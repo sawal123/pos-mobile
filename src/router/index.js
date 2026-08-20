@@ -128,9 +128,6 @@ const shiftRequiredRoutes = new Set([
   'pos',
   'payment',
   'payment-success',
-  'transactions',
-  'transaction-detail',
-  'settings',
 ])
 
 export function createAppRouter() {

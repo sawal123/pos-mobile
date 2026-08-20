@@ -69,6 +69,26 @@ describe('P1 POS flow', () => {
     expect(router.currentRoute.value.fullPath).toBe('/shift/open')
   })
 
+  it('allows transactions route when business and pin are ready even if shift is closed', async () => {
+    const { router, businessStore, cashierStore } = createContext()
+
+    makeBusinessReady(businessStore)
+    cashierStore.setPinConfigured(true)
+    await router.push('/transactions')
+
+    expect(router.currentRoute.value.fullPath).toBe('/transactions')
+  })
+
+  it('allows settings route when business and pin are ready even if shift is closed', async () => {
+    const { router, businessStore, cashierStore } = createContext()
+
+    makeBusinessReady(businessStore)
+    cashierStore.setPinConfigured(true)
+    await router.push('/settings')
+
+    expect(router.currentRoute.value.fullPath).toBe('/settings')
+  })
+
   it('redirects payment access back to POS when cart is empty', async () => {
     const { router, businessStore, cashierStore, shiftStore } = createContext()
 
