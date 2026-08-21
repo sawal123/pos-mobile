@@ -4,11 +4,35 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 
 import App from './App.vue'
-import router from './router'
+import { createAppRouter } from './router'
+import { initializePersistence } from './services/database'
 
-const app = createApp(App)
+export async function bootstrapApp({
+  appFactory = createApp,
+  piniaFactory = createPinia,
+  routerFactory = createAppRouter,
+  initialize = initializePersistence,
+  rootComponent = App,
+  mountTarget = '#app',
+} = {}) {
+  const app = appFactory(rootComponent)
+  const pinia = piniaFactory()
 
-app.use(createPinia())
-app.use(router)
+  app.use(pinia)
+  await initialize(pinia)
 
-app.mount('#app')
+  const router = routerFactory()
+
+  app.use(router)
+  app.mount(mountTarget)
+
+  return {
+    app,
+    pinia,
+    router,
+  }
+}
+
+if (!import.meta.env.VITEST) {
+  void bootstrapApp()
+}
