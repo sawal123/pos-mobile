@@ -1,5 +1,6 @@
 <script setup>
 import { storeToRefs } from 'pinia'
+import { useRouter } from 'vue-router'
 
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
@@ -12,9 +13,18 @@ import { useProductStore } from '@/stores/productStore'
 
 const productStore = useProductStore()
 const cartStore = useCartStore()
+const router = useRouter()
 
 const { categories, filteredProducts, searchQuery, selectedCategory } = storeToRefs(productStore)
 const { items, subtotal, tax, total } = storeToRefs(cartStore)
+
+function handleCheckout() {
+  if (!items.value.length) {
+    return
+  }
+
+  router.push('/payment')
+}
 </script>
 
 <template>
@@ -129,7 +139,13 @@ const { items, subtotal, tax, total } = storeToRefs(cartStore)
         <p v-else class="text-sm text-ink-secondary">Belum ada item yang ditambahkan.</p>
       </BaseCard>
 
-      <CartSummary :subtotal="subtotal" :tax="tax" :total="total" />
+      <CartSummary
+        :subtotal="subtotal"
+        :tax="tax"
+        :total="total"
+        :disabled="!items.length"
+        @checkout="handleCheckout"
+      />
     </section>
     </div>
   </div>

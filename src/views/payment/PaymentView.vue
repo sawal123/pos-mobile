@@ -7,8 +7,10 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import PaymentMethodCard from '@/components/payment/PaymentMethodCard.vue'
 import CartSummary from '@/components/pos/CartSummary.vue'
 import { useCartStore } from '@/stores/cartStore'
+import { useTransactionStore } from '@/stores/transactionStore'
 
 const cartStore = useCartStore()
+const transactionStore = useTransactionStore()
 const router = useRouter()
 const selectedMethod = ref('cash')
 
@@ -19,6 +21,20 @@ const paymentMethods = [
 ]
 
 function completePayment() {
+  if (!cartStore.items.length) {
+    router.push('/pos')
+    return
+  }
+
+  transactionStore.createTransaction({
+    items: cartStore.items,
+    subtotal: cartStore.subtotal,
+    tax: cartStore.tax,
+    total: cartStore.total,
+    paymentMethod: selectedMethod.value,
+  })
+
+  cartStore.clearCart()
   router.push('/payment/success')
 }
 </script>
@@ -46,10 +62,17 @@ function completePayment() {
     <section class="space-y-4">
       <BaseCard class="space-y-4">
         <h3 class="text-lg font-semibold text-ink-primary">Ringkasan Pembayaran</h3>
-        <CartSummary :subtotal="cartStore.subtotal" :tax="cartStore.tax" :total="cartStore.total" />
+        <CartSummary
+          :subtotal="cartStore.subtotal"
+          :tax="cartStore.tax"
+          :total="cartStore.total"
+          :show-action="false"
+        />
       </BaseCard>
 
-      <BaseButton block size="lg" @click="completePayment">Selesaikan Pembayaran</BaseButton>
+      <BaseButton block size="lg" :disabled="!cartStore.items.length" @click="completePayment">
+        Selesaikan Pembayaran
+      </BaseButton>
     </section>
   </div>
 </template>

@@ -10,6 +10,12 @@ defineProps({
   },
 })
 
+function getItemCount(transaction) {
+  if (typeof transaction.itemCount === 'number') return transaction.itemCount
+  if (Array.isArray(transaction.items)) return transaction.items.reduce((count, item) => count + (item.qty ?? 1), 0)
+  return transaction.items ?? 0
+}
+
 function statusVariant(status) {
   if (status === 'paid') return 'success'
   if (status === 'refunded') return 'warning'
@@ -31,7 +37,7 @@ function statusVariant(status) {
     </div>
 
     <div class="flex items-center justify-between text-sm text-ink-secondary">
-      <span>{{ transaction.items }} item • {{ transaction.paymentMethod }}</span>
+      <span>{{ getItemCount(transaction) }} item • {{ transaction.paymentMethod }}</span>
       <span>{{ formatDateTime(transaction.createdAt) }}</span>
     </div>
 
