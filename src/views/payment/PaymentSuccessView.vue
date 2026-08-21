@@ -1,10 +1,16 @@
 <script setup>
-import { useRouter } from 'vue-router'
+import { onBeforeRouteLeave, useRouter } from 'vue-router'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
+import { useTransactionStore } from '@/stores/transactionStore'
 
 const router = useRouter()
+const transactionStore = useTransactionStore()
+
+onBeforeRouteLeave(() => {
+  transactionStore.clearLastTransaction()
+})
 </script>
 
 <template>

@@ -16,7 +16,21 @@ defineProps({
     type: Number,
     default: 0,
   },
+  disabled: {
+    type: Boolean,
+    default: false,
+  },
+  showAction: {
+    type: Boolean,
+    default: true,
+  },
+  actionLabel: {
+    type: String,
+    default: 'Kunci Pesanan',
+  },
 })
+
+defineEmits(['checkout'])
 </script>
 
 <template>
@@ -34,6 +48,13 @@ defineProps({
       <span>{{ formatCurrency(total) }}</span>
     </div>
 
-    <BaseButton block>Kunci Pesanan</BaseButton>
+    <BaseButton
+      v-if="showAction"
+      block
+      :disabled="disabled"
+      @click="$emit('checkout')"
+    >
+      {{ actionLabel }}
+    </BaseButton>
   </BaseCard>
 </template>
