@@ -7,15 +7,37 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseSheet from '@/components/base/BaseSheet.vue'
+import {
+  RESTORE_CONFIRMATION_MESSAGE,
+  createBackupPayload,
+  downloadBackupFile,
+  restoreBackupPayload,
+  validateBackupPayload,
+} from '@/services/backupService'
 import { useBusinessStore } from '@/stores/businessStore'
+import { useCartStore } from '@/stores/cartStore'
 import { useCashierStore } from '@/stores/cashierStore'
+import { useCustomerStore } from '@/stores/customerStore'
+import { useExpenseStore } from '@/stores/expenseStore'
+import { useProductStore } from '@/stores/productStore'
+import { useShiftStore } from '@/stores/shiftStore'
+import { useTransactionStore } from '@/stores/transactionStore'
 
 const businessStore = useBusinessStore()
+const cartStore = useCartStore()
 const cashierStore = useCashierStore()
+const customerStore = useCustomerStore()
+const expenseStore = useExpenseStore()
+const productStore = useProductStore()
+const shiftStore = useShiftStore()
+const transactionStore = useTransactionStore()
 const router = useRouter()
 
 const showProfileModal = ref(false)
 const showActionSheet = ref(false)
+const backupInputRef = ref(null)
+const feedbackType = ref('success')
+const feedbackMessage = ref('')
 
 const businessSummary = computed(() => [
   { label: 'Nama Toko', value: businessStore.name || '-' },
@@ -26,10 +48,94 @@ const businessSummary = computed(() => [
   { label: 'Mode', value: businessStore.mode === 'cloud' ? 'Cloud' : 'Free' },
   { label: 'PIN Kasir', value: cashierStore.activeCashier.pinConfigured ? 'Sudah diatur' : 'Belum diatur' },
 ])
+
+function getStoreContext() {
+  return {
+    businessStore,
+    productStore,
+    customerStore,
+    expenseStore,
+    transactionStore,
+    cartStore,
+    shiftStore,
+  }
+}
+
+function setFeedback(type, message) {
+  feedbackType.value = type
+  feedbackMessage.value = message
+}
+
+function handleBackup() {
+  const payload = createBackupPayload(getStoreContext())
+  downloadBackupFile(payload)
+  setFeedback('success', 'Backup berhasil dibuat.')
+}
+
+function handleRestoreClick() {
+  if (shiftStore.isOpen) {
+    setFeedback('error', 'Restore backup tidak dapat dilakukan saat shift aktif. Tutup shift terlebih dahulu.')
+    return
+  }
+
+  backupInputRef.value?.click()
+}
+
+async function handleRestoreFileChange(event) {
+  const input = event.target
+  const [file] = input.files ?? []
+
+  if (!file) {
+    input.value = ''
+    return
+  }
+
+  try {
+    const text = await file.text()
+    let payload
+
+    try {
+      payload = JSON.parse(text)
+    } catch {
+      setFeedback('error', 'File backup tidak valid.')
+      return
+    }
+
+    const validation = validateBackupPayload(payload)
+
+    if (!validation.valid) {
+      setFeedback('error', validation.error)
+      return
+    }
+
+    if (!window.confirm(RESTORE_CONFIRMATION_MESSAGE)) {
+      return
+    }
+
+    const result = restoreBackupPayload(payload, getStoreContext())
+
+    if (!result.success) {
+      setFeedback('error', result.error)
+      return
+    }
+
+    setFeedback('success', 'Backup berhasil dipulihkan.')
+  } finally {
+    input.value = ''
+  }
+}
 </script>
 
 <template>
   <div class="mx-auto max-w-3xl space-y-5">
+    <input
+      ref="backupInputRef"
+      class="hidden"
+      type="file"
+      accept=".json,application/json"
+      @change="handleRestoreFileChange"
+    />
+
     <div>
       <p class="text-sm font-medium uppercase tracking-[0.18em] text-primary">Settings</p>
       <h2 class="mt-2 text-2xl font-semibold text-ink-primary">Pengaturan aplikasi</h2>
@@ -64,9 +170,17 @@ const businessSummary = computed(() => [
 
     <BaseSheet :open="showActionSheet" title="Shortcut Pengaturan" @close="showActionSheet = false">
       <div class="grid gap-3">
+        <p
+          v-if="feedbackMessage"
+          class="rounded-2xl px-4 py-3 text-sm"
+          :class="feedbackType === 'error' ? 'bg-danger/10 text-danger' : 'bg-emerald-100 text-emerald-700'"
+        >
+          {{ feedbackMessage }}
+        </p>
         <BaseButton block variant="secondary" @click="router.push('/customers')">Kelola Pelanggan</BaseButton>
         <BaseButton block variant="secondary" @click="router.push('/expenses')">Kelola Pengeluaran</BaseButton>
-        <BaseButton block variant="secondary">Export Data</BaseButton>
+        <BaseButton block variant="secondary" @click="handleBackup">Backup Data</BaseButton>
+        <BaseButton block variant="secondary" @click="handleRestoreClick">Restore Backup</BaseButton>
         <BaseButton block variant="secondary">Sinkronisasi</BaseButton>
         <BaseButton block variant="danger" @click="showActionSheet = false">Tutup</BaseButton>
       </div>
