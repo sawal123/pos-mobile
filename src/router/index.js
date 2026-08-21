@@ -12,6 +12,9 @@ import WelcomeView from '../views/onboarding/WelcomeView.vue'
 import PaymentSuccessView from '../views/payment/PaymentSuccessView.vue'
 import PaymentView from '../views/payment/PaymentView.vue'
 import PosView from '../views/pos/PosView.vue'
+import CategoriesView from '../views/categories/CategoriesView.vue'
+import ProductFormView from '../views/products/ProductFormView.vue'
+import ProductsView from '../views/products/ProductsView.vue'
 import CloseShiftView from '../views/shift/CloseShiftView.vue'
 import OpenShiftView from '../views/shift/OpenShiftView.vue'
 import ShiftView from '../views/shift/ShiftView.vue'
@@ -69,6 +72,26 @@ const routes = [
         component: PosView,
       },
       {
+        path: 'products',
+        name: 'products',
+        component: ProductsView,
+      },
+      {
+        path: 'products/create',
+        name: 'product-create',
+        component: ProductFormView,
+      },
+      {
+        path: 'products/:id/edit',
+        name: 'product-edit',
+        component: ProductFormView,
+      },
+      {
+        path: 'categories',
+        name: 'categories',
+        component: CategoriesView,
+      },
+      {
         path: 'payment',
         name: 'payment',
         component: PaymentView,
@@ -103,6 +126,10 @@ const businessRequiredRoutes = new Set([
   'shift',
   'close-shift',
   'pos',
+  'products',
+  'product-create',
+  'product-edit',
+  'categories',
   'payment',
   'payment-success',
   'transactions',
@@ -115,6 +142,10 @@ const pinRequiredRoutes = new Set([
   'shift',
   'close-shift',
   'pos',
+  'products',
+  'product-create',
+  'product-edit',
+  'categories',
   'payment',
   'payment-success',
   'transactions',

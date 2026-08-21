@@ -15,7 +15,7 @@ const productStore = useProductStore()
 const cartStore = useCartStore()
 const router = useRouter()
 
-const { categories, filteredProducts, searchQuery, selectedCategory } = storeToRefs(productStore)
+const { filterCategories, filteredProducts, searchQuery, selectedCategory } = storeToRefs(productStore)
 const { items, subtotal, tax, total } = storeToRefs(cartStore)
 
 function handleCheckout() {
@@ -82,7 +82,7 @@ function handleCheckout() {
 
         <div class="flex gap-3 overflow-x-auto pb-1">
           <CategoryPill
-            v-for="category in categories"
+            v-for="category in filterCategories"
             :key="category"
             :label="category"
             :active="selectedCategory === category"
