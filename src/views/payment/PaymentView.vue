@@ -18,7 +18,7 @@ const transactionStore = useTransactionStore()
 const router = useRouter()
 
 const selectedMethod = ref('cash')
-const cashReceived = ref(cartStore.total ? String(cartStore.total) : '')
+const cashReceived = ref('')
 const isProcessing = ref(false)
 const hasAttemptedSubmit = ref(false)
 
@@ -36,7 +36,7 @@ const parsedCashReceived = computed(() => {
   }
 
   const amount = Number(cashReceived.value)
-  return Number.isNaN(amount) ? Number.NaN : amount
+  return Number.isFinite(amount) ? amount : Number.NaN
 })
 
 const cashValidationState = computed(() => {
@@ -104,7 +104,7 @@ const changeAmount = computed(() => {
 })
 
 const quickCashAmounts = computed(() => {
-  const amounts = QUICK_CASH_AMOUNTS.filter((amount) => amount >= cartStore.total)
+  const amounts = QUICK_CASH_AMOUNTS.filter((amount) => amount > cartStore.total)
   return [...new Set(amounts)].slice(0, 3)
 })
 

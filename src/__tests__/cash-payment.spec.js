@@ -9,6 +9,7 @@ import { useCashierStore } from '@/stores/cashierStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import { formatCurrency } from '@/utils/formatters'
+import BaseInput from '@/components/base/BaseInput.vue'
 import PaymentView from '@/views/payment/PaymentView.vue'
 
 function createContext() {
@@ -37,13 +38,13 @@ function makeBusinessReady(businessStore) {
   })
 }
 
-async function mountPaymentView() {
+async function mountPaymentView(product = { id: 1, name: 'Es Kopi Susu', category: 'Minuman', price: 22000, stock: 10 }) {
   const context = createContext()
 
   makeBusinessReady(context.businessStore)
   context.cashierStore.setPinConfigured(true)
   context.shiftStore.openShift(100000)
-  context.cartStore.addItem({ id: 1, name: 'Es Kopi Susu', category: 'Minuman', price: 22000, stock: 10 })
+  context.cartStore.addItem(product)
 
   await context.router.push('/payment')
   await flushPromises()
@@ -65,12 +66,28 @@ function getCashInput(wrapper) {
   return wrapper.find('input[type="number"]')
 }
 
+async function setCashInputValue(wrapper, value) {
+  wrapper.findComponent(BaseInput).vm.$emit('update:modelValue', value)
+  await flushPromises()
+}
+
 describe('P3 cash payment', () => {
+  it('initial cashReceived kosong', async () => {
+    const { wrapper } = await mountPaymentView()
+
+    expect(getCashInput(wrapper).element.value).toBe('')
+  })
+
+  it('cash awal tidak langsung bisa dibayar', async () => {
+    const { wrapper } = await mountPaymentView()
+    const payButton = getButtonByText(wrapper, 'Selesaikan Pembayaran')
+
+    expect(payButton.attributes('disabled')).toBeDefined()
+  })
+
   it('cash kosong tidak dapat menyelesaikan pembayaran', async () => {
     const { wrapper, transactionStore, cartStore } = await mountPaymentView()
     const initialCount = transactionStore.items.length
-    await getCashInput(wrapper).setValue('')
-    await flushPromises()
     const payButton = getButtonByText(wrapper, 'Selesaikan Pembayaran')
 
     expect(payButton.attributes('disabled')).toBeDefined()
@@ -86,8 +103,7 @@ describe('P3 cash payment', () => {
     const { wrapper, transactionStore, cartStore } = await mountPaymentView()
     const initialCount = transactionStore.items.length
 
-    await getCashInput(wrapper).setValue('20000')
-    await flushPromises()
+    await setCashInputValue(wrapper, '20000')
 
     const payButton = getButtonByText(wrapper, 'Selesaikan Pembayaran')
 
@@ -106,8 +122,7 @@ describe('P3 cash payment', () => {
     const initialCount = transactionStore.items.length
     const total = cartStore.total
 
-    await getCashInput(wrapper).setValue(String(total))
-    await flushPromises()
+    await setCashInputValue(wrapper, String(total))
 
     const payButton = getButtonByText(wrapper, 'Selesaikan Pembayaran')
 
@@ -126,8 +141,7 @@ describe('P3 cash payment', () => {
     const { wrapper, transactionStore, router } = await mountPaymentView()
     const initialCount = transactionStore.items.length
 
-    await getCashInput(wrapper).setValue('50000')
-    await flushPromises()
+    await setCashInputValue(wrapper, '50000')
 
     await getButtonByText(wrapper, 'Selesaikan Pembayaran').trigger('click')
     await flushPromises()
@@ -140,8 +154,7 @@ describe('P3 cash payment', () => {
   it('kembalian dihitung dengan benar', async () => {
     const { wrapper } = await mountPaymentView()
 
-    await getCashInput(wrapper).setValue('50000')
-    await flushPromises()
+    await setCashInputValue(wrapper, '50000')
 
     expect(wrapper.text()).toContain(formatCurrency(25580))
   })
@@ -149,8 +162,7 @@ describe('P3 cash payment', () => {
   it('kembalian tidak pernah negatif', async () => {
     const { wrapper } = await mountPaymentView()
 
-    await getCashInput(wrapper).setValue('20000')
-    await flushPromises()
+    await setCashInputValue(wrapper, '20000')
 
     expect(wrapper.text()).toContain(formatCurrency(0))
     expect(wrapper.text()).not.toContain('-')
@@ -172,6 +184,40 @@ describe('P3 cash payment', () => {
     expect(wrapper.text()).toContain(formatCurrency(50000))
   })
 
+  it('quick amount dengan nilai sama persis seperti total tidak tampil', async () => {
+    const { wrapper } = await mountPaymentView({
+      id: 99,
+      name: 'Paket 50 Ribu',
+      category: 'Makanan',
+      price: 45045,
+      stock: 5,
+    })
+
+    const quickAmountLabels = wrapper
+      .findAll('button')
+      .map((button) => button.text().trim())
+      .filter((label) => label.startsWith('Rp'))
+
+    expect(quickAmountLabels).not.toContain(formatCurrency(50000))
+  })
+
+  it('quick amount yang lebih besar dari total tetap tampil', async () => {
+    const { wrapper } = await mountPaymentView({
+      id: 99,
+      name: 'Paket 50 Ribu',
+      category: 'Makanan',
+      price: 45045,
+      stock: 5,
+    })
+
+    const quickAmountLabels = wrapper
+      .findAll('button')
+      .map((button) => button.text().trim())
+      .filter((label) => label.startsWith('Rp'))
+
+    expect(quickAmountLabels).toContain(formatCurrency(100000))
+  })
+
   it('nominal cepat tidak duplicate', async () => {
     const { wrapper } = await mountPaymentView()
     const quickAmountLabels = wrapper
@@ -185,8 +231,7 @@ describe('P3 cash payment', () => {
   it('transaksi cash menyimpan cashReceived', async () => {
     const { wrapper, transactionStore } = await mountPaymentView()
 
-    await getCashInput(wrapper).setValue('50000')
-    await flushPromises()
+    await setCashInputValue(wrapper, '50000')
     await getButtonByText(wrapper, 'Selesaikan Pembayaran').trigger('click')
     await flushPromises()
 
@@ -196,8 +241,7 @@ describe('P3 cash payment', () => {
   it('transaksi cash menyimpan changeAmount', async () => {
     const { wrapper, transactionStore } = await mountPaymentView()
 
-    await getCashInput(wrapper).setValue('50000')
-    await flushPromises()
+    await setCashInputValue(wrapper, '50000')
     await getButtonByText(wrapper, 'Selesaikan Pembayaran').trigger('click')
     await flushPromises()
 
@@ -208,8 +252,7 @@ describe('P3 cash payment', () => {
     const { wrapper, transactionStore } = await mountPaymentView()
     const initialCount = transactionStore.items.length
 
-    await getCashInput(wrapper).setValue('20000')
-    await flushPromises()
+    await setCashInputValue(wrapper, '20000')
     await getButtonByText(wrapper, 'Selesaikan Pembayaran').trigger('click')
     await flushPromises()
 
@@ -219,8 +262,7 @@ describe('P3 cash payment', () => {
   it('pembayaran invalid tidak clear cart', async () => {
     const { wrapper, cartStore } = await mountPaymentView()
 
-    await getCashInput(wrapper).setValue('20000')
-    await flushPromises()
+    await setCashInputValue(wrapper, '20000')
     await getButtonByText(wrapper, 'Selesaikan Pembayaran').trigger('click')
     await flushPromises()
 
@@ -231,8 +273,7 @@ describe('P3 cash payment', () => {
     const { wrapper, transactionStore } = await mountPaymentView()
     const initialCount = transactionStore.items.length
 
-    await getCashInput(wrapper).setValue('50000')
-    await flushPromises()
+    await setCashInputValue(wrapper, '50000')
     await getButtonByText(wrapper, 'Selesaikan Pembayaran').trigger('click')
     await flushPromises()
 
@@ -242,8 +283,7 @@ describe('P3 cash payment', () => {
   it('pembayaran cash valid clear cart setelah transaction dibuat', async () => {
     const { wrapper, cartStore } = await mountPaymentView()
 
-    await getCashInput(wrapper).setValue('50000')
-    await flushPromises()
+    await setCashInputValue(wrapper, '50000')
     await getButtonByText(wrapper, 'Selesaikan Pembayaran').trigger('click')
     await flushPromises()
 
@@ -271,8 +311,7 @@ describe('P3 cash payment', () => {
   it('transaksi non-cash tidak membawa cashReceived/changeAmount dari cash', async () => {
     const { wrapper, transactionStore } = await mountPaymentView()
 
-    await getCashInput(wrapper).setValue('50000')
-    await flushPromises()
+    await setCashInputValue(wrapper, '50000')
     await getButtonByText(wrapper, 'QRIS').trigger('click')
     await flushPromises()
     await getButtonByText(wrapper, 'Selesaikan Pembayaran').trigger('click')
@@ -281,5 +320,50 @@ describe('P3 cash payment', () => {
     expect(transactionStore.lastTransaction.paymentMethod).toBe('qris')
     expect(transactionStore.lastTransaction.cashReceived).toBeNull()
     expect(transactionStore.lastTransaction.changeAmount).toBeNull()
+  })
+
+  it('Infinity ditolak', async () => {
+    const { wrapper } = await mountPaymentView()
+
+    await setCashInputValue(wrapper, 'Infinity')
+
+    expect(wrapper.text()).toContain('Uang diterima harus berupa angka valid')
+  })
+
+  it('-Infinity ditolak', async () => {
+    const { wrapper } = await mountPaymentView()
+
+    await setCashInputValue(wrapper, '-Infinity')
+
+    expect(wrapper.text()).toContain('Uang diterima harus berupa angka valid')
+  })
+
+  it('nilai yang menghasilkan non-finite seperti 1e309 ditolak', async () => {
+    const { wrapper } = await mountPaymentView()
+
+    await setCashInputValue(wrapper, '1e309')
+
+    expect(wrapper.text()).toContain('Uang diterima harus berupa angka valid')
+  })
+
+  it('invalid non-finite tidak membuat transaction', async () => {
+    const { wrapper, transactionStore } = await mountPaymentView()
+    const initialCount = transactionStore.items.length
+
+    await setCashInputValue(wrapper, '1e309')
+    await getButtonByText(wrapper, 'Selesaikan Pembayaran').trigger('click')
+    await flushPromises()
+
+    expect(transactionStore.items).toHaveLength(initialCount)
+  })
+
+  it('invalid non-finite tidak clear cart', async () => {
+    const { wrapper, cartStore } = await mountPaymentView()
+
+    await setCashInputValue(wrapper, '1e309')
+    await getButtonByText(wrapper, 'Selesaikan Pembayaran').trigger('click')
+    await flushPromises()
+
+    expect(cartStore.items).toHaveLength(1)
   })
 })
