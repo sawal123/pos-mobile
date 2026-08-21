@@ -4,11 +4,7 @@ import { useExpenseStore } from '@/stores/expenseStore'
 import { useProductStore } from '@/stores/productStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 
-import {
-  SYNC_BUSINESS_ENTITY_ID,
-  SYNC_ENTITY_TYPES,
-  SYNC_RESERVED_CATEGORY,
-} from './syncConstants'
+import { SYNC_BUSINESS_ENTITY_ID, SYNC_ENTITY_TYPES, SYNC_RESERVED_CATEGORY } from './syncConstants'
 
 const CLOUD_SYNCABLE_BUSINESS_FIELDS = ['name', 'type', 'owner', 'phone', 'outlet']
 

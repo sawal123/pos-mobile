@@ -210,7 +210,7 @@ export function createPersistenceService({ adapter, pinia }) {
           }
 
           const nextSnapshot = cloneValue(snapshot)
-        void runSerialized(() => context.save(adapter, nextSnapshot), context.key)
+          void runSerialized(() => context.save(adapter, nextSnapshot), context.key)
         },
         { deep: true },
       )

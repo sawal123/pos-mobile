@@ -113,7 +113,8 @@ export function createMemoryAdapter() {
       state.syncQueue[index] = {
         ...existing,
         operation: entry.operation,
-        payload: entry.payload === null || entry.payload === undefined ? null : cloneValue(entry.payload),
+        payload:
+          entry.payload === null || entry.payload === undefined ? null : cloneValue(entry.payload),
         updatedAt: entry.updatedAt,
         attemptCount: 0,
         lastError: null,

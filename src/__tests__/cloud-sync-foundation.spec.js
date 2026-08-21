@@ -672,7 +672,8 @@ describe('P9 category sync tracking', () => {
 
     const pending = await runtime.queueService.listPending()
     const product = pending.find(
-      (item) => item.entityType === SYNC_ENTITY_TYPES.PRODUCT && item.entityId === created.product.id,
+      (item) =>
+        item.entityType === SYNC_ENTITY_TYPES.PRODUCT && item.entityId === created.product.id,
     )
     expect(product.operation).toBe(SYNC_OPERATIONS.UPSERT)
     expect(product.payload.category).toBe('Promo')
@@ -1134,9 +1135,7 @@ describe('P9 sync safety', () => {
 
     expect(fakeDb.beginTransaction).not.toHaveBeenCalled()
     expect(fakeDb.commitTransaction).not.toHaveBeenCalled()
-    expect(
-      fakeDb.run.mock.calls.some(([sql]) => sql.includes('INSERT INTO sync_queue')),
-    ).toBe(true)
+    expect(fakeDb.run.mock.calls.some(([sql]) => sql.includes('INSERT INTO sync_queue'))).toBe(true)
   })
 })
 

@@ -5,10 +5,7 @@ import { bootstrapApp } from '@/main'
 import { resolvePersistenceAdapter } from '@/services/database'
 import { createMemoryAdapter } from '@/services/database/memoryAdapter'
 import { createPersistenceService } from '@/services/database/persistenceService'
-import {
-  createSQLiteAdapter,
-  deserializeTransactionRows,
-} from '@/services/database/sqliteAdapter'
+import { createSQLiteAdapter, deserializeTransactionRows } from '@/services/database/sqliteAdapter'
 import { DB_VERSION } from '@/services/database/schema'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCartStore } from '@/stores/cartStore'
@@ -290,8 +287,12 @@ describe('P8 sqlite persistence foundation', () => {
     await runtime.service.flush()
 
     const hydrated = await restartRuntime(adapter)
-    const paidTransaction = hydrated.transactionStore.items.find((item) => item.customerId === 'cust-1')
-    const legacyTransaction = hydrated.transactionStore.items.find((item) => item.id === 'TRX-LEGACY')
+    const paidTransaction = hydrated.transactionStore.items.find(
+      (item) => item.customerId === 'cust-1',
+    )
+    const legacyTransaction = hydrated.transactionStore.items.find(
+      (item) => item.id === 'TRX-LEGACY',
+    )
 
     expect(paidTransaction.customerSnapshot).toEqual({
       id: 'cust-1',
@@ -672,7 +673,9 @@ describe('P8 native sqlite plugin fallback', () => {
     expect(adapter.name).toBe('memory')
     expect(createSQLite).not.toHaveBeenCalled()
     expect(consoleError).toHaveBeenCalledTimes(1)
-    expect(consoleError.mock.calls[0][0]).toContain('CapacitorSQLite is unavailable on native platform')
+    expect(consoleError.mock.calls[0][0]).toContain(
+      'CapacitorSQLite is unavailable on native platform',
+    )
   })
 
   it('native dengan plugin sqlite memakai adapter sqlite tanpa console.error', async () => {

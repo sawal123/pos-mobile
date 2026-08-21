@@ -90,7 +90,9 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
 
   async function readMetaValue(key, fallback = null) {
     const db = await ensureConnection()
-    const { values = [] } = await db.query('SELECT value FROM app_meta WHERE key = ? LIMIT 1', [key])
+    const { values = [] } = await db.query('SELECT value FROM app_meta WHERE key = ? LIMIT 1', [
+      key,
+    ])
 
     if (!values.length) {
       return fallback
@@ -109,7 +111,9 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
 
   async function readAppState(key, fallback = null) {
     const db = await ensureConnection()
-    const { values = [] } = await db.query('SELECT value FROM app_state WHERE key = ? LIMIT 1', [key])
+    const { values = [] } = await db.query('SELECT value FROM app_state WHERE key = ? LIMIT 1', [
+      key,
+    ])
 
     if (!values.length) {
       return fallback
@@ -378,8 +382,7 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
         entityType: row.entity_type,
         entityId: row.entity_id,
         operation: row.operation,
-        payload:
-          row.payload === null || row.payload === undefined ? null : JSON.parse(row.payload),
+        payload: row.payload === null || row.payload === undefined ? null : JSON.parse(row.payload),
         createdAt: row.created_at,
         updatedAt: row.updated_at,
         attemptCount: Number(row.attempt_count),
