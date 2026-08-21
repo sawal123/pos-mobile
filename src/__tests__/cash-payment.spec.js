@@ -38,7 +38,9 @@ function makeBusinessReady(businessStore) {
   })
 }
 
-async function mountPaymentView(product = { id: 1, name: 'Es Kopi Susu', category: 'Minuman', price: 22000, stock: 10 }) {
+async function mountPaymentView(
+  product = { id: 1, name: 'Es Kopi Susu', category: 'Minuman', price: 22000, stock: 10 },
+) {
   const context = createContext()
 
   makeBusinessReady(context.businessStore)
