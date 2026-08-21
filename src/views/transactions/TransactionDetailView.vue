@@ -25,7 +25,16 @@ function statusVariant(status) {
 
 <template>
   <div class="mx-auto max-w-2xl space-y-5">
-    <BaseButton variant="ghost" @click="router.push('/transactions')">Kembali</BaseButton>
+    <div class="flex flex-wrap gap-3">
+      <BaseButton variant="ghost" @click="router.push('/transactions')">Kembali</BaseButton>
+      <BaseButton
+        v-if="transaction"
+        variant="secondary"
+        @click="router.push(`/transactions/${transaction.id}/receipt`)"
+      >
+        Lihat Struk
+      </BaseButton>
+    </div>
 
     <BaseCard v-if="transaction" class="space-y-5">
       <div class="flex items-start justify-between gap-4">

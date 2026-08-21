@@ -23,6 +23,7 @@ import CloseShiftView from '../views/shift/CloseShiftView.vue'
 import OpenShiftView from '../views/shift/OpenShiftView.vue'
 import ShiftView from '../views/shift/ShiftView.vue'
 import SettingsView from '../views/settings/SettingsView.vue'
+import ReceiptView from '../views/transactions/ReceiptView.vue'
 import TransactionDetailView from '../views/transactions/TransactionDetailView.vue'
 import TransactionsView from '../views/transactions/TransactionsView.vue'
 
@@ -146,6 +147,11 @@ const routes = [
         component: TransactionDetailView,
       },
       {
+        path: 'transactions/:id/receipt',
+        name: 'transaction-receipt',
+        component: ReceiptView,
+      },
+      {
         path: 'settings',
         name: 'settings',
         component: SettingsView,
@@ -174,6 +180,7 @@ const businessRequiredRoutes = new Set([
   'payment-success',
   'transactions',
   'transaction-detail',
+  'transaction-receipt',
   'settings',
 ])
 
@@ -196,6 +203,7 @@ const pinRequiredRoutes = new Set([
   'payment-success',
   'transactions',
   'transaction-detail',
+  'transaction-receipt',
   'settings',
 ])
 

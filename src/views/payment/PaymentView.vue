@@ -8,6 +8,7 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import PaymentMethodCard from '@/components/payment/PaymentMethodCard.vue'
 import CartSummary from '@/components/pos/CartSummary.vue'
+import { useBusinessStore } from '@/stores/businessStore'
 import { useCartStore } from '@/stores/cartStore'
 import { useCustomerStore } from '@/stores/customerStore'
 import { useTransactionStore } from '@/stores/transactionStore'
@@ -15,6 +16,7 @@ import { formatCurrency } from '@/utils/formatters'
 
 const QUICK_CASH_AMOUNTS = [20000, 50000, 100000, 200000, 500000]
 
+const businessStore = useBusinessStore()
 const cartStore = useCartStore()
 const customerStore = useCustomerStore()
 const transactionStore = useTransactionStore()
@@ -160,6 +162,11 @@ async function completePayment() {
     subtotal: cartStore.subtotal,
     tax: cartStore.tax,
     total: cartStore.total,
+    businessSnapshot: {
+      name: businessStore.name,
+      outlet: businessStore.outlet,
+      phone: businessStore.phone,
+    },
     customer: selectedCustomer.value?.name ?? 'Walk-in Customer',
     customerId: selectedCustomer.value?.id ?? null,
     customerSnapshot: selectedCustomer.value ? { ...selectedCustomer.value } : null,
