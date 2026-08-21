@@ -48,6 +48,7 @@ const businessSummary = computed(() => [
       <div class="flex flex-wrap gap-3">
         <BaseButton variant="secondary" @click="showProfileModal = true">Edit Profil</BaseButton>
         <BaseButton variant="secondary" @click="router.push('/customers')">Kelola Pelanggan</BaseButton>
+        <BaseButton variant="secondary" @click="router.push('/expenses')">Kelola Pengeluaran</BaseButton>
         <BaseButton variant="ghost" @click="showActionSheet = true">Aksi Lainnya</BaseButton>
       </div>
     </BaseCard>
@@ -64,6 +65,7 @@ const businessSummary = computed(() => [
     <BaseSheet :open="showActionSheet" title="Shortcut Pengaturan" @close="showActionSheet = false">
       <div class="grid gap-3">
         <BaseButton block variant="secondary" @click="router.push('/customers')">Kelola Pelanggan</BaseButton>
+        <BaseButton block variant="secondary" @click="router.push('/expenses')">Kelola Pengeluaran</BaseButton>
         <BaseButton block variant="secondary">Export Data</BaseButton>
         <BaseButton block variant="secondary">Sinkronisasi</BaseButton>
         <BaseButton block variant="danger" @click="showActionSheet = false">Tutup</BaseButton>
