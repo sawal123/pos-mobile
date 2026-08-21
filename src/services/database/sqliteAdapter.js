@@ -6,6 +6,7 @@ import {
   DB_VERSION,
   RESERVED_CATEGORY,
 } from './schema'
+import { applyMigrations } from './migrations'
 
 function parseJsonValue(value, fallback) {
   if (value === null || value === undefined) {
@@ -132,11 +133,14 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
       await db.execute('PRAGMA foreign_keys = ON;')
       await db.execute(CREATE_TABLE_STATEMENTS)
 
-      const currentVersion = await this.getSchemaVersion()
-
-      if (currentVersion !== version) {
-        await this.setSchemaVersion(version)
-      }
+      await applyMigrations(
+        {
+          getVersion: () => this.getSchemaVersion(),
+          setVersion: (nextVersion) => this.setSchemaVersion(nextVersion),
+          execute: (sql) => db.execute(sql),
+        },
+        version,
+      )
     },
     async getSchemaVersion() {
       const db = await ensureConnection()
@@ -329,6 +333,74 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
     },
     async saveShiftState(state) {
       await writeAppState(APP_STATE_KEYS.shift, state)
+    },
+    async upsertSyncQueueItem(entry) {
+      const db = await ensureConnection()
+
+      // Single-statement upsert. On conflict the latest mutation wins while
+      // created_at and id (first-queued identity) are preserved and retry
+      // metadata is reset for the new payload.
+      await db.run(
+        `INSERT INTO sync_queue
+           (id, entity_type, entity_id, operation, payload, created_at, updated_at, attempt_count, last_error)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL)
+         ON CONFLICT(entity_type, entity_id) DO UPDATE SET
+           operation = excluded.operation,
+           payload = excluded.payload,
+           updated_at = excluded.updated_at,
+           attempt_count = 0,
+           last_error = NULL`,
+        [
+          entry.id,
+          entry.entityType,
+          entry.entityId,
+          entry.operation,
+          entry.payload === null || entry.payload === undefined
+            ? null
+            : JSON.stringify(entry.payload),
+          entry.createdAt,
+          entry.updatedAt,
+        ],
+      )
+    },
+    async listSyncQueueItems({ limit = 100 } = {}) {
+      const db = await ensureConnection()
+      const { values = [] } = await db.query(
+        `SELECT id, entity_type, entity_id, operation, payload, created_at, updated_at, attempt_count, last_error
+         FROM sync_queue
+         ORDER BY created_at ASC, rowid ASC
+         LIMIT ?`,
+        [Number(limit)],
+      )
+
+      return values.map((row) => ({
+        id: row.id,
+        entityType: row.entity_type,
+        entityId: row.entity_id,
+        operation: row.operation,
+        payload:
+          row.payload === null || row.payload === undefined ? null : JSON.parse(row.payload),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        attemptCount: Number(row.attempt_count),
+        lastError: row.last_error,
+      }))
+    },
+    async countSyncQueueItems() {
+      const db = await ensureConnection()
+      const { values = [] } = await db.query('SELECT COUNT(*) AS total FROM sync_queue')
+      return Number(values[0]?.total ?? 0)
+    },
+    async markSyncQueueItemFailed(id, error) {
+      const db = await ensureConnection()
+      await db.run(
+        'UPDATE sync_queue SET attempt_count = attempt_count + 1, last_error = ? WHERE id = ?',
+        [error, id],
+      )
+    },
+    async deleteSyncQueueItem(id) {
+      const db = await ensureConnection()
+      await db.run('DELETE FROM sync_queue WHERE id = ?', [id])
     },
     async close() {
       if (!dbConnection) {

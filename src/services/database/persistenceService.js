@@ -161,7 +161,7 @@ export function createPersistenceService({ adapter, pinia }) {
   let suppressPersistence = false
   let writeQueue = Promise.resolve()
 
-  function queueWrite(task, label) {
+  function runSerialized(task, label) {
     const run = writeQueue.catch(() => {}).then(task)
 
     writeQueue = run.catch((error) => {
@@ -210,7 +210,7 @@ export function createPersistenceService({ adapter, pinia }) {
           }
 
           const nextSnapshot = cloneValue(snapshot)
-          void queueWrite(() => context.save(adapter, nextSnapshot), context.key)
+        void runSerialized(() => context.save(adapter, nextSnapshot), context.key)
         },
         { deep: true },
       )
@@ -224,8 +224,12 @@ export function createPersistenceService({ adapter, pinia }) {
     async initialize() {
       await adapter.initialize()
 
-      if ((await adapter.getSchemaVersion()) !== DB_VERSION) {
-        await adapter.setSchemaVersion(DB_VERSION)
+      const schemaVersion = await adapter.getSchemaVersion()
+
+      if (schemaVersion !== DB_VERSION) {
+        throw new Error(
+          `Unsupported database schema version ${schemaVersion}. Expected ${DB_VERSION}.`,
+        )
       }
 
       const firstRun = !(await adapter.isInitialized())
@@ -240,7 +244,7 @@ export function createPersistenceService({ adapter, pinia }) {
 
       return {
         firstRun,
-        schemaVersion: await adapter.getSchemaVersion(),
+        schemaVersion,
       }
     },
     async flush() {
@@ -256,5 +260,6 @@ export function createPersistenceService({ adapter, pinia }) {
       await writeQueue
       await adapter.close()
     },
+    runSerialized,
   }
 }

@@ -509,6 +509,11 @@ describe('P8 sqlite persistence foundation', () => {
         order.push(`hydrate:start:${pinia}`)
         await Promise.resolve()
         order.push('hydrate:end')
+        return {}
+      },
+      async initializeSync({ pinia }) {
+        order.push(`sync:init:${pinia}`)
+        return { queueService: {}, tracker: {} }
       },
       routerFactory() {
         order.push('router:created')
@@ -523,6 +528,7 @@ describe('P8 sqlite persistence foundation', () => {
       'pinia:installed',
       'hydrate:start:pinia-plugin',
       'hydrate:end',
+      'sync:init:pinia-plugin',
       'router:created',
       'router:installed',
       'mount:#app',
