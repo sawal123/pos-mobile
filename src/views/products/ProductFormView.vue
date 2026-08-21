@@ -64,8 +64,8 @@ async function handleSubmit() {
   const payload = {
     name: form.name,
     category: form.category,
-    price: Number(form.price),
-    stock: Number(form.stock),
+    price: form.price,
+    stock: form.stock,
     isActive: form.isActive,
   }
 

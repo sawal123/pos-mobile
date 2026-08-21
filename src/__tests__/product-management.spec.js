@@ -138,6 +138,150 @@ describe('P2 product management', () => {
     expect(result.error).toBeTruthy()
   })
 
+  it("createCategory('semua') ditolak", () => {
+    const { productStore } = createContext()
+
+    const result = productStore.createCategory('semua')
+
+    expect(result.success).toBe(false)
+    expect(result.error).toBeTruthy()
+  })
+
+  it("createCategory('SEMUA') ditolak", () => {
+    const { productStore } = createContext()
+
+    const result = productStore.createCategory('SEMUA')
+
+    expect(result.success).toBe(false)
+    expect(result.error).toBeTruthy()
+  })
+
+  it('create product dengan category tidak terdaftar ditolak', () => {
+    const { productStore } = createContext()
+
+    const result = productStore.createProduct({
+      name: 'Latte',
+      category: 'Kategori Tidak Ada',
+      price: 20000,
+      stock: 10,
+      isActive: true,
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.errors.category).toBeTruthy()
+    expect(productStore.categories).not.toContain('Kategori Tidak Ada')
+  })
+
+  it('create product invalid tidak menambah product', () => {
+    const { productStore } = createContext()
+    const initialCount = productStore.products.length
+
+    const result = productStore.createProduct({
+      name: 'Latte',
+      category: 'Kategori Tidak Ada',
+      price: 20000,
+      stock: 10,
+      isActive: true,
+    })
+
+    expect(result.success).toBe(false)
+    expect(productStore.products).toHaveLength(initialCount)
+  })
+
+  it('update product dengan category tidak terdaftar ditolak', () => {
+    const { productStore } = createContext()
+    const productId = productStore.products[0].id
+
+    const result = productStore.updateProduct(productId, {
+      name: 'Es Kopi Susu',
+      category: 'Kategori Tidak Ada',
+      price: 22000,
+      stock: 18,
+      isActive: true,
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.errors.category).toBeTruthy()
+    expect(productStore.categories).not.toContain('Kategori Tidak Ada')
+  })
+
+  it('update product invalid tidak mengubah product existing', () => {
+    const { productStore } = createContext()
+    const productId = productStore.products[0].id
+    const originalProduct = { ...productStore.getProductById(productId) }
+
+    const result = productStore.updateProduct(productId, {
+      name: 'Produk Baru',
+      category: 'Kategori Tidak Ada',
+      price: 99999,
+      stock: 99,
+      isActive: false,
+    })
+
+    expect(result.success).toBe(false)
+    expect(productStore.getProductById(productId)).toEqual(originalProduct)
+  })
+
+  it('price kosong ditolak', () => {
+    const { productStore } = createContext()
+
+    const result = productStore.createProduct({
+      name: 'Latte',
+      category: 'Minuman',
+      price: '',
+      stock: 10,
+      isActive: true,
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.errors.price).toBeTruthy()
+  })
+
+  it('stock kosong ditolak', () => {
+    const { productStore } = createContext()
+
+    const result = productStore.createProduct({
+      name: 'Latte',
+      category: 'Minuman',
+      price: 20000,
+      stock: '',
+      isActive: true,
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.errors.stock).toBeTruthy()
+  })
+
+  it('price 0 tetap valid', () => {
+    const { productStore } = createContext()
+
+    const result = productStore.createProduct({
+      name: 'Air Putih',
+      category: 'Minuman',
+      price: 0,
+      stock: 10,
+      isActive: true,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.product.price).toBe(0)
+  })
+
+  it('stock 0 tetap valid', () => {
+    const { productStore } = createContext()
+
+    const result = productStore.createProduct({
+      name: 'Menu Habis',
+      category: 'Makanan',
+      price: 10000,
+      stock: 0,
+      isActive: true,
+    })
+
+    expect(result.success).toBe(true)
+    expect(result.product.stock).toBe(0)
+  })
+
   it('edit category mengubah category product terkait', () => {
     const { productStore } = createContext()
 

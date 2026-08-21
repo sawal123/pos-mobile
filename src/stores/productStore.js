@@ -4,6 +4,7 @@ import { products } from '@/data/products'
 
 const DEFAULT_FILTER_CATEGORY = 'Semua'
 const DEFAULT_CATEGORIES = ['Minuman', 'Makanan', 'Snack', 'Dessert', 'Lainnya']
+const DEFAULT_FILTER_CATEGORY_KEY = DEFAULT_FILTER_CATEGORY.toLowerCase()
 
 function normalizeProduct(product) {
   return {
@@ -26,6 +27,10 @@ function normalizeCategoryKey(value) {
   return value.trim().toLowerCase()
 }
 
+function isBlankValue(value) {
+  return value == null || (typeof value === 'string' && !value.trim())
+}
+
 function generateProductId() {
   if (globalThis.crypto?.randomUUID) {
     return globalThis.crypto.randomUUID()
@@ -34,12 +39,12 @@ function generateProductId() {
   return `product-${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
-function validateProductInput(payload) {
+function validateProductInput(payload, categories) {
   const errors = {}
   const name = normalizeName(payload.name ?? '')
   const category = normalizeName(payload.category ?? '')
-  const price = Number(payload.price)
-  const stock = Number(payload.stock)
+  const price = isBlankValue(payload.price) ? Number.NaN : Number(payload.price)
+  const stock = isBlankValue(payload.stock) ? Number.NaN : Number(payload.stock)
 
   if (!name) {
     errors.name = 'Nama produk wajib diisi.'
@@ -47,8 +52,10 @@ function validateProductInput(payload) {
 
   if (!category) {
     errors.category = 'Kategori wajib dipilih.'
-  } else if (category === DEFAULT_FILTER_CATEGORY) {
+  } else if (normalizeCategoryKey(category) === DEFAULT_FILTER_CATEGORY_KEY) {
     errors.category = 'Kategori produk tidak valid.'
+  } else if (!categories.includes(category)) {
+    errors.category = 'Kategori tidak ditemukan.'
   }
 
   if (Number.isNaN(price) || price < 0) {
@@ -83,7 +90,7 @@ function validateCategoryName(name, categories, currentName = null) {
     }
   }
 
-  if (trimmedName === DEFAULT_FILTER_CATEGORY) {
+  if (normalizeCategoryKey(trimmedName) === DEFAULT_FILTER_CATEGORY_KEY) {
     return {
       isValid: false,
       error: 'Nama kategori tidak valid.',
@@ -156,7 +163,7 @@ export const useProductStore = defineStore('product', {
       return this.products.find((product) => String(product.id) === String(id)) ?? null
     },
     createProduct(payload) {
-      const { errors, isValid, values } = validateProductInput(payload)
+      const { errors, isValid, values } = validateProductInput(payload, this.categories)
 
       if (!isValid) {
         return {
@@ -171,10 +178,6 @@ export const useProductStore = defineStore('product', {
       }
 
       this.products.push(product)
-
-      if (!this.categories.includes(product.category)) {
-        this.categories.push(product.category)
-      }
 
       return {
         success: true,
@@ -194,7 +197,7 @@ export const useProductStore = defineStore('product', {
         }
       }
 
-      const { errors, isValid, values } = validateProductInput(payload)
+      const { errors, isValid, values } = validateProductInput(payload, this.categories)
 
       if (!isValid) {
         return {
@@ -208,10 +211,6 @@ export const useProductStore = defineStore('product', {
       existingProduct.price = values.price
       existingProduct.stock = values.stock
       existingProduct.isActive = values.isActive
-
-      if (!this.categories.includes(values.category)) {
-        this.categories.push(values.category)
-      }
 
       return {
         success: true,
