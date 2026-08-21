@@ -38,6 +38,8 @@ export const useTransactionStore = defineStore('transaction', {
         tax: payload.tax,
         total: payload.total,
         paymentMethod: payload.paymentMethod,
+        cashReceived: payload.cashReceived ?? null,
+        changeAmount: payload.changeAmount ?? null,
         createdAt: new Date().toISOString(),
       }
 

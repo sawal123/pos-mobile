@@ -190,8 +190,11 @@ describe('P1 POS flow', () => {
       },
     })
 
+    const exactCashButton = getButtonByText(wrapper, 'Uang Pas')
     const payButton = getButtonByText(wrapper, 'Selesaikan Pembayaran')
 
+    await exactCashButton.trigger('click')
+    await flushPromises()
     await payButton.trigger('click')
     await flushPromises()
 
