@@ -1,5 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -8,16 +9,21 @@ import BaseInput from '@/components/base/BaseInput.vue'
 import PaymentMethodCard from '@/components/payment/PaymentMethodCard.vue'
 import CartSummary from '@/components/pos/CartSummary.vue'
 import { useCartStore } from '@/stores/cartStore'
+import { useCustomerStore } from '@/stores/customerStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import { formatCurrency } from '@/utils/formatters'
 
 const QUICK_CASH_AMOUNTS = [20000, 50000, 100000, 200000, 500000]
 
 const cartStore = useCartStore()
+const customerStore = useCustomerStore()
 const transactionStore = useTransactionStore()
 const router = useRouter()
 
+const { customers } = storeToRefs(customerStore)
+
 const selectedMethod = ref('cash')
+const selectedCustomerId = ref('')
 const cashReceived = ref('')
 const isProcessing = ref(false)
 const hasAttemptedSubmit = ref(false)
@@ -29,6 +35,7 @@ const paymentMethods = [
 ]
 
 const isCashMethod = computed(() => selectedMethod.value === 'cash')
+const selectedCustomer = computed(() => customerStore.getCustomerById(selectedCustomerId.value))
 
 const parsedCashReceived = computed(() => {
   if (cashReceived.value == null || `${cashReceived.value}`.trim() === '') {
@@ -153,6 +160,9 @@ async function completePayment() {
     subtotal: cartStore.subtotal,
     tax: cartStore.tax,
     total: cartStore.total,
+    customer: selectedCustomer.value?.name ?? 'Walk-in Customer',
+    customerId: selectedCustomer.value?.id ?? null,
+    customerSnapshot: selectedCustomer.value ? { ...selectedCustomer.value } : null,
     paymentMethod: selectedMethod.value,
     cashReceived: isCashMethod.value ? parsedCashReceived.value : null,
     changeAmount: isCashMethod.value ? changeAmount.value : null,
@@ -181,6 +191,28 @@ async function completePayment() {
           <PaymentMethodCard :method="method" :active="selectedMethod === method.id" />
         </button>
       </div>
+
+      <BaseCard class="space-y-3">
+        <div>
+          <p class="text-sm font-medium text-ink-primary">Pelanggan</p>
+          <p class="mt-1 text-sm text-ink-secondary">
+            Pilih pelanggan jika transaksi tidak menggunakan Walk-in Customer.
+          </p>
+        </div>
+
+        <label class="flex flex-col gap-2">
+          <span class="text-sm font-medium text-ink-secondary">Customer</span>
+          <select
+            v-model="selectedCustomerId"
+            class="h-12 rounded-2xl border border-zinc-200 bg-white px-4 text-sm text-ink-primary outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/10"
+          >
+            <option value="">Walk-in Customer</option>
+            <option v-for="customer in customers" :key="customer.id" :value="customer.id">
+              {{ customer.name }}
+            </option>
+          </select>
+        </label>
+      </BaseCard>
 
       <BaseCard v-if="isCashMethod" class="space-y-4">
         <BaseInput

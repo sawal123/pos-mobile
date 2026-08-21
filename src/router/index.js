@@ -13,6 +13,8 @@ import PaymentSuccessView from '../views/payment/PaymentSuccessView.vue'
 import PaymentView from '../views/payment/PaymentView.vue'
 import PosView from '../views/pos/PosView.vue'
 import CategoriesView from '../views/categories/CategoriesView.vue'
+import CustomerFormView from '../views/customers/CustomerFormView.vue'
+import CustomersView from '../views/customers/CustomersView.vue'
 import ProductFormView from '../views/products/ProductFormView.vue'
 import ProductsView from '../views/products/ProductsView.vue'
 import CloseShiftView from '../views/shift/CloseShiftView.vue'
@@ -92,6 +94,21 @@ const routes = [
         component: CategoriesView,
       },
       {
+        path: 'customers',
+        name: 'customers',
+        component: CustomersView,
+      },
+      {
+        path: 'customers/create',
+        name: 'customer-create',
+        component: CustomerFormView,
+      },
+      {
+        path: 'customers/:id/edit',
+        name: 'customer-edit',
+        component: CustomerFormView,
+      },
+      {
         path: 'payment',
         name: 'payment',
         component: PaymentView,
@@ -130,6 +147,9 @@ const businessRequiredRoutes = new Set([
   'product-create',
   'product-edit',
   'categories',
+  'customers',
+  'customer-create',
+  'customer-edit',
   'payment',
   'payment-success',
   'transactions',
@@ -146,6 +166,9 @@ const pinRequiredRoutes = new Set([
   'product-create',
   'product-edit',
   'categories',
+  'customers',
+  'customer-create',
+  'customer-edit',
   'payment',
   'payment-success',
   'transactions',
