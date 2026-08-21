@@ -1,5 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue'
+import { useRouter } from 'vue-router'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
@@ -11,6 +12,7 @@ import { useCashierStore } from '@/stores/cashierStore'
 
 const businessStore = useBusinessStore()
 const cashierStore = useCashierStore()
+const router = useRouter()
 
 const showProfileModal = ref(false)
 const showActionSheet = ref(false)
@@ -45,6 +47,7 @@ const businessSummary = computed(() => [
 
       <div class="flex flex-wrap gap-3">
         <BaseButton variant="secondary" @click="showProfileModal = true">Edit Profil</BaseButton>
+        <BaseButton variant="secondary" @click="router.push('/customers')">Kelola Pelanggan</BaseButton>
         <BaseButton variant="ghost" @click="showActionSheet = true">Aksi Lainnya</BaseButton>
       </div>
     </BaseCard>
@@ -60,6 +63,7 @@ const businessSummary = computed(() => [
 
     <BaseSheet :open="showActionSheet" title="Shortcut Pengaturan" @close="showActionSheet = false">
       <div class="grid gap-3">
+        <BaseButton block variant="secondary" @click="router.push('/customers')">Kelola Pelanggan</BaseButton>
         <BaseButton block variant="secondary">Export Data</BaseButton>
         <BaseButton block variant="secondary">Sinkronisasi</BaseButton>
         <BaseButton block variant="danger" @click="showActionSheet = false">Tutup</BaseButton>

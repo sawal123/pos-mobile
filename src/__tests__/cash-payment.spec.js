@@ -165,7 +165,7 @@ describe('P3 cash payment', () => {
     await setCashInputValue(wrapper, '20000')
 
     expect(wrapper.text()).toContain(formatCurrency(0))
-    expect(wrapper.text()).not.toContain('-')
+    expect(wrapper.text()).not.toContain(formatCurrency(-4420))
   })
 
   it('Uang Pas mengisi total transaksi', async () => {

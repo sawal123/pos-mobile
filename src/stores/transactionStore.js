@@ -30,7 +30,9 @@ export const useTransactionStore = defineStore('transaction', {
       const transaction = {
         id: createTransactionId(),
         invoiceNumber: createInvoiceNumber(),
-        customer: 'Walk-in Customer',
+        customer: payload.customer ?? 'Walk-in Customer',
+        customerId: payload.customerId ?? null,
+        customerSnapshot: payload.customerSnapshot ? { ...payload.customerSnapshot } : null,
         status: 'paid',
         items: payload.items.map((item) => ({ ...item })),
         itemCount: payload.items.reduce((count, item) => count + item.qty, 0),
