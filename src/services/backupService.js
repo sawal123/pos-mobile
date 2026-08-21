@@ -16,6 +16,10 @@ function hasValue(value) {
   return value !== null && value !== undefined && value !== ''
 }
 
+function hasOwn(object, key) {
+  return isObject(object) && Object.prototype.hasOwnProperty.call(object, key)
+}
+
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0
 }
@@ -31,34 +35,11 @@ function isValidDateString(value) {
 }
 
 function normalizeTransactionForBackup(transaction) {
-  const items = Array.isArray(transaction.items)
-    ? transaction.items.map((item) => ({ ...item }))
-    : []
-
-  const itemCount = Number.isFinite(transaction.itemCount)
-    ? transaction.itemCount
-    : (Array.isArray(transaction.items)
-      ? items.reduce((count, item) => count + (Number(item.qty) || 0), 0)
-      : (Number.isFinite(transaction.items) ? transaction.items : 0))
-
-  return {
-    id: transaction.id,
-    invoiceNumber: typeof transaction.invoiceNumber === 'string' ? transaction.invoiceNumber : String(transaction.id ?? ''),
-    customer: typeof transaction.customer === 'string' ? transaction.customer : 'Walk-in Customer',
-    customerId: transaction.customerId ?? null,
-    customerSnapshot: transaction.customerSnapshot ? { ...transaction.customerSnapshot } : null,
-    businessSnapshot: transaction.businessSnapshot ? { ...transaction.businessSnapshot } : null,
-    status: typeof transaction.status === 'string' ? transaction.status : 'paid',
-    items,
-    itemCount,
-    subtotal: Number.isFinite(transaction.subtotal) ? transaction.subtotal : 0,
-    tax: Number.isFinite(transaction.tax) ? transaction.tax : 0,
-    total: Number.isFinite(transaction.total) ? transaction.total : 0,
-    paymentMethod: typeof transaction.paymentMethod === 'string' ? transaction.paymentMethod : '',
-    cashReceived: Number.isFinite(transaction.cashReceived) ? transaction.cashReceived : null,
-    changeAmount: Number.isFinite(transaction.changeAmount) ? transaction.changeAmount : null,
-    createdAt: isValidDateString(transaction.createdAt) ? transaction.createdAt : new Date().toISOString(),
+  if (!isObject(transaction)) {
+    return transaction
   }
+
+  return jsonClone(transaction)
 }
 
 function buildProductData(productStore) {
@@ -190,6 +171,23 @@ function validateBusinessSnapshot(snapshot) {
     && typeof snapshot.phone === 'string'
 }
 
+function validateTransactionItems(items) {
+  if (Array.isArray(items)) {
+    for (const item of items) {
+      if (!isObject(item)
+        || !isNonEmptyString(item.name)
+        || !isFiniteNumber(item.price, { min: 0 })
+        || !isFiniteNumber(item.qty, { greaterThan: 0 })) {
+        return false
+      }
+    }
+
+    return true
+  }
+
+  return isFiniteNumber(items, { greaterThan: 0 })
+}
+
 function validateTransactionsData(transactions) {
   if (!Array.isArray(transactions)) {
     return 'File backup tidak valid.'
@@ -198,30 +196,51 @@ function validateTransactionsData(transactions) {
   for (const transaction of transactions) {
     if (!isObject(transaction)
       || !hasValue(transaction.id)
-      || !Array.isArray(transaction.items)
-      || !isFiniteNumber(transaction.subtotal, { min: 0 })
-      || !isFiniteNumber(transaction.tax, { min: 0 })
+      || !validateTransactionItems(transaction.items)
       || !isFiniteNumber(transaction.total, { min: 0 })
       || typeof transaction.paymentMethod !== 'string'
       || !isValidDateString(transaction.createdAt)) {
       return 'File backup tidak valid.'
     }
 
-    for (const item of transaction.items) {
-      if (!isObject(item)
-        || !isNonEmptyString(item.name)
-        || !isFiniteNumber(item.price, { min: 0 })
-        || !isFiniteNumber(item.qty, { greaterThan: 0 })) {
-        return 'File backup tidak valid.'
-      }
+    if (hasOwn(transaction, 'invoiceNumber') && typeof transaction.invoiceNumber !== 'string') {
+      return 'File backup tidak valid.'
     }
 
-    if (transaction.cashReceived !== null && transaction.cashReceived !== undefined
+    if (hasOwn(transaction, 'customer') && typeof transaction.customer !== 'string') {
+      return 'File backup tidak valid.'
+    }
+
+    if (hasOwn(transaction, 'customerId')
+      && transaction.customerId !== null
+      && typeof transaction.customerId !== 'string') {
+      return 'File backup tidak valid.'
+    }
+
+    if (hasOwn(transaction, 'status') && typeof transaction.status !== 'string') {
+      return 'File backup tidak valid.'
+    }
+
+    if (hasOwn(transaction, 'itemCount') && !isFiniteNumber(transaction.itemCount, { greaterThan: 0 })) {
+      return 'File backup tidak valid.'
+    }
+
+    if (hasOwn(transaction, 'subtotal') && !isFiniteNumber(transaction.subtotal, { min: 0 })) {
+      return 'File backup tidak valid.'
+    }
+
+    if (hasOwn(transaction, 'tax') && !isFiniteNumber(transaction.tax, { min: 0 })) {
+      return 'File backup tidak valid.'
+    }
+
+    if (hasOwn(transaction, 'cashReceived')
+      && transaction.cashReceived !== null
       && !isFiniteNumber(transaction.cashReceived, { min: 0 })) {
       return 'File backup tidak valid.'
     }
 
-    if (transaction.changeAmount !== null && transaction.changeAmount !== undefined
+    if (hasOwn(transaction, 'changeAmount')
+      && transaction.changeAmount !== null
       && !isFiniteNumber(transaction.changeAmount, { min: 0 })) {
       return 'File backup tidak valid.'
     }

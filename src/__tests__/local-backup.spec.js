@@ -1,8 +1,9 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { describe, expect, it, vi, afterEach } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { createAppRouter } from '@/router'
+import { transactions as legacyTransactions } from '@/data/transactions'
 import {
   BACKUP_SCHEMA,
   BACKUP_VERSION,
@@ -21,6 +22,10 @@ import { useProductStore } from '@/stores/productStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import SettingsView from '@/views/settings/SettingsView.vue'
+
+const legacyTransaction = typeof globalThis.structuredClone === 'function'
+  ? globalThis.structuredClone(legacyTransactions[0])
+  : JSON.parse(JSON.stringify(legacyTransactions[0]))
 
 function createContext() {
   const pinia = createPinia()
@@ -414,6 +419,61 @@ describe('P7 local backup & restore JSON', () => {
     expect(payload.data.products.products[0].name).toBe('Es Kopi Susu')
   })
 
+  it('legacy transaction dengan items numeric dapat dibackup', () => {
+    const context = createContext()
+
+    const payload = createBackupPayload(context)
+
+    expect(payload.data.transactions[0].items).toBe(legacyTransaction.items)
+  })
+
+  it('backup mempertahankan items: 3', () => {
+    const context = createContext()
+
+    const payload = createBackupPayload(context)
+
+    expect(payload.data.transactions[0].items).toBe(3)
+  })
+
+  it('backup legacy tidak mengubah items menjadi []', () => {
+    const context = createContext()
+
+    const payload = createBackupPayload(context)
+
+    expect(Array.isArray(payload.data.transactions[0].items)).toBe(false)
+  })
+
+  it('legacy transaction tanpa subtotal/tax tetap dapat dibackup', () => {
+    const context = createContext()
+
+    const payload = createBackupPayload(context)
+
+    expect(payload.data.transactions[0].subtotal).toBeUndefined()
+    expect(payload.data.transactions[0].tax).toBeUndefined()
+  })
+
+  it('legacy transaction tanpa businessSnapshot tetap valid', () => {
+    const payload = makeValidBackup()
+    payload.data.transactions = [{ ...legacyTransaction }]
+
+    expect(validateBackupPayload(payload).valid).toBe(true)
+  })
+
+  it('legacy transaction tanpa customerSnapshot tetap valid', () => {
+    const payload = makeValidBackup()
+    payload.data.transactions = [{ ...legacyTransaction }]
+
+    expect(validateBackupPayload(payload).valid).toBe(true)
+  })
+
+  it('legacy transaction backup dapat divalidasi', () => {
+    const context = createContext()
+
+    const payload = createBackupPayload(context)
+
+    expect(validateBackupPayload(payload).valid).toBe(true)
+  })
+
   it('invalid JSON ditangani tanpa crash', async () => {
     const { wrapper, productStore } = await mountSettings()
     const initialProducts = JSON.stringify(productStore.products)
@@ -505,6 +565,42 @@ describe('P7 local backup & restore JSON', () => {
     })
   })
 
+  it('modern transaction dengan items array tetap bekerja', () => {
+    const payload = makeValidBackup()
+
+    expect(validateBackupPayload(payload).valid).toBe(true)
+  })
+
+  it('invalid numeric items 0 ditolak', () => {
+    const payload = makeValidBackup()
+    payload.data.transactions = [{ ...legacyTransaction, items: 0 }]
+
+    expect(validateBackupPayload(payload)).toEqual({
+      valid: false,
+      error: 'File backup tidak valid.',
+    })
+  })
+
+  it('invalid numeric items negatif ditolak', () => {
+    const payload = makeValidBackup()
+    payload.data.transactions = [{ ...legacyTransaction, items: -1 }]
+
+    expect(validateBackupPayload(payload)).toEqual({
+      valid: false,
+      error: 'File backup tidak valid.',
+    })
+  })
+
+  it('invalid numeric items Infinity ditolak', () => {
+    const payload = makeValidBackup()
+    payload.data.transactions = [{ ...legacyTransaction, items: Infinity }]
+
+    expect(validateBackupPayload(payload)).toEqual({
+      valid: false,
+      error: 'File backup tidak valid.',
+    })
+  })
+
   it('validation gagal tidak mengubah store mana pun', () => {
     const context = createContext()
     seedStores(context)
@@ -577,6 +673,18 @@ describe('P7 local backup & restore JSON', () => {
     expect(context.transactionStore.items[0].id).toBe('trx-backup')
   })
 
+  it('legacy transaction dapat direstore', () => {
+    const context = createContext()
+    seedStores(context)
+    const payload = makeValidBackup()
+    payload.data.transactions = [{ ...legacyTransaction }]
+
+    const result = restoreBackupPayload(payload, context)
+
+    expect(result.success).toBe(true)
+    expect(context.transactionStore.items[0].id).toBe(legacyTransaction.id)
+  })
+
   it('restore mempertahankan product ID', () => {
     const context = createContext()
     seedStores(context)
@@ -615,6 +723,17 @@ describe('P7 local backup & restore JSON', () => {
     expect(context.transactionStore.items[0].invoiceNumber).toBe('INV-BACKUP')
   })
 
+  it('restore mempertahankan items: 3', () => {
+    const context = createContext()
+    seedStores(context)
+    const payload = makeValidBackup()
+    payload.data.transactions = [{ ...legacyTransaction }]
+
+    restoreBackupPayload(payload, context)
+
+    expect(context.transactionStore.items[0].items).toBe(3)
+  })
+
   it('transaction snapshot tetap utuh setelah restore', () => {
     const context = createContext()
     seedStores(context)
@@ -632,6 +751,17 @@ describe('P7 local backup & restore JSON', () => {
       outlet: 'Outlet Backup',
       phone: '081111111111',
     })
+  })
+
+  it('backup -> restore menghasilkan historical legacy transaction yang ekuivalen', () => {
+    const sourceContext = createContext()
+    const payload = createBackupPayload(sourceContext)
+    const restoreContext = createContext()
+    seedStores(restoreContext)
+
+    restoreBackupPayload(payload, restoreContext)
+
+    expect(restoreContext.transactionStore.items[0]).toEqual(legacyTransaction)
   })
 
   it('business profile berhasil direstore', () => {
@@ -743,6 +873,7 @@ describe('P7 local backup & restore JSON', () => {
     const revokeObjectURLSpy = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
     const clickSpy = vi.fn()
     const originalCreateElement = document.createElement.bind(document)
+
     vi.spyOn(document, 'createElement').mockImplementation((tagName) => {
       if (tagName === 'a') {
         return {
@@ -782,6 +913,7 @@ describe('P7 local backup & restore JSON', () => {
       href: '',
       download: '',
     }
+
     vi.spyOn(document, 'createElement').mockReturnValue(anchor)
 
     const filename = downloadBackupFile(makeValidBackup())
