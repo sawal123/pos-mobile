@@ -1,18 +1,26 @@
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
+import BaseInput from '@/components/base/BaseInput.vue'
 import PaymentMethodCard from '@/components/payment/PaymentMethodCard.vue'
 import CartSummary from '@/components/pos/CartSummary.vue'
 import { useCartStore } from '@/stores/cartStore'
 import { useTransactionStore } from '@/stores/transactionStore'
+import { formatCurrency } from '@/utils/formatters'
+
+const QUICK_CASH_AMOUNTS = [20000, 50000, 100000, 200000, 500000]
 
 const cartStore = useCartStore()
 const transactionStore = useTransactionStore()
 const router = useRouter()
+
 const selectedMethod = ref('cash')
+const cashReceived = ref(cartStore.total ? String(cartStore.total) : '')
+const isProcessing = ref(false)
+const hasAttemptedSubmit = ref(false)
 
 const paymentMethods = [
   { id: 'cash', label: 'Cash', description: 'Pembayaran tunai di kasir' },
@@ -20,11 +28,125 @@ const paymentMethods = [
   { id: 'card', label: 'Card', description: 'Debit atau kartu kredit' },
 ]
 
-function completePayment() {
+const isCashMethod = computed(() => selectedMethod.value === 'cash')
+
+const parsedCashReceived = computed(() => {
+  if (cashReceived.value == null || `${cashReceived.value}`.trim() === '') {
+    return null
+  }
+
+  const amount = Number(cashReceived.value)
+  return Number.isNaN(amount) ? Number.NaN : amount
+})
+
+const cashValidationState = computed(() => {
+  if (!isCashMethod.value) {
+    return 'valid'
+  }
+
+  if (parsedCashReceived.value === null) {
+    return 'required'
+  }
+
+  if (Number.isNaN(parsedCashReceived.value)) {
+    return 'invalid'
+  }
+
+  if (parsedCashReceived.value < 0) {
+    return 'negative'
+  }
+
+  if (parsedCashReceived.value < cartStore.total) {
+    return 'insufficient'
+  }
+
+  return 'valid'
+})
+
+const cashValidationMessage = computed(() => {
+  if (!isCashMethod.value) {
+    return ''
+  }
+
+  if (cashValidationState.value === 'required') {
+    return hasAttemptedSubmit.value ? 'Uang diterima wajib diisi' : ''
+  }
+
+  if (cashValidationState.value === 'invalid') {
+    return 'Uang diterima harus berupa angka valid'
+  }
+
+  if (cashValidationState.value === 'negative') {
+    return 'Uang diterima tidak boleh negatif'
+  }
+
+  if (cashValidationState.value === 'insufficient') {
+    return 'Uang diterima kurang dari total pembayaran'
+  }
+
+  return ''
+})
+
+const isCashPaymentValid = computed(() => isCashMethod.value && cashValidationState.value === 'valid')
+
+const displayedCashReceived = computed(() => (
+  parsedCashReceived.value == null || Number.isNaN(parsedCashReceived.value)
+    ? 0
+    : parsedCashReceived.value
+))
+
+const changeAmount = computed(() => {
+  if (!isCashPaymentValid.value) {
+    return 0
+  }
+
+  return Math.max(0, parsedCashReceived.value - cartStore.total)
+})
+
+const quickCashAmounts = computed(() => {
+  const amounts = QUICK_CASH_AMOUNTS.filter((amount) => amount >= cartStore.total)
+  return [...new Set(amounts)].slice(0, 3)
+})
+
+const isSubmitDisabled = computed(() => {
+  if (!cartStore.items.length || isProcessing.value) {
+    return true
+  }
+
+  if (!isCashMethod.value) {
+    return false
+  }
+
+  return !isCashPaymentValid.value
+})
+
+function fillExactAmount() {
+  cashReceived.value = String(cartStore.total)
+  hasAttemptedSubmit.value = false
+}
+
+function selectQuickCashAmount(amount) {
+  cashReceived.value = String(amount)
+  hasAttemptedSubmit.value = false
+}
+
+async function completePayment() {
   if (!cartStore.items.length) {
-    router.push('/pos')
+    await router.push('/pos')
     return
   }
+
+  hasAttemptedSubmit.value = true
+
+  if (isCashMethod.value && !isCashPaymentValid.value) {
+    return
+  }
+
+  if (isProcessing.value) {
+    return
+  }
+
+  isProcessing.value = true
 
   transactionStore.createTransaction({
     items: cartStore.items,
@@ -32,10 +154,12 @@ function completePayment() {
     tax: cartStore.tax,
     total: cartStore.total,
     paymentMethod: selectedMethod.value,
+    cashReceived: isCashMethod.value ? parsedCashReceived.value : null,
+    changeAmount: isCashMethod.value ? changeAmount.value : null,
   })
 
   cartStore.clearCart()
-  router.push('/payment/success')
+  await router.push('/payment/success')
 }
 </script>
 
@@ -57,6 +181,50 @@ function completePayment() {
           <PaymentMethodCard :method="method" :active="selectedMethod === method.id" />
         </button>
       </div>
+
+      <BaseCard v-if="isCashMethod" class="space-y-4">
+        <BaseInput
+          :model-value="cashReceived"
+          label="Uang Diterima"
+          type="number"
+          placeholder="Masukkan nominal uang diterima"
+          @update:model-value="cashReceived = $event"
+        />
+
+        <div class="flex flex-wrap gap-2">
+          <BaseButton size="sm" variant="secondary" @click="fillExactAmount">Uang Pas</BaseButton>
+          <BaseButton
+            v-for="amount in quickCashAmounts"
+            :key="amount"
+            size="sm"
+            variant="ghost"
+            @click="selectQuickCashAmount(amount)"
+          >
+            {{ formatCurrency(amount) }}
+          </BaseButton>
+        </div>
+
+        <p v-if="cashValidationMessage" class="text-sm text-danger">
+          {{ cashValidationMessage }}
+        </p>
+
+        <div class="rounded-2xl bg-zinc-50 px-4 py-3">
+          <div class="flex items-center justify-between gap-3 text-sm">
+            <span class="text-ink-secondary">Total</span>
+            <span class="font-medium text-ink-primary">{{ formatCurrency(cartStore.total) }}</span>
+          </div>
+          <div class="mt-2 flex items-center justify-between gap-3 text-sm">
+            <span class="text-ink-secondary">Uang Diterima</span>
+            <span class="font-medium text-ink-primary">
+              {{ formatCurrency(displayedCashReceived) }}
+            </span>
+          </div>
+          <div class="mt-2 flex items-center justify-between gap-3 text-sm">
+            <span class="text-ink-secondary">Kembalian</span>
+            <span class="font-medium text-ink-primary">{{ formatCurrency(changeAmount) }}</span>
+          </div>
+        </div>
+      </BaseCard>
     </section>
 
     <section class="space-y-4">
@@ -70,7 +238,7 @@ function completePayment() {
         />
       </BaseCard>
 
-      <BaseButton block size="lg" :disabled="!cartStore.items.length" @click="completePayment">
+      <BaseButton block size="lg" :disabled="isSubmitDisabled" @click="completePayment">
         Selesaikan Pembayaran
       </BaseButton>
     </section>
