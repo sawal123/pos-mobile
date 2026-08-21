@@ -67,7 +67,7 @@ export const useExpenseStore = defineStore('expense', {
     expenses: [],
   }),
   getters: {
-    totalExpense(state) {
+    totalExpenses(state) {
       return state.expenses.reduce((sum, expense) => sum + expense.amount, 0)
     },
     sortedExpenses(state) {

@@ -145,19 +145,43 @@ describe('P5 expense management', () => {
     expect(expenseStore.expenses).toHaveLength(0)
   })
 
-  it('amount non-finite ditolak', () => {
+  it('Infinity ditolak', () => {
     const { expenseStore } = createContext()
 
-    const nan = expenseStore.createExpense({ ...validExpense, amount: Number.NaN })
-    const infinity = expenseStore.createExpense({ ...validExpense, amount: Number.POSITIVE_INFINITY })
-    const overflow = expenseStore.createExpense({ ...validExpense, amount: 1e309 })
+    const result = expenseStore.createExpense({ ...validExpense, amount: Number.POSITIVE_INFINITY })
 
-    expect(nan.success).toBe(false)
-    expect(nan.errors.amount).toBeTruthy()
-    expect(infinity.success).toBe(false)
-    expect(infinity.errors.amount).toBeTruthy()
-    expect(overflow.success).toBe(false)
-    expect(overflow.errors.amount).toBeTruthy()
+    expect(result.success).toBe(false)
+    expect(result.errors.amount).toBeTruthy()
+    expect(expenseStore.expenses).toHaveLength(0)
+  })
+
+  it('-Infinity ditolak', () => {
+    const { expenseStore } = createContext()
+
+    const result = expenseStore.createExpense({ ...validExpense, amount: Number.NEGATIVE_INFINITY })
+
+    expect(result.success).toBe(false)
+    expect(result.errors.amount).toBeTruthy()
+    expect(expenseStore.expenses).toHaveLength(0)
+  })
+
+  it('1e309 ditolak', () => {
+    const { expenseStore } = createContext()
+
+    const result = expenseStore.createExpense({ ...validExpense, amount: 1e309 })
+
+    expect(result.success).toBe(false)
+    expect(result.errors.amount).toBeTruthy()
+    expect(expenseStore.expenses).toHaveLength(0)
+  })
+
+  it('NaN ditolak', () => {
+    const { expenseStore } = createContext()
+
+    const result = expenseStore.createExpense({ ...validExpense, amount: Number.NaN })
+
+    expect(result.success).toBe(false)
+    expect(result.errors.amount).toBeTruthy()
     expect(expenseStore.expenses).toHaveLength(0)
   })
 
@@ -169,6 +193,25 @@ describe('P5 expense management', () => {
     expect(result.success).toBe(true)
     expect(typeof result.expense.amount).toBe('number')
     expect(result.expense.amount).toBe(25000)
+  })
+
+  it('amount string numeric disimpan sebagai Number', () => {
+    const { expenseStore } = createContext()
+
+    const result = expenseStore.createExpense({ ...validExpense, amount: '25000' })
+
+    expect(result.success).toBe(true)
+    expect(typeof result.expense.amount).toBe('number')
+    expect(result.expense.amount).toBe(25000)
+  })
+
+  it('note di-trim', () => {
+    const { expenseStore } = createContext()
+
+    const result = expenseStore.createExpense({ ...validExpense, note: '  Keperluan kasir  ' })
+
+    expect(result.success).toBe(true)
+    expect(result.expense.note).toBe('Keperluan kasir')
   })
 
   it('update expense mengubah record yang benar', () => {
@@ -231,6 +274,23 @@ describe('P5 expense management', () => {
     expect(expenseStore.expenses).toHaveLength(initialCount)
   })
 
+  it('invalid update tidak mengubah existing expense', () => {
+    const { expenseStore } = createContext()
+    const created = expenseStore.createExpense(validExpense)
+    const original = { ...expenseStore.getExpenseById(created.expense.id) }
+
+    const result = expenseStore.updateExpense(created.expense.id, {
+      ...validExpense,
+      title: 'Beli Kertas',
+      amount: 0,
+    })
+
+    expect(result.success).toBe(false)
+    expect(result.errors.amount).toBeTruthy()
+    expect(expenseStore.getExpenseById(created.expense.id)).toEqual(original)
+    expect(expenseStore.expenses).toHaveLength(1)
+  })
+
   it('delete expense berhasil', () => {
     const { expenseStore } = createContext()
     const created = expenseStore.createExpense(validExpense)
@@ -242,14 +302,14 @@ describe('P5 expense management', () => {
     expect(expenseStore.expenses).toHaveLength(0)
   })
 
-  it('total expense dihitung dengan benar', () => {
+  it('totalExpenses dihitung dengan benar', () => {
     const { expenseStore } = createContext()
 
     expenseStore.createExpense({ ...validExpense, amount: 25000 })
     expenseStore.createExpense({ ...validExpense, title: 'Beli Kertas', amount: 30000 })
     expenseStore.createExpense({ ...validExpense, title: 'Bensin', amount: 15000 })
 
-    expect(expenseStore.totalExpense).toBe(70000)
+    expect(expenseStore.totalExpenses).toBe(70000)
   })
 
   it('membuat expense tidak mengubah transaction', () => {
@@ -264,7 +324,7 @@ describe('P5 expense management', () => {
     expect(transactionStore.lastTransaction).toBeNull()
   })
 
-  it('/expenses dapat dibuka tanpa shift aktif jika Business + PIN siap', async () => {
+  it('/expenses dapat diakses dengan shift closed jika Business + PIN ready', async () => {
     const { router, businessStore, cashierStore } = createContext()
 
     makeBusinessReady(businessStore)
@@ -274,7 +334,7 @@ describe('P5 expense management', () => {
     expect(router.currentRoute.value.fullPath).toBe('/expenses')
   })
 
-  it('/expenses/create dapat dibuka tanpa shift aktif', async () => {
+  it('/expenses/create dapat diakses dengan shift closed', async () => {
     const { router, businessStore, cashierStore } = createContext()
 
     makeBusinessReady(businessStore)
@@ -284,7 +344,7 @@ describe('P5 expense management', () => {
     expect(router.currentRoute.value.fullPath).toBe('/expenses/create')
   })
 
-  it('/expenses/:id/edit dapat dibuka tanpa shift aktif', async () => {
+  it('/expenses/:id/edit dapat diakses dengan shift closed', async () => {
     const { router, businessStore, cashierStore, expenseStore } = createContext()
     const created = expenseStore.createExpense(validExpense)
 
@@ -295,7 +355,7 @@ describe('P5 expense management', () => {
     expect(router.currentRoute.value.fullPath).toBe(`/expenses/${created.expense.id}/edit`)
   })
 
-  it('route POS tetap membutuhkan shift aktif', async () => {
+  it('/pos tetap membutuhkan active shift', async () => {
     const { router, businessStore, cashierStore } = createContext()
 
     makeBusinessReady(businessStore)

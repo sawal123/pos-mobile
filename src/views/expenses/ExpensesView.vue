@@ -45,7 +45,7 @@ function handleDelete(expense) {
 
     <BaseCard class="space-y-1">
       <p class="text-sm text-ink-secondary">Total Pengeluaran</p>
-      <p class="text-2xl font-semibold text-ink-primary">{{ formatCurrency(expenseStore.totalExpense) }}</p>
+      <p class="text-2xl font-semibold text-ink-primary">{{ formatCurrency(expenseStore.totalExpenses) }}</p>
     </BaseCard>
 
     <BaseCard class="space-y-4">
