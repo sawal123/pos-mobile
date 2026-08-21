@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">POS Mobile</string>
+    <string name="title_activity_main">POS Mobile</string>
+    <string name="package_name">com.posoffline.app</string>
+    <string name="custom_url_scheme">com.posoffline.app</string>
+</resources>
