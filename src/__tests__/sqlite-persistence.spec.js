@@ -5,7 +5,10 @@ import { bootstrapApp } from '@/main'
 import { resolvePersistenceAdapter } from '@/services/database'
 import { createMemoryAdapter } from '@/services/database/memoryAdapter'
 import { createPersistenceService } from '@/services/database/persistenceService'
-import { deserializeTransactionRows } from '@/services/database/sqliteAdapter'
+import {
+  createSQLiteAdapter,
+  deserializeTransactionRows,
+} from '@/services/database/sqliteAdapter'
 import { DB_VERSION } from '@/services/database/schema'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCartStore } from '@/stores/cartStore'
@@ -15,6 +18,49 @@ import { useExpenseStore } from '@/stores/expenseStore'
 import { useProductStore } from '@/stores/productStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import { useTransactionStore } from '@/stores/transactionStore'
+
+const { fakeDb } = vi.hoisted(() => {
+  const fakeDb = {
+    beginTransaction: vi.fn(async () => {}),
+    commitTransaction: vi.fn(async () => {}),
+    rollbackTransaction: vi.fn(async () => {}),
+    run: vi.fn(async () => {}),
+    query: vi.fn(async () => ({ values: [] })),
+    execute: vi.fn(async () => {}),
+    isDBOpen: async () => ({ result: true }),
+    open: async () => {},
+    close: async () => {},
+  }
+
+  return { fakeDb }
+})
+
+vi.mock('@capacitor-community/sqlite', () => {
+  class SQLiteConnection {
+    async checkConnectionsConsistency() {
+      return { result: true }
+    }
+
+    async isConnection() {
+      return { result: false }
+    }
+
+    async createConnection() {
+      return fakeDb
+    }
+
+    async retrieveConnection() {
+      return fakeDb
+    }
+
+    async closeConnection() {}
+  }
+
+  return {
+    CapacitorSQLite: {},
+    SQLiteConnection,
+  }
+})
 
 function createRuntime(adapter = createMemoryAdapter()) {
   const pinia = createPinia()
@@ -481,5 +527,162 @@ describe('P8 sqlite persistence foundation', () => {
       'router:installed',
       'mount:#app',
     ])
+  })
+})
+
+describe('P8 sqlite adapter transaction flag', () => {
+  beforeEach(() => {
+    fakeDb.run.mockClear()
+    fakeDb.beginTransaction.mockClear()
+    fakeDb.commitTransaction.mockClear()
+  })
+
+  it('saveBusiness menjalankan db.run dengan transaction flag false', async () => {
+    const adapter = createSQLiteAdapter()
+
+    await adapter.saveBusiness({
+      name: 'Toko ABC',
+      type: 'Cafe',
+      owner: 'Admin',
+      phone: '08123456789',
+      outlet: 'Outlet Utama',
+      mode: 'free',
+    })
+
+    expect(fakeDb.beginTransaction).toHaveBeenCalledTimes(1)
+    expect(fakeDb.commitTransaction).toHaveBeenCalledTimes(1)
+    expect(fakeDb.run.mock.calls.length).toBeGreaterThan(0)
+    for (const args of fakeDb.run.mock.calls) {
+      expect(args[2]).toBe(false)
+    }
+  })
+
+  it('saveProducts menjalankan semua db.run dengan transaction flag false', async () => {
+    const adapter = createSQLiteAdapter()
+
+    await adapter.saveProducts(
+      [
+        {
+          id: 'p1',
+          name: 'Kopi',
+          category: 'Minuman',
+          price: 20000,
+          stock: 5,
+          isActive: true,
+        },
+      ],
+      ['Minuman'],
+    )
+
+    expect(fakeDb.beginTransaction).toHaveBeenCalledTimes(1)
+    expect(fakeDb.commitTransaction).toHaveBeenCalledTimes(1)
+    expect(fakeDb.run.mock.calls.length).toBeGreaterThan(0)
+    for (const args of fakeDb.run.mock.calls) {
+      expect(args[2]).toBe(false)
+    }
+  })
+
+  it('saveCustomers menjalankan db.run dengan transaction flag false', async () => {
+    const adapter = createSQLiteAdapter()
+
+    await adapter.saveCustomers([
+      { id: 'c1', name: 'Budi', phone: '08111111111', email: 'budi@example.com' },
+    ])
+
+    expect(fakeDb.beginTransaction).toHaveBeenCalledTimes(1)
+    expect(fakeDb.commitTransaction).toHaveBeenCalledTimes(1)
+    expect(fakeDb.run.mock.calls.length).toBeGreaterThan(0)
+    for (const args of fakeDb.run.mock.calls) {
+      expect(args[2]).toBe(false)
+    }
+  })
+
+  it('saveExpenses menjalankan db.run dengan transaction flag false', async () => {
+    const adapter = createSQLiteAdapter()
+
+    await adapter.saveExpenses([
+      {
+        id: 'e1',
+        title: 'Listrik',
+        category: 'Operasional',
+        amount: 150000,
+        note: '',
+        createdAt: '2026-08-21T00:00:00.000Z',
+      },
+    ])
+
+    expect(fakeDb.beginTransaction).toHaveBeenCalledTimes(1)
+    expect(fakeDb.commitTransaction).toHaveBeenCalledTimes(1)
+    expect(fakeDb.run.mock.calls.length).toBeGreaterThan(0)
+    for (const args of fakeDb.run.mock.calls) {
+      expect(args[2]).toBe(false)
+    }
+  })
+
+  it('saveTransactions menjalankan db.run dengan transaction flag false', async () => {
+    const adapter = createSQLiteAdapter()
+
+    await adapter.saveTransactions([
+      { id: 't1', items: 2, total: 50000, createdAt: '2026-08-21T00:00:00.000Z' },
+    ])
+
+    expect(fakeDb.beginTransaction).toHaveBeenCalledTimes(1)
+    expect(fakeDb.commitTransaction).toHaveBeenCalledTimes(1)
+    expect(fakeDb.run.mock.calls.length).toBeGreaterThan(0)
+    for (const args of fakeDb.run.mock.calls) {
+      expect(args[2]).toBe(false)
+    }
+  })
+})
+
+describe('P8 native sqlite plugin fallback', () => {
+  it('web/test tanpa native memakai memory adapter tanpa console.error', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const createSQLite = vi.fn(async () => ({ name: 'sqlite' }))
+
+    const adapter = await resolvePersistenceAdapter({
+      isNativePlatform: false,
+      isPluginAvailable: false,
+      createMemory: createMemoryAdapter,
+      createSQLite,
+    })
+
+    expect(adapter.name).toBe('memory')
+    expect(createSQLite).not.toHaveBeenCalled()
+    expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('native tanpa plugin sqlite memakai memory adapter dan console.error sekali', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const createSQLite = vi.fn(async () => ({ name: 'sqlite' }))
+
+    const adapter = await resolvePersistenceAdapter({
+      isNativePlatform: true,
+      isPluginAvailable: false,
+      createMemory: createMemoryAdapter,
+      createSQLite,
+    })
+
+    expect(adapter.name).toBe('memory')
+    expect(createSQLite).not.toHaveBeenCalled()
+    expect(consoleError).toHaveBeenCalledTimes(1)
+    expect(consoleError.mock.calls[0][0]).toContain('CapacitorSQLite is unavailable on native platform')
+  })
+
+  it('native dengan plugin sqlite memakai adapter sqlite tanpa console.error', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const sqliteAdapter = { name: 'sqlite' }
+    const createSQLite = vi.fn(async () => sqliteAdapter)
+
+    const adapter = await resolvePersistenceAdapter({
+      isNativePlatform: true,
+      isPluginAvailable: true,
+      createMemory: createMemoryAdapter,
+      createSQLite,
+    })
+
+    expect(createSQLite).toHaveBeenCalledTimes(1)
+    expect(adapter).toBe(sqliteAdapter)
+    expect(consoleError).not.toHaveBeenCalled()
   })
 })

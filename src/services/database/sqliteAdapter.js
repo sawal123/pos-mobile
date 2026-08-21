@@ -174,10 +174,11 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
     },
     async saveBusiness(data) {
       await withTransaction(async (db) => {
-        await db.run('DELETE FROM business')
+        await db.run('DELETE FROM business', [], false)
         await db.run(
           'INSERT INTO business (id, name, type, owner, phone, outlet, mode) VALUES (?, ?, ?, ?, ?, ?, ?)',
           [1, data.name, data.type, data.owner, data.phone, data.outlet, data.mode],
+          false,
         )
       })
     },
@@ -204,15 +205,15 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
     },
     async saveProducts(products, categories) {
       await withTransaction(async (db) => {
-        await db.run('DELETE FROM products')
-        await db.run('DELETE FROM categories')
+        await db.run('DELETE FROM products', [], false)
+        await db.run('DELETE FROM categories', [], false)
 
         for (const category of categories) {
           if (String(category) === RESERVED_CATEGORY) {
             continue
           }
 
-          await db.run('INSERT INTO categories (name) VALUES (?)', [category])
+          await db.run('INSERT INTO categories (name) VALUES (?)', [category], false)
         }
 
         for (const product of products) {
@@ -226,6 +227,7 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
               Number(product.stock),
               product.isActive ? 1 : 0,
             ],
+            false,
           )
         }
       })
@@ -245,15 +247,14 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
     },
     async saveCustomers(customers) {
       await withTransaction(async (db) => {
-        await db.run('DELETE FROM customers')
+        await db.run('DELETE FROM customers', [], false)
 
         for (const customer of customers) {
-          await db.run('INSERT INTO customers (id, name, phone, email) VALUES (?, ?, ?, ?)', [
-            String(customer.id),
-            customer.name,
-            customer.phone,
-            customer.email,
-          ])
+          await db.run(
+            'INSERT INTO customers (id, name, phone, email) VALUES (?, ?, ?, ?)',
+            [String(customer.id), customer.name, customer.phone, customer.email],
+            false,
+          )
         }
       })
     },
@@ -274,7 +275,7 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
     },
     async saveExpenses(expenses) {
       await withTransaction(async (db) => {
-        await db.run('DELETE FROM expenses')
+        await db.run('DELETE FROM expenses', [], false)
 
         for (const expense of expenses) {
           await db.run(
@@ -287,6 +288,7 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
               expense.note,
               expense.createdAt,
             ],
+            false,
           )
         }
       })
@@ -301,7 +303,7 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
     },
     async saveTransactions(transactions) {
       await withTransaction(async (db) => {
-        await db.run('DELETE FROM transactions')
+        await db.run('DELETE FROM transactions', [], false)
 
         for (const transaction of transactions) {
           await db.run(
@@ -311,6 +313,7 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
               JSON.stringify(transaction),
               String(transaction.createdAt ?? '') || new Date().toISOString(),
             ],
+            false,
           )
         }
       })

@@ -9,7 +9,15 @@ export async function resolvePersistenceAdapter({
   createMemory = createMemoryAdapter,
   createSQLite,
 } = {}) {
-  if (!isNativePlatform || !isPluginAvailable) {
+  if (!isNativePlatform) {
+    return createMemory()
+  }
+
+  if (!isPluginAvailable) {
+    console.error(
+      'CapacitorSQLite is unavailable on native platform. Falling back to memory persistence.',
+    )
+
     return createMemory()
   }
 
