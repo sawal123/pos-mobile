@@ -6,7 +6,12 @@ import { DB_NAME, DB_VERSION, MIGRATIONS } from '@/services/database/schema'
 import { createSQLiteAdapter } from '@/services/database/sqliteAdapter'
 
 const { fakeDb, fakeUserVersion, addUpgradeStatementMock } = vi.hoisted(() => {
-  const state = { userVersion: 0 }
+  const state = {
+    userVersion: 0,
+    targetVersion: 2,
+    upgrades: [],
+    executedUpgradeSql: [],
+  }
 
   const fakeDb = {
     beginTransaction: vi.fn(async () => {}),
@@ -28,11 +33,28 @@ const { fakeDb, fakeUserVersion, addUpgradeStatementMock } = vi.hoisted(() => {
       }
     }),
     isDBOpen: async () => ({ result: false }),
-    open: vi.fn(async () => {}),
+    open: vi.fn(async () => {
+      // Simulate the native plugin upgrade flow: for every registered step
+      // whose toVersion is within (currentVersion, targetVersion], run its
+      // statements and set the schema version to that step.
+      const sorted = [...state.upgrades].sort((a, b) => a.toVersion - b.toVersion)
+
+      for (const step of sorted) {
+        if (step.toVersion > state.userVersion && step.toVersion <= state.targetVersion) {
+          for (const statement of step.statements) {
+            state.executedUpgradeSql.push(statement)
+          }
+
+          state.userVersion = step.toVersion
+        }
+      }
+    }),
     close: async () => {},
   }
 
-  const addUpgradeStatementMock = vi.fn(async () => {})
+  const addUpgradeStatementMock = vi.fn(async (database, upgrade) => {
+    state.upgrades = upgrade
+  })
 
   return { fakeDb, fakeUserVersion: state, addUpgradeStatementMock }
 })
@@ -51,7 +73,8 @@ vi.mock('@capacitor-community/sqlite', () => {
       return { result: false }
     }
 
-    async createConnection() {
+    async createConnection(database, encrypted, mode, version, readonly) {
+      fakeUserVersion.targetVersion = version
       return fakeDb
     }
 
@@ -96,6 +119,9 @@ function assertNoDrop(executed) {
 
 beforeEach(() => {
   fakeUserVersion.userVersion = 0
+  fakeUserVersion.targetVersion = 2
+  fakeUserVersion.upgrades = []
+  fakeUserVersion.executedUpgradeSql = []
   fakeDb.query.mockClear()
   fakeDb.execute.mockClear()
   fakeDb.run.mockClear()
@@ -162,7 +188,7 @@ describe('P9 database migration v2', () => {
 
     await adapter.initialize()
 
-    const executed = fakeDb.execute.mock.calls.map(([sql]) => sql).join('\n')
+    const executed = fakeUserVersion.executedUpgradeSql.join('\n')
     expect(executed).toMatch(/CREATE TABLE IF NOT EXISTS sync_queue/)
   })
 
@@ -195,6 +221,87 @@ describe('P9 database migration v2', () => {
     expect(step.statements.join('\n')).toMatch(
       /CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_queue_entity/,
     )
+  })
+
+  it('upgrade list memiliki toVersion 1 (base schema) dan toVersion 2 (sync_queue)', async () => {
+    const adapter = createSQLiteAdapter()
+
+    await adapter.initialize()
+
+    const [, upgrade] = addUpgradeStatementMock.mock.calls[0]
+    expect(upgrade.map(({ toVersion }) => toVersion)).toEqual([1, 2])
+
+    const v1 = upgrade.find(({ toVersion }) => toVersion === 1)
+    expect(v1.statements.join('\n')).toMatch(/CREATE TABLE IF NOT EXISTS business/)
+    expect(v1.statements.join('\n')).toMatch(/CREATE TABLE IF NOT EXISTS transactions/)
+
+    const v2 = upgrade.find(({ toVersion }) => toVersion === 2)
+    expect(v2.statements.join('\n')).toMatch(/CREATE TABLE IF NOT EXISTS sync_queue/)
+  })
+
+  it('fresh native v0 menjalankan upgrade v1 lalu v2 hingga version 2', async () => {
+    fakeUserVersion.userVersion = 0
+    const adapter = createSQLiteAdapter()
+
+    await adapter.initialize()
+
+    expect(await adapter.getSchemaVersion()).toBe(2)
+
+    const executed = fakeUserVersion.executedUpgradeSql
+    const v1Index = executed.findIndex((sql) =>
+      sql.includes('CREATE TABLE IF NOT EXISTS business'),
+    )
+    const v2Index = executed.findIndex((sql) =>
+      sql.includes('CREATE TABLE IF NOT EXISTS sync_queue'),
+    )
+
+    expect(v1Index).toBeGreaterThanOrEqual(0)
+    expect(v2Index).toBeGreaterThanOrEqual(0)
+    expect(v1Index).toBeLessThan(v2Index)
+  })
+
+  it('existing native v1 hanya menjalankan upgrade v2 (data P8 aman)', async () => {
+    fakeUserVersion.userVersion = 1
+    const adapter = createSQLiteAdapter()
+
+    await adapter.initialize()
+
+    expect(await adapter.getSchemaVersion()).toBe(2)
+
+    const executed = fakeUserVersion.executedUpgradeSql
+    expect(executed.some((sql) => sql.includes('CREATE TABLE IF NOT EXISTS sync_queue'))).toBe(true)
+    expect(executed.some((sql) => sql.includes('CREATE TABLE IF NOT EXISTS business'))).toBe(false)
+    expect(executed.some((sql) => sql.includes('CREATE TABLE IF NOT EXISTS products'))).toBe(false)
+  })
+
+  it('base schema P8 tersedia pada fresh install', async () => {
+    const adapter = createSQLiteAdapter()
+
+    await adapter.initialize()
+
+    const executed = fakeUserVersion.executedUpgradeSql.join('\n')
+    for (const table of [
+      'app_meta',
+      'business',
+      'categories',
+      'products',
+      'customers',
+      'expenses',
+      'transactions',
+      'app_state',
+    ]) {
+      expect(executed).toMatch(new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`, 'i'))
+    }
+  })
+
+  it('existing v2 reinitialize aman (native open tidak upgrade ulang)', async () => {
+    fakeUserVersion.userVersion = 2
+    const adapter = createSQLiteAdapter()
+
+    await adapter.initialize()
+
+    expect(await adapter.getSchemaVersion()).toBe(2)
+    expect(fakeUserVersion.executedUpgradeSql).toEqual([])
   })
 
   it('upgrade statement v1->v2 tidak drop/delete data existing', async () => {

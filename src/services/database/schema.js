@@ -90,6 +90,12 @@ export const SYNC_QUEUE_TABLE_STATEMENT = `
 // MIGRATIONS maps each schema version to the SQL needed to upgrade from the
 // previous version to that version. Version 1 is the base schema, so the first
 // migration entry is version 2.
+//
+// Native @capacitor-community/sqlite upgrade sequence (registered before the
+// database is opened, built in sqliteAdapter.buildUpgradeStatements):
+//   toVersion 1 = CREATE_TABLE_STATEMENTS (P8 base schema)
+//   toVersion 2 = MIGRATIONS[2] (sync_queue + unique index)
+// Fresh installs run v0 -> v1 -> v2; existing P8 (v1) databases run only v2.
 export const MIGRATIONS = {
   2: SYNC_QUEUE_TABLE_STATEMENT,
 }

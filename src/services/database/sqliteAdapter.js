@@ -34,10 +34,19 @@ function splitSqlStatements(sql) {
 }
 
 // Build the official @capacitor-community/sqlite upgrade statement list from
-// the single source of truth in schema.js (MIGRATIONS). Each entry upgrades
-// the native database to its version during open().
+// the single source of truth in schema.js. Version 1 is the P8 base schema;
+// every MIGRATIONS entry upgrades the native database to its version during
+// open(). This gives the complete sequence v0 -> v1 -> v2 for fresh installs
+// while existing v1 databases only run the v2 step (data untouched).
 function buildUpgradeStatements(targetVersion) {
   const upgrades = []
+
+  if (targetVersion >= 1) {
+    upgrades.push({
+      toVersion: 1,
+      statements: splitSqlStatements(CREATE_TABLE_STATEMENTS),
+    })
+  }
 
   for (const [versionKey, sql] of Object.entries(MIGRATIONS)) {
     const toVersion = Number(versionKey)
