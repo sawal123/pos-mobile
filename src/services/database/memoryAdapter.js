@@ -1,4 +1,5 @@
 import { DB_VERSION, RESERVED_CATEGORY } from './schema'
+import { applyMigrations } from './migrations'
 
 function cloneValue(value) {
   if (typeof globalThis.structuredClone === 'function') {
@@ -11,7 +12,7 @@ function cloneValue(value) {
 export function createMemoryAdapter() {
   const state = {
     initialized: false,
-    schemaVersion: DB_VERSION,
+    schemaVersion: 0,
     business: null,
     products: [],
     categories: [],
@@ -20,11 +21,23 @@ export function createMemoryAdapter() {
     transactions: [],
     cashierState: null,
     shiftState: null,
+    syncQueue: [],
   }
 
   return {
     name: 'memory',
-    async initialize() {},
+    async initialize() {
+      await applyMigrations(
+        {
+          getVersion: () => state.schemaVersion,
+          setVersion: (version) => {
+            state.schemaVersion = version
+          },
+          execute: async () => {},
+        },
+        DB_VERSION,
+      )
+    },
     async getSchemaVersion() {
       return state.schemaVersion
     },
@@ -84,6 +97,52 @@ export function createMemoryAdapter() {
     },
     async saveShiftState(value) {
       state.shiftState = cloneValue(value)
+    },
+    async upsertSyncQueueItem(entry) {
+      const index = state.syncQueue.findIndex(
+        (item) => item.entityType === entry.entityType && item.entityId === entry.entityId,
+      )
+
+      if (index === -1) {
+        state.syncQueue.push(cloneValue(entry))
+        return
+      }
+
+      const existing = state.syncQueue[index]
+
+      state.syncQueue[index] = {
+        ...existing,
+        operation: entry.operation,
+        payload:
+          entry.payload === null || entry.payload === undefined ? null : cloneValue(entry.payload),
+        updatedAt: entry.updatedAt,
+        attemptCount: 0,
+        lastError: null,
+      }
+    },
+    async listSyncQueueItems({ limit = 100 } = {}) {
+      return cloneValue(
+        state.syncQueue
+          .slice()
+          .sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0))
+          .slice(0, Number(limit)),
+      )
+    },
+    async countSyncQueueItems() {
+      return state.syncQueue.length
+    },
+    async markSyncQueueItemFailed(id, error) {
+      const item = state.syncQueue.find((entry) => entry.id === id)
+
+      if (!item) {
+        return
+      }
+
+      item.attemptCount += 1
+      item.lastError = error
+    },
+    async deleteSyncQueueItem(id) {
+      state.syncQueue = state.syncQueue.filter((entry) => entry.id !== id)
     },
     async close() {},
   }

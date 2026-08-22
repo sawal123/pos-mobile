@@ -6,12 +6,14 @@ import { createPinia } from 'pinia'
 import App from './App.vue'
 import { createAppRouter } from './router'
 import { initializePersistence } from './services/database'
+import { initializeSyncFoundation } from './services/sync'
 
 export async function bootstrapApp({
   appFactory = createApp,
   piniaFactory = createPinia,
   routerFactory = createAppRouter,
   initialize = initializePersistence,
+  initializeSync = initializeSyncFoundation,
   rootComponent = App,
   mountTarget = '#app',
 } = {}) {
@@ -19,7 +21,15 @@ export async function bootstrapApp({
   const pinia = piniaFactory()
 
   app.use(pinia)
-  await initialize(pinia)
+
+  const persistence = await initialize(pinia)
+  const syncFoundation = persistence
+    ? await initializeSync({
+        pinia,
+        adapter: persistence.adapter,
+        scheduler: persistence,
+      })
+    : null
 
   const router = routerFactory()
 
@@ -30,6 +40,8 @@ export async function bootstrapApp({
     app,
     pinia,
     router,
+    persistence,
+    syncFoundation,
   }
 }
 

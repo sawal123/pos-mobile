@@ -4,8 +4,63 @@ import {
   CREATE_TABLE_STATEMENTS,
   DB_NAME,
   DB_VERSION,
+  MIGRATIONS,
   RESERVED_CATEGORY,
 } from './schema'
+import { applyMigrations } from './migrations'
+
+// Normalize any error shape into a plain string before it is persisted. SQLite
+// bind parameters must never receive an Error object.
+export function normalizeErrorMessage(error) {
+  if (error === null || error === undefined) {
+    return ''
+  }
+
+  if (error instanceof Error) {
+    return error.message
+  }
+
+  return String(error)
+}
+
+// Split a multi-statement SQL string (statements separated by ";\n") into
+// individual statements. The native upgrade runner executes each element with
+// a single execSQL call, so each element must be exactly one SQL statement.
+function splitSqlStatements(sql) {
+  return sql
+    .split(';\n')
+    .map((statement) => statement.trim())
+    .filter((statement) => statement.length > 0)
+}
+
+// Build the official @capacitor-community/sqlite upgrade statement list from
+// the single source of truth in schema.js. Version 1 is the P8 base schema;
+// every MIGRATIONS entry upgrades the native database to its version during
+// open(). This gives the complete sequence v0 -> v1 -> v2 for fresh installs
+// while existing v1 databases only run the v2 step (data untouched).
+function buildUpgradeStatements(targetVersion) {
+  const upgrades = []
+
+  if (targetVersion >= 1) {
+    upgrades.push({
+      toVersion: 1,
+      statements: splitSqlStatements(CREATE_TABLE_STATEMENTS),
+    })
+  }
+
+  for (const [versionKey, sql] of Object.entries(MIGRATIONS)) {
+    const toVersion = Number(versionKey)
+
+    if (toVersion > 1 && toVersion <= targetVersion) {
+      upgrades.push({
+        toVersion,
+        statements: splitSqlStatements(sql),
+      })
+    }
+  }
+
+  return upgrades
+}
 
 function parseJsonValue(value, fallback) {
   if (value === null || value === undefined) {
@@ -43,6 +98,12 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
     if (!sqliteConnection) {
       sqliteConnection = new SQLiteConnection(CapacitorSQLite)
     }
+
+    // Register the official upgrade statements BEFORE createConnection/open so
+    // that opening an existing P8 (v1) database upgrades it to v2 natively.
+    // Never rely on a custom migration running after the native connection is
+    // already open.
+    await sqliteConnection.addUpgradeStatement(database, buildUpgradeStatements(version))
 
     const consistency = await sqliteConnection.checkConnectionsConsistency()
     const existingConnection = await sqliteConnection.isConnection(database, false)
@@ -89,7 +150,9 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
 
   async function readMetaValue(key, fallback = null) {
     const db = await ensureConnection()
-    const { values = [] } = await db.query('SELECT value FROM app_meta WHERE key = ? LIMIT 1', [key])
+    const { values = [] } = await db.query('SELECT value FROM app_meta WHERE key = ? LIMIT 1', [
+      key,
+    ])
 
     if (!values.length) {
       return fallback
@@ -108,7 +171,9 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
 
   async function readAppState(key, fallback = null) {
     const db = await ensureConnection()
-    const { values = [] } = await db.query('SELECT value FROM app_state WHERE key = ? LIMIT 1', [key])
+    const { values = [] } = await db.query('SELECT value FROM app_state WHERE key = ? LIMIT 1', [
+      key,
+    ])
 
     if (!values.length) {
       return fallback
@@ -132,11 +197,14 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
       await db.execute('PRAGMA foreign_keys = ON;')
       await db.execute(CREATE_TABLE_STATEMENTS)
 
-      const currentVersion = await this.getSchemaVersion()
-
-      if (currentVersion !== version) {
-        await this.setSchemaVersion(version)
-      }
+      await applyMigrations(
+        {
+          getVersion: () => this.getSchemaVersion(),
+          setVersion: (nextVersion) => this.setSchemaVersion(nextVersion),
+          execute: (sql) => db.execute(sql),
+        },
+        version,
+      )
     },
     async getSchemaVersion() {
       const db = await ensureConnection()
@@ -329,6 +397,73 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
     },
     async saveShiftState(state) {
       await writeAppState(APP_STATE_KEYS.shift, state)
+    },
+    async upsertSyncQueueItem(entry) {
+      const db = await ensureConnection()
+
+      // Single-statement upsert. On conflict the latest mutation wins while
+      // created_at and id (first-queued identity) are preserved and retry
+      // metadata is reset for the new payload.
+      await db.run(
+        `INSERT INTO sync_queue
+           (id, entity_type, entity_id, operation, payload, created_at, updated_at, attempt_count, last_error)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL)
+         ON CONFLICT(entity_type, entity_id) DO UPDATE SET
+           operation = excluded.operation,
+           payload = excluded.payload,
+           updated_at = excluded.updated_at,
+           attempt_count = 0,
+           last_error = NULL`,
+        [
+          entry.id,
+          entry.entityType,
+          entry.entityId,
+          entry.operation,
+          entry.payload === null || entry.payload === undefined
+            ? null
+            : JSON.stringify(entry.payload),
+          entry.createdAt,
+          entry.updatedAt,
+        ],
+      )
+    },
+    async listSyncQueueItems({ limit = 100 } = {}) {
+      const db = await ensureConnection()
+      const { values = [] } = await db.query(
+        `SELECT id, entity_type, entity_id, operation, payload, created_at, updated_at, attempt_count, last_error
+         FROM sync_queue
+         ORDER BY created_at ASC, rowid ASC
+         LIMIT ?`,
+        [Number(limit)],
+      )
+
+      return values.map((row) => ({
+        id: row.id,
+        entityType: row.entity_type,
+        entityId: row.entity_id,
+        operation: row.operation,
+        payload: row.payload === null || row.payload === undefined ? null : JSON.parse(row.payload),
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        attemptCount: Number(row.attempt_count),
+        lastError: row.last_error,
+      }))
+    },
+    async countSyncQueueItems() {
+      const db = await ensureConnection()
+      const { values = [] } = await db.query('SELECT COUNT(*) AS total FROM sync_queue')
+      return Number(values[0]?.total ?? 0)
+    },
+    async markSyncQueueItemFailed(id, error) {
+      const db = await ensureConnection()
+      await db.run(
+        'UPDATE sync_queue SET attempt_count = attempt_count + 1, last_error = ? WHERE id = ?',
+        [normalizeErrorMessage(error), id],
+      )
+    },
+    async deleteSyncQueueItem(id) {
+      const db = await ensureConnection()
+      await db.run('DELETE FROM sync_queue WHERE id = ?', [id])
     },
     async close() {
       if (!dbConnection) {

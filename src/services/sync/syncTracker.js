@@ -1,0 +1,262 @@
+import { useBusinessStore } from '@/stores/businessStore'
+import { useCustomerStore } from '@/stores/customerStore'
+import { useExpenseStore } from '@/stores/expenseStore'
+import { useProductStore } from '@/stores/productStore'
+import { useTransactionStore } from '@/stores/transactionStore'
+
+import { SYNC_BUSINESS_ENTITY_ID, SYNC_ENTITY_TYPES, SYNC_RESERVED_CATEGORY } from './syncConstants'
+
+const CLOUD_SYNCABLE_BUSINESS_FIELDS = ['name', 'type', 'owner', 'phone', 'outlet']
+
+function captureCloudSyncableBusiness(businessStore) {
+  return {
+    name: businessStore.name,
+    type: businessStore.type,
+    owner: businessStore.owner,
+    phone: businessStore.phone,
+    outlet: businessStore.outlet,
+  }
+}
+
+function cloudSyncableBusinessChanged(before, after) {
+  return CLOUD_SYNCABLE_BUSINESS_FIELDS.some((field) => before[field] !== after[field])
+}
+
+/**
+ * Tracks successful user mutations and mirrors them into the durable sync
+ * outbox. Uses Pinia $onAction so hydration/restore via $patch never produces
+ * cloud operations, and only enqueues when the business is in cloud mode.
+ *
+ * This is a local-only foundation: nothing is sent to any server on P9.
+ */
+export function createSyncChangeTracker({ pinia, queueService, stores = {} }) {
+  const businessStore = stores.businessStore ?? useBusinessStore(pinia)
+  const productStore = stores.productStore ?? useProductStore(pinia)
+  const customerStore = stores.customerStore ?? useCustomerStore(pinia)
+  const expenseStore = stores.expenseStore ?? useExpenseStore(pinia)
+  const transactionStore = stores.transactionStore ?? useTransactionStore(pinia)
+
+  const stopHandlers = []
+
+  function isCloudMode() {
+    return businessStore.mode === 'cloud'
+  }
+
+  function enqueueUpsert(entityType, entityId, payload) {
+    if (!isCloudMode()) {
+      return
+    }
+
+    void queueService.enqueueUpsert(entityType, entityId, payload)
+  }
+
+  function enqueueDelete(entityType, entityId) {
+    if (!isCloudMode()) {
+      return
+    }
+
+    void queueService.enqueueDelete(entityType, entityId)
+  }
+
+  function track(store, name, handler) {
+    const stop = store.$onAction((action) => {
+      if (action.name === name) {
+        handler(action)
+      }
+    })
+
+    stopHandlers.push(stop)
+  }
+
+  // ---- BUSINESS ----
+  // Capture cloud-syncable profile fields before the action; after success,
+  // only queue when those fields actually changed AND the resulting mode is
+  // cloud. A mode-only change is never a business cloud mutation.
+  track(businessStore, 'setBusiness', ({ after }) => {
+    const before = captureCloudSyncableBusiness(businessStore)
+
+    after(() => {
+      if (!isCloudMode()) {
+        return
+      }
+
+      const current = captureCloudSyncableBusiness(businessStore)
+
+      if (cloudSyncableBusinessChanged(before, current)) {
+        void queueService.enqueueUpsert(
+          SYNC_ENTITY_TYPES.BUSINESS,
+          SYNC_BUSINESS_ENTITY_ID,
+          current,
+        )
+      }
+    })
+  })
+
+  // ---- PRODUCT ----
+  track(productStore, 'createProduct', ({ after }) => {
+    after((result) => {
+      if (result?.success) {
+        enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, result.product.id, result.product)
+      }
+    })
+  })
+
+  track(productStore, 'updateProduct', ({ after }) => {
+    after((result) => {
+      if (result?.success) {
+        enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, result.product.id, result.product)
+      }
+    })
+  })
+
+  track(productStore, 'toggleProductActive', ({ args, after }) => {
+    const [id] = args
+
+    after((result) => {
+      if (result !== true) {
+        return
+      }
+
+      const product = productStore.getProductById(id)
+
+      if (product) {
+        enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, product.id, product)
+      }
+    })
+  })
+
+  track(productStore, 'deleteProduct', ({ args, after }) => {
+    const [id] = args
+
+    after((result) => {
+      if (result === true) {
+        enqueueDelete(SYNC_ENTITY_TYPES.PRODUCT, id)
+      }
+    })
+  })
+
+  // ---- CATEGORY ----
+  track(productStore, 'createCategory', ({ after }) => {
+    after((result) => {
+      if (!result?.success || result.category === SYNC_RESERVED_CATEGORY) {
+        return
+      }
+
+      enqueueUpsert(SYNC_ENTITY_TYPES.CATEGORY, result.category, { name: result.category })
+    })
+  })
+
+  // Rename: delete old category id, upsert new category id, and re-queue every
+  // product whose category changed because of the rename.
+  track(productStore, 'updateCategory', ({ args, after }) => {
+    const [currentName] = args
+    const affectedProductIds = productStore.products
+      .filter((product) => product.category === currentName)
+      .map((product) => product.id)
+
+    after((result) => {
+      if (!result?.success) {
+        return
+      }
+
+      enqueueDelete(SYNC_ENTITY_TYPES.CATEGORY, currentName)
+      enqueueUpsert(SYNC_ENTITY_TYPES.CATEGORY, result.category, { name: result.category })
+
+      for (const productId of affectedProductIds) {
+        const product = productStore.getProductById(productId)
+
+        if (product) {
+          enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, product.id, product)
+        }
+      }
+    })
+  })
+
+  track(productStore, 'deleteCategory', ({ args, after }) => {
+    const [name] = args
+
+    after((result) => {
+      if (result?.success) {
+        enqueueDelete(SYNC_ENTITY_TYPES.CATEGORY, name)
+      }
+    })
+  })
+
+  // ---- CUSTOMER ----
+  track(customerStore, 'createCustomer', ({ after }) => {
+    after((result) => {
+      if (result?.success) {
+        enqueueUpsert(SYNC_ENTITY_TYPES.CUSTOMER, result.customer.id, result.customer)
+      }
+    })
+  })
+
+  track(customerStore, 'updateCustomer', ({ after }) => {
+    after((result) => {
+      if (result?.success) {
+        enqueueUpsert(SYNC_ENTITY_TYPES.CUSTOMER, result.customer.id, result.customer)
+      }
+    })
+  })
+
+  track(customerStore, 'deleteCustomer', ({ args, after }) => {
+    const [id] = args
+
+    after((result) => {
+      if (result === true) {
+        enqueueDelete(SYNC_ENTITY_TYPES.CUSTOMER, id)
+      }
+    })
+  })
+
+  // ---- EXPENSE ----
+  track(expenseStore, 'createExpense', ({ after }) => {
+    after((result) => {
+      if (result?.success) {
+        enqueueUpsert(SYNC_ENTITY_TYPES.EXPENSE, result.expense.id, result.expense)
+      }
+    })
+  })
+
+  track(expenseStore, 'updateExpense', ({ after }) => {
+    after((result) => {
+      if (result?.success) {
+        enqueueUpsert(SYNC_ENTITY_TYPES.EXPENSE, result.expense.id, result.expense)
+      }
+    })
+  })
+
+  track(expenseStore, 'deleteExpense', ({ args, after }) => {
+    const [id] = args
+
+    after((result) => {
+      if (result === true) {
+        enqueueDelete(SYNC_ENTITY_TYPES.EXPENSE, id)
+      }
+    })
+  })
+
+  // ---- TRANSACTION ----
+  // addTransaction is the canonical sync point. createTransaction calls
+  // addTransaction internally, so tracking only addTransaction guarantees
+  // exactly one outbox row per local transaction.
+  track(transactionStore, 'addTransaction', ({ after }) => {
+    after((transaction) => {
+      if (!transaction) {
+        return
+      }
+
+      enqueueUpsert(SYNC_ENTITY_TYPES.TRANSACTION, transaction.id, transaction)
+    })
+  })
+
+  return {
+    dispose() {
+      for (const stop of stopHandlers) {
+        stop()
+      }
+
+      stopHandlers.length = 0
+    },
+  }
+}
