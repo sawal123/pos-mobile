@@ -2,10 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createMemoryAdapter } from '@/services/database/memoryAdapter'
 import { applyMigrations } from '@/services/database/migrations'
-import { DB_VERSION, MIGRATIONS } from '@/services/database/schema'
+import { DB_NAME, DB_VERSION, MIGRATIONS } from '@/services/database/schema'
 import { createSQLiteAdapter } from '@/services/database/sqliteAdapter'
 
-const { fakeDb, fakeUserVersion } = vi.hoisted(() => {
+const { fakeDb, fakeUserVersion, addUpgradeStatementMock } = vi.hoisted(() => {
   const state = { userVersion: 0 }
 
   const fakeDb = {
@@ -27,16 +27,22 @@ const { fakeDb, fakeUserVersion } = vi.hoisted(() => {
         state.userVersion = Number(match[1])
       }
     }),
-    isDBOpen: async () => ({ result: true }),
-    open: async () => {},
+    isDBOpen: async () => ({ result: false }),
+    open: vi.fn(async () => {}),
     close: async () => {},
   }
 
-  return { fakeDb, fakeUserVersion: state }
+  const addUpgradeStatementMock = vi.fn(async () => {})
+
+  return { fakeDb, fakeUserVersion: state, addUpgradeStatementMock }
 })
 
 vi.mock('@capacitor-community/sqlite', () => {
   class SQLiteConnection {
+    async addUpgradeStatement(database, upgrade) {
+      return addUpgradeStatementMock(database, upgrade)
+    }
+
     async checkConnectionsConsistency() {
       return { result: true }
     }
@@ -93,6 +99,8 @@ beforeEach(() => {
   fakeDb.query.mockClear()
   fakeDb.execute.mockClear()
   fakeDb.run.mockClear()
+  fakeDb.open.mockClear()
+  addUpgradeStatementMock.mockClear()
 })
 
 describe('P9 database migration v2', () => {
@@ -156,6 +164,69 @@ describe('P9 database migration v2', () => {
 
     const executed = fakeDb.execute.mock.calls.map(([sql]) => sql).join('\n')
     expect(executed).toMatch(/CREATE TABLE IF NOT EXISTS sync_queue/)
+  })
+
+  it('upgrade statement didaftarkan sebelum native database open', async () => {
+    fakeUserVersion.userVersion = 1
+    const adapter = createSQLiteAdapter()
+
+    await adapter.initialize()
+
+    const addUpgradeOrder = addUpgradeStatementMock.mock.invocationCallOrder[0]
+    const openOrder = fakeDb.open.mock.invocationCallOrder[0]
+
+    expect(addUpgradeOrder).toBeDefined()
+    expect(openOrder).toBeDefined()
+    expect(addUpgradeOrder).toBeLessThan(openOrder)
+  })
+
+  it('upgrade statement resmi terdaftar dengan toVersion 2 dan sync_queue', async () => {
+    const adapter = createSQLiteAdapter()
+
+    await adapter.initialize()
+
+    expect(addUpgradeStatementMock).toHaveBeenCalled()
+    const [registeredDatabase, upgrade] = addUpgradeStatementMock.mock.calls[0]
+    expect(registeredDatabase).toBe(DB_NAME)
+
+    const step = upgrade.find(({ toVersion }) => toVersion === 2)
+    expect(step).toBeTruthy()
+    expect(step.statements.join('\n')).toMatch(/CREATE TABLE IF NOT EXISTS sync_queue/)
+    expect(step.statements.join('\n')).toMatch(
+      /CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_queue_entity/,
+    )
+  })
+
+  it('upgrade statement v1->v2 tidak drop/delete data existing', async () => {
+    const adapter = createSQLiteAdapter()
+
+    await adapter.initialize()
+
+    const [, upgrade] = addUpgradeStatementMock.mock.calls[0]
+    const joined = upgrade.map(({ statements }) => statements.join('\n')).join('\n')
+
+    for (const table of [
+      'business',
+      'categories',
+      'products',
+      'customers',
+      'expenses',
+      'transactions',
+    ]) {
+      expect(joined).not.toMatch(new RegExp(`DROP TABLE\\s+${table}`, 'i'))
+      expect(joined).not.toMatch(new RegExp(`DELETE FROM\\s+${table}`, 'i'))
+    }
+
+    expect(joined).toMatch(/CREATE TABLE IF NOT EXISTS sync_queue/)
+  })
+
+  it('reinitialize SQLite v2 aman (tidak rusak)', async () => {
+    const adapter = createSQLiteAdapter()
+
+    await adapter.initialize()
+    await adapter.initialize()
+
+    expect(await adapter.getSchemaVersion()).toBe(2)
   })
 
   it('memory sync_queue siap dipakai setelah migrasi v2', async () => {

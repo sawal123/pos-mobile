@@ -34,6 +34,8 @@ const { fakeDb } = vi.hoisted(() => {
 
 vi.mock('@capacitor-community/sqlite', () => {
   class SQLiteConnection {
+    async addUpgradeStatement() {}
+
     async checkConnectionsConsistency() {
       return { result: true }
     }
@@ -245,6 +247,39 @@ describe('P9 sync queue service', () => {
 
     const pending = await queueService.listPending()
     expect(pending[0].lastError).toBe('timeout')
+  })
+
+  it('markFailed(new Error) menyimpan message sebagai lastError', async () => {
+    const adapter = createMemoryAdapter()
+    const queueService = createSyncQueueService({ adapter, scheduler: createSimpleScheduler() })
+
+    const { entry } = await queueService.enqueueUpsert('product', 'p-1', { name: 'a' })
+    await queueService.markFailed(entry.id, new Error('timeout'))
+
+    const pending = await queueService.listPending()
+    expect(pending[0].lastError).toBe('timeout')
+  })
+
+  it('markFailed(number) menyimpan string number sebagai lastError', async () => {
+    const adapter = createMemoryAdapter()
+    const queueService = createSyncQueueService({ adapter, scheduler: createSimpleScheduler() })
+
+    const { entry } = await queueService.enqueueUpsert('product', 'p-1', { name: 'a' })
+    await queueService.markFailed(entry.id, 500)
+
+    const pending = await queueService.listPending()
+    expect(pending[0].lastError).toBe('500')
+  })
+
+  it('markFailed(null) menyimpan empty string sebagai lastError', async () => {
+    const adapter = createMemoryAdapter()
+    const queueService = createSyncQueueService({ adapter, scheduler: createSimpleScheduler() })
+
+    const { entry } = await queueService.enqueueUpsert('product', 'p-1', { name: 'a' })
+    await queueService.markFailed(entry.id, null)
+
+    const pending = await queueService.listPending()
+    expect(pending[0].lastError).toBe('')
   })
 
   it('mutation baru reset attemptCount', async () => {
@@ -1136,6 +1171,30 @@ describe('P9 sync safety', () => {
     expect(fakeDb.beginTransaction).not.toHaveBeenCalled()
     expect(fakeDb.commitTransaction).not.toHaveBeenCalled()
     expect(fakeDb.run.mock.calls.some(([sql]) => sql.includes('INSERT INTO sync_queue'))).toBe(true)
+  })
+
+  it('markFailed tidak mengirim object Error ke SQLite bind parameter', async () => {
+    const adapter = createSQLiteAdapter()
+    await adapter.initialize()
+
+    await adapter.upsertSyncQueueItem({
+      id: 'q-1',
+      entityType: 'product',
+      entityId: 'p-1',
+      operation: 'upsert',
+      payload: { name: 'Kopi' },
+      createdAt: '2026-08-21T00:00:00.000Z',
+      updatedAt: '2026-08-21T00:00:00.000Z',
+      attemptCount: 0,
+      lastError: null,
+    })
+
+    await adapter.markSyncQueueItemFailed('q-1', new Error('timeout'))
+
+    const updateCall = fakeDb.run.mock.calls.find(([sql]) => sql.includes('UPDATE sync_queue'))
+    expect(updateCall).toBeTruthy()
+    expect(updateCall[1][0]).toBe('timeout')
+    expect(updateCall[1][0]).not.toBeInstanceOf(Error)
   })
 })
 

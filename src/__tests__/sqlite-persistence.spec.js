@@ -34,6 +34,8 @@ const { fakeDb } = vi.hoisted(() => {
 
 vi.mock('@capacitor-community/sqlite', () => {
   class SQLiteConnection {
+    async addUpgradeStatement() {}
+
     async checkConnectionsConsistency() {
       return { result: true }
     }

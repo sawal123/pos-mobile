@@ -4,9 +4,54 @@ import {
   CREATE_TABLE_STATEMENTS,
   DB_NAME,
   DB_VERSION,
+  MIGRATIONS,
   RESERVED_CATEGORY,
 } from './schema'
 import { applyMigrations } from './migrations'
+
+// Normalize any error shape into a plain string before it is persisted. SQLite
+// bind parameters must never receive an Error object.
+export function normalizeErrorMessage(error) {
+  if (error === null || error === undefined) {
+    return ''
+  }
+
+  if (error instanceof Error) {
+    return error.message
+  }
+
+  return String(error)
+}
+
+// Split a multi-statement SQL string (statements separated by ";\n") into
+// individual statements. The native upgrade runner executes each element with
+// a single execSQL call, so each element must be exactly one SQL statement.
+function splitSqlStatements(sql) {
+  return sql
+    .split(';\n')
+    .map((statement) => statement.trim())
+    .filter((statement) => statement.length > 0)
+}
+
+// Build the official @capacitor-community/sqlite upgrade statement list from
+// the single source of truth in schema.js (MIGRATIONS). Each entry upgrades
+// the native database to its version during open().
+function buildUpgradeStatements(targetVersion) {
+  const upgrades = []
+
+  for (const [versionKey, sql] of Object.entries(MIGRATIONS)) {
+    const toVersion = Number(versionKey)
+
+    if (toVersion > 1 && toVersion <= targetVersion) {
+      upgrades.push({
+        toVersion,
+        statements: splitSqlStatements(sql),
+      })
+    }
+  }
+
+  return upgrades
+}
 
 function parseJsonValue(value, fallback) {
   if (value === null || value === undefined) {
@@ -44,6 +89,12 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
     if (!sqliteConnection) {
       sqliteConnection = new SQLiteConnection(CapacitorSQLite)
     }
+
+    // Register the official upgrade statements BEFORE createConnection/open so
+    // that opening an existing P8 (v1) database upgrades it to v2 natively.
+    // Never rely on a custom migration running after the native connection is
+    // already open.
+    await sqliteConnection.addUpgradeStatement(database, buildUpgradeStatements(version))
 
     const consistency = await sqliteConnection.checkConnectionsConsistency()
     const existingConnection = await sqliteConnection.isConnection(database, false)
@@ -398,7 +449,7 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
       const db = await ensureConnection()
       await db.run(
         'UPDATE sync_queue SET attempt_count = attempt_count + 1, last_error = ? WHERE id = ?',
-        [error, id],
+        [normalizeErrorMessage(error), id],
       )
     },
     async deleteSyncQueueItem(id) {

@@ -1,5 +1,20 @@
 import { SYNC_ENTITY_TYPES, SYNC_OPERATIONS, SYNC_QUEUE_DEFAULT_LIMIT } from './syncConstants'
 
+// Normalize any error shape into a plain string before it is persisted so an
+// Error/number/null is never stored as-is (and never bound to SQLite as an
+// object). Mirrors the same guard used by the SQLite adapter.
+function normalizeErrorMessage(error) {
+  if (error === null || error === undefined) {
+    return ''
+  }
+
+  if (error instanceof Error) {
+    return error.message
+  }
+
+  return String(error)
+}
+
 function createQueueEntryId() {
   if (globalThis.crypto?.randomUUID) {
     return globalThis.crypto.randomUUID()
@@ -95,8 +110,12 @@ export function createSyncQueueService({ adapter, scheduler }) {
     },
     async markFailed(queueId, error) {
       try {
+        // Normalize before persisting so an Error/number/null is always stored
+        // as a plain string and never bound to SQLite as an object.
+        const normalizedError = normalizeErrorMessage(error)
+
         await scheduler.runSerialized(
-          () => adapter.markSyncQueueItemFailed(queueId, error),
+          () => adapter.markSyncQueueItemFailed(queueId, normalizedError),
           'sync:failed',
         )
 
