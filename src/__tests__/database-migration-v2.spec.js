@@ -248,9 +248,7 @@ describe('P9 database migration v2', () => {
     expect(await adapter.getSchemaVersion()).toBe(2)
 
     const executed = fakeUserVersion.executedUpgradeSql
-    const v1Index = executed.findIndex((sql) =>
-      sql.includes('CREATE TABLE IF NOT EXISTS business'),
-    )
+    const v1Index = executed.findIndex((sql) => sql.includes('CREATE TABLE IF NOT EXISTS business'))
     const v2Index = executed.findIndex((sql) =>
       sql.includes('CREATE TABLE IF NOT EXISTS sync_queue'),
     )
