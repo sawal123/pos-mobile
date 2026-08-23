@@ -155,6 +155,7 @@ async function handleRestoreFileChange(event) {
         <BaseButton variant="secondary" @click="showProfileModal = true">Edit Profil</BaseButton>
         <BaseButton variant="secondary" @click="router.push('/customers')">Kelola Pelanggan</BaseButton>
         <BaseButton variant="secondary" @click="router.push('/expenses')">Kelola Pengeluaran</BaseButton>
+        <BaseButton id="settings-cloud-btn" variant="secondary" @click="router.push('/cloud')">Cloud Login</BaseButton>
         <BaseButton variant="ghost" @click="showActionSheet = true">Aksi Lainnya</BaseButton>
       </div>
     </BaseCard>

@@ -1,0 +1,357 @@
+import { defineStore } from 'pinia'
+import { ref, computed } from 'vue'
+
+import { cloudLogin, fetchMobileContext, registerDevice, cloudLogout } from '@/services/cloud/authService'
+import { saveToken, getToken, removeToken } from '@/services/cloud/tokenRepository'
+
+/**
+ * Cloud session store — P10.
+ *
+ * Owns NON-SENSITIVE cloud context:
+ *   - authenticated user (id, name, email)
+ *   - selected business_id / name
+ *   - selected outlet_id / name
+ *   - device_identifier (stable UUID)
+ *   - registered device server-id
+ *   - cloud_access flag
+ *
+ * Bearer token lives exclusively in tokenRepository (secure storage).
+ * This store is NOT included in P7 backup.
+ * This store never calls /api/sync/push or /api/sync/pull.
+ */
+export const useCloudSessionStore = defineStore('cloudSession', () => {
+  // ── State ──────────────────────────────────────────────────────────────────
+
+  /** Authenticated user: { id, name, email } | null */
+  const user = ref(null)
+
+  /** Selected business from /api/mobile/context */
+  const selectedBusiness = ref(null) // { id, name, cloud_access, subscription }
+
+  /** Selected outlet */
+  const selectedOutlet = ref(null) // { id, name }
+
+  /** Stable device UUID – set from deviceIdentifier service */
+  const deviceIdentifier = ref(null)
+
+  /** Server-side device ID after registration */
+  const registeredDeviceId = ref(null)
+
+  /** cloud_access for the selected business */
+  const cloudAccess = ref(false)
+
+  /** List of businesses from context (drives selection UI) */
+  const businesses = ref([])
+
+  /** True while a cloud operation is in flight */
+  const loading = ref(false)
+
+  /** Last cloud error string – cleared on each new operation */
+  const error = ref(null)
+
+  // ── Computed ───────────────────────────────────────────────────────────────
+
+  const isAuthenticated = computed(() => user.value !== null)
+
+  const hasCloudAccess = computed(() => isAuthenticated.value && cloudAccess.value === true)
+
+  const isDeviceRegistered = computed(() => registeredDeviceId.value !== null)
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+
+  function clearSession() {
+    user.value = null
+    selectedBusiness.value = null
+    selectedOutlet.value = null
+    cloudAccess.value = false
+    registeredDeviceId.value = null
+    businesses.value = []
+    error.value = null
+    // deviceIdentifier is intentionally NOT cleared on logout
+  }
+
+  // ── Actions ────────────────────────────────────────────────────────────────
+
+  /**
+   * Login flow:
+   * 1. Authenticate with /api/auth/login
+   * 2. Save token to secure storage
+   * 3. Fetch /api/mobile/context
+   * 4. Store context in state
+   *
+   * Returns { ok, businesses, error }.
+   * Caller is responsible for business/outlet selection and device registration.
+   */
+  async function login(email, password) {
+    loading.value = true
+    error.value = null
+
+    try {
+      const loginResult = await cloudLogin(email, password)
+
+      if (!loginResult.ok) {
+        error.value = loginResult.error?.message ?? 'Login gagal'
+        return { ok: false, error: loginResult.error }
+      }
+
+      // Token is only persisted after confirmed success
+      await saveToken(loginResult.token)
+
+      user.value = loginResult.user
+        ? {
+            id: loginResult.user.id,
+            name: loginResult.user.name,
+            email: loginResult.user.email,
+          }
+        : null
+
+      // Fetch context immediately after login
+      const contextResult = await fetchMobileContext(loginResult.token)
+
+      if (!contextResult.ok) {
+        // Rollback token – context is required
+        await removeToken()
+        user.value = null
+        error.value = contextResult.error?.message ?? 'Gagal mengambil context'
+        return { ok: false, error: contextResult.error }
+      }
+
+      businesses.value = (contextResult.data?.businesses ?? []).map((b) => ({
+        id: b.id,
+        name: b.name,
+        cloud_access: b.cloud_access,
+        subscription: b.subscription ?? null,
+        outlets: (b.outlets ?? []).map((o) => ({
+          id: o.id,
+          name: o.name,
+          status: o.status,
+        })),
+        device_context: b.device_context ?? null,
+      }))
+
+      return { ok: true, businesses: businesses.value }
+    } finally {
+      loading.value = false
+    }
+  }
+
+  /**
+   * Select a business from the context list.
+   * Business MUST be sourced from businesses state – no arbitrary IDs.
+   */
+  function selectBusiness(businessId) {
+    const match = businesses.value.find((b) => b.id === businessId)
+
+    if (!match) {
+      error.value = 'Business tidak ditemukan dalam context'
+      return { ok: false }
+    }
+
+    selectedBusiness.value = { id: match.id, name: match.name }
+    cloudAccess.value = match.cloud_access === true
+    selectedOutlet.value = null
+    registeredDeviceId.value = null
+
+    return { ok: true, business: match }
+  }
+
+  /**
+   * Select an outlet. Only active outlets are eligible.
+   */
+  function selectOutlet(outletId) {
+    const business = businesses.value.find((b) => b.id === selectedBusiness.value?.id)
+
+    if (!business) {
+      error.value = 'Business belum dipilih'
+      return { ok: false }
+    }
+
+    const activeOutlets = (business.outlets ?? []).filter((o) => o.status === 'active')
+    const match = activeOutlets.find((o) => o.id === outletId)
+
+    if (!match) {
+      error.value = 'Outlet tidak aktif atau tidak ditemukan'
+      return { ok: false }
+    }
+
+    selectedOutlet.value = { id: match.id, name: match.name }
+    registeredDeviceId.value = null
+
+    return { ok: true, outlet: match }
+  }
+
+  /**
+   * Register or resolve device with the backend.
+   * Preconditions: authenticated, business selected, cloud_access=true, outlet selected.
+   */
+  async function doRegisterDevice({ platform = null, deviceName = 'POS Mobile' } = {}) {
+    if (!isAuthenticated.value) {
+      return { ok: false, error: { code: 'NOT_AUTHENTICATED' } }
+    }
+
+    if (!selectedBusiness.value) {
+      return { ok: false, error: { code: 'NO_BUSINESS_SELECTED' } }
+    }
+
+    if (!cloudAccess.value) {
+      return { ok: false, error: { code: 'NO_CLOUD_ACCESS' } }
+    }
+
+    if (!selectedOutlet.value) {
+      return { ok: false, error: { code: 'NO_OUTLET_SELECTED' } }
+    }
+
+    if (!deviceIdentifier.value) {
+      return { ok: false, error: { code: 'NO_DEVICE_IDENTIFIER' } }
+    }
+
+    loading.value = true
+    error.value = null
+
+    try {
+      const token = await getToken()
+
+      const result = await registerDevice(token, {
+        business_id: selectedBusiness.value.id,
+        outlet_id: selectedOutlet.value.id,
+        device_identifier: deviceIdentifier.value,
+        name: deviceName,
+        platform,
+      })
+
+      if (!result.ok) {
+        error.value = result.error?.message ?? 'Device registration gagal'
+        return { ok: false, error: result.error }
+      }
+
+      registeredDeviceId.value = result.device?.id ?? null
+
+      return { ok: true, device: result.device }
+    } finally {
+      loading.value = false
+    }
+  }
+
+  /**
+   * Logout from cloud.
+   * Always clears local session/token, even on network failure.
+   * NEVER deletes POS data, sync_queue, or backup.
+   * NEVER changes device_identifier.
+   */
+  async function logout() {
+    loading.value = true
+    error.value = null
+
+    try {
+      const token = await getToken()
+
+      if (token) {
+        // Best-effort – network failure is acceptable; local cleanup still happens
+        await cloudLogout(token).catch(() => {})
+      }
+
+      await removeToken()
+      clearSession()
+
+      return { ok: true }
+    } finally {
+      loading.value = false
+    }
+  }
+
+  /**
+   * Hydrate session from secure storage (app restart).
+   * Restores token + context without triggering any sync.
+   * Called from bootstrapApp after persistence is ready.
+   */
+  async function hydrateFromStorage(adapter) {
+    // Restore device identifier (non-sensitive, from SQLite/memory adapter)
+    if (adapter) {
+      try {
+        const storedId = await adapter.loadDeviceIdentifier()
+        if (storedId) {
+          deviceIdentifier.value = storedId
+        }
+      } catch {
+        // non-blocking
+      }
+    }
+
+    // Check if there's a valid token in secure storage
+    try {
+      const token = await getToken()
+
+      if (!token) {
+        // FREE mode – POS continues offline
+        return { ok: true, authenticated: false }
+      }
+
+      // Restore stored cloud context (non-sensitive)
+      if (adapter) {
+        try {
+          const ctx = await adapter.loadCloudContext()
+
+          if (ctx) {
+            user.value = ctx.user ?? null
+            selectedBusiness.value = ctx.selectedBusiness ?? null
+            selectedOutlet.value = ctx.selectedOutlet ?? null
+            cloudAccess.value = ctx.cloudAccess ?? false
+            registeredDeviceId.value = ctx.registeredDeviceId ?? null
+          }
+        } catch {
+          // non-blocking – POS still starts
+        }
+      }
+
+      return { ok: true, authenticated: true }
+    } catch {
+      // token read failure → still allow POS to start
+      return { ok: true, authenticated: false }
+    }
+  }
+
+  /**
+   * Persist non-sensitive cloud context to adapter.
+   */
+  async function persistCloudContext(adapter) {
+    if (!adapter) return
+
+    try {
+      await adapter.saveCloudContext({
+        user: user.value,
+        selectedBusiness: selectedBusiness.value,
+        selectedOutlet: selectedOutlet.value,
+        cloudAccess: cloudAccess.value,
+        registeredDeviceId: registeredDeviceId.value,
+      })
+    } catch {
+      // non-blocking
+    }
+  }
+
+  return {
+    // state
+    user,
+    selectedBusiness,
+    selectedOutlet,
+    deviceIdentifier,
+    registeredDeviceId,
+    cloudAccess,
+    businesses,
+    loading,
+    error,
+    // computed
+    isAuthenticated,
+    hasCloudAccess,
+    isDeviceRegistered,
+    // actions
+    login,
+    selectBusiness,
+    selectOutlet,
+    doRegisterDevice,
+    logout,
+    hydrateFromStorage,
+    persistCloudContext,
+    clearSession,
+  }
+})
