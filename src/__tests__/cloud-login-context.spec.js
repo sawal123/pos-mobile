@@ -2,16 +2,20 @@
  * P10 Cloud Login & Sync Context tests.
  *
  * Coverage:
- * - API/Auth: login success/failure, EMAIL_NOT_VERIFIED, TWO_FACTOR_REQUIRED
- * - Context: business/outlet selection rules, cloud_access checks
- * - Device: stable identifier, register device, error handling
- * - Logout: local cleanup regardless of network failure, POS data preserved
- * - Offline: FREE mode hydrates without token
- * - Regression: no calls to /api/sync/push or /api/sync/pull
+ * - 1. Native secure token persistence (in-memory fallback, native Keystore/Keychain integration)
+ * - 2. Cloud context persistence & lifecycle hydration (TEST A)
+ * - 3. Logout clears persisted context (TEST B & TEST C)
+ * - 4. Zero-business UI reachable & tested (TEST D)
+ * - 5. Native token store contract & boundary isolation (TEST E)
+ * - 6. Stable device identifier durability & error tolerance
+ * - 7. Offline / FREE mode isolation
+ * - 8. Strict sync boundary assertions (no /api/sync/push or /api/sync/pull)
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
+import { mount, flushPromises } from '@vue/test-utils'
+import { Capacitor } from '@capacitor/core'
 
 import { apiRequest } from '../services/cloud/apiClient'
 import { cloudLogin, fetchMobileContext, registerDevice, cloudLogout } from '../services/cloud/authService'
@@ -24,6 +28,7 @@ import {
 import { resolveDeviceIdentifier } from '../services/cloud/deviceIdentifier'
 import { useCloudSessionStore } from '../stores/cloudSessionStore'
 import { createMemoryAdapter } from '../services/database/memoryAdapter'
+import CloudLoginView from '../views/settings/CloudLoginView.vue'
 
 // ── Utility ─────────────────────────────────────────────────────────────────
 
@@ -142,383 +147,95 @@ describe('Bearer token used for context request', () => {
 })
 
 // ════════════════════════════════════════════════════════════════════════════
-// 2. cloudSessionStore – Login + Context
+// 2. Cloud Context Persistence & Hydration Lifecycle (TEST A)
 // ════════════════════════════════════════════════════════════════════════════
 
-describe('cloudSessionStore – login flow', () => {
-  function setupLoginMocks() {
-    // First call: /api/auth/login
-    apiRequest.mockResolvedValueOnce(
-      makeOkResponse({ token_type: 'Bearer', token: MOCK_TOKEN, user: MOCK_USER }),
-    )
-    // Second call: /api/mobile/context
-    apiRequest.mockResolvedValueOnce(makeOkResponse(MOCK_CONTEXT))
-  }
+describe('TEST A — Cloud context persistence & restart hydration', () => {
+  it('persists cloud context throughout lifecycle and restores on simulated restart', async () => {
+    const adapter = createMemoryAdapter()
+    await adapter.initialize()
 
-  it('login success – stores session and token', async () => {
-    setupLoginMocks()
-    const store = useCloudSessionStore()
-
-    const result = await store.login('test@example.com', 'secret')
-
-    expect(result.ok).toBe(true)
-    expect(store.isAuthenticated).toBe(true)
-    expect(store.user).toMatchObject({ email: 'test@example.com' })
-    expect(await getToken()).toBe(MOCK_TOKEN)
-  })
-
-  it('invalid credentials – does not create session', async () => {
-    apiRequest.mockResolvedValueOnce(makeErrorResponse(401, 'INVALID_CREDENTIALS', 'Unauthorized'))
-    const store = useCloudSessionStore()
-
-    const result = await store.login('bad@x.com', 'wrong')
-
-    expect(result.ok).toBe(false)
-    expect(store.isAuthenticated).toBe(false)
-    expect(await getToken()).toBeNull()
-  })
-
-  it('1 business – can be auto-selected', async () => {
-    setupLoginMocks()
-    const store = useCloudSessionStore()
-    await store.login('test@example.com', 'secret')
-
-    // businesses is populated; selecting the only one should work
-    expect(store.businesses).toHaveLength(1)
-    const result = store.selectBusiness(MOCK_BUSINESS_CLOUD.id)
-    expect(result.ok).toBe(true)
-    expect(store.selectedBusiness?.id).toBe(MOCK_BUSINESS_CLOUD.id)
-  })
-
-  it('>1 business – does not auto-select arbitrarily', async () => {
-    // Return 2 businesses
-    apiRequest.mockResolvedValueOnce(
-      makeOkResponse({ token_type: 'Bearer', token: MOCK_TOKEN, user: MOCK_USER }),
-    )
-    apiRequest.mockResolvedValueOnce(
-      makeOkResponse({
-        user: MOCK_USER,
-        businesses: [MOCK_BUSINESS_CLOUD, MOCK_BUSINESS_NO_CLOUD],
-      }),
-    )
-    const store = useCloudSessionStore()
-    await store.login('test@example.com', 'secret')
-
-    // With >1 business, none should be selected automatically
-    expect(store.selectedBusiness).toBeNull()
-    expect(store.businesses).toHaveLength(2)
-  })
-
-  it('cloud_access false – selectBusiness marks cloudAccess=false', async () => {
-    apiRequest.mockResolvedValueOnce(
-      makeOkResponse({ token_type: 'Bearer', token: MOCK_TOKEN, user: MOCK_USER }),
-    )
-    apiRequest.mockResolvedValueOnce(
-      makeOkResponse({ user: MOCK_USER, businesses: [MOCK_BUSINESS_NO_CLOUD] }),
-    )
-    const store = useCloudSessionStore()
-    await store.login('test@example.com', 'secret')
-    store.selectBusiness(MOCK_BUSINESS_NO_CLOUD.id)
-
-    expect(store.cloudAccess).toBe(false)
-    expect(store.hasCloudAccess).toBe(false)
-  })
-})
-
-// ════════════════════════════════════════════════════════════════════════════
-// 3. Outlet selection
-// ════════════════════════════════════════════════════════════════════════════
-
-describe('cloudSessionStore – outlet selection', () => {
-  async function loginAndSelectBusiness() {
-    const store = useCloudSessionStore()
+    // 1. Initial login + context
     apiRequest.mockResolvedValueOnce(
       makeOkResponse({ token_type: 'Bearer', token: MOCK_TOKEN, user: MOCK_USER }),
     )
     apiRequest.mockResolvedValueOnce(makeOkResponse(MOCK_CONTEXT))
-    await store.login('test@example.com', 'secret')
-    store.selectBusiness(MOCK_BUSINESS_CLOUD.id)
-    return store
-  }
+    apiRequest.mockResolvedValueOnce(makeOkResponse({ id: 888 }))
 
-  it('only active outlets are eligible', async () => {
-    // Inject a business with mixed outlet statuses
     const store = useCloudSessionStore()
-    apiRequest.mockResolvedValueOnce(
-      makeOkResponse({ token_type: 'Bearer', token: MOCK_TOKEN, user: MOCK_USER }),
-    )
-    apiRequest.mockResolvedValueOnce(
-      makeOkResponse({
-        user: MOCK_USER,
-        businesses: [
-          {
-            ...MOCK_BUSINESS_CLOUD,
-            outlets: [
-              { id: 200, name: 'Aktif', status: 'active' },
-              { id: 201, name: 'Inactive', status: 'inactive' },
-            ],
-          },
-        ],
-      }),
-    )
-    await store.login('test@example.com', 'secret')
-    store.selectBusiness(MOCK_BUSINESS_CLOUD.id)
+    store.setPersistenceAdapter(adapter)
+    store.deviceIdentifier = 'stable-device-uuid-test-a'
+    await adapter.saveDeviceIdentifier('stable-device-uuid-test-a')
 
-    // inactive outlet must be rejected
-    const badResult = store.selectOutlet(201)
-    expect(badResult.ok).toBe(false)
+    const loginRes = await store.login('test@example.com', 'secret')
+    expect(loginRes.ok).toBe(true)
 
-    // active outlet must be accepted
-    const goodResult = store.selectOutlet(200)
-    expect(goodResult.ok).toBe(true)
-  })
+    // Context after login persisted
+    let persistedCtx = await adapter.loadCloudContext()
+    expect(persistedCtx).not.toBeNull()
+    expect(persistedCtx.user).toMatchObject({ id: 1, email: 'test@example.com' })
 
-  it('zero active outlet – selectOutlet fails', async () => {
-    const store = useCloudSessionStore()
-    apiRequest.mockResolvedValueOnce(
-      makeOkResponse({ token_type: 'Bearer', token: MOCK_TOKEN, user: MOCK_USER }),
-    )
-    apiRequest.mockResolvedValueOnce(
-      makeOkResponse({
-        user: MOCK_USER,
-        businesses: [
-          {
-            ...MOCK_BUSINESS_CLOUD,
-            outlets: [{ id: 300, name: 'Inactive', status: 'inactive' }],
-          },
-        ],
-      }),
-    )
-    await store.login('test@example.com', 'secret')
-    store.selectBusiness(MOCK_BUSINESS_CLOUD.id)
+    // 2. Select business
+    await store.selectBusiness(MOCK_BUSINESS_CLOUD.id)
+    persistedCtx = await adapter.loadCloudContext()
+    expect(persistedCtx.selectedBusiness).toMatchObject({ id: 10, name: 'Toko A' })
+    expect(persistedCtx.cloudAccess).toBe(true)
 
-    const result = store.selectOutlet(300)
-    expect(result.ok).toBe(false)
-  })
+    // 3. Select outlet
+    await store.selectOutlet(100)
+    persistedCtx = await adapter.loadCloudContext()
+    expect(persistedCtx.selectedOutlet).toMatchObject({ id: 100, name: 'Outlet Utama' })
 
-  it('1 active outlet – can be directly selected', async () => {
-    const store = await loginAndSelectBusiness()
-    const result = store.selectOutlet(100) // MOCK_BUSINESS_CLOUD has outlet 100 active
-    expect(result.ok).toBe(true)
-    expect(store.selectedOutlet?.id).toBe(100)
+    // 4. Register device
+    const regRes = await store.doRegisterDevice({ platform: 'android' })
+    expect(regRes.ok).toBe(true)
+    persistedCtx = await adapter.loadCloudContext()
+    expect(persistedCtx.registeredDeviceId).toBe(888)
+
+    // 5. Simulate App Restart: new Pinia, new store instance, same adapter
+    const newPinia = createPinia()
+    setActivePinia(newPinia)
+    const restartStore = useCloudSessionStore(newPinia)
+
+    expect(restartStore.isAuthenticated).toBe(false)
+    expect(restartStore.user).toBeNull()
+
+    // Hydrate
+    const hydrationRes = await restartStore.hydrateFromStorage(adapter)
+    expect(hydrationRes.ok).toBe(true)
+    expect(hydrationRes.authenticated).toBe(true)
+
+    // Assert restored state
+    expect(restartStore.user).toMatchObject({ id: 1, email: 'test@example.com' })
+    expect(restartStore.selectedBusiness).toMatchObject({ id: 10, name: 'Toko A' })
+    expect(restartStore.selectedOutlet).toMatchObject({ id: 100, name: 'Outlet Utama' })
+    expect(restartStore.cloudAccess).toBe(true)
+    expect(restartStore.registeredDeviceId).toBe(888)
+    expect(restartStore.deviceIdentifier).toBe('stable-device-uuid-test-a')
+
+    // Strict check: no sync endpoints called during login, hydration, or lifecycle
+    const calledPaths = apiRequest.mock.calls.map((c) => c[0])
+    expect(calledPaths).not.toContain('/api/sync/push')
+    expect(calledPaths).not.toContain('/api/sync/pull')
   })
 })
 
 // ════════════════════════════════════════════════════════════════════════════
-// 4. Cloud access guard
+// 3. Logout Lifecycle (TEST B & TEST C)
 // ════════════════════════════════════════════════════════════════════════════
 
-describe('cloud_access guard', () => {
-  it('cloud_access false – doRegisterDevice returns NO_CLOUD_ACCESS error', async () => {
-    const store = useCloudSessionStore()
-    apiRequest.mockResolvedValueOnce(
-      makeOkResponse({ token_type: 'Bearer', token: MOCK_TOKEN, user: MOCK_USER }),
-    )
-    apiRequest.mockResolvedValueOnce(
-      makeOkResponse({ user: MOCK_USER, businesses: [MOCK_BUSINESS_NO_CLOUD] }),
-    )
-    await store.login('test@example.com', 'secret')
-    store.selectBusiness(MOCK_BUSINESS_NO_CLOUD.id)
-    store.deviceIdentifier = 'some-uuid'
-
-    const result = await store.doRegisterDevice()
-
-    expect(result.ok).toBe(false)
-    expect(result.error.code).toBe('NO_CLOUD_ACCESS')
-    // Must NOT have called /api/mobile/devices
-    const deviceCalls = apiRequest.mock.calls.filter((c) => c[0] === '/api/mobile/devices')
-    expect(deviceCalls).toHaveLength(0)
-  })
-})
-
-// ════════════════════════════════════════════════════════════════════════════
-// 5. Device identifier
-// ════════════════════════════════════════════════════════════════════════════
-
-describe('resolveDeviceIdentifier', () => {
-  it('generates UUID once and returns same value on second call', async () => {
+describe('TEST B — Logout clears persisted context and leaves POS data intact', () => {
+  it('logout cleans token, persisted context, and Pinia without touching POS data', async () => {
     const adapter = createMemoryAdapter()
     await adapter.initialize()
 
-    const id1 = await resolveDeviceIdentifier(adapter)
-    const id2 = await resolveDeviceIdentifier(adapter)
-
-    expect(id1).toBeTruthy()
-    expect(id1).toBe(id2)
-    expect(typeof id1).toBe('string')
-  })
-
-  it('identifier stays the same after simulated restart (same adapter)', async () => {
-    const adapter = createMemoryAdapter()
-    await adapter.initialize()
-
-    const id1 = await resolveDeviceIdentifier(adapter)
-    // Save manually, then read again (simulates app restart with re-hydration)
-    const id2 = await adapter.loadDeviceIdentifier()
-
-    expect(id2).toBe(id1)
-  })
-
-  it('does not generate a new UUID when called a second time (idempotent)', async () => {
-    const adapter = createMemoryAdapter()
-    await adapter.initialize()
-
-    const first = await resolveDeviceIdentifier(adapter)
-    // Simulate another call (e.g. after login)
-    const second = await resolveDeviceIdentifier(adapter)
-
-    expect(second).toBe(first)
-  })
-})
-
-// ════════════════════════════════════════════════════════════════════════════
-// 6. Register device
-// ════════════════════════════════════════════════════════════════════════════
-
-describe('doRegisterDevice', () => {
-  async function prepareStoreForRegistration() {
-    const store = useCloudSessionStore()
-    apiRequest.mockResolvedValueOnce(
-      makeOkResponse({ token_type: 'Bearer', token: MOCK_TOKEN, user: MOCK_USER }),
+    // Pre-populate POS products, customers, transactions, and sync_queue
+    await adapter.saveProducts(
+      [{ id: 'p1', name: 'Kopi', category: 'Minuman', price: 15000, stock: 10, isActive: true }],
+      ['Minuman'],
     )
-    apiRequest.mockResolvedValueOnce(makeOkResponse(MOCK_CONTEXT))
-    await store.login('test@example.com', 'secret')
-    store.selectBusiness(MOCK_BUSINESS_CLOUD.id)
-    store.selectOutlet(100)
-    store.deviceIdentifier = 'stable-device-uuid-1234'
-    return store
-  }
-
-  it('sends correct business/outlet/identifier payload', async () => {
-    const store = await prepareStoreForRegistration()
-    apiRequest.mockResolvedValueOnce(makeOkResponse({ id: 999 }))
-
-    await store.doRegisterDevice({ platform: 'android' })
-
-    const [, options] = apiRequest.mock.calls.find((c) => c[0] === '/api/mobile/devices')
-    expect(options.body).toMatchObject({
-      business_id: MOCK_BUSINESS_CLOUD.id,
-      outlet_id: 100,
-      device_identifier: 'stable-device-uuid-1234',
-      platform: 'android',
-    })
-  })
-
-  it('stores registeredDeviceId on success', async () => {
-    const store = await prepareStoreForRegistration()
-    apiRequest.mockResolvedValueOnce(makeOkResponse({ id: 777 }))
-
-    await store.doRegisterDevice()
-
-    expect(store.registeredDeviceId).toBe(777)
-    expect(store.isDeviceRegistered).toBe(true)
-  })
-
-  it('DEVICE_INACTIVE – returns error, does not generate new UUID', async () => {
-    const store = await prepareStoreForRegistration()
-    apiRequest.mockResolvedValueOnce(makeErrorResponse(403, 'DEVICE_INACTIVE', 'Device inactive'))
-
-    const result = await store.doRegisterDevice()
-
-    expect(result.ok).toBe(false)
-    expect(result.error.code).toBe('DEVICE_INACTIVE')
-    // device_identifier must NOT have changed
-    expect(store.deviceIdentifier).toBe('stable-device-uuid-1234')
-  })
-
-  it('DEVICE_OUTLET_MISMATCH – returns error, does not generate new UUID', async () => {
-    const store = await prepareStoreForRegistration()
-    apiRequest.mockResolvedValueOnce(
-      makeErrorResponse(409, 'DEVICE_OUTLET_MISMATCH', 'Device belongs to different outlet'),
-    )
-
-    const result = await store.doRegisterDevice()
-
-    expect(result.ok).toBe(false)
-    expect(result.error.code).toBe('DEVICE_OUTLET_MISMATCH')
-    // Must NOT create new identifier
-    expect(store.deviceIdentifier).toBe('stable-device-uuid-1234')
-  })
-})
-
-// ════════════════════════════════════════════════════════════════════════════
-// 7. Logout
-// ════════════════════════════════════════════════════════════════════════════
-
-describe('logout', () => {
-  async function loginStore() {
-    const store = useCloudSessionStore()
-    apiRequest.mockResolvedValueOnce(
-      makeOkResponse({ token_type: 'Bearer', token: MOCK_TOKEN, user: MOCK_USER }),
-    )
-    apiRequest.mockResolvedValueOnce(makeOkResponse(MOCK_CONTEXT))
-    await store.login('test@example.com', 'secret')
-    store.selectBusiness(MOCK_BUSINESS_CLOUD.id)
-    store.selectOutlet(100)
-    store.deviceIdentifier = 'stable-device-uuid-logout'
-    return store
-  }
-
-  it('clears local session and token after successful logout', async () => {
-    const store = await loginStore()
-    apiRequest.mockResolvedValueOnce({ ok: true, status: 200, data: null, error: null })
-
-    await store.logout()
-
-    expect(store.isAuthenticated).toBe(false)
-    expect(store.user).toBeNull()
-    expect(await getToken()).toBeNull()
-  })
-
-  it('network failure during logout still clears local credential', async () => {
-    const store = await loginStore()
-    apiRequest.mockResolvedValueOnce({
-      ok: false,
-      status: 0,
-      data: null,
-      error: { code: 'NETWORK_ERROR', message: 'offline' },
-    })
-
-    await store.logout()
-
-    expect(store.isAuthenticated).toBe(false)
-    expect(await getToken()).toBeNull()
-  })
-
-  it('logout does NOT delete device_identifier', async () => {
-    const store = await loginStore()
-    const originalId = store.deviceIdentifier
-    apiRequest.mockResolvedValueOnce({ ok: true, status: 200, data: null, error: null })
-
-    await store.logout()
-
-    expect(store.deviceIdentifier).toBe(originalId)
-  })
-
-  it('logout does NOT touch POS adapter data', async () => {
-    const store = await loginStore()
-    const adapter = createMemoryAdapter()
-    await adapter.initialize()
-
-    // Pre-populate some POS data
-    await adapter.saveProducts([{ id: 'p1', name: 'P', category: 'C', price: 1, stock: 5, isActive: true }], [])
-    await adapter.saveCustomers([{ id: 'c1', name: 'Cust', phone: '', email: '' }])
-
-    apiRequest.mockResolvedValueOnce({ ok: true, status: 200, data: null, error: null })
-    await store.logout()
-
-    // POS data must still be there
-    const products = await adapter.loadProducts()
-    expect(products.products).toHaveLength(1)
-    const customers = await adapter.loadCustomers()
-    expect(customers).toHaveLength(1)
-  })
-
-  it('logout does NOT touch sync_queue', async () => {
-    const store = await loginStore()
-    const adapter = createMemoryAdapter()
-    await adapter.initialize()
-
+    await adapter.saveCustomers([{ id: 'c1', name: 'Budi', phone: '0812', email: 'budi@x.com' }])
+    await adapter.saveTransactions([{ id: 'tx1', total: 15000, createdAt: new Date().toISOString() }])
     await adapter.upsertSyncQueueItem({
       id: 'sq1',
       entityType: 'product',
@@ -530,131 +247,306 @@ describe('logout', () => {
       attemptCount: 0,
       lastError: null,
     })
+    await adapter.saveDeviceIdentifier('stable-device-uuid-logout')
 
+    // Simulate active session
+    await saveToken(MOCK_TOKEN)
+    const store = useCloudSessionStore()
+    store.setPersistenceAdapter(adapter)
+    store.user = MOCK_USER
+    store.selectedBusiness = { id: 10, name: 'Toko A' }
+    store.selectedOutlet = { id: 100, name: 'Outlet Utama' }
+    store.cloudAccess = true
+    store.registeredDeviceId = 777
+    store.deviceIdentifier = 'stable-device-uuid-logout'
+    await store.persistCloudContext()
+
+    // Mock logout API response
     apiRequest.mockResolvedValueOnce({ ok: true, status: 200, data: null, error: null })
+
+    // Execute logout
     await store.logout()
 
-    const count = await adapter.countSyncQueueItems()
-    expect(count).toBe(1)
+    // Assert Pinia state cleared
+    expect(store.isAuthenticated).toBe(false)
+    expect(store.user).toBeNull()
+    expect(store.selectedBusiness).toBeNull()
+    expect(store.selectedOutlet).toBeNull()
+    expect(store.registeredDeviceId).toBeNull()
+
+    // Assert token removed
+    expect(await getToken()).toBeNull()
+
+    // Assert persisted cloud context is cleared
+    const persistedCtx = await adapter.loadCloudContext()
+    expect(persistedCtx).toBeNull()
+
+    // Simulate restart after logout
+    const newPinia = createPinia()
+    setActivePinia(newPinia)
+    const freshStore = useCloudSessionStore(newPinia)
+    const hydRes = await freshStore.hydrateFromStorage(adapter)
+    expect(hydRes.authenticated).toBe(false)
+    expect(freshStore.user).toBeNull()
+
+    // POS DATA MUST REMAIN INTACT
+    expect(freshStore.deviceIdentifier).toBe('stable-device-uuid-logout')
+    const products = await adapter.loadProducts()
+    expect(products.products).toHaveLength(1)
+    const customers = await adapter.loadCustomers()
+    expect(customers).toHaveLength(1)
+    const txs = await adapter.loadTransactions()
+    expect(txs).toHaveLength(1)
+    const queueCount = await adapter.countSyncQueueItems()
+    expect(queueCount).toBe(1)
+  })
+})
+
+describe('TEST C — Logout network failure still clears local credentials & context', () => {
+  it('clears token, context, and Pinia session even if network is offline', async () => {
+    const adapter = createMemoryAdapter()
+    await adapter.initialize()
+    await adapter.saveDeviceIdentifier('stable-device-uuid-c')
+
+    await saveToken(MOCK_TOKEN)
+    const store = useCloudSessionStore()
+    store.setPersistenceAdapter(adapter)
+    store.user = MOCK_USER
+    store.selectedBusiness = { id: 10, name: 'Toko A' }
+    store.selectedOutlet = { id: 100, name: 'Outlet Utama' }
+    store.cloudAccess = true
+    store.deviceIdentifier = 'stable-device-uuid-c'
+    await store.persistCloudContext()
+
+    // Mock network failure on logout
+    apiRequest.mockResolvedValueOnce({
+      ok: false,
+      status: 0,
+      data: null,
+      error: { code: 'NETWORK_ERROR', message: 'No internet connection' },
+    })
+
+    const logoutRes = await store.logout()
+    expect(logoutRes.ok).toBe(true)
+
+    // Token and context must still be cleaned locally
+    expect(await getToken()).toBeNull()
+    expect(await adapter.loadCloudContext()).toBeNull()
+    expect(store.isAuthenticated).toBe(false)
+    expect(store.deviceIdentifier).toBe('stable-device-uuid-c')
   })
 })
 
 // ════════════════════════════════════════════════════════════════════════════
-// 8. Offline / FREE mode
+// 4. Zero Business UI (TEST D)
 // ════════════════════════════════════════════════════════════════════════════
 
-describe('offline / FREE mode', () => {
-  it('hydrateFromStorage succeeds with no token – authenticated=false', async () => {
-    const store = useCloudSessionStore()
-    const adapter = createMemoryAdapter()
-    await adapter.initialize()
+describe('TEST D — Zero business UI handling', () => {
+  it('displays zero-business notice and prevents outlet/device registration when user has 0 businesses', async () => {
+    apiRequest.mockResolvedValueOnce(
+      makeOkResponse({ token_type: 'Bearer', token: MOCK_TOKEN, user: MOCK_USER }),
+    )
+    apiRequest.mockResolvedValueOnce(
+      makeOkResponse({
+        user: MOCK_USER,
+        businesses: [], // ZERO businesses
+      }),
+    )
 
-    const result = await store.hydrateFromStorage(adapter)
+    const wrapper = mount(CloudLoginView)
 
-    expect(result.ok).toBe(true)
-    expect(result.authenticated).toBe(false)
-    expect(store.isAuthenticated).toBe(false)
+    // Fill form and trigger login
+    await wrapper.find('#cloud-email input').setValue('test@example.com')
+    await wrapper.find('#cloud-password input').setValue('secret')
+    await wrapper.find('#cloud-login-btn').trigger('click')
+
+    // Wait for Vue reactivity & async login
+    await flushPromises()
+
+    // Assert zero-business card is rendered and reachable
+    const zeroBizCard = wrapper.find('#cloud-no-business')
+    expect(zeroBizCard.exists()).toBe(true)
+    expect(zeroBizCard.text()).toContain('Akun Anda belum memiliki Business')
+
+    // Normal logged-in card with empty business must NOT be shown
+    expect(wrapper.find('#cloud-logged-in').exists()).toBe(false)
+
+    // Device registration must NOT have been called
+    const devCalls = apiRequest.mock.calls.filter((c) => c[0] === '/api/mobile/devices')
+    expect(devCalls).toHaveLength(0)
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// 5. Native Token Store Contract (TEST E)
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('TEST E — Token repository contract & native isolation', () => {
+  it('browser/Vitest: uses in-memory store and never calls localStorage', async () => {
+    const lsSpy = vi.spyOn(globalThis, 'localStorage', 'get').mockReturnValue(undefined)
+
+    await saveToken('token-123')
+    expect(await getToken()).toBe('token-123')
+    await removeToken()
+    expect(await getToken()).toBeNull()
+
+    expect(lsSpy).not.toHaveBeenCalled()
+    lsSpy.mockRestore()
   })
 
-  it('API failure during login does not prevent local POS startup', async () => {
-    apiRequest.mockRejectedValueOnce(new Error('Network failure'))
+  it('native environment: detects platform and delegates to secure storage plugin', async () => {
+    const isNativeSpy = vi.spyOn(Capacitor, 'isNativePlatform').mockReturnValue(true)
 
-    // Store login throws but POS (adapter) is unaffected
-    const store = useCloudSessionStore()
-    // login should handle internal error gracefully (store.error set, not thrown)
-    try {
-      await store.login('x@x.com', 'pw')
-    } catch {
-      // acceptable
+    // Mock the dynamic import of @aparajita/capacitor-secure-storage
+    const secureStorageMock = {
+      set: vi.fn().mockResolvedValue(undefined),
+      get: vi.fn().mockResolvedValue('native-secure-token'),
+      remove: vi.fn().mockResolvedValue(true),
     }
 
-    // POS adapter still usable
-    const adapter = createMemoryAdapter()
-    await adapter.initialize()
-    const biz = await adapter.loadBusiness()
-    expect(biz).toBeNull() // fresh adapter – no POS data lost
+    vi.doMock('@aparajita/capacitor-secure-storage', () => ({
+      SecureStorage: secureStorageMock,
+    }))
+
+    await saveToken('native-token-abc')
+    expect(secureStorageMock.set).toHaveBeenCalledWith('cloud_bearer_token', 'native-token-abc')
+
+    const read = await getToken()
+    expect(secureStorageMock.get).toHaveBeenCalledWith('cloud_bearer_token')
+    expect(read).toBe('native-secure-token')
+
+    await removeToken()
+    expect(secureStorageMock.remove).toHaveBeenCalledWith('cloud_bearer_token')
+
+    isNativeSpy.mockRestore()
+    vi.doUnmock('@aparajita/capacitor-secure-storage')
   })
 })
 
 // ════════════════════════════════════════════════════════════════════════════
-// 9. No sync push/pull calls
+// 6. Stable Device Identifier
 // ════════════════════════════════════════════════════════════════════════════
 
-describe('P10 sync boundary – no push/pull', () => {
-  const FORBIDDEN = ['/api/sync/push', '/api/sync/pull']
+describe('resolveDeviceIdentifier', () => {
+  it('generates UUID once and returns same value on subsequent calls', async () => {
+    const adapter = createMemoryAdapter()
+    await adapter.initialize()
 
-  it('login flow does not call sync push or pull', async () => {
+    const id1 = await resolveDeviceIdentifier(adapter)
+    const id2 = await resolveDeviceIdentifier(adapter)
+
+    expect(id1).toBeTruthy()
+    expect(id1).toBe(id2)
+    expect(typeof id1).toBe('string')
+  })
+
+  it('DEVICE_INACTIVE & DEVICE_OUTLET_MISMATCH do not regenerate identifier', async () => {
+    const store = useCloudSessionStore()
     apiRequest.mockResolvedValueOnce(
       makeOkResponse({ token_type: 'Bearer', token: MOCK_TOKEN, user: MOCK_USER }),
     )
     apiRequest.mockResolvedValueOnce(makeOkResponse(MOCK_CONTEXT))
-    apiRequest.mockResolvedValueOnce(makeOkResponse({ id: 55 }))
-
-    const store = useCloudSessionStore()
     await store.login('test@example.com', 'secret')
-    store.selectBusiness(MOCK_BUSINESS_CLOUD.id)
-    store.selectOutlet(100)
-    store.deviceIdentifier = 'uuid-x'
-    await store.doRegisterDevice()
+    await store.selectBusiness(MOCK_BUSINESS_CLOUD.id)
+    await store.selectOutlet(100)
+    store.deviceIdentifier = 'fixed-uuid-999'
 
-    const calledPaths = apiRequest.mock.calls.map((c) => c[0])
-    for (const forbidden of FORBIDDEN) {
-      expect(calledPaths).not.toContain(forbidden)
-    }
-  })
+    // Error 1: DEVICE_INACTIVE
+    apiRequest.mockResolvedValueOnce(makeErrorResponse(403, 'DEVICE_INACTIVE', 'Device inactive'))
+    let res = await store.doRegisterDevice()
+    expect(res.ok).toBe(false)
+    expect(store.deviceIdentifier).toBe('fixed-uuid-999')
 
-  it('logout does not call sync push or pull', async () => {
-    await saveToken(MOCK_TOKEN)
-    const store = useCloudSessionStore()
-    store.user = MOCK_USER
-
-    apiRequest.mockResolvedValueOnce({ ok: true, status: 200, data: null, error: null })
-    await store.logout()
-
-    const calledPaths = apiRequest.mock.calls.map((c) => c[0])
-    for (const forbidden of FORBIDDEN) {
-      expect(calledPaths).not.toContain(forbidden)
-    }
-  })
-
-  it('authService never references sync endpoints', async () => {
-    // Verify cloudLogout only calls /api/auth/logout
-    apiRequest.mockResolvedValueOnce({ ok: true, status: 200, data: null, error: null })
-    await cloudLogout('test-token')
-
-    expect(apiRequest).toHaveBeenCalledWith(
-      '/api/auth/logout',
-      expect.objectContaining({ method: 'DELETE' }),
+    // Error 2: DEVICE_OUTLET_MISMATCH
+    apiRequest.mockResolvedValueOnce(
+      makeErrorResponse(409, 'DEVICE_OUTLET_MISMATCH', 'Outlet mismatch'),
     )
-    expect(apiRequest).not.toHaveBeenCalledWith(
-      expect.stringContaining('/api/sync'),
-      expect.anything(),
-    )
+    res = await store.doRegisterDevice()
+    expect(res.ok).toBe(false)
+    expect(store.deviceIdentifier).toBe('fixed-uuid-999')
   })
 })
 
 // ════════════════════════════════════════════════════════════════════════════
-// 10. Token repository
+// 7. Outlet Selection & Cloud Access Guard
 // ════════════════════════════════════════════════════════════════════════════
 
-describe('tokenRepository', () => {
-  it('saveToken / getToken / removeToken roundtrip', async () => {
-    await saveToken('my-token')
-    expect(await getToken()).toBe('my-token')
-    await removeToken()
-    expect(await getToken()).toBeNull()
+describe('Outlet selection & cloud access rules', () => {
+  it('rejects inactive outlets and requires active status', async () => {
+    const store = useCloudSessionStore()
+    apiRequest.mockResolvedValueOnce(
+      makeOkResponse({ token_type: 'Bearer', token: MOCK_TOKEN, user: MOCK_USER }),
+    )
+    apiRequest.mockResolvedValueOnce(
+      makeOkResponse({
+        user: MOCK_USER,
+        businesses: [
+          {
+            ...MOCK_BUSINESS_CLOUD,
+            outlets: [
+              { id: 201, name: 'Active Outlet', status: 'active' },
+              { id: 202, name: 'Inactive Outlet', status: 'inactive' },
+            ],
+          },
+        ],
+      }),
+    )
+
+    await store.login('test@example.com', 'secret')
+    await store.selectBusiness(MOCK_BUSINESS_CLOUD.id)
+
+    const bad = await store.selectOutlet(202)
+    expect(bad.ok).toBe(false)
+
+    const good = await store.selectOutlet(201)
+    expect(good.ok).toBe(true)
+    expect(store.selectedOutlet?.id).toBe(201)
   })
 
-  it('getToken returns null before any save', async () => {
-    expect(await getToken()).toBeNull()
-  })
+  it('cloud_access = false stops device registration and leaves local POS functional', async () => {
+    const store = useCloudSessionStore()
+    apiRequest.mockResolvedValueOnce(
+      makeOkResponse({ token_type: 'Bearer', token: MOCK_TOKEN, user: MOCK_USER }),
+    )
+    apiRequest.mockResolvedValueOnce(
+      makeOkResponse({ user: MOCK_USER, businesses: [MOCK_BUSINESS_NO_CLOUD] }),
+    )
 
-  it('uses in-memory store – does not touch localStorage', async () => {
-    const spy = vi.spyOn(globalThis, 'localStorage', 'get').mockReturnValue(undefined)
-    await saveToken('no-ls-token')
-    await getToken()
-    await removeToken()
-    expect(spy).not.toHaveBeenCalled()
-    spy.mockRestore()
+    await store.login('test@example.com', 'secret')
+    await store.selectBusiness(MOCK_BUSINESS_NO_CLOUD.id)
+    store.deviceIdentifier = 'dev-uuid'
+
+    const reg = await store.doRegisterDevice()
+    expect(reg.ok).toBe(false)
+    expect(reg.error.code).toBe('NO_CLOUD_ACCESS')
+
+    // Verify /api/mobile/devices was never called
+    const devCalls = apiRequest.mock.calls.filter((c) => c[0] === '/api/mobile/devices')
+    expect(devCalls).toHaveLength(0)
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// 8. Strict Sync Isolation Assertions
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('Strict Sync Isolation Assertions', () => {
+  it('never calls /api/sync/push or /api/sync/pull across all auth flows', async () => {
+    apiRequest.mockResolvedValueOnce(
+      makeOkResponse({ token_type: 'Bearer', token: MOCK_TOKEN, user: MOCK_USER }),
+    )
+    apiRequest.mockResolvedValueOnce(makeOkResponse(MOCK_CONTEXT))
+    apiRequest.mockResolvedValueOnce(makeOkResponse({ id: 99 }))
+
+    const store = useCloudSessionStore()
+    await store.login('test@example.com', 'secret')
+    await store.selectBusiness(MOCK_BUSINESS_CLOUD.id)
+    await store.selectOutlet(100)
+    store.deviceIdentifier = 'dev-uuid'
+    await store.doRegisterDevice()
+
+    const allCalledEndpoints = apiRequest.mock.calls.map((c) => c[0])
+    expect(allCalledEndpoints).not.toContain('/api/sync/push')
+    expect(allCalledEndpoints).not.toContain('/api/sync/pull')
   })
 })

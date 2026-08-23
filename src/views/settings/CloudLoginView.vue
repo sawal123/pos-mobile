@@ -15,6 +15,10 @@ const password = ref('')
 const step = ref('login') // 'login' | 'select-business' | 'select-outlet' | 'done'
 
 // ── Derived ─────────────────────────────────────────────────────────────────
+const isZeroBusiness = computed(
+  () => cloudStore.isAuthenticated && cloudStore.businesses.length === 0,
+)
+
 const activeBusinessOutlets = computed(() => {
   const biz = cloudStore.businesses.find((b) => b.id === cloudStore.selectedBusiness?.id)
   return (biz?.outlets ?? []).filter((o) => o.status === 'active')
@@ -46,12 +50,12 @@ async function handleLogin() {
   const { businesses } = result
 
   if (businesses.length === 0) {
-    step.value = 'done' // no business state shown in template
+    step.value = 'done'
     return
   }
 
   if (businesses.length === 1) {
-    cloudStore.selectBusiness(businesses[0].id)
+    await cloudStore.selectBusiness(businesses[0].id)
     await advanceAfterBusiness(businesses[0])
     return
   }
@@ -60,7 +64,7 @@ async function handleLogin() {
 }
 
 async function handleSelectBusiness(businessId) {
-  const result = cloudStore.selectBusiness(businessId)
+  const result = await cloudStore.selectBusiness(businessId)
   if (!result.ok) return
 
   const biz = cloudStore.businesses.find((b) => b.id === businessId)
@@ -81,7 +85,7 @@ async function advanceAfterBusiness(biz) {
   }
 
   if (actOutlets.length === 1) {
-    const outletResult = cloudStore.selectOutlet(actOutlets[0].id)
+    const outletResult = await cloudStore.selectOutlet(actOutlets[0].id)
     if (!outletResult.ok) return
     await tryRegisterDevice()
     return
@@ -91,7 +95,7 @@ async function advanceAfterBusiness(biz) {
 }
 
 async function handleSelectOutlet(outletId) {
-  const result = cloudStore.selectOutlet(outletId)
+  const result = await cloudStore.selectOutlet(outletId)
   if (!result.ok) return
   await tryRegisterDevice()
 }
@@ -123,8 +127,31 @@ onMounted(() => {
       <h2 class="mt-2 text-2xl font-semibold text-ink-primary">Cloud Login</h2>
     </div>
 
+    <!-- ZERO BUSINESS STATE (Reachable when authenticated but has 0 businesses) -->
+    <BaseCard
+      v-if="isZeroBusiness"
+      id="cloud-no-business"
+      class="space-y-3"
+    >
+      <p class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger">
+        Akun Anda belum memiliki Business. Buat Business terlebih dahulu di dashboard web.
+      </p>
+      <BaseButton
+        id="cloud-logout-btn"
+        variant="danger"
+        :loading="cloudStore.loading"
+        @click="handleLogout"
+      >
+        Logout Cloud
+      </BaseButton>
+    </BaseCard>
+
     <!-- LOGGED IN STATE -->
-    <BaseCard v-if="cloudStore.isAuthenticated && step === 'done'" class="space-y-4" id="cloud-logged-in">
+    <BaseCard
+      v-else-if="cloudStore.isAuthenticated && step === 'done'"
+      id="cloud-logged-in"
+      class="space-y-4"
+    >
       <div class="space-y-2">
         <div class="flex items-center justify-between rounded-2xl bg-surface px-4 py-3">
           <span class="text-sm text-ink-secondary">Email</span>
@@ -182,18 +209,6 @@ onMounted(() => {
       >
         Logout Cloud
       </BaseButton>
-    </BaseCard>
-
-    <!-- ZERO BUSINESS STATE -->
-    <BaseCard
-      v-else-if="cloudStore.isAuthenticated && step === 'done' && cloudStore.businesses.length === 0"
-      id="cloud-no-business"
-      class="space-y-3"
-    >
-      <p class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger">
-        Akun Anda belum memiliki Business. Buat Business terlebih dahulu di dashboard web.
-      </p>
-      <BaseButton variant="danger" @click="handleLogout">Logout Cloud</BaseButton>
     </BaseCard>
 
     <!-- SELECT BUSINESS -->

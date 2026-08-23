@@ -26,7 +26,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   const user = ref(null)
 
   /** Selected business from /api/mobile/context */
-  const selectedBusiness = ref(null) // { id, name, cloud_access, subscription }
+  const selectedBusiness = ref(null) // { id, name }
 
   /** Selected outlet */
   const selectedOutlet = ref(null) // { id, name }
@@ -49,6 +49,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   /** Last cloud error string – cleared on each new operation */
   const error = ref(null)
 
+  /** Reference to persistence adapter */
+  let _adapter = null
+
   // ── Computed ───────────────────────────────────────────────────────────────
 
   const isAuthenticated = computed(() => user.value !== null)
@@ -58,6 +61,10 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   const isDeviceRegistered = computed(() => registeredDeviceId.value !== null)
 
   // ── Helpers ────────────────────────────────────────────────────────────────
+
+  function setPersistenceAdapter(adapter) {
+    _adapter = adapter
+  }
 
   function clearSession() {
     user.value = null
@@ -70,6 +77,44 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     // deviceIdentifier is intentionally NOT cleared on logout
   }
 
+  /**
+   * Persist non-sensitive cloud context to adapter.
+   * Minimal context: user, selectedBusiness, selectedOutlet, cloudAccess, registeredDeviceId.
+   * Token is NEVER included.
+   */
+  async function persistCloudContext(adapter = _adapter) {
+    const targetAdapter = adapter ?? _adapter
+    if (!targetAdapter) return
+
+    try {
+      await targetAdapter.saveCloudContext({
+        user: user.value
+          ? {
+              id: user.value.id,
+              name: user.value.name,
+              email: user.value.email,
+            }
+          : null,
+        selectedBusiness: selectedBusiness.value
+          ? {
+              id: selectedBusiness.value.id,
+              name: selectedBusiness.value.name,
+            }
+          : null,
+        selectedOutlet: selectedOutlet.value
+          ? {
+              id: selectedOutlet.value.id,
+              name: selectedOutlet.value.name,
+            }
+          : null,
+        cloudAccess: cloudAccess.value === true,
+        registeredDeviceId: registeredDeviceId.value ?? null,
+      })
+    } catch (err) {
+      console.error('Failed to persist cloud context.', err)
+    }
+  }
+
   // ── Actions ────────────────────────────────────────────────────────────────
 
   /**
@@ -78,9 +123,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
    * 2. Save token to secure storage
    * 3. Fetch /api/mobile/context
    * 4. Store context in state
+   * 5. Persist initial cloud context
    *
    * Returns { ok, businesses, error }.
-   * Caller is responsible for business/outlet selection and device registration.
    */
   async function login(email, password) {
     loading.value = true
@@ -129,6 +174,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         device_context: b.device_context ?? null,
       }))
 
+      // Persist cloud context on successful login + context
+      await persistCloudContext()
+
       return { ok: true, businesses: businesses.value }
     } finally {
       loading.value = false
@@ -138,8 +186,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   /**
    * Select a business from the context list.
    * Business MUST be sourced from businesses state – no arbitrary IDs.
+   * Persists cloud context on change.
    */
-  function selectBusiness(businessId) {
+  async function selectBusiness(businessId) {
     const match = businesses.value.find((b) => b.id === businessId)
 
     if (!match) {
@@ -152,13 +201,16 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     selectedOutlet.value = null
     registeredDeviceId.value = null
 
+    await persistCloudContext()
+
     return { ok: true, business: match }
   }
 
   /**
    * Select an outlet. Only active outlets are eligible.
+   * Persists cloud context on change.
    */
-  function selectOutlet(outletId) {
+  async function selectOutlet(outletId) {
     const business = businesses.value.find((b) => b.id === selectedBusiness.value?.id)
 
     if (!business) {
@@ -177,12 +229,15 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     selectedOutlet.value = { id: match.id, name: match.name }
     registeredDeviceId.value = null
 
+    await persistCloudContext()
+
     return { ok: true, outlet: match }
   }
 
   /**
    * Register or resolve device with the backend.
    * Preconditions: authenticated, business selected, cloud_access=true, outlet selected.
+   * Persists cloud context on success.
    */
   async function doRegisterDevice({ platform = null, deviceName = 'POS Mobile' } = {}) {
     if (!isAuthenticated.value) {
@@ -226,6 +281,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
 
       registeredDeviceId.value = result.device?.id ?? null
 
+      // Persist updated context with registered device ID
+      await persistCloudContext()
+
       return { ok: true, device: result.device }
     } finally {
       loading.value = false
@@ -234,9 +292,8 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
 
   /**
    * Logout from cloud.
-   * Always clears local session/token, even on network failure.
-   * NEVER deletes POS data, sync_queue, or backup.
-   * NEVER changes device_identifier.
+   * Always clears local session, token, and persisted cloud_context, even on network failure.
+   * NEVER deletes POS data, sync_queue, backup, or device_identifier.
    */
   async function logout() {
     loading.value = true
@@ -246,11 +303,20 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       const token = await getToken()
 
       if (token) {
-        // Best-effort – network failure is acceptable; local cleanup still happens
+        // Best-effort server notification – network failure is acceptable
         await cloudLogout(token).catch(() => {})
       }
 
       await removeToken()
+
+      if (_adapter) {
+        try {
+          await _adapter.clearCloudContext()
+        } catch (err) {
+          console.error('Failed to clear cloud context from adapter.', err)
+        }
+      }
+
       clearSession()
 
       return { ok: true }
@@ -261,14 +327,20 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
 
   /**
    * Hydrate session from secure storage (app restart).
-   * Restores token + context without triggering any sync.
+   * Restores token + context without triggering any sync or network call.
    * Called from bootstrapApp after persistence is ready.
    */
   async function hydrateFromStorage(adapter) {
-    // Restore device identifier (non-sensitive, from SQLite/memory adapter)
     if (adapter) {
+      setPersistenceAdapter(adapter)
+    }
+
+    const targetAdapter = adapter ?? _adapter
+
+    // Restore device identifier (non-sensitive, from SQLite/memory adapter)
+    if (targetAdapter) {
       try {
-        const storedId = await adapter.loadDeviceIdentifier()
+        const storedId = await targetAdapter.loadDeviceIdentifier()
         if (storedId) {
           deviceIdentifier.value = storedId
         }
@@ -287,15 +359,15 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       }
 
       // Restore stored cloud context (non-sensitive)
-      if (adapter) {
+      if (targetAdapter) {
         try {
-          const ctx = await adapter.loadCloudContext()
+          const ctx = await targetAdapter.loadCloudContext()
 
           if (ctx) {
             user.value = ctx.user ?? null
             selectedBusiness.value = ctx.selectedBusiness ?? null
             selectedOutlet.value = ctx.selectedOutlet ?? null
-            cloudAccess.value = ctx.cloudAccess ?? false
+            cloudAccess.value = ctx.cloudAccess === true
             registeredDeviceId.value = ctx.registeredDeviceId ?? null
           }
         } catch {
@@ -303,29 +375,10 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         }
       }
 
-      return { ok: true, authenticated: true }
+      return { ok: true, authenticated: user.value !== null }
     } catch {
       // token read failure → still allow POS to start
       return { ok: true, authenticated: false }
-    }
-  }
-
-  /**
-   * Persist non-sensitive cloud context to adapter.
-   */
-  async function persistCloudContext(adapter) {
-    if (!adapter) return
-
-    try {
-      await adapter.saveCloudContext({
-        user: user.value,
-        selectedBusiness: selectedBusiness.value,
-        selectedOutlet: selectedOutlet.value,
-        cloudAccess: cloudAccess.value,
-        registeredDeviceId: registeredDeviceId.value,
-      })
-    } catch {
-      // non-blocking
     }
   }
 
@@ -345,6 +398,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     hasCloudAccess,
     isDeviceRegistered,
     // actions
+    setPersistenceAdapter,
     login,
     selectBusiness,
     selectOutlet,

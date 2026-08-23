@@ -1,12 +1,18 @@
 /**
  * Secure token repository abstraction.
  *
- * On native (Capacitor) → uses @capacitor/preferences which stores values
- * in Android SharedPreferences (encrypted) and iOS Keychain.
- * On web/test → uses an in-memory map (NOT localStorage).
+ * Native (Android / iOS):
+ * Uses @aparajita/capacitor-secure-storage which is backed by
+ * Android Keystore and iOS Keychain.
  *
- * The store never passes through Pinia and the raw token value is never logged.
+ * Web / Vitest / Browser:
+ * Uses an in-memory fallback.
+ * DILARANG menyimpan token di localStorage, sessionStorage, SQLite, app_meta, Pinia state.
+ *
+ * The Bearer token is never exposed to Pinia and never logged.
  */
+
+import { Capacitor } from '@capacitor/core'
 
 const TOKEN_KEY = 'cloud_bearer_token'
 
@@ -16,90 +22,57 @@ let _inMemoryToken = null
  * In-memory fallback for web/Vitest environments.
  * Never touches localStorage/sessionStorage.
  */
-function createInMemoryTokenStore() {
-  return {
-    async save(token) {
-      _inMemoryToken = token
-    },
-    async get() {
-      return _inMemoryToken
-    },
-    async remove() {
-      _inMemoryToken = null
-    },
-  }
+const inMemoryStore = {
+  async save(token) {
+    _inMemoryToken = token
+  },
+  async get() {
+    return _inMemoryToken
+  },
+  async remove() {
+    _inMemoryToken = null
+  },
 }
 
 /**
- * Native secure store using @capacitor/preferences.
+ * Native secure store using @aparajita/capacitor-secure-storage.
+ * Uses Android Keystore and iOS Keychain.
  */
-function createNativeTokenStore() {
-  return {
-    async save(token) {
-      const { Preferences } = await import('@capacitor/preferences')
-      await Preferences.set({ key: TOKEN_KEY, value: token })
-    },
-    async get() {
-      const { Preferences } = await import('@capacitor/preferences')
-      const { value } = await Preferences.get({ key: TOKEN_KEY })
-      return value ?? null
-    },
-    async remove() {
-      const { Preferences } = await import('@capacitor/preferences')
-      await Preferences.remove({ key: TOKEN_KEY })
-    },
-  }
+const nativeStore = {
+  async save(token) {
+    const { SecureStorage } = await import('@aparajita/capacitor-secure-storage')
+    await SecureStorage.set(TOKEN_KEY, token)
+  },
+  async get() {
+    const { SecureStorage } = await import('@aparajita/capacitor-secure-storage')
+    const value = await SecureStorage.get(TOKEN_KEY)
+    return value ? String(value) : null
+  },
+  async remove() {
+    const { SecureStorage } = await import('@aparajita/capacitor-secure-storage')
+    await SecureStorage.remove(TOKEN_KEY)
+  },
 }
-
-let _store = null
 
 function resolveStore() {
-  if (_store) return _store
-
-  // Capacitor.isNativePlatform() is the canonical check; guard for Vitest env
-  try {
-    const { Capacitor } = globalThis.__CAPACITOR__ ?? {}
-    if (Capacitor?.isNativePlatform?.()) {
-      _store = createNativeTokenStore()
-      return _store
-    }
-  } catch {
-    // not available
+  if (Capacitor.isNativePlatform()) {
+    return nativeStore
   }
 
-  // Check via import if we are in a real Capacitor context
-  _store = createInMemoryTokenStore()
-  return _store
+  return inMemoryStore
 }
 
 /**
- * Initialise the store. Call once at bootstrap so Capacitor.isNativePlatform()
- * is evaluated after the Capacitor runtime is ready.
- *
- * @param {{ isNative?: boolean }} [options]
- */
-export function initTokenStore({ isNative = false } = {}) {
-  if (isNative) {
-    _store = createNativeTokenStore()
-  } else {
-    _store = createInMemoryTokenStore()
-  }
-}
-
-/** Reset for tests */
-export function _resetTokenStore() {
-  _store = null
-  _inMemoryToken = null
-}
-
-/**
+ * Save Bearer token to secure credential storage.
  * @param {string} token
  */
 export async function saveToken(token) {
+  if (!token) return
   await resolveStore().save(token)
 }
 
 /**
+ * Get stored Bearer token.
  * @returns {Promise<string|null>}
  */
 export async function getToken() {
@@ -107,8 +80,13 @@ export async function getToken() {
 }
 
 /**
- * Remove the stored Bearer token.
+ * Remove stored Bearer token.
  */
 export async function removeToken() {
   await resolveStore().remove()
+}
+
+/** Reset for tests */
+export function _resetTokenStore() {
+  _inMemoryToken = null
 }
