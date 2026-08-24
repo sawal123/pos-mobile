@@ -22,6 +22,8 @@ export function createMemoryAdapter() {
     cashierState: null,
     shiftState: null,
     syncQueue: [],
+    deviceIdentifier: null,
+    cloudContext: null,
   }
 
   return {
@@ -143,6 +145,23 @@ export function createMemoryAdapter() {
     },
     async deleteSyncQueueItem(id) {
       state.syncQueue = state.syncQueue.filter((entry) => entry.id !== id)
+    },
+    // P10: device identifier (stable, non-sensitive, survives logout)
+    async loadDeviceIdentifier() {
+      return state.deviceIdentifier ? String(state.deviceIdentifier) : null
+    },
+    async saveDeviceIdentifier(id) {
+      state.deviceIdentifier = String(id)
+    },
+    // P10: non-sensitive cloud session context
+    async loadCloudContext() {
+      return state.cloudContext ? cloneValue(state.cloudContext) : null
+    },
+    async saveCloudContext(ctx) {
+      state.cloudContext = cloneValue(ctx)
+    },
+    async clearCloudContext() {
+      state.cloudContext = null
     },
     async close() {},
   }

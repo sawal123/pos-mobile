@@ -7,6 +7,8 @@ import App from './App.vue'
 import { createAppRouter } from './router'
 import { initializePersistence } from './services/database'
 import { initializeSyncFoundation } from './services/sync'
+import { resolveDeviceIdentifier } from './services/cloud/deviceIdentifier'
+import { useCloudSessionStore } from './stores/cloudSessionStore'
 
 export async function bootstrapApp({
   appFactory = createApp,
@@ -34,6 +36,23 @@ export async function bootstrapApp({
   const router = routerFactory()
 
   app.use(router)
+
+  // P10: hydrate cloud session and device identifier after persistence is ready.
+  // Non-blocking – POS continues offline if cloud storage fails.
+  if (persistence) {
+    try {
+      const adapter = persistence.adapter
+      // Ensure device identifier is generated once and persisted
+      const devId = await resolveDeviceIdentifier(adapter)
+      const cloudStore = useCloudSessionStore(pinia)
+      cloudStore.deviceIdentifier = devId
+      // Restore token + non-sensitive cloud context (no push/pull)
+      await cloudStore.hydrateFromStorage(adapter)
+    } catch {
+      // Never block POS startup on cloud errors
+    }
+  }
+
   app.mount(mountTarget)
 
   return {

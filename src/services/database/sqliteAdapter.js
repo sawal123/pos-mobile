@@ -465,6 +465,24 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
       const db = await ensureConnection()
       await db.run('DELETE FROM sync_queue WHERE id = ?', [id])
     },
+    // P10: device identifier (stable, non-sensitive, survives logout)
+    async loadDeviceIdentifier() {
+      return readMetaValue('device_identifier', null)
+    },
+    async saveDeviceIdentifier(id) {
+      await writeMetaValue('device_identifier', id)
+    },
+    // P10: non-sensitive cloud session context (user, business, outlet, etc.)
+    async loadCloudContext() {
+      return readMetaValue('cloud_context', null)
+    },
+    async saveCloudContext(ctx) {
+      await writeMetaValue('cloud_context', ctx)
+    },
+    async clearCloudContext() {
+      const db = await ensureConnection()
+      await db.run("DELETE FROM app_meta WHERE key = 'cloud_context'", [])
+    },
     async close() {
       if (!dbConnection) {
         return

@@ -20,6 +20,10 @@ defineProps({
     type: String,
     default: '',
   },
+  disabled: {
+    type: Boolean,
+    default: false,
+  },
 })
 
 const emit = defineEmits(['update:modelValue'])
@@ -35,6 +39,7 @@ const emit = defineEmits(['update:modelValue'])
       :type="type"
       :placeholder="placeholder"
       :value="modelValue"
+      :disabled="disabled"
       class="h-12 rounded-2xl border border-zinc-200 bg-white px-4 text-sm text-ink-primary outline-none transition placeholder:text-zinc-400 focus:border-primary focus:ring-4 focus:ring-primary/10"
       @input="emit('update:modelValue', $event.target.value)"
     />
