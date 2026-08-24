@@ -43,6 +43,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   /** List of businesses from context (drives selection UI) */
   const businesses = ref([])
 
+  /** Tracks whether the business context list has been resolved from the API in this session */
+  const hasResolvedBusinessContext = ref(false)
+
   /** True while a cloud operation is in flight */
   const loading = ref(false)
 
@@ -73,6 +76,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     cloudAccess.value = false
     registeredDeviceId.value = null
     businesses.value = []
+    hasResolvedBusinessContext.value = false
     error.value = null
     // deviceIdentifier is intentionally NOT cleared on logout
   }
@@ -173,6 +177,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         })),
         device_context: b.device_context ?? null,
       }))
+      hasResolvedBusinessContext.value = true
 
       // Persist cloud context on successful login + context
       await persistCloudContext()
@@ -335,6 +340,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       setPersistenceAdapter(adapter)
     }
 
+    hasResolvedBusinessContext.value = false
     const targetAdapter = adapter ?? _adapter
 
     // Restore device identifier (non-sensitive, from SQLite/memory adapter)
@@ -391,6 +397,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     registeredDeviceId,
     cloudAccess,
     businesses,
+    hasResolvedBusinessContext,
     loading,
     error,
     // computed

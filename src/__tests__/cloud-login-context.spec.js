@@ -375,6 +375,69 @@ describe('TEST D — Zero business UI handling', () => {
     const devCalls = apiRequest.mock.calls.filter((c) => c[0] === '/api/mobile/devices')
     expect(devCalls).toHaveLength(0)
   })
+
+  it('regression: hydrated logged-in state renders correctly without false zero-business notice or network calls', async () => {
+    // 1. Buat adapter
+    const adapter = createMemoryAdapter()
+    await adapter.initialize()
+
+    // 2. Simpan stable device_identifier
+    await adapter.saveDeviceIdentifier('stable-device-uuid-hydrated-ui')
+
+    // 3. Simpan cloud_context
+    await adapter.saveCloudContext({
+      user: MOCK_USER,
+      selectedBusiness: { id: 10, name: 'Toko A' },
+      selectedOutlet: { id: 100, name: 'Outlet Utama' },
+      cloudAccess: true,
+      registeredDeviceId: 888,
+    })
+
+    // 4. Simpan token melalui token repository
+    await saveToken(MOCK_TOKEN)
+
+    // 5. Buat Pinia baru
+    const pinia = createPinia()
+    setActivePinia(pinia)
+
+    // 6. Buat cloud store baru
+    const store = useCloudSessionStore(pinia)
+
+    // 7. Jalankan hydration
+    const hydRes = await store.hydrateFromStorage(adapter)
+    expect(hydRes.ok).toBe(true)
+    expect(hydRes.authenticated).toBe(true)
+
+    // 8. Mount CloudLoginView
+    const wrapper = mount(CloudLoginView, {
+      global: {
+        plugins: [pinia],
+      },
+    })
+
+    // 9. Tunggu Vue lifecycle / flushPromises
+    await flushPromises()
+
+    // Assert: #cloud-no-business TIDAK ada
+    expect(wrapper.find('#cloud-no-business').exists()).toBe(false)
+
+    // Assert: #cloud-logged-in ada
+    const loggedInCard = wrapper.find('#cloud-logged-in')
+    expect(loggedInCard.exists()).toBe(true)
+
+    // Assert: data hasil hydration tampil
+    expect(loggedInCard.text()).toContain(MOCK_USER.email)
+    expect(loggedInCard.text()).toContain('Toko A')
+    expect(loggedInCard.text()).toContain('Outlet Utama')
+    expect(loggedInCard.text()).toContain('Aktif')
+    expect(loggedInCard.text()).toContain('Terdaftar')
+
+    // Assert: tidak ada network request (offline-only hydration)
+    const calledPaths = apiRequest.mock.calls.map((c) => c[0])
+    expect(calledPaths).not.toContain('/api/mobile/context')
+    expect(calledPaths).not.toContain('/api/sync/push')
+    expect(calledPaths).not.toContain('/api/sync/pull')
+  })
 })
 
 // ════════════════════════════════════════════════════════════════════════════

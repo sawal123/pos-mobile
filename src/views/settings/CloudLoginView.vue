@@ -16,7 +16,11 @@ const step = ref('login') // 'login' | 'select-business' | 'select-outlet' | 'do
 
 // ── Derived ─────────────────────────────────────────────────────────────────
 const isZeroBusiness = computed(
-  () => cloudStore.isAuthenticated && cloudStore.businesses.length === 0,
+  () =>
+    cloudStore.isAuthenticated &&
+    cloudStore.hasResolvedBusinessContext &&
+    cloudStore.businesses.length === 0 &&
+    !cloudStore.selectedBusiness,
 )
 
 const activeBusinessOutlets = computed(() => {
