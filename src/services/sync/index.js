@@ -1,9 +1,11 @@
 import { createSyncChangeTracker } from './syncTracker'
 import { createSyncQueueService } from './syncQueueService'
 
-export { SYNC_ENTITY_TYPES, SYNC_OPERATIONS } from './syncConstants'
+export { SYNC_ENTITY_TYPES, SYNC_OPERATIONS, SYNC_RESERVED_CATEGORY } from './syncConstants'
 export { createSyncChangeTracker } from './syncTracker'
 export { createSyncQueueService } from './syncQueueService'
+export { createSyncIdentityRegistry, buildProductSyncSku, isUuid, generateUuid } from './syncIdentityRegistry'
+export { createContractMapper, mapOutboxEntries } from './contractMapper'
 
 /**
  * Initializes the P9 sync foundation after SQLite persistence is ready.
