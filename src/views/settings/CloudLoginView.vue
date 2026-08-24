@@ -18,8 +18,8 @@ const step = ref('login') // 'login' | 'select-business' | 'select-outlet' | 'do
 const isZeroBusiness = computed(
   () =>
     cloudStore.isAuthenticated &&
-    cloudStore.hasResolvedBusinessContext &&
-    cloudStore.businesses.length === 0 &&
+    (cloudStore.hasResolvedZeroBusiness ||
+      (cloudStore.hasResolvedBusinessContext && cloudStore.businesses.length === 0)) &&
     !cloudStore.selectedBusiness,
 )
 

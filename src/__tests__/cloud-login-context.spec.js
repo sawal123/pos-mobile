@@ -438,6 +438,70 @@ describe('TEST D — Zero business UI handling', () => {
     expect(calledPaths).not.toContain('/api/sync/push')
     expect(calledPaths).not.toContain('/api/sync/pull')
   })
+
+  it('regression: genuine zero-business state survives restart/hydration and keeps zero-business notice visible', async () => {
+    const adapter = createMemoryAdapter()
+    await adapter.initialize()
+    await adapter.saveDeviceIdentifier('stable-device-uuid-zero-biz')
+
+    // 1. Login with 0 businesses
+    apiRequest.mockResolvedValueOnce(
+      makeOkResponse({ token_type: 'Bearer', token: MOCK_TOKEN, user: MOCK_USER }),
+    )
+    apiRequest.mockResolvedValueOnce(
+      makeOkResponse({
+        user: MOCK_USER,
+        businesses: [], // ZERO businesses
+      }),
+    )
+
+    const initialPinia = createPinia()
+    setActivePinia(initialPinia)
+    const initialStore = useCloudSessionStore(initialPinia)
+    initialStore.setPersistenceAdapter(adapter)
+
+    const loginRes = await initialStore.login('test@example.com', 'secret')
+    expect(loginRes.ok).toBe(true)
+    expect(initialStore.hasResolvedZeroBusiness).toBe(true)
+
+    // Context persisted in adapter with hasResolvedZeroBusiness: true
+    const persistedCtx = await adapter.loadCloudContext()
+    expect(persistedCtx.hasResolvedZeroBusiness).toBe(true)
+    expect(persistedCtx.selectedBusiness).toBeNull()
+
+    // 2. Simulate restart: new Pinia, new store, hydrate from adapter
+    const restartPinia = createPinia()
+    setActivePinia(restartPinia)
+    const restartStore = useCloudSessionStore(restartPinia)
+
+    const hydRes = await restartStore.hydrateFromStorage(adapter)
+    expect(hydRes.ok).toBe(true)
+    expect(hydRes.authenticated).toBe(true)
+    expect(restartStore.hasResolvedZeroBusiness).toBe(true)
+    expect(restartStore.selectedBusiness).toBeNull()
+
+    // 3. Mount CloudLoginView with hydrated store
+    const wrapper = mount(CloudLoginView, {
+      global: {
+        plugins: [restartPinia],
+      },
+    })
+    await flushPromises()
+
+    // Assert: #cloud-no-business tetap tampil
+    const zeroBizCard = wrapper.find('#cloud-no-business')
+    expect(zeroBizCard.exists()).toBe(true)
+    expect(zeroBizCard.text()).toContain('Akun Anda belum memiliki Business')
+
+    // Assert: #cloud-logged-in TIDAK tampil
+    expect(wrapper.find('#cloud-logged-in').exists()).toBe(false)
+
+    // Assert: tidak ada network request tambahan selama restart/hydration
+    const restartCalledPaths = apiRequest.mock.calls.slice(2).map((c) => c[0])
+    expect(restartCalledPaths).not.toContain('/api/mobile/context')
+    expect(restartCalledPaths).not.toContain('/api/sync/push')
+    expect(restartCalledPaths).not.toContain('/api/sync/pull')
+  })
 })
 
 // ════════════════════════════════════════════════════════════════════════════

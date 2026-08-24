@@ -46,6 +46,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   /** Tracks whether the business context list has been resolved from the API in this session */
   const hasResolvedBusinessContext = ref(false)
 
+  /** Tracks whether the account has confirmed zero business from /api/mobile/context (persisted across restart) */
+  const hasResolvedZeroBusiness = ref(false)
+
   /** True while a cloud operation is in flight */
   const loading = ref(false)
 
@@ -77,6 +80,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     registeredDeviceId.value = null
     businesses.value = []
     hasResolvedBusinessContext.value = false
+    hasResolvedZeroBusiness.value = false
     error.value = null
     // deviceIdentifier is intentionally NOT cleared on logout
   }
@@ -113,6 +117,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
           : null,
         cloudAccess: cloudAccess.value === true,
         registeredDeviceId: registeredDeviceId.value ?? null,
+        hasResolvedZeroBusiness: hasResolvedZeroBusiness.value === true,
       })
     } catch (err) {
       console.error('Failed to persist cloud context.', err)
@@ -178,6 +183,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         device_context: b.device_context ?? null,
       }))
       hasResolvedBusinessContext.value = true
+      hasResolvedZeroBusiness.value = businesses.value.length === 0
 
       // Persist cloud context on successful login + context
       await persistCloudContext()
@@ -205,6 +211,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     cloudAccess.value = match.cloud_access === true
     selectedOutlet.value = null
     registeredDeviceId.value = null
+    hasResolvedZeroBusiness.value = false
 
     await persistCloudContext()
 
@@ -375,6 +382,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
             selectedOutlet.value = ctx.selectedOutlet ?? null
             cloudAccess.value = ctx.cloudAccess === true
             registeredDeviceId.value = ctx.registeredDeviceId ?? null
+            hasResolvedZeroBusiness.value = ctx.hasResolvedZeroBusiness === true
           }
         } catch {
           // non-blocking – POS still starts
@@ -398,6 +406,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     cloudAccess,
     businesses,
     hasResolvedBusinessContext,
+    hasResolvedZeroBusiness,
     loading,
     error,
     // computed
