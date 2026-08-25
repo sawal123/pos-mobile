@@ -8,9 +8,11 @@ export { createSyncIdentityRegistry, buildProductSyncSku, isUuid, generateUuid }
 export { createContractMapper, mapOutboxEntries } from './contractMapper'
 export { pushSyncRequest } from './syncPushTransport'
 export { createSyncPushService } from './syncPushService'
+export { pullSyncChanges } from './syncPullTransport'
+export { createSyncPullService } from './syncPullService'
 
 /**
- * Initializes the P9 sync foundation after SQLite persistence is ready.
+ * Initializes the P9-P13 sync foundation after SQLite persistence is ready.
  * The change tracker is attached only after hydration completes, so startup
  * hydration / first-run seeding never produce cloud outbox operations.
  *
@@ -23,10 +25,12 @@ export function initializeSyncFoundation({ pinia, adapter, scheduler }) {
   const queueService = createSyncQueueService({ adapter, scheduler })
   const tracker = createSyncChangeTracker({ pinia, queueService })
   const pushService = createSyncPushService({ adapter, scheduler, queueService })
+  const pullService = createSyncPullService({ adapter, scheduler, queueService, pinia })
 
   return {
     queueService,
     tracker,
     pushService,
+    pullService,
   }
 }

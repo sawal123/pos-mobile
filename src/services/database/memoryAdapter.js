@@ -27,6 +27,9 @@ export function createMemoryAdapter() {
     syncIdentityMap: null,
     syncPushBinding: null,
     syncPushInflight: null,
+    syncPullBinding: null,
+    syncPullState: null,
+    syncServerVersions: null,
   }
 
   return {
@@ -226,6 +229,27 @@ export function createMemoryAdapter() {
     },
     async clearSyncPushInflight() {
       state.syncPushInflight = null
+    },
+    // P13: sync pull context binding (durable, survives restart & logout)
+    async loadSyncPullBinding() {
+      return state.syncPullBinding ? cloneValue(state.syncPullBinding) : null
+    },
+    async saveSyncPullBinding(binding) {
+      state.syncPullBinding = cloneValue(binding)
+    },
+    // P13: sync pull state/cursor (durable, survives restart & logout)
+    async loadSyncPullState() {
+      return state.syncPullState ? cloneValue(state.syncPullState) : null
+    },
+    async saveSyncPullState(pullState) {
+      state.syncPullState = cloneValue(pullState)
+    },
+    // P13: sync server versions metadata (durable, survives restart & logout)
+    async loadSyncServerVersions() {
+      return state.syncServerVersions ? cloneValue(state.syncServerVersions) : null
+    },
+    async saveSyncServerVersions(versions) {
+      state.syncServerVersions = cloneValue(versions)
     },
     async close() {},
   }
