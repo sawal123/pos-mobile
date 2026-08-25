@@ -50,6 +50,13 @@ function isValidOperation(operation) {
  * P9 only stores operations locally. Nothing is sent to any server.
  */
 export function createSyncQueueService({ adapter, scheduler }) {
+  async function runTask(task, label) {
+    if (scheduler && typeof scheduler.runSerialized === 'function') {
+      return scheduler.runSerialized(task, label)
+    }
+    return task()
+  }
+
   async function enqueue(entityType, entityId, operation, payload) {
     if (!isValidEntityType(entityType)) {
       const error = new Error(`Unsupported sync entity type: ${entityType}`)
@@ -77,7 +84,7 @@ export function createSyncQueueService({ adapter, scheduler }) {
     }
 
     try {
-      await scheduler.runSerialized(() => adapter.upsertSyncQueueItem(entry), `sync:${entityType}`)
+      await runTask(() => adapter.upsertSyncQueueItem(entry), `sync:${entityType}`)
 
       return {
         ok: true,
@@ -114,7 +121,7 @@ export function createSyncQueueService({ adapter, scheduler }) {
         // as a plain string and never bound to SQLite as an object.
         const normalizedError = normalizeErrorMessage(error)
 
-        await scheduler.runSerialized(
+        await runTask(
           () => adapter.markSyncQueueItemFailed(queueId, normalizedError),
           'sync:failed',
         )
@@ -128,13 +135,51 @@ export function createSyncQueueService({ adapter, scheduler }) {
     },
     async remove(queueId) {
       try {
-        await scheduler.runSerialized(() => adapter.deleteSyncQueueItem(queueId), 'sync:remove')
+        await runTask(() => adapter.deleteSyncQueueItem(queueId), 'sync:remove')
 
         return { ok: true }
       } catch (error) {
         console.error(`Failed to remove sync queue item ${queueId}.`, error)
 
         return { ok: false, error }
+      }
+    },
+    async removeIfUnchanged(snapshot) {
+      try {
+        let result = { changes: 0 }
+        await runTask(async () => {
+          result = await adapter.deleteSyncQueueItemIfUnchanged(snapshot)
+        }, 'sync:remove-cas')
+
+        return {
+          ok: true,
+          removed: (result?.changes ?? 0) > 0,
+        }
+      } catch (error) {
+        console.error(`Failed to conditionally remove sync queue item ${snapshot?.id}.`, error)
+
+        return { ok: false, removed: false, error }
+      }
+    },
+    async markFailedIfUnchanged(snapshot, error) {
+      try {
+        const normalizedError = normalizeErrorMessage(error)
+        let result = { changes: 0 }
+        await runTask(async () => {
+          result = await adapter.markSyncQueueItemFailedIfUnchanged(snapshot, normalizedError)
+        }, 'sync:failed-cas')
+
+        return {
+          ok: true,
+          updated: (result?.changes ?? 0) > 0,
+        }
+      } catch (err) {
+        console.error(
+          `Failed to conditionally mark sync queue item ${snapshot?.id} as failed.`,
+          err,
+        )
+
+        return { ok: false, updated: false, error: err }
       }
     },
     async flush() {

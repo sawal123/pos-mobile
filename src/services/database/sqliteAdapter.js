@@ -465,6 +465,55 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
       const db = await ensureConnection()
       await db.run('DELETE FROM sync_queue WHERE id = ?', [id])
     },
+    async deleteSyncQueueItemIfUnchanged(snapshot) {
+      if (!snapshot || !snapshot.id) return { changes: 0 }
+      const db = await ensureConnection()
+      const payloadStr =
+        snapshot.payload === null || snapshot.payload === undefined
+          ? null
+          : JSON.stringify(snapshot.payload)
+
+      const result = await db.run(
+        `DELETE FROM sync_queue
+         WHERE id = ?
+           AND updated_at = ?
+           AND operation = ?
+           AND ((payload IS NULL AND ? IS NULL) OR payload = ?)`,
+        [snapshot.id, snapshot.updatedAt, snapshot.operation, payloadStr, payloadStr],
+      )
+
+      const count = result?.changes?.changes ?? 0
+      return { changes: Number(count) }
+    },
+    async markSyncQueueItemFailedIfUnchanged(snapshot, error) {
+      if (!snapshot || !snapshot.id) return { changes: 0 }
+      const db = await ensureConnection()
+      const payloadStr =
+        snapshot.payload === null || snapshot.payload === undefined
+          ? null
+          : JSON.stringify(snapshot.payload)
+
+      const result = await db.run(
+        `UPDATE sync_queue
+         SET attempt_count = attempt_count + 1,
+             last_error = ?
+         WHERE id = ?
+           AND updated_at = ?
+           AND operation = ?
+           AND ((payload IS NULL AND ? IS NULL) OR payload = ?)`,
+        [
+          normalizeErrorMessage(error),
+          snapshot.id,
+          snapshot.updatedAt,
+          snapshot.operation,
+          payloadStr,
+          payloadStr,
+        ],
+      )
+
+      const count = result?.changes?.changes ?? 0
+      return { changes: Number(count) }
+    },
     // P10: device identifier (stable, non-sensitive, survives logout)
     async loadDeviceIdentifier() {
       return readMetaValue('device_identifier', null)
@@ -489,6 +538,24 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
     },
     async saveSyncIdentityMap(map) {
       await writeMetaValue('sync_identity_map', map)
+    },
+    // P12: sync push business binding (stable, durable, survives logout)
+    async loadSyncPushBinding() {
+      return readMetaValue('sync_push_binding_v1', null)
+    },
+    async saveSyncPushBinding(binding) {
+      await writeMetaValue('sync_push_binding_v1', binding)
+    },
+    // P12: sync push in-flight request envelope (durable, survives restart)
+    async loadSyncPushInflight() {
+      return readMetaValue('sync_push_inflight_v1', null)
+    },
+    async saveSyncPushInflight(envelope) {
+      await writeMetaValue('sync_push_inflight_v1', envelope)
+    },
+    async clearSyncPushInflight() {
+      const db = await ensureConnection()
+      await db.run("DELETE FROM app_meta WHERE key = 'sync_push_inflight_v1'", [])
     },
     async close() {
       if (!dbConnection) {

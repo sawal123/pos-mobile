@@ -25,6 +25,8 @@ export function createMemoryAdapter() {
     deviceIdentifier: null,
     cloudContext: null,
     syncIdentityMap: null,
+    syncPushBinding: null,
+    syncPushInflight: null,
   }
 
   return {
@@ -147,6 +149,43 @@ export function createMemoryAdapter() {
     async deleteSyncQueueItem(id) {
       state.syncQueue = state.syncQueue.filter((entry) => entry.id !== id)
     },
+    async deleteSyncQueueItemIfUnchanged(snapshot) {
+      if (!snapshot || !snapshot.id) return { changes: 0 }
+      const index = state.syncQueue.findIndex((item) => {
+        if (item.id !== snapshot.id) return false
+        if (item.updatedAt !== snapshot.updatedAt) return false
+        if (item.operation !== snapshot.operation) return false
+        const itemPayload = item.payload === null || item.payload === undefined ? null : JSON.stringify(item.payload)
+        const snapPayload = snapshot.payload === null || snapshot.payload === undefined ? null : JSON.stringify(snapshot.payload)
+        return itemPayload === snapPayload
+      })
+
+      if (index === -1) {
+        return { changes: 0 }
+      }
+
+      state.syncQueue.splice(index, 1)
+      return { changes: 1 }
+    },
+    async markSyncQueueItemFailedIfUnchanged(snapshot, error) {
+      if (!snapshot || !snapshot.id) return { changes: 0 }
+      const item = state.syncQueue.find((entry) => {
+        if (entry.id !== snapshot.id) return false
+        if (entry.updatedAt !== snapshot.updatedAt) return false
+        if (entry.operation !== snapshot.operation) return false
+        const itemPayload = entry.payload === null || entry.payload === undefined ? null : JSON.stringify(entry.payload)
+        const snapPayload = snapshot.payload === null || snapshot.payload === undefined ? null : JSON.stringify(snapshot.payload)
+        return itemPayload === snapPayload
+      })
+
+      if (!item) {
+        return { changes: 0 }
+      }
+
+      item.attemptCount += 1
+      item.lastError = error instanceof Error ? error.message : String(error ?? '')
+      return { changes: 1 }
+    },
     // P10: device identifier (stable, non-sensitive, survives logout)
     async loadDeviceIdentifier() {
       return state.deviceIdentifier ? String(state.deviceIdentifier) : null
@@ -170,6 +209,23 @@ export function createMemoryAdapter() {
     },
     async saveSyncIdentityMap(map) {
       state.syncIdentityMap = cloneValue(map)
+    },
+    // P12: sync push business binding (stable, durable, survives logout)
+    async loadSyncPushBinding() {
+      return state.syncPushBinding ? cloneValue(state.syncPushBinding) : null
+    },
+    async saveSyncPushBinding(binding) {
+      state.syncPushBinding = cloneValue(binding)
+    },
+    // P12: sync push in-flight request envelope (durable, survives restart)
+    async loadSyncPushInflight() {
+      return state.syncPushInflight ? cloneValue(state.syncPushInflight) : null
+    },
+    async saveSyncPushInflight(envelope) {
+      state.syncPushInflight = cloneValue(envelope)
+    },
+    async clearSyncPushInflight() {
+      state.syncPushInflight = null
     },
     async close() {},
   }

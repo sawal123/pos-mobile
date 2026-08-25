@@ -9,6 +9,7 @@ import { initializePersistence } from './services/database'
 import { initializeSyncFoundation } from './services/sync'
 import { resolveDeviceIdentifier } from './services/cloud/deviceIdentifier'
 import { useCloudSessionStore } from './stores/cloudSessionStore'
+import { useSyncPushStore } from './stores/syncPushStore'
 
 export async function bootstrapApp({
   appFactory = createApp,
@@ -48,6 +49,11 @@ export async function bootstrapApp({
       cloudStore.deviceIdentifier = devId
       // Restore token + non-sensitive cloud context (no push/pull)
       await cloudStore.hydrateFromStorage(adapter)
+
+      if (syncFoundation?.pushService) {
+        const syncPushStore = useSyncPushStore(pinia)
+        syncPushStore.init({ pushService: syncFoundation.pushService })
+      }
     } catch {
       // Never block POS startup on cloud errors
     }
