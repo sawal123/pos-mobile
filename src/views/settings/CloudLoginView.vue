@@ -6,13 +6,17 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
+import { useSyncPushStore } from '@/stores/syncPushStore'
 
 const cloudStore = useCloudSessionStore()
+const syncPushStore = useSyncPushStore()
 
 // ── Form state ──────────────────────────────────────────────────────────────
 const email = ref('')
 const password = ref('')
 const step = ref('login') // 'login' | 'select-business' | 'select-outlet' | 'done'
+const syncMessage = ref('')
+const syncSuccess = ref(false)
 
 // ── Derived ─────────────────────────────────────────────────────────────────
 const isZeroBusiness = computed(
@@ -32,6 +36,15 @@ const zeroActiveOutlets = computed(
   () => step.value === 'select-outlet' && activeBusinessOutlets.value.length === 0,
 )
 
+const canSync = computed(
+  () =>
+    cloudStore.isAuthenticated &&
+    cloudStore.hasCloudAccess &&
+    Boolean(cloudStore.selectedBusiness) &&
+    Boolean(cloudStore.selectedOutlet) &&
+    cloudStore.isDeviceRegistered,
+)
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 function getPlatform() {
   try {
@@ -41,6 +54,24 @@ function getPlatform() {
     // web / test
   }
   return null
+}
+
+async function handleSyncNow() {
+  syncMessage.value = ''
+  const result = await syncPushStore.pushNow()
+  if (result.ok) {
+    syncSuccess.value = true
+    const sent = result.removedQueueIds?.length ?? 0
+    const rem = result.remaining ?? 0
+    if (sent === 0 && rem === 0) {
+      syncMessage.value = 'Semua data telah tersinkronisasi.'
+    } else {
+      syncMessage.value = `${sent} data berhasil dikirim, ${rem} masih menunggu.`
+    }
+  } else {
+    syncSuccess.value = false
+    syncMessage.value = result.error?.message ?? result.message ?? 'Sinkronisasi gagal.'
+  }
 }
 
 // ── Login flow ───────────────────────────────────────────────────────────────
@@ -117,9 +148,10 @@ async function handleLogout() {
 }
 
 // Sync context to adapter on mount (if already hydrated)
-onMounted(() => {
+onMounted(async () => {
   if (cloudStore.isAuthenticated) {
     step.value = 'done'
+    await syncPushStore.refreshPendingCount()
   }
 })
 </script>
@@ -185,6 +217,40 @@ onMounted(() => {
           <span class="text-sm text-ink-secondary">Device</span>
           <span class="font-medium text-emerald-600">Terdaftar</span>
         </div>
+      </div>
+
+      <!-- P12: Manual Sync Section -->
+      <div
+        v-if="canSync"
+        id="cloud-sync-section"
+        class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
+      >
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-sm font-semibold text-ink-primary">Sinkronisasi Cloud</p>
+            <p id="sync-pending-label" class="text-xs text-ink-secondary">
+              {{ syncPushStore.pendingCount }} data menunggu sinkronisasi
+            </p>
+          </div>
+          <BaseButton
+            id="sync-now-btn"
+            variant="primary"
+            size="sm"
+            :loading="syncPushStore.loading"
+            @click="handleSyncNow"
+          >
+            Sync Sekarang
+          </BaseButton>
+        </div>
+
+        <p
+          v-if="syncMessage"
+          id="sync-result-message"
+          class="rounded-xl px-3 py-2 text-xs font-medium"
+          :class="syncSuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'"
+        >
+          {{ syncMessage }}
+        </p>
       </div>
 
       <!-- Cloud access warning -->

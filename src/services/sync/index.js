@@ -6,6 +6,8 @@ export { createSyncChangeTracker } from './syncTracker'
 export { createSyncQueueService } from './syncQueueService'
 export { createSyncIdentityRegistry, buildProductSyncSku, isUuid, generateUuid } from './syncIdentityRegistry'
 export { createContractMapper, mapOutboxEntries } from './contractMapper'
+export { pushSyncRequest } from './syncPushTransport'
+export { createSyncPushService } from './syncPushService'
 
 /**
  * Initializes the P9 sync foundation after SQLite persistence is ready.
@@ -20,9 +22,11 @@ export { createContractMapper, mapOutboxEntries } from './contractMapper'
 export function initializeSyncFoundation({ pinia, adapter, scheduler }) {
   const queueService = createSyncQueueService({ adapter, scheduler })
   const tracker = createSyncChangeTracker({ pinia, queueService })
+  const pushService = createSyncPushService({ adapter, scheduler, queueService })
 
   return {
     queueService,
     tracker,
+    pushService,
   }
 }
