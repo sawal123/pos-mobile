@@ -122,7 +122,13 @@ export function createSyncIdentityRegistry({ adapter = null, scheduler = null } 
 
     const newUuid = generateUuid()
     map[registryKey] = newUuid
-    await persistMap()
+
+    try {
+      await persistMap()
+    } catch (err) {
+      delete map[registryKey]
+      throw err
+    }
 
     return newUuid
   }

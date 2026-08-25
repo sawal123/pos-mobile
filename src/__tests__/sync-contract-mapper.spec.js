@@ -147,6 +147,68 @@ describe('P11: Sync Identity Registry', () => {
     // 5. saveSyncIdentityMap must never be called (no new UUID generated or persisted)
     expect(saveSpy).not.toHaveBeenCalled()
   })
+
+  it('rolls back in-memory map entry when saveSyncIdentityMap fails and retries successfully', async () => {
+    // 1. Create durable registry
+    const registry = createSyncIdentityRegistry({ adapter })
+
+    // 2. Mock saveSyncIdentityMap to fail once
+    const writeError = new Error('Disk write failed')
+    const saveSpy = vi.spyOn(adapter, 'saveSyncIdentityMap').mockRejectedValueOnce(writeError)
+
+    // 3. Attempt to resolve sync ID
+    await expect(registry.resolveSyncId('product', 'legacy-product-1')).rejects.toThrow(
+      'Disk write failed',
+    )
+
+    // 4. Assert failed UUID is rolled back and not considered resolved
+    expect(registry.peekSyncId('product', 'legacy-product-1')).toBeNull()
+
+    // 5. Retry with working save
+    saveSpy.mockRestore()
+    const resolvedSyncId = await registry.resolveSyncId('product', 'legacy-product-1')
+
+    // 6. Assert valid UUID and saved to adapter
+    expect(isUuid(resolvedSyncId)).toBe(true)
+    expect(registry.peekSyncId('product', 'legacy-product-1')).toBe(resolvedSyncId)
+
+    const persisted = await adapter.loadSyncIdentityMap()
+    expect(persisted['product:legacy-product-1']).toBe(resolvedSyncId)
+
+    // 7. Simulated restart with new registry referencing same adapter
+    const newRegistry = createSyncIdentityRegistry({ adapter })
+    const reloadedSyncId = await newRegistry.resolveSyncId('product', 'legacy-product-1')
+    expect(reloadedSyncId).toBe(resolvedSyncId)
+  })
+
+  it('rolls back in-memory map entry when scheduler.runSerialized fails', async () => {
+    let shouldFail = true
+    const scheduler = {
+      async runSerialized(task, label) {
+        if (shouldFail) {
+          throw new Error('Scheduler serialized task queue error')
+        }
+        return task()
+      },
+    }
+
+    const registry = createSyncIdentityRegistry({ adapter, scheduler })
+
+    await expect(registry.resolveSyncId('product', 'legacy-prod-sched')).rejects.toThrow(
+      'Scheduler serialized task queue error',
+    )
+
+    expect(registry.peekSyncId('product', 'legacy-prod-sched')).toBeNull()
+
+    // Retry after scheduler recovers
+    shouldFail = false
+    const resolvedSyncId = await registry.resolveSyncId('product', 'legacy-prod-sched')
+    expect(isUuid(resolvedSyncId)).toBe(true)
+    expect(registry.peekSyncId('product', 'legacy-prod-sched')).toBe(resolvedSyncId)
+
+    const persisted = await adapter.loadSyncIdentityMap()
+    expect(persisted['product:legacy-prod-sched']).toBe(resolvedSyncId)
+  })
 })
 
 describe('P11: Category Mapping', () => {
