@@ -739,6 +739,352 @@ describe('P12: Preconditions & Error Handling', () => {
   })
 })
 
+describe('P12: In-Flight Envelope Context Validation', () => {
+  let adapter
+  let queueService
+  let registry
+  let mockTransport
+
+  beforeEach(async () => {
+    adapter = createMemoryAdapter()
+    await adapter.initialize()
+    queueService = createSyncQueueService({ adapter })
+    registry = createSyncIdentityRegistry({ adapter })
+    mockTransport = vi.fn()
+
+    // Seed existing in-flight envelope
+    await adapter.saveSyncPushInflight({
+      version: 1,
+      requestId: '11111111-1111-1111-1111-111111111111',
+      businessId: 10,
+      outletId: 100,
+      deviceIdentifier: 'DEVICE-A',
+      registeredDeviceId: 50,
+      createdAt: '2026-08-25T10:00:00.000Z',
+      queueSnapshots: [
+        {
+          id: 'q1',
+          entityType: 'product',
+          entityId: 'p1',
+          operation: 'upsert',
+          payload: {},
+          updatedAt: '2026-08-25T10:00:00.000Z',
+        },
+      ],
+      changes: {
+        categories: [],
+        products: [{ name: 'P' }],
+        customers: [],
+        shifts: [],
+        sales: [],
+        sale_items: [],
+        expenses: [],
+      },
+    })
+  })
+
+  it('fails closed on businessId mismatch without network call', async () => {
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport: mockTransport,
+    })
+
+    const result = await pushService.pushNow({
+      context: makeValidCloudContext({
+        selectedBusiness: { id: 99, name: 'Other Business' },
+        selectedOutlet: { id: 100, name: 'Outlet' },
+        deviceIdentifier: 'DEVICE-A',
+        registeredDeviceId: 50,
+      }),
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_ENVELOPE_CONTEXT_MISMATCH')
+    expect(mockTransport).not.toHaveBeenCalled()
+    expect(await adapter.loadSyncPushInflight()).not.toBeNull()
+  })
+
+  it('fails closed on outletId mismatch without network call', async () => {
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport: mockTransport,
+    })
+
+    const result = await pushService.pushNow({
+      context: makeValidCloudContext({
+        selectedBusiness: { id: 10, name: 'Business 10' },
+        selectedOutlet: { id: 200, name: 'Other Outlet' },
+        deviceIdentifier: 'DEVICE-A',
+        registeredDeviceId: 50,
+      }),
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_ENVELOPE_CONTEXT_MISMATCH')
+    expect(mockTransport).not.toHaveBeenCalled()
+    expect(await adapter.loadSyncPushInflight()).not.toBeNull()
+  })
+
+  it('fails closed on deviceIdentifier mismatch without network call', async () => {
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport: mockTransport,
+    })
+
+    const result = await pushService.pushNow({
+      context: makeValidCloudContext({
+        selectedBusiness: { id: 10, name: 'Business 10' },
+        selectedOutlet: { id: 100, name: 'Outlet' },
+        deviceIdentifier: 'DEVICE-B',
+        registeredDeviceId: 50,
+      }),
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_ENVELOPE_CONTEXT_MISMATCH')
+    expect(mockTransport).not.toHaveBeenCalled()
+    expect(await adapter.loadSyncPushInflight()).not.toBeNull()
+  })
+
+  it('fails closed on registeredDeviceId mismatch without network call', async () => {
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport: mockTransport,
+    })
+
+    const result = await pushService.pushNow({
+      context: makeValidCloudContext({
+        selectedBusiness: { id: 10, name: 'Business 10' },
+        selectedOutlet: { id: 100, name: 'Outlet' },
+        deviceIdentifier: 'DEVICE-A',
+        registeredDeviceId: 60,
+      }),
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_ENVELOPE_CONTEXT_MISMATCH')
+    expect(mockTransport).not.toHaveBeenCalled()
+    expect(await adapter.loadSyncPushInflight()).not.toBeNull()
+  })
+})
+
+describe('P12: Mixed Limits & Candidate Deferral', () => {
+  let adapter
+  let queueService
+  let registry
+
+  beforeEach(async () => {
+    adapter = createMemoryAdapter()
+    await adapter.initialize()
+    queueService = createSyncQueueService({ adapter })
+    registry = createSyncIdentityRegistry({ adapter })
+  })
+
+  it('defers 101st category but includes subsequent valid product in same HTTP batch', async () => {
+    for (let i = 1; i <= 101; i++) {
+      await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.CATEGORY, `cat-${i}`, { name: `Cat ${i}` })
+    }
+    const prodEntry = await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-mixed', {
+      id: 'p-mixed',
+      name: 'Product In Mixed Batch',
+      price: 15000,
+      isActive: true,
+    })
+
+    let capturedChanges = null
+    const transport = vi.fn().mockImplementation(async ({ body }) => {
+      capturedChanges = body.changes
+      return {
+        ok: true,
+        status: 200,
+        data: {
+          data: {
+            request_id: body.request_id,
+            duplicate: false,
+          },
+        },
+      }
+    })
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const result = await pushService.pushNow({ context: makeValidCloudContext() })
+
+    expect(result.ok).toBe(true)
+    expect(transport).toHaveBeenCalledTimes(1)
+    expect(capturedChanges.categories).toHaveLength(100)
+    expect(capturedChanges.products).toHaveLength(1)
+    expect(result.removedQueueIds).toHaveLength(101) // 100 categories + 1 product
+    expect(result.removedQueueIds).toContain(prodEntry.entry.id)
+    expect(result.remaining).toBe(1) // 101st category remains pending
+  })
+})
+
+describe('P12: Zero-Mapped Entry & Reserved Category Handling', () => {
+  let adapter
+  let queueService
+  let registry
+  let mockTransport
+
+  beforeEach(async () => {
+    adapter = createMemoryAdapter()
+    await adapter.initialize()
+    queueService = createSyncQueueService({ adapter })
+    registry = createSyncIdentityRegistry({ adapter })
+    mockTransport = vi.fn()
+  })
+
+  it('does not call transport or remove queue when only reserved category Semua is queued', async () => {
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.CATEGORY, 'Semua', { name: 'Semua' })
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport: mockTransport,
+    })
+
+    const result = await pushService.pushNow({ context: makeValidCloudContext() })
+
+    expect(result.ok).toBe(true)
+    expect(mockTransport).not.toHaveBeenCalled()
+    expect(result.sentQueueIds).toEqual([])
+    expect(result.removedQueueIds).toEqual([])
+    expect(result.blocked).toHaveLength(1)
+    expect(result.blocked[0].code).toBe('NO_MAPPED_SERVER_CHANGE')
+    expect(result.remaining).toBe(1)
+    expect(await queueService.countPending()).toBe(1)
+  })
+
+  it('includes only valid product when queue contains reserved category Semua + product', async () => {
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.CATEGORY, 'Semua', { name: 'Semua' })
+    const prod = await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-valid', {
+      id: 'p-valid',
+      name: 'Valid Product',
+      price: 10000,
+      isActive: true,
+    })
+
+    let capturedChanges = null
+    mockTransport.mockImplementation(async ({ body }) => {
+      capturedChanges = body.changes
+      return {
+        ok: true,
+        status: 200,
+        data: {
+          data: {
+            request_id: body.request_id,
+            duplicate: false,
+          },
+        },
+      }
+    })
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport: mockTransport,
+    })
+
+    const result = await pushService.pushNow({ context: makeValidCloudContext() })
+
+    expect(result.ok).toBe(true)
+    expect(mockTransport).toHaveBeenCalledTimes(1)
+    expect(capturedChanges.categories).toHaveLength(0)
+    expect(capturedChanges.products).toHaveLength(1)
+    expect(result.sentQueueIds).toEqual([prod.entry.id])
+    expect(result.removedQueueIds).toEqual([prod.entry.id])
+    expect(result.remaining).toBe(1) // 'Semua' remains in queue
+    expect(await queueService.countPending()).toBe(1)
+  })
+})
+
+describe('P12: Production-Like Store Wiring', () => {
+  let adapter
+  let pinia
+  let queueService
+  let registry
+  let mockTransport
+
+  beforeEach(async () => {
+    pinia = createPinia()
+    setActivePinia(pinia)
+    adapter = createMemoryAdapter()
+    await adapter.initialize()
+    queueService = createSyncQueueService({ adapter })
+    registry = createSyncIdentityRegistry({ adapter })
+    mockTransport = vi.fn().mockImplementation(async ({ body }) => ({
+      ok: true,
+      status: 200,
+      data: {
+        data: {
+          request_id: body.request_id,
+          duplicate: false,
+        },
+      },
+    }))
+  })
+
+  it('bridges CloudSessionStore context to pushService in syncPushStore.pushNow() without explicit context', async () => {
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-wire', {
+      id: 'p-wire',
+      name: 'Kopi Susu Wiring',
+      price: 18000,
+      isActive: true,
+    })
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'production-secure-token',
+      transport: mockTransport,
+    })
+
+    const cloudStore = useCloudSessionStore()
+    const syncPushStore = useSyncPushStore()
+
+    cloudStore.user = { id: 1, email: 'owner@example.com' }
+    cloudStore.selectedBusiness = { id: 10, name: 'Business 10' }
+    cloudStore.selectedOutlet = { id: 101, name: 'Outlet 1' }
+    cloudStore.cloudAccess = true
+    cloudStore.deviceIdentifier = '123e4567-e89b-12d3-a456-426614174000'
+    cloudStore.registeredDeviceId = 55
+
+    syncPushStore.init({ pushService })
+
+    const result = await syncPushStore.pushNow() // No explicit context passed
+
+    expect(result.ok).toBe(true)
+    expect(mockTransport).toHaveBeenCalledTimes(1)
+    const call = mockTransport.mock.calls[0][0]
+    expect(call.token).toBe('production-secure-token')
+    expect(call.body.business_id).toBe(10)
+    expect(call.body.device_identifier).toBe('123e4567-e89b-12d3-a456-426614174000')
+  })
+})
+
 describe('P12: UI Integration in CloudLoginView', () => {
   let adapter
   let pinia

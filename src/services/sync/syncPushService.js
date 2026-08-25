@@ -177,15 +177,21 @@ export function createSyncPushService({
       const warnings = []
 
       if (existingEnvelope) {
-        if (existingEnvelope.businessId !== currentBusinessId) {
+        const isBusinessMatch = Number(existingEnvelope.businessId) === currentBusinessId
+        const isOutletMatch = Number(existingEnvelope.outletId) === Number(selectedOutlet.id)
+        const isDeviceMatch = String(existingEnvelope.deviceIdentifier) === String(deviceIdentifier)
+        const isRegisteredDeviceMatch =
+          String(existingEnvelope.registeredDeviceId) === String(registeredDeviceId)
+
+        if (!isBusinessMatch || !isOutletMatch || !isDeviceMatch || !isRegisteredDeviceMatch) {
           const remaining = await activeQueueService.countPending()
           return {
             ok: false,
             code: 'SYNC_ENVELOPE_CONTEXT_MISMATCH',
-            message: `In-flight envelope business ID ${existingEnvelope.businessId} does not match current business ${currentBusinessId}.`,
+            message: `In-flight envelope context does not match current cloud context.`,
             error: {
               code: 'SYNC_ENVELOPE_CONTEXT_MISMATCH',
-              message: `In-flight envelope business ID ${existingEnvelope.businessId} does not match current business ${currentBusinessId}.`,
+              message: `In-flight envelope context does not match current cloud context.`,
             },
             remaining,
             sentQueueIds: [],
@@ -201,7 +207,24 @@ export function createSyncPushService({
         isReusedEnvelope = true
       } else {
         // ── 4. Build new batch from outbox queue ────────────────────────────────
-        const pendingItems = await activeQueueService.listPending({ limit: 500 })
+        const totalPending = await activeQueueService.countPending()
+
+        if (totalPending === 0) {
+          return {
+            ok: true,
+            requestId: null,
+            duplicate: false,
+            sentQueueIds: [],
+            removedQueueIds: [],
+            preservedQueueIds: [],
+            blocked: [],
+            warnings: [],
+            remaining: 0,
+            error: null,
+          }
+        }
+
+        const pendingItems = await activeQueueService.listPending({ limit: totalPending })
 
         if (pendingItems.length === 0) {
           return {
@@ -256,6 +279,29 @@ export function createSyncPushService({
             warnings.push(...mapped.warnings)
           }
 
+          const isMapped =
+            Array.isArray(mapped.mappedQueueIds) && mapped.mappedQueueIds.includes(entry.id)
+          const hasServerChanges =
+            mapped.changes.categories.length > 0 ||
+            mapped.changes.products.length > 0 ||
+            mapped.changes.customers.length > 0 ||
+            mapped.changes.shifts.length > 0 ||
+            mapped.changes.sales.length > 0 ||
+            mapped.changes.sale_items.length > 0 ||
+            mapped.changes.expenses.length > 0
+
+          if (!isMapped || !hasServerChanges) {
+            blocked.push({
+              queueId: entry.id,
+              entityType: entry.entityType,
+              entityId: entry.entityId,
+              operation: entry.operation,
+              code: 'NO_MAPPED_SERVER_CHANGE',
+              message: 'Queue item did not produce any server-compatible changes.',
+            })
+            continue
+          }
+
           if (singleEntryExceedsLimit(mapped.changes)) {
             blocked.push({
               queueId: entry.id,
@@ -269,8 +315,8 @@ export function createSyncPushService({
           }
 
           if (wouldExceedLimit(accumulatedChanges, mapped.changes)) {
-            // Batch limit reached, defer remaining candidates for next push
-            break
+            // Batch limit for this entity type reached, defer candidate for next push batch
+            continue
           }
 
           // Accumulate changes

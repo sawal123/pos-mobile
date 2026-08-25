@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { Capacitor } from '@capacitor/core'
 
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -44,6 +44,12 @@ const canSync = computed(
     Boolean(cloudStore.selectedOutlet) &&
     cloudStore.isDeviceRegistered,
 )
+
+watch(canSync, async (isReady) => {
+  if (isReady) {
+    await syncPushStore.refreshPendingCount()
+  }
+})
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 function getPlatform() {

@@ -38,7 +38,7 @@ export const useSyncPushStore = defineStore('syncPush', () => {
     }
   }
 
-  async function pushNow(options) {
+  async function pushNow(options = {}) {
     if (!_pushService) {
       if (_adapter) {
         _pushService = createSyncPushService({
@@ -59,8 +59,20 @@ export const useSyncPushStore = defineStore('syncPush', () => {
     loading.value = true
     lastError.value = null
 
+    const resolvedContext = options.context ?? {
+      user: cloudStore.user,
+      selectedBusiness: cloudStore.selectedBusiness,
+      selectedOutlet: cloudStore.selectedOutlet,
+      cloudAccess: cloudStore.cloudAccess,
+      deviceIdentifier: cloudStore.deviceIdentifier,
+      registeredDeviceId: cloudStore.registeredDeviceId,
+    }
+
     try {
-      const result = await _pushService.pushNow(options)
+      const result = await _pushService.pushNow({
+        ...options,
+        context: resolvedContext,
+      })
       lastResult.value = result
       if (!result.ok) {
         lastError.value = result.error?.message ?? result.message ?? 'Sync push failed'
