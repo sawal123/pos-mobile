@@ -483,6 +483,13 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
       const db = await ensureConnection()
       await db.run("DELETE FROM app_meta WHERE key = 'cloud_context'", [])
     },
+    // P11: sync identity map (stable, durable, non-sensitive, survives logout)
+    async loadSyncIdentityMap() {
+      return readMetaValue('sync_identity_map', null)
+    },
+    async saveSyncIdentityMap(map) {
+      await writeMetaValue('sync_identity_map', map)
+    },
     async close() {
       if (!dbConnection) {
         return

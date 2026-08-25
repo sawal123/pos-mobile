@@ -191,7 +191,7 @@ function makeValidBackup(overrides = {}) {
     },
   }
 
-  const payload = { ...base, ...overrides, data: { ...base.data, ...(overrides.data ?? {}) } }
+  const payload = { ...base, ...overrides, data: { ...base.data, ...overrides.data } }
 
   return typeof globalThis.structuredClone === 'function'
     ? globalThis.structuredClone(payload)

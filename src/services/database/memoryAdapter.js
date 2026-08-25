@@ -24,6 +24,7 @@ export function createMemoryAdapter() {
     syncQueue: [],
     deviceIdentifier: null,
     cloudContext: null,
+    syncIdentityMap: null,
   }
 
   return {
@@ -162,6 +163,13 @@ export function createMemoryAdapter() {
     },
     async clearCloudContext() {
       state.cloudContext = null
+    },
+    // P11: sync identity map (stable, durable, non-sensitive, survives logout)
+    async loadSyncIdentityMap() {
+      return state.syncIdentityMap ? cloneValue(state.syncIdentityMap) : null
+    },
+    async saveSyncIdentityMap(map) {
+      state.syncIdentityMap = cloneValue(map)
     },
     async close() {},
   }
