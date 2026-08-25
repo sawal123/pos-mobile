@@ -398,7 +398,7 @@ export function createSyncPushService({
         const duplicate = Boolean(respData.duplicate)
         const removedQueueIds = []
         const preservedQueueIds = []
-        let hasStorageError = false
+        const cleanupFailedQueueIds = []
 
         for (const snapshot of envelope.queueSnapshots) {
           const casResult = await activeQueueService.removeIfUnchanged(snapshot)
@@ -406,18 +406,42 @@ export function createSyncPushService({
             if (casResult.removed) {
               removedQueueIds.push(snapshot.id)
             } else {
+              // CAS mismatch: entity mutated locally while request was in-flight — normal, preserve it
               preservedQueueIds.push(snapshot.id)
             }
           } else {
-            hasStorageError = true
+            // Storage/SQLite error: not a CAS mismatch, local cleanup genuinely failed
+            cleanupFailedQueueIds.push(snapshot.id)
           }
         }
+
+        const hasStorageError = cleanupFailedQueueIds.length > 0
 
         if (!hasStorageError && adapter && typeof adapter.clearSyncPushInflight === 'function') {
           await adapter.clearSyncPushInflight()
         }
 
         const remaining = await activeQueueService.countPending()
+
+        if (hasStorageError) {
+          return {
+            ok: false,
+            code: 'LOCAL_SYNC_CLEANUP_FAILED',
+            requestId,
+            duplicate,
+            sentQueueIds,
+            removedQueueIds,
+            preservedQueueIds,
+            cleanupFailedQueueIds,
+            blocked,
+            warnings,
+            remaining,
+            error: {
+              code: 'LOCAL_SYNC_CLEANUP_FAILED',
+              message: `Server accepted the request (requestId: ${requestId}) but local queue cleanup failed for ${cleanupFailedQueueIds.length} item(s). Retry will reuse the same requestId.`,
+            },
+          }
+        }
 
         return {
           ok: true,
@@ -426,6 +450,7 @@ export function createSyncPushService({
           sentQueueIds,
           removedQueueIds,
           preservedQueueIds,
+          cleanupFailedQueueIds: [],
           blocked,
           warnings,
           remaining,

@@ -1139,3 +1139,192 @@ describe('P12: UI Integration in CloudLoginView', () => {
     expect(wrapper.text()).toContain('2 data berhasil dikirim, 3 masih menunggu.')
   })
 })
+
+describe('P12: Server Success + Local Queue Cleanup Failure (LOCAL_SYNC_CLEANUP_FAILED)', () => {
+  let adapter
+  let queueService
+  let registry
+
+  function makeSuccessTransport(requestIdRef = { value: null }) {
+    return vi.fn().mockImplementation(async ({ body }) => {
+      requestIdRef.value = body.request_id
+      return {
+        ok: true,
+        status: 200,
+        data: {
+          data: {
+            request_id: body.request_id,
+            duplicate: false,
+          },
+        },
+      }
+    })
+  }
+
+  function makeDuplicateTransport(firstRequestId) {
+    return vi.fn().mockImplementation(async ({ body }) => ({
+      ok: true,
+      status: 200,
+      data: {
+        data: {
+          request_id: body.request_id,
+          duplicate: body.request_id === firstRequestId,
+        },
+      },
+    }))
+  }
+
+  beforeEach(async () => {
+    adapter = createMemoryAdapter()
+    await adapter.initialize()
+    queueService = createSyncQueueService({ adapter })
+    registry = createSyncIdentityRegistry({ adapter })
+  })
+
+  it('returns LOCAL_SYNC_CLEANUP_FAILED and preserves envelope when CAS delete throws storage error', async () => {
+    const q1 = await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-cleanup-fail', {
+      id: 'p-cleanup-fail',
+      name: 'Cleanup Fail Product',
+      price: 12000,
+      isActive: true,
+    })
+
+    const requestIdRef = { value: null }
+    const transport = makeSuccessTransport(requestIdRef)
+
+    // Override adapter CAS delete to simulate SQLite storage error
+    const originalDelete = adapter.deleteSyncQueueItemIfUnchanged.bind(adapter)
+    adapter.deleteSyncQueueItemIfUnchanged = vi.fn().mockRejectedValue(
+      new Error('SQLite disk I/O error'),
+    )
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const result = await pushService.pushNow({ context: makeValidCloudContext() })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('LOCAL_SYNC_CLEANUP_FAILED')
+    expect(result.requestId).toBeTruthy()
+    expect(result.cleanupFailedQueueIds).toContain(q1.entry.id)
+    expect(result.removedQueueIds).toEqual([])
+    expect(result.error.code).toBe('LOCAL_SYNC_CLEANUP_FAILED')
+
+    // Envelope must still be persisted for retry
+    const inflight = await adapter.loadSyncPushInflight()
+    expect(inflight).not.toBeNull()
+    expect(inflight.requestId).toBe(result.requestId)
+
+    // Queue item must still be present
+    expect(await queueService.countPending()).toBe(1)
+
+    // Now simulate retry after storage error is resolved
+    adapter.deleteSyncQueueItemIfUnchanged = originalDelete
+    const savedRequestId = result.requestId
+
+    const retryTransport = makeDuplicateTransport(savedRequestId)
+    const retryRegistry = createSyncIdentityRegistry({ adapter })
+    const retryService = createSyncPushService({
+      adapter,
+      queueService,
+      registry: retryRegistry,
+      tokenFetcher: async () => 'test-token',
+      transport: retryTransport,
+    })
+
+    const retryResult = await retryService.pushNow({ context: makeValidCloudContext() })
+
+    expect(retryResult.ok).toBe(true)
+    expect(retryResult.requestId).toBe(savedRequestId)
+    expect(retryResult.duplicate).toBe(true)
+    expect(retryResult.removedQueueIds).toContain(q1.entry.id)
+    expect(retryResult.remaining).toBe(0)
+
+    // Envelope must be cleared on successful retry
+    expect(await adapter.loadSyncPushInflight()).toBeNull()
+  })
+
+  it('handles partial cleanup: queue #1 removed, queue #2 fails, envelope preserved, retry clears all', async () => {
+    const q1 = await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-partial-1', {
+      id: 'p-partial-1',
+      name: 'Partial Product 1',
+      price: 10000,
+      isActive: true,
+    })
+    const q2 = await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-partial-2', {
+      id: 'p-partial-2',
+      name: 'Partial Product 2',
+      price: 20000,
+      isActive: true,
+    })
+
+    const requestIdRef = { value: null }
+    const transport = makeSuccessTransport(requestIdRef)
+
+    // First call succeeds for q1, fails for q2
+    let callCount = 0
+    const originalDelete = adapter.deleteSyncQueueItemIfUnchanged.bind(adapter)
+    adapter.deleteSyncQueueItemIfUnchanged = vi.fn().mockImplementation(async (snapshot) => {
+      callCount++
+      if (callCount === 1) {
+        // q1 — succeed
+        return originalDelete(snapshot)
+      }
+      // q2 — storage error
+      throw new Error('SQLite disk I/O error on second item')
+    })
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const result = await pushService.pushNow({ context: makeValidCloudContext() })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('LOCAL_SYNC_CLEANUP_FAILED')
+    expect(result.removedQueueIds).toContain(q1.entry.id)
+    expect(result.cleanupFailedQueueIds).toContain(q2.entry.id)
+
+    // Envelope still present
+    const inflight = await adapter.loadSyncPushInflight()
+    expect(inflight).not.toBeNull()
+    const savedRequestId = result.requestId
+
+    // q1 is already gone, q2 still in queue
+    expect(await queueService.countPending()).toBe(1)
+    const pending = await queueService.listPending()
+    expect(pending[0].id).toBe(q2.entry.id)
+
+    // Retry after storage error resolved
+    adapter.deleteSyncQueueItemIfUnchanged = originalDelete
+
+    const retryTransport = makeDuplicateTransport(savedRequestId)
+    const retryRegistry = createSyncIdentityRegistry({ adapter })
+    const retryService = createSyncPushService({
+      adapter,
+      queueService,
+      registry: retryRegistry,
+      tokenFetcher: async () => 'test-token',
+      transport: retryTransport,
+    })
+
+    const retryResult = await retryService.pushNow({ context: makeValidCloudContext() })
+
+    expect(retryResult.ok).toBe(true)
+    expect(retryResult.requestId).toBe(savedRequestId)
+    expect(retryResult.duplicate).toBe(true)
+
+    // Both q1 and q2 are now gone (q1 was already removed, q2 now removed)
+    expect(retryResult.remaining).toBe(0)
+    expect(await adapter.loadSyncPushInflight()).toBeNull()
+  })
+})
