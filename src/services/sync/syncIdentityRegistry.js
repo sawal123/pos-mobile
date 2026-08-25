@@ -52,6 +52,11 @@ export function buildProductSyncSku(syncId) {
 export function createSyncIdentityRegistry({ adapter = null, scheduler = null } = {}) {
   let map = {}
   let isLoaded = false
+  const isDurable = Boolean(
+    adapter &&
+      typeof adapter.loadSyncIdentityMap === 'function' &&
+      typeof adapter.saveSyncIdentityMap === 'function',
+  )
 
   async function ensureLoaded() {
     if (isLoaded) return
@@ -61,11 +66,14 @@ export function createSyncIdentityRegistry({ adapter = null, scheduler = null } 
         if (stored && typeof stored === 'object') {
           map = { ...stored }
         }
+        isLoaded = true
       } catch (err) {
         console.error('Failed to load sync identity map from adapter.', err)
+        throw err
       }
+    } else {
+      isLoaded = true
     }
-    isLoaded = true
   }
 
   async function persistMap() {
@@ -140,5 +148,6 @@ export function createSyncIdentityRegistry({ adapter = null, scheduler = null } 
     peekSyncId,
     ensureLoaded,
     getMap: () => ({ ...map }),
+    isDurable,
   }
 }

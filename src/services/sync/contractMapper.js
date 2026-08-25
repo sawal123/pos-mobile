@@ -49,7 +49,7 @@ export async function mapOutboxEntries(
     activeRegistry = createSyncIdentityRegistry({ adapter, scheduler })
   }
 
-  if (!activeRegistry) {
+  if (!activeRegistry || !activeRegistry.isDurable) {
     throw new Error('mapOutboxEntries requires a durable registry or database adapter.')
   }
 
@@ -620,7 +620,7 @@ export function createContractMapper({ registry = null, adapter = null, schedule
     activeRegistry = createSyncIdentityRegistry({ adapter, scheduler })
   }
 
-  if (!activeRegistry) {
+  if (!activeRegistry || !activeRegistry.isDurable) {
     throw new Error('createContractMapper requires a durable registry or database adapter.')
   }
 

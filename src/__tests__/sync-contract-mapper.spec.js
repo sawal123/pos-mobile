@@ -124,6 +124,29 @@ describe('P11: Sync Identity Registry', () => {
     const persisted = await adapter.loadSyncIdentityMap()
     expect(persisted['category:Kopi Susu']).toBe(syncId)
   })
+
+  it('fails closed when loadSyncIdentityMap throws: does not generate UUID and does not persist', async () => {
+    // 1. Initial successful save of category:Minuman -> UUID-A
+    const initialRegistry = createSyncIdentityRegistry({ adapter })
+    const initialSyncId = await initialRegistry.resolveSyncId('category', 'Minuman')
+    expect(isUuid(initialSyncId)).toBe(true)
+
+    // 2. Mock loadSyncIdentityMap to throw (simulating storage read error on app restart)
+    const readError = new Error('SQLite disk read error')
+    vi.spyOn(adapter, 'loadSyncIdentityMap').mockRejectedValue(readError)
+    const saveSpy = vi.spyOn(adapter, 'saveSyncIdentityMap')
+
+    // 3. New registry instance simulating restart
+    const brokenRegistry = createSyncIdentityRegistry({ adapter })
+
+    // 4. resolveSyncId must reject/throw
+    await expect(brokenRegistry.resolveSyncId('category', 'Minuman')).rejects.toThrow(
+      'SQLite disk read error',
+    )
+
+    // 5. saveSyncIdentityMap must never be called (no new UUID generated or persisted)
+    expect(saveSpy).not.toHaveBeenCalled()
+  })
 })
 
 describe('P11: Category Mapping', () => {
@@ -795,6 +818,30 @@ describe('P11: Mapper Durability & Fail-Closed Factory Guards', () => {
 
   it('throws when createContractMapper is invoked without durable registry or adapter', () => {
     expect(() => createContractMapper()).toThrow(
+      'createContractMapper requires a durable registry or database adapter.',
+    )
+  })
+
+  it('throws when mapOutboxEntries is given an ephemeral registry without adapter', async () => {
+    const ephemeralRegistry = createSyncIdentityRegistry()
+    const entries = [
+      {
+        id: 'q-1',
+        entityType: SYNC_ENTITY_TYPES.PRODUCT,
+        entityId: 'p1',
+        operation: SYNC_OPERATIONS.UPSERT,
+        payload: { id: 'p1', name: 'Product', price: 1000 },
+      },
+    ]
+
+    await expect(mapOutboxEntries(entries, { registry: ephemeralRegistry })).rejects.toThrow(
+      'mapOutboxEntries requires a durable registry or database adapter.',
+    )
+  })
+
+  it('throws when createContractMapper is given an ephemeral registry without adapter', () => {
+    const ephemeralRegistry = createSyncIdentityRegistry()
+    expect(() => createContractMapper({ registry: ephemeralRegistry })).toThrow(
       'createContractMapper requires a durable registry or database adapter.',
     )
   })
