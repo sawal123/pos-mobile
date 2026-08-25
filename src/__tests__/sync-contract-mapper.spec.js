@@ -20,7 +20,6 @@ import {
   createSyncIdentityRegistry,
   buildProductSyncSku,
   isUuid,
-  generateUuid,
 } from '../services/sync/syncIdentityRegistry'
 import { mapOutboxEntries, createContractMapper } from '../services/sync/contractMapper'
 import { SYNC_ENTITY_TYPES, SYNC_OPERATIONS } from '../services/sync/syncConstants'
@@ -104,6 +103,26 @@ describe('P11: Sync Identity Registry', () => {
 
     const identityMap = await adapter.loadSyncIdentityMap()
     expect(identityMap['category:Snack']).toBe(syncId)
+  })
+
+  it('persists through scheduler using canonical P9 signature runSerialized(task, label)', async () => {
+    const calls = []
+    const scheduler = {
+      async runSerialized(task, label) {
+        calls.push({ type: typeof task, label })
+        return task()
+      },
+    }
+
+    const registry = createSyncIdentityRegistry({ adapter, scheduler })
+    const syncId = await registry.resolveSyncId('category', 'Kopi Susu')
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0].type).toBe('function')
+    expect(calls[0].label).toBe('sync_identity_map_write')
+
+    const persisted = await adapter.loadSyncIdentityMap()
+    expect(persisted['category:Kopi Susu']).toBe(syncId)
   })
 })
 
@@ -382,16 +401,16 @@ describe('P11: Expense Mapping', () => {
     expect(result.mappedQueueIds).toEqual(['q-exp-1'])
   })
 
-  it('blocks expense with negative or zero amount', async () => {
+  it('allows expense with amount = 0 (non-negative integer contract)', async () => {
     const entries = [
       {
-        id: 'q-exp-bad',
+        id: 'q-exp-zero',
         entityType: SYNC_ENTITY_TYPES.EXPENSE,
-        entityId: 'exp-2',
+        entityId: 'exp-zero',
         operation: SYNC_OPERATIONS.UPSERT,
         payload: {
-          id: 'exp-2',
-          title: 'Test',
+          id: 'exp-zero',
+          title: 'Sample Free Promotion',
           amount: 0,
           createdAt: '2026-08-24T10:00:00.000Z',
         },
@@ -399,9 +418,45 @@ describe('P11: Expense Mapping', () => {
     ]
 
     const result = await mapOutboxEntries(entries, { registry })
+    expect(result.changes.expenses).toHaveLength(1)
+    expect(result.changes.expenses[0].amount).toBe(0)
+    expect(result.blocked).toHaveLength(0)
+    expect(result.mappedQueueIds).toEqual(['q-exp-zero'])
+  })
+
+  it('blocks expense with negative or non-integer amount', async () => {
+    const entries = [
+      {
+        id: 'q-exp-neg',
+        entityType: SYNC_ENTITY_TYPES.EXPENSE,
+        entityId: 'exp-neg',
+        operation: SYNC_OPERATIONS.UPSERT,
+        payload: {
+          id: 'exp-neg',
+          title: 'Test Negative',
+          amount: -500,
+          createdAt: '2026-08-24T10:00:00.000Z',
+        },
+      },
+      {
+        id: 'q-exp-float',
+        entityType: SYNC_ENTITY_TYPES.EXPENSE,
+        entityId: 'exp-float',
+        operation: SYNC_OPERATIONS.UPSERT,
+        payload: {
+          id: 'exp-float',
+          title: 'Test Float',
+          amount: 12.5,
+          createdAt: '2026-08-24T10:00:00.000Z',
+        },
+      },
+    ]
+
+    const result = await mapOutboxEntries(entries, { registry })
     expect(result.changes.expenses).toHaveLength(0)
-    expect(result.blocked).toHaveLength(1)
+    expect(result.blocked).toHaveLength(2)
     expect(result.blocked[0].code).toBe('INVALID_EXPENSE_AMOUNT')
+    expect(result.blocked[1].code).toBe('INVALID_EXPENSE_AMOUNT')
   })
 })
 
@@ -449,6 +504,7 @@ describe('P11: Transaction Mapping (Sale + Sale Items)', () => {
 
     const sale = result.changes.sales[0]
     expect(sale.transaction_number).toBe('INV-2026-001')
+    expect(sale.status).toBe('paid')
     expect(sale.subtotal).toBe(35000)
     expect(sale.discount_amount).toBe(0)
     expect(sale.tax_amount).toBe(3500)
@@ -532,6 +588,46 @@ describe('P11: Transaction Mapping (Sale + Sale Items)', () => {
     expect(result.blocked[0].code).toBe('LEGACY_TRANSACTION_UNMAPPABLE')
     expect(result.mappedQueueIds).toHaveLength(0)
   })
+
+  it('preserves valid transaction status such as refunded and defaults missing status to completed', async () => {
+    const entries = [
+      {
+        id: 'q-trx-refunded',
+        entityType: SYNC_ENTITY_TYPES.TRANSACTION,
+        entityId: 'trx-ref',
+        operation: SYNC_OPERATIONS.UPSERT,
+        payload: {
+          id: 'trx-ref',
+          invoiceNumber: 'INV-REF',
+          status: 'refunded',
+          subtotal: 10000,
+          total: 10000,
+          createdAt: '2026-08-24T14:30:00.000Z',
+          items: [{ id: 'p1', name: 'Item', price: 10000, qty: 1 }],
+        },
+      },
+      {
+        id: 'q-trx-nostatus',
+        entityType: SYNC_ENTITY_TYPES.TRANSACTION,
+        entityId: 'trx-no',
+        operation: SYNC_OPERATIONS.UPSERT,
+        payload: {
+          id: 'trx-no',
+          invoiceNumber: 'INV-NO',
+          subtotal: 10000,
+          total: 10000,
+          createdAt: '2026-08-24T14:30:00.000Z',
+          items: [{ id: 'p1', name: 'Item', price: 10000, qty: 1 }],
+        },
+      },
+    ]
+
+    const result = await mapOutboxEntries(entries, { registry })
+
+    expect(result.changes.sales).toHaveLength(2)
+    expect(result.changes.sales[0].status).toBe('refunded')
+    expect(result.changes.sales[1].status).toBe('completed')
+  })
 })
 
 describe('P11: Business Entity & Delete Operation Blocking', () => {
@@ -579,6 +675,34 @@ describe('P11: Business Entity & Delete Operation Blocking', () => {
 
     expect(result.blocked).toHaveLength(4)
     expect(result.blocked.every((b) => b.code === 'DELETE_NOT_SUPPORTED_BY_SERVER_V1')).toBe(true)
+    expect(result.mappedQueueIds).toHaveLength(0)
+  })
+
+  it('fails closed on unsupported foreign operations besides upsert and delete', async () => {
+    const entries = [
+      {
+        id: 'q-op-patch',
+        entityType: SYNC_ENTITY_TYPES.PRODUCT,
+        entityId: 'p1',
+        operation: 'patch',
+        payload: { id: 'p1', name: 'Patched Product', price: 1000 },
+      },
+      {
+        id: 'q-op-custom',
+        entityType: SYNC_ENTITY_TYPES.CATEGORY,
+        entityId: 'c1',
+        operation: 'archive',
+        payload: { name: 'Archived Category' },
+      },
+    ]
+
+    const result = await mapOutboxEntries(entries, { registry })
+
+    expect(result.changes.products).toHaveLength(0)
+    expect(result.changes.categories).toHaveLength(0)
+    expect(result.blocked).toHaveLength(2)
+    expect(result.blocked[0].code).toBe('UNSUPPORTED_SYNC_OPERATION')
+    expect(result.blocked[1].code).toBe('UNSUPPORTED_SYNC_OPERATION')
     expect(result.mappedQueueIds).toHaveLength(0)
   })
 })
@@ -645,6 +769,63 @@ describe('P11: Mixed Batch Processing & Ordering', () => {
   })
 })
 
+describe('P11: Mapper Durability & Fail-Closed Factory Guards', () => {
+  let adapter
+
+  beforeEach(async () => {
+    adapter = createMemoryAdapter()
+    await adapter.initialize()
+  })
+
+  it('throws when mapOutboxEntries is invoked without durable registry or adapter', async () => {
+    const entries = [
+      {
+        id: 'q-1',
+        entityType: SYNC_ENTITY_TYPES.PRODUCT,
+        entityId: 'p1',
+        operation: SYNC_OPERATIONS.UPSERT,
+        payload: { id: 'p1', name: 'Product', price: 1000 },
+      },
+    ]
+
+    await expect(mapOutboxEntries(entries)).rejects.toThrow(
+      'mapOutboxEntries requires a durable registry or database adapter.',
+    )
+  })
+
+  it('throws when createContractMapper is invoked without durable registry or adapter', () => {
+    expect(() => createContractMapper()).toThrow(
+      'createContractMapper requires a durable registry or database adapter.',
+    )
+  })
+
+  it('creates durable mapper directly when given persistence adapter and scheduler', async () => {
+    const scheduler = {
+      runSerialized: vi.fn(async (task) => task()),
+    }
+
+    const mapper = createContractMapper({ adapter, scheduler })
+    expect(mapper.registry).toBeDefined()
+
+    const entries = [
+      {
+        id: 'q-durable-1',
+        entityType: SYNC_ENTITY_TYPES.CATEGORY,
+        entityId: 'Durable Category',
+        operation: SYNC_OPERATIONS.UPSERT,
+        payload: { name: 'Durable Category' },
+      },
+    ]
+
+    const result = await mapper.mapOutboxEntries(entries)
+    expect(result.changes.categories).toHaveLength(1)
+    expect(scheduler.runSerialized).toHaveBeenCalledWith(
+      expect.any(Function),
+      'sync_identity_map_write',
+    )
+  })
+})
+
 describe('P11: Strict Network & Storage Isolation', () => {
   it('does not invoke global fetch or make HTTP calls during contract mapping', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
@@ -661,7 +842,7 @@ describe('P11: Strict Network & Storage Isolation', () => {
       },
     ]
 
-    await mapOutboxEntries(entries)
+    await mapOutboxEntries(entries, { adapter })
 
     expect(fetchSpy).not.toHaveBeenCalled()
     fetchSpy.mockRestore()

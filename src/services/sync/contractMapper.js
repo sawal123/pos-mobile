@@ -36,10 +36,23 @@ function isPositiveInteger(value) {
  * @param {Array<object>} entries List of sync_queue outbox entries.
  * @param {object} [options]
  * @param {object} [options.registry] Sync identity registry instance.
+ * @param {object} [options.adapter] Database adapter providing persistence.
+ * @param {object} [options.scheduler] Optional serialized task scheduler.
  * @returns {Promise<object>}
  */
-export async function mapOutboxEntries(entries = [], { registry = null } = {}) {
-  const activeRegistry = registry ?? createSyncIdentityRegistry()
+export async function mapOutboxEntries(
+  entries = [],
+  { registry = null, adapter = null, scheduler = null } = {},
+) {
+  let activeRegistry = registry
+  if (!activeRegistry && adapter) {
+    activeRegistry = createSyncIdentityRegistry({ adapter, scheduler })
+  }
+
+  if (!activeRegistry) {
+    throw new Error('mapOutboxEntries requires a durable registry or database adapter.')
+  }
+
   await activeRegistry.ensureLoaded()
 
   const changes = {
@@ -76,7 +89,20 @@ export async function mapOutboxEntries(entries = [], { registry = null } = {}) {
       continue
     }
 
-    // ── 2. Block unsupported entity types
+    // ── 2. Fail closed for unsupported operations (only UPSERT allowed)
+    if (operation !== SYNC_OPERATIONS.UPSERT) {
+      blocked.push({
+        queueId,
+        entityType,
+        entityId,
+        operation,
+        code: 'UNSUPPORTED_SYNC_OPERATION',
+        message: `Operation '${operation}' is not supported by server v1 contract`,
+      })
+      continue
+    }
+
+    // ── 3. Block unsupported entity types
     if (entityType === SYNC_ENTITY_TYPES.BUSINESS) {
       blocked.push({
         queueId,
@@ -290,14 +316,14 @@ export async function mapOutboxEntries(entries = [], { registry = null } = {}) {
         continue
       }
 
-      if (!isPositiveInteger(payload.amount)) {
+      if (!isNonNegativeInteger(payload.amount)) {
         blocked.push({
           queueId,
           entityType,
           entityId,
           operation,
           code: 'INVALID_EXPENSE_AMOUNT',
-          message: 'Expense amount must be a positive integer',
+          message: 'Expense amount must be a non-negative integer',
         })
         continue
       }
@@ -540,11 +566,14 @@ export async function mapOutboxEntries(entries = [], { registry = null } = {}) {
         ? payload.invoiceNumber.trim()
         : `LOCAL-${saleSyncId}`
 
+      const status = isNonEmptyString(payload.status) ? payload.status.trim() : 'completed'
+
       changes.sales.push({
         sync_id: saleSyncId,
         customer_sync_id: customerSyncId,
         shift_sync_id: null,
         transaction_number: transactionNumber,
+        status,
         subtotal: payload.subtotal,
         discount_amount: 0,
         tax_amount: taxAmount,
@@ -581,10 +610,19 @@ export async function mapOutboxEntries(entries = [], { registry = null } = {}) {
  *
  * @param {object} [options]
  * @param {object} [options.registry] Sync identity registry instance.
+ * @param {object} [options.adapter] Database adapter providing persistence.
+ * @param {object} [options.scheduler] Optional serialized task scheduler.
  * @returns {object}
  */
-export function createContractMapper({ registry = null } = {}) {
-  const activeRegistry = registry ?? createSyncIdentityRegistry()
+export function createContractMapper({ registry = null, adapter = null, scheduler = null } = {}) {
+  let activeRegistry = registry
+  if (!activeRegistry && adapter) {
+    activeRegistry = createSyncIdentityRegistry({ adapter, scheduler })
+  }
+
+  if (!activeRegistry) {
+    throw new Error('createContractMapper requires a durable registry or database adapter.')
+  }
 
   return {
     registry: activeRegistry,

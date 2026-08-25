@@ -75,7 +75,7 @@ export function createSyncIdentityRegistry({ adapter = null, scheduler = null } 
     const saveTask = () => adapter.saveSyncIdentityMap(mapSnapshot)
 
     if (scheduler && typeof scheduler.runSerialized === 'function') {
-      await scheduler.runSerialized('sync_identity_map_write', saveTask)
+      await scheduler.runSerialized(saveTask, 'sync_identity_map_write')
     } else {
       await saveTask()
     }
