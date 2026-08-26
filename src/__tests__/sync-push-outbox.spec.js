@@ -732,7 +732,7 @@ describe('P12: Preconditions & Error Handling', () => {
     expect(await adapter.loadSyncPushInflight()).not.toBeNull()
   })
 
-  it('handles 409 SYNC_CONFLICT without deleting queue, keeping envelope and returning conflict', async () => {
+  it('handles 409 SYNC_CONFLICT without deleting queue, clearing envelope and persisting conflict record', async () => {
     await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-conflict', {
       id: 'p-conflict',
       name: 'Conflict Product',
@@ -740,15 +740,20 @@ describe('P12: Preconditions & Error Handling', () => {
       isActive: true,
     })
 
+    const prodSyncId = await registry.resolveSyncId(SYNC_ENTITY_TYPES.PRODUCT, 'p-conflict')
+
     mockTransport.mockResolvedValue({
       ok: false,
       status: 409,
-      data: null,
-      error: {
-        status: 409,
+      data: {
         code: 'SYNC_CONFLICT',
-        message: 'Sync data conflict detected on server',
-        data: { conflict_details: {} },
+        conflicts: [
+          {
+            entity: 'products',
+            sync_id: prodSyncId,
+            server_sync_version: 2,
+          },
+        ],
       },
     })
 
@@ -763,14 +768,14 @@ describe('P12: Preconditions & Error Handling', () => {
     const result = await pushService.pushNow({ context: makeValidCloudContext() })
 
     expect(result.ok).toBe(false)
-    expect(result.error.code).toBe('SYNC_CONFLICT')
+    expect(result.code).toBe('SYNC_CONFLICT')
     expect(await queueService.countPending()).toBe(1)
-    expect(await adapter.loadSyncPushInflight()).not.toBeNull()
+    expect(await adapter.loadSyncPushInflight()).toBeNull()
 
-    // Verify snapshot marked failed
-    const pending = await queueService.listPending()
-    expect(pending[0].attemptCount).toBe(1)
-    expect(pending[0].lastError).toContain('Sync data conflict detected on server')
+    const conflictState = await adapter.loadSyncConflicts()
+    expect(conflictState).not.toBeNull()
+    expect(conflictState.conflicts).toHaveLength(1)
+    expect(conflictState.conflicts[0].status).toBe('open')
   })
 })
 

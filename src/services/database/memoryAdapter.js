@@ -30,6 +30,7 @@ export function createMemoryAdapter() {
     syncPullBinding: null,
     syncPullState: null,
     syncServerVersions: null,
+    syncConflicts: null,
   }
 
   return {
@@ -286,6 +287,16 @@ export function createMemoryAdapter() {
     },
     async saveSyncBootstrapState(bootstrapState) {
       state.syncBootstrapState = cloneValue(bootstrapState)
+    },
+    // P15: sync conflicts (durable, survives restart & logout)
+    async loadSyncConflicts() {
+      return state.syncConflicts ? cloneValue(state.syncConflicts) : null
+    },
+    async saveSyncConflicts(conflictsState) {
+      state.syncConflicts = cloneValue(conflictsState)
+    },
+    async clearSyncConflicts() {
+      state.syncConflicts = null
     },
     async close() {},
   }

@@ -618,6 +618,17 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
     async saveSyncBootstrapState(state) {
       await writeMetaValue('sync_bootstrap_state_v1', state)
     },
+    // P15: sync conflicts (durable, survives restart & logout)
+    async loadSyncConflicts() {
+      return readMetaValue('sync_conflicts_v1', null)
+    },
+    async saveSyncConflicts(conflictsState) {
+      await writeMetaValue('sync_conflicts_v1', conflictsState)
+    },
+    async clearSyncConflicts() {
+      const db = await ensureConnection()
+      await db.run("DELETE FROM app_meta WHERE key = 'sync_conflicts_v1'", [])
+    },
     async close() {
       if (!dbConnection) {
         return
