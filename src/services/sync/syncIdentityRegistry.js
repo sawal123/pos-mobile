@@ -149,9 +149,150 @@ export function createSyncIdentityRegistry({ adapter = null, scheduler = null } 
     return map[`${entityType}:${keyStr}`] ?? null
   }
 
+  /**
+   * Reverse resolution: finds local key from a given syncId for an entity type.
+   *
+   * @param {string} entityType
+   * @param {string} syncId
+   * @returns {Promise<string|null>}
+   */
+  async function findLocalKeyBySyncId(entityType, syncId) {
+    if (!syncId || !isUuid(syncId)) {
+      return null
+    }
+
+    await ensureLoaded()
+
+    const normalizedSyncId = String(syncId).trim().toLowerCase()
+    const prefix = `${entityType}:`
+
+    for (const [key, val] of Object.entries(map)) {
+      if (key.startsWith(prefix) && typeof val === 'string' && val.toLowerCase() === normalizedSyncId) {
+        return key.slice(prefix.length)
+      }
+    }
+
+    return null
+  }
+
+  /**
+   * Explicitly binds a local identifier to a remote sync UUID in the registry.
+   * Fails closed on duplicate / collision.
+   *
+   * @param {string} entityType
+   * @param {string|number} localKey
+   * @param {string} syncId
+   * @returns {Promise<string>}
+   */
+  async function bindSyncId(entityType, localKey, syncId) {
+    if (!syncId || !isUuid(syncId)) {
+      throw new Error(`Invalid sync_id UUID: ${syncId}`)
+    }
+    if (localKey === null || localKey === undefined || localKey === '') {
+      throw new Error(`Invalid localKey: ${localKey}`)
+    }
+
+    await ensureLoaded()
+
+    const normalizedSyncId = String(syncId).trim().toLowerCase()
+    const keyStr = String(localKey).trim()
+    const registryKey = `${entityType}:${keyStr}`
+
+    // Check if this localKey is already bound to a different syncId
+    if (map[registryKey]) {
+      if (map[registryKey].toLowerCase() === normalizedSyncId) {
+        return normalizedSyncId
+      }
+      throw new Error(
+        `IDENTITY_COLLISION: localKey "${keyStr}" already bound to "${map[registryKey]}", cannot rebind to "${normalizedSyncId}"`,
+      )
+    }
+
+    // Check if this syncId is already bound to a different localKey of same entityType
+    const prefix = `${entityType}:`
+    for (const [k, v] of Object.entries(map)) {
+      if (k.startsWith(prefix) && typeof v === 'string' && v.toLowerCase() === normalizedSyncId) {
+        if (k !== registryKey) {
+          throw new Error(
+            `IDENTITY_COLLISION: syncId "${normalizedSyncId}" already bound to "${k.slice(prefix.length)}", cannot bind to "${keyStr}"`,
+          )
+        }
+      }
+    }
+
+    map[registryKey] = normalizedSyncId
+
+    try {
+      await persistMap()
+    } catch (err) {
+      delete map[registryKey]
+      throw err
+    }
+
+    return normalizedSyncId
+  }
+
+  /**
+   * Rebinds a sync identity to a renamed local identifier (e.g. category renamed).
+   *
+   * @param {string} entityType
+   * @param {string|number} oldLocalKey
+   * @param {string|number} newLocalKey
+   * @param {string} syncId
+   * @returns {Promise<string>}
+   */
+  async function rebindSyncId(entityType, oldLocalKey, newLocalKey, syncId) {
+    if (!syncId || !isUuid(syncId)) {
+      throw new Error(`Invalid sync_id UUID: ${syncId}`)
+    }
+
+    await ensureLoaded()
+
+    const normalizedSyncId = String(syncId).trim().toLowerCase()
+    const oldKeyStr = String(oldLocalKey).trim()
+    const newKeyStr = String(newLocalKey).trim()
+
+    if (oldKeyStr === newKeyStr) {
+      return bindSyncId(entityType, newKeyStr, normalizedSyncId)
+    }
+
+    const oldRegistryKey = `${entityType}:${oldKeyStr}`
+    const newRegistryKey = `${entityType}:${newKeyStr}`
+
+    // Check if newKey is already bound to a DIFFERENT syncId
+    if (map[newRegistryKey] && map[newRegistryKey].toLowerCase() !== normalizedSyncId) {
+      throw new Error(
+        `IDENTITY_COLLISION: target localKey "${newKeyStr}" already bound to "${map[newRegistryKey]}"`,
+      )
+    }
+
+    const prevOld = map[oldRegistryKey]
+    const prevNew = map[newRegistryKey]
+
+    delete map[oldRegistryKey]
+    map[newRegistryKey] = normalizedSyncId
+
+    try {
+      await persistMap()
+    } catch (err) {
+      if (prevOld !== undefined) map[oldRegistryKey] = prevOld
+      else delete map[oldRegistryKey]
+
+      if (prevNew !== undefined) map[newRegistryKey] = prevNew
+      else delete map[newRegistryKey]
+
+      throw err
+    }
+
+    return normalizedSyncId
+  }
+
   return {
     resolveSyncId,
     peekSyncId,
+    findLocalKeyBySyncId,
+    bindSyncId,
+    rebindSyncId,
     ensureLoaded,
     getMap: () => ({ ...map }),
     isDurable,

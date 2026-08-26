@@ -557,6 +557,27 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
       const db = await ensureConnection()
       await db.run("DELETE FROM app_meta WHERE key = 'sync_push_inflight_v1'", [])
     },
+    // P13: sync pull context binding (durable, survives restart & logout)
+    async loadSyncPullBinding() {
+      return readMetaValue('sync_pull_binding_v1', null)
+    },
+    async saveSyncPullBinding(binding) {
+      await writeMetaValue('sync_pull_binding_v1', binding)
+    },
+    // P13: sync pull state/cursor (durable, survives restart & logout)
+    async loadSyncPullState() {
+      return readMetaValue('sync_pull_state_v1', null)
+    },
+    async saveSyncPullState(pullState) {
+      await writeMetaValue('sync_pull_state_v1', pullState)
+    },
+    // P13: sync server versions metadata (durable, survives restart & logout)
+    async loadSyncServerVersions() {
+      return readMetaValue('sync_server_versions_v1', null)
+    },
+    async saveSyncServerVersions(versions) {
+      await writeMetaValue('sync_server_versions_v1', versions)
+    },
     async close() {
       if (!dbConnection) {
         return

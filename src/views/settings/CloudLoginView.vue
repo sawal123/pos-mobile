@@ -7,9 +7,11 @@ import BaseInput from '@/components/base/BaseInput.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useSyncPushStore } from '@/stores/syncPushStore'
+import { useSyncPullStore } from '@/stores/syncPullStore'
 
 const cloudStore = useCloudSessionStore()
 const syncPushStore = useSyncPushStore()
+const syncPullStore = useSyncPullStore()
 
 // ── Form state ──────────────────────────────────────────────────────────────
 const email = ref('')
@@ -17,6 +19,8 @@ const password = ref('')
 const step = ref('login') // 'login' | 'select-business' | 'select-outlet' | 'done'
 const syncMessage = ref('')
 const syncSuccess = ref(false)
+const pullMessage = ref('')
+const pullSuccess = ref(false)
 
 // ── Derived ─────────────────────────────────────────────────────────────────
 const isZeroBusiness = computed(
@@ -77,6 +81,23 @@ async function handleSyncNow() {
   } else {
     syncSuccess.value = false
     syncMessage.value = result.error?.message ?? result.message ?? 'Sinkronisasi gagal.'
+  }
+}
+
+async function handlePullNow() {
+  pullMessage.value = ''
+  const result = await syncPullStore.pullNow()
+  if (result.ok) {
+    pullSuccess.value = true
+    const applied = result.applied ?? 0
+    if (applied === 0) {
+      pullMessage.value = 'Data lokal sudah terbaru.'
+    } else {
+      pullMessage.value = `${applied} perubahan cloud diterapkan.`
+    }
+  } else {
+    pullSuccess.value = false
+    pullMessage.value = result.error?.message ?? result.message ?? 'Gagal menarik data cloud.'
   }
 }
 
@@ -256,6 +277,40 @@ onMounted(async () => {
           :class="syncSuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'"
         >
           {{ syncMessage }}
+        </p>
+      </div>
+
+      <!-- P13: Manual Pull Section -->
+      <div
+        v-if="canSync"
+        id="cloud-pull-section"
+        class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
+      >
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-sm font-semibold text-ink-primary">Tarik Data Cloud</p>
+            <p class="text-xs text-ink-secondary">
+              Ambil perubahan data dari server cloud ke POS lokal
+            </p>
+          </div>
+          <BaseButton
+            id="pull-now-btn"
+            variant="secondary"
+            size="sm"
+            :loading="syncPullStore.loading"
+            @click="handlePullNow"
+          >
+            Tarik Data Cloud
+          </BaseButton>
+        </div>
+
+        <p
+          v-if="pullMessage"
+          id="pull-result-message"
+          class="rounded-xl px-3 py-2 text-xs font-medium"
+          :class="pullSuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'"
+        >
+          {{ pullMessage }}
         </p>
       </div>
 
