@@ -329,6 +329,77 @@ export function createSyncBootstrapService({
       }
     }
 
+    // ── 6.5. Dependency Closure Validation ───────────────────────────────────
+    const mappedChanges = preflightResult.changes || {}
+    const catSyncIds = new Set((mappedChanges.categories || []).map((c) => c.sync_id.toLowerCase()))
+    const prodSyncIds = new Set((mappedChanges.products || []).map((p) => p.sync_id.toLowerCase()))
+    const custSyncIds = new Set((mappedChanges.customers || []).map((c) => c.sync_id.toLowerCase()))
+    const saleSyncIds = new Set((mappedChanges.sales || []).map((s) => s.sync_id.toLowerCase()))
+
+    const missingDependencies = []
+
+    // 1. Product -> Category
+    for (const prod of mappedChanges.products || []) {
+      if (prod.category_sync_id && !catSyncIds.has(prod.category_sync_id.toLowerCase())) {
+        missingDependencies.push({
+          entity: 'products',
+          syncId: prod.sync_id,
+          dependencyEntity: 'categories',
+          dependencySyncId: prod.category_sync_id,
+        })
+      }
+    }
+
+    // 2. Sale -> Customer
+    for (const sale of mappedChanges.sales || []) {
+      if (sale.customer_sync_id && !custSyncIds.has(sale.customer_sync_id.toLowerCase())) {
+        missingDependencies.push({
+          entity: 'sales',
+          syncId: sale.sync_id,
+          dependencyEntity: 'customers',
+          dependencySyncId: sale.customer_sync_id,
+        })
+      }
+    }
+
+    // 3. SaleItem -> Sale
+    for (const item of mappedChanges.sale_items || []) {
+      if (item.sale_sync_id && !saleSyncIds.has(item.sale_sync_id.toLowerCase())) {
+        missingDependencies.push({
+          entity: 'sale_items',
+          syncId: item.sync_id,
+          dependencyEntity: 'sales',
+          dependencySyncId: item.sale_sync_id,
+        })
+      }
+    }
+
+    // 4. SaleItem -> Product
+    for (const item of mappedChanges.sale_items || []) {
+      if (item.product_sync_id && !prodSyncIds.has(item.product_sync_id.toLowerCase())) {
+        missingDependencies.push({
+          entity: 'sale_items',
+          syncId: item.sync_id,
+          dependencyEntity: 'products',
+          dependencySyncId: item.product_sync_id,
+        })
+      }
+    }
+
+    if (missingDependencies.length > 0) {
+      return {
+        ok: false,
+        code: 'BOOTSTRAP_DEPENDENCY_MISSING',
+        message: 'Bootstrap dataset has missing parent dependencies.',
+        dependencies: missingDependencies,
+        error: {
+          code: 'BOOTSTRAP_DEPENDENCY_MISSING',
+          message: 'Bootstrap dataset has missing parent dependencies.',
+          dependencies: missingDependencies,
+        },
+      }
+    }
+
     // ── 7. Atomic Outbox Staging to P9 sync_queue ─────────────────────────────
     const stageResult = await activeQueueService.enqueueManyUpserts(syntheticEntries)
     if (!stageResult || !stageResult.ok) {

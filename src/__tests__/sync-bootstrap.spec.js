@@ -520,6 +520,104 @@ describe('P14: Local Snapshot & Preflight Atomicity', () => {
     expect(res.code).toBe('BOOTSTRAP_PREFLIGHT_FAILED')
     expect(await queueService.countPending()).toBe(0)
   })
+
+  it('fails with BOOTSTRAP_DEPENDENCY_MISSING when historical transaction references a deleted product', async () => {
+    productStore.categories = ['Minuman']
+    productStore.products = [
+      { id: 'p-1', name: 'Kopi Hitam', price: 10000, category: 'Minuman', stock: 10, isActive: true },
+    ]
+    // Transaction references 'p-deleted' which is not in ProductStore
+    transactionStore.items = [
+      {
+        id: 't-1',
+        subtotal: 10000,
+        tax: 0,
+        total: 10000,
+        createdAt: '2026-08-26T08:00:00.000Z',
+        items: [{ id: 'p-deleted', name: 'Deleted Product', price: 10000, qty: 1, subtotal: 10000 }],
+      },
+    ]
+
+    const service = createSyncBootstrapService({
+      adapter,
+      queueService,
+      registry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport: mockEmptyServerTransport(),
+    })
+
+    const res = await service.bootstrapNow({ context: makeValidCloudContext() })
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('BOOTSTRAP_DEPENDENCY_MISSING')
+    expect(res.dependencies).toBeDefined()
+    expect(res.dependencies.some((d) => d.entity === 'sale_items' && d.dependencyEntity === 'products')).toBe(true)
+
+    // Verify atomic failure: nothing staged
+    expect(await queueService.countPending()).toBe(0)
+    expect(await adapter.loadSyncBootstrapState()).toBeNull()
+  })
+
+  it('fails with BOOTSTRAP_DEPENDENCY_MISSING when transaction references a deleted customer', async () => {
+    productStore.categories = ['Minuman']
+    productStore.products = [
+      { id: 'p-1', name: 'Kopi Hitam', price: 10000, category: 'Minuman', stock: 10, isActive: true },
+    ]
+    customerStore.customers = [] // Customer is missing from CustomerStore
+
+    transactionStore.items = [
+      {
+        id: 't-1',
+        customerId: 'c-deleted',
+        subtotal: 10000,
+        tax: 0,
+        total: 10000,
+        createdAt: '2026-08-26T08:00:00.000Z',
+        items: [{ id: 'p-1', name: 'Kopi Hitam', price: 10000, qty: 1, subtotal: 10000 }],
+      },
+    ]
+
+    const service = createSyncBootstrapService({
+      adapter,
+      queueService,
+      registry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport: mockEmptyServerTransport(),
+    })
+
+    const res = await service.bootstrapNow({ context: makeValidCloudContext() })
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('BOOTSTRAP_DEPENDENCY_MISSING')
+    expect(res.dependencies.some((d) => d.entity === 'sales' && d.dependencyEntity === 'customers')).toBe(true)
+
+    expect(await queueService.countPending()).toBe(0)
+    expect(await adapter.loadSyncBootstrapState()).toBeNull()
+  })
+
+  it('fails with BOOTSTRAP_DEPENDENCY_MISSING when product references a missing category', async () => {
+    productStore.categories = ['Makanan'] // 'Minuman' is missing
+    productStore.products = [
+      { id: 'p-1', name: 'Kopi Hitam', price: 10000, category: 'Minuman', stock: 10, isActive: true },
+    ]
+
+    const service = createSyncBootstrapService({
+      adapter,
+      queueService,
+      registry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport: mockEmptyServerTransport(),
+    })
+
+    const res = await service.bootstrapNow({ context: makeValidCloudContext() })
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('BOOTSTRAP_DEPENDENCY_MISSING')
+    expect(res.dependencies.some((d) => d.entity === 'products' && d.dependencyEntity === 'categories')).toBe(true)
+
+    expect(await queueService.countPending()).toBe(0)
+    expect(await adapter.loadSyncBootstrapState()).toBeNull()
+  })
 })
 
 describe('P14: Queue Semantics, Conflicts, & Idempotent Retry', () => {
@@ -858,7 +956,13 @@ describe('P14: UI Integration in CloudLoginView', () => {
         ok: true,
         staged: 3,
         counts: { categories: 2, products: 1, customers: 0, expenses: 0, transactions: 0 },
-        state: { status: 'staged' },
+        state: {
+          status: 'staged',
+          businessId: 10,
+          outletId: 101,
+          deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
+          registeredDeviceId: 55,
+        },
       }),
     }
     syncBootstrapStore.init({ bootstrapService: mockBootstrapService })
@@ -893,5 +997,69 @@ describe('P14: UI Integration in CloudLoginView', () => {
 
     expect(mockBootstrapService.bootstrapNow).toHaveBeenCalled()
     expect(wrapper.text()).toContain('Data lokal siap disinkronkan. Gunakan Sync Sekarang.')
+  })
+
+  it('displays warning notice and disables Sync button when bootstrap state has context mismatch with current cloud session', async () => {
+    const cloudStore = useCloudSessionStore(pinia)
+    cloudStore.user = { id: 1, name: 'Owner User', email: 'owner@example.com' }
+    cloudStore.selectedBusiness = { id: 20, name: 'Kedai Kopi Cabang 2' } // Current business 20
+    cloudStore.selectedOutlet = { id: 202, name: 'Outlet Cabang' }
+    cloudStore.cloudAccess = true
+    cloudStore.deviceIdentifier = '123e4567-e89b-12d3-a456-426614174000'
+    cloudStore.registeredDeviceId = 55
+    cloudStore.businesses = [
+      {
+        id: 20,
+        name: 'Kedai Kopi Cabang 2',
+        cloud_access: true,
+        outlets: [{ id: 202, name: 'Outlet Cabang', status: 'active' }],
+      },
+    ]
+
+    // Pre-saved bootstrap state was for business 10
+    await adapter.saveSyncBootstrapState({
+      version: 1,
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
+      registeredDeviceId: 55,
+      status: 'staged',
+      stagedAt: new Date().toISOString(),
+      counts: { categories: 1, products: 1, customers: 0, expenses: 0, transactions: 0 },
+    })
+
+    const syncBootstrapStore = useSyncBootstrapStore(pinia)
+    syncBootstrapStore.init({
+      bootstrapService: { bootstrapNow: vi.fn() },
+      adapter,
+    })
+
+    await syncBootstrapStore.loadBootstrapState()
+    expect(syncBootstrapStore.isStaged).toBe(true)
+    expect(syncBootstrapStore.isStagedForCurrentContext).toBe(false)
+    expect(syncBootstrapStore.hasContextMismatch).toBe(true)
+
+    const wrapper = mount(CloudLoginView, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          BaseCard: { template: '<div><slot /></div>' },
+          BaseButton: {
+            props: ['loading', 'disabled', 'variant', 'size'],
+            template: '<button :disabled="disabled || loading" @click="$emit(\'click\')"><slot /></button>',
+          },
+          BaseInput: true,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    const mismatchNotice = wrapper.find('#cloud-bootstrap-mismatch-notice')
+    expect(mismatchNotice.exists()).toBe(true)
+    expect(mismatchNotice.text()).toContain('Data lokal sudah disiapkan untuk Business/Outlet lain.')
+
+    const syncBtn = wrapper.find('#sync-now-btn')
+    expect(syncBtn.attributes('disabled')).toBeDefined()
   })
 })

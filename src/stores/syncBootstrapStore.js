@@ -28,6 +28,23 @@ export const useSyncBootstrapStore = defineStore('syncBootstrap', () => {
     return bootstrapState.value?.status === 'staged' || bootstrapState.value?.status === 'completed'
   })
 
+  const isStagedForCurrentContext = computed(() => {
+    if (!isStaged.value || !bootstrapState.value) {
+      return false
+    }
+    const state = bootstrapState.value
+    const isBizMatch = Number(state.businessId) === Number(cloudStore.selectedBusiness?.id)
+    const isOutletMatch = Number(state.outletId) === Number(cloudStore.selectedOutlet?.id)
+    const isDevMatch = String(state.deviceIdentifier) === String(cloudStore.deviceIdentifier)
+    const isRegDevMatch = String(state.registeredDeviceId) === String(cloudStore.registeredDeviceId)
+
+    return isBizMatch && isOutletMatch && isDevMatch && isRegDevMatch
+  })
+
+  const hasContextMismatch = computed(() => {
+    return isStaged.value && !isStagedForCurrentContext.value
+  })
+
   const previewCounts = computed(() => {
     const categories = (productStore.categories ?? []).filter(
       (c) =>
@@ -154,6 +171,8 @@ export const useSyncBootstrapStore = defineStore('syncBootstrap', () => {
     lastError,
     bootstrapState,
     isStaged,
+    isStagedForCurrentContext,
+    hasContextMismatch,
     previewCounts,
     init,
     loadBootstrapState,

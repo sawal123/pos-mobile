@@ -310,9 +310,18 @@ onMounted(async () => {
         </p>
       </div>
 
+      <!-- P14: Bootstrap Context Mismatch Notice -->
+      <div
+        v-if="canSync && syncBootstrapStore.hasContextMismatch"
+        id="cloud-bootstrap-mismatch-notice"
+        class="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-800"
+      >
+        Data lokal sudah disiapkan untuk Business/Outlet lain.
+      </div>
+
       <!-- P14: Bootstrap Staged Notice -->
       <div
-        v-else-if="canSync && syncBootstrapStore.isStaged"
+        v-else-if="canSync && syncBootstrapStore.isStagedForCurrentContext"
         id="cloud-bootstrap-staged-notice"
         class="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-medium text-emerald-800"
       >
@@ -336,6 +345,7 @@ onMounted(async () => {
             id="sync-now-btn"
             variant="primary"
             size="sm"
+            :disabled="syncBootstrapStore.hasContextMismatch"
             :loading="syncPushStore.loading"
             @click="handleSyncNow"
           >

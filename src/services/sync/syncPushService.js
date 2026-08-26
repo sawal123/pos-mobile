@@ -2,6 +2,7 @@ import { pushSyncRequest } from './syncPushTransport'
 import { createSyncQueueService } from './syncQueueService'
 import { createSyncIdentityRegistry, generateUuid } from './syncIdentityRegistry'
 import { mapOutboxEntries } from './contractMapper'
+import { SYNC_ENTITY_TYPES, SYNC_RESERVED_CATEGORY } from './syncConstants'
 import { getToken } from '@/services/cloud/tokenRepository'
 
 const MAX_ENTITY_PER_TYPE = 100
@@ -195,6 +196,45 @@ export function createSyncPushService({
           }
         }
 
+        // When envelope exists but push binding is missing, validate bootstrap context
+        if (!existingBinding && adapter && typeof adapter.loadSyncBootstrapState === 'function') {
+          const bootstrapState = await adapter.loadSyncBootstrapState()
+          if (!bootstrapState || (bootstrapState.status !== 'staged' && bootstrapState.status !== 'completed')) {
+            const remaining = await activeQueueService.countPending()
+            return {
+              ok: false,
+              code: 'SYNC_BOOTSTRAP_REQUIRED',
+              message: 'Initial bootstrap is required before first cloud sync.',
+              error: { code: 'SYNC_BOOTSTRAP_REQUIRED' },
+              remaining,
+              sentQueueIds: [],
+              removedQueueIds: [],
+              preservedQueueIds: [],
+              blocked: [],
+              warnings: [],
+            }
+          }
+          const isBizMatch = Number(bootstrapState.businessId) === currentBusinessId
+          const isOutletMatch = Number(bootstrapState.outletId) === Number(selectedOutlet.id)
+          const isDevMatch = String(bootstrapState.deviceIdentifier) === String(deviceIdentifier)
+          const isRegDevMatch = String(bootstrapState.registeredDeviceId) === String(registeredDeviceId)
+          if (!isBizMatch || !isOutletMatch || !isDeviceMatch || !isRegDevMatch) {
+            const remaining = await activeQueueService.countPending()
+            return {
+              ok: false,
+              code: 'SYNC_BOOTSTRAP_CONTEXT_MISMATCH',
+              message: 'Bootstrap context does not match current cloud context.',
+              error: { code: 'SYNC_BOOTSTRAP_CONTEXT_MISMATCH' },
+              remaining,
+              sentQueueIds: [],
+              removedQueueIds: [],
+              preservedQueueIds: [],
+              blocked: [],
+              warnings: [],
+            }
+          }
+        }
+
         requestId = existingEnvelope.requestId
         envelope = existingEnvelope
         isReusedEnvelope = true
@@ -234,6 +274,42 @@ export function createSyncPushService({
           }
         }
 
+        // Build sets of pending local parent keys in outbox queue for dependency check
+        const pendingCatKeys = new Set()
+        const pendingCustKeys = new Set()
+        const pendingProdKeys = new Set()
+
+        for (const item of pendingItems) {
+          if (item.entityType === SYNC_ENTITY_TYPES.CATEGORY) {
+            const catName = item.payload?.name || item.entityId
+            if (catName) pendingCatKeys.add(String(catName).trim())
+          } else if (item.entityType === SYNC_ENTITY_TYPES.CUSTOMER) {
+            if (item.entityId) pendingCustKeys.add(String(item.entityId))
+          } else if (item.entityType === SYNC_ENTITY_TYPES.PRODUCT) {
+            if (item.entityId) pendingProdKeys.add(String(item.entityId))
+          }
+        }
+
+        const selectedCatKeys = new Set()
+        const selectedCustKeys = new Set()
+        const selectedProdKeys = new Set()
+
+        const phase1 = []
+        const phase2 = []
+        const phase3 = []
+
+        for (const item of pendingItems) {
+          if (item.entityType === SYNC_ENTITY_TYPES.CATEGORY) {
+            phase1.push(item)
+          } else if (item.entityType === SYNC_ENTITY_TYPES.TRANSACTION) {
+            phase3.push(item)
+          } else {
+            phase2.push(item)
+          }
+        }
+
+        const orderedCandidates = [...phase1, ...phase2, ...phase3]
+
         const accumulatedChanges = {
           categories: [],
           products: [],
@@ -246,7 +322,41 @@ export function createSyncPushService({
 
         const batchSnapshots = []
 
-        for (const entry of pendingItems) {
+        for (const entry of orderedCandidates) {
+          // Dependency pre-check before mapping
+          if (entry.entityType === SYNC_ENTITY_TYPES.PRODUCT) {
+            const prodCat = entry.payload?.category ? String(entry.payload.category).trim() : null
+            if (
+              prodCat &&
+              prodCat.toLowerCase() !== SYNC_RESERVED_CATEGORY.toLowerCase() &&
+              pendingCatKeys.has(prodCat) &&
+              !selectedCatKeys.has(prodCat)
+            ) {
+              // Parent Category is pending in queue but not selected in this batch -> defer
+              continue
+            }
+          } else if (entry.entityType === SYNC_ENTITY_TYPES.TRANSACTION) {
+            const custId = entry.payload?.customerId ?? entry.payload?.customer_id
+            if (custId && pendingCustKeys.has(String(custId)) && !selectedCustKeys.has(String(custId))) {
+              // Parent Customer is pending in queue but not selected in this batch -> defer
+              continue
+            }
+
+            const trxItems = Array.isArray(entry.payload?.items) ? entry.payload.items : []
+            let hasUnselectedPendingProduct = false
+            for (const it of trxItems) {
+              const pId = it.id ?? it.productId ?? it.product_id
+              if (pId && pendingProdKeys.has(String(pId)) && !selectedProdKeys.has(String(pId))) {
+                hasUnselectedPendingProduct = true
+                break
+              }
+            }
+            if (hasUnselectedPendingProduct) {
+              // Parent Product is pending in queue but not selected in this batch -> defer
+              continue
+            }
+          }
+
           let mapped
           try {
             mapped = await mapOutboxEntries([entry], { registry: activeRegistry })
@@ -321,6 +431,15 @@ export function createSyncPushService({
           accumulatedChanges.sale_items.push(...mapped.changes.sale_items)
           accumulatedChanges.expenses.push(...mapped.changes.expenses)
 
+          if (entry.entityType === SYNC_ENTITY_TYPES.CATEGORY) {
+            const catName = entry.payload?.name || entry.entityId
+            if (catName) selectedCatKeys.add(String(catName).trim())
+          } else if (entry.entityType === SYNC_ENTITY_TYPES.CUSTOMER) {
+            if (entry.entityId) selectedCustKeys.add(String(entry.entityId))
+          } else if (entry.entityType === SYNC_ENTITY_TYPES.PRODUCT) {
+            if (entry.entityId) selectedProdKeys.add(String(entry.entityId))
+          }
+
           batchSnapshots.push({
             id: entry.id,
             entityType: entry.entityType,
@@ -347,7 +466,46 @@ export function createSyncPushService({
           }
         }
 
-        // ── 4.5. Persist business binding on first real push before in-flight envelope and HTTP
+        // ── 4.5. Verify Bootstrap State and Context before first real push
+        if (!existingBinding && adapter && typeof adapter.loadSyncBootstrapState === 'function') {
+          const bootstrapState = await adapter.loadSyncBootstrapState()
+          if (!bootstrapState || (bootstrapState.status !== 'staged' && bootstrapState.status !== 'completed')) {
+            const remaining = await activeQueueService.countPending()
+            return {
+              ok: false,
+              code: 'SYNC_BOOTSTRAP_REQUIRED',
+              message: 'Initial bootstrap is required before first cloud sync.',
+              error: { code: 'SYNC_BOOTSTRAP_REQUIRED' },
+              remaining,
+              sentQueueIds: [],
+              removedQueueIds: [],
+              preservedQueueIds: [],
+              blocked: [],
+              warnings: [],
+            }
+          }
+          const isBizMatch = Number(bootstrapState.businessId) === currentBusinessId
+          const isOutletMatch = Number(bootstrapState.outletId) === Number(selectedOutlet.id)
+          const isDeviceMatch = String(bootstrapState.deviceIdentifier) === String(deviceIdentifier)
+          const isRegDevMatch = String(bootstrapState.registeredDeviceId) === String(registeredDeviceId)
+          if (!isBizMatch || !isOutletMatch || !isDeviceMatch || !isRegDevMatch) {
+            const remaining = await activeQueueService.countPending()
+            return {
+              ok: false,
+              code: 'SYNC_BOOTSTRAP_CONTEXT_MISMATCH',
+              message: 'Bootstrap context does not match current cloud context.',
+              error: { code: 'SYNC_BOOTSTRAP_CONTEXT_MISMATCH' },
+              remaining,
+              sentQueueIds: [],
+              removedQueueIds: [],
+              preservedQueueIds: [],
+              blocked: [],
+              warnings: [],
+            }
+          }
+        }
+
+        // ── 4.6. Persist business binding on first real push before in-flight envelope and HTTP
         if (!existingBinding && adapter && typeof adapter.saveSyncPushBinding === 'function') {
           try {
             await adapter.saveSyncPushBinding({
