@@ -260,6 +260,15 @@ export function createSyncPullService({
         }
       }
 
+      if (nextCursor < currentAfter) {
+        return {
+          ok: false,
+          code: 'REGRESSIVE_PULL_CURSOR',
+          message: `Server returned next_cursor (${nextCursor}) which regressed before after (${currentAfter}).`,
+          error: { code: 'REGRESSIVE_PULL_CURSOR', message: 'Regressive cursor' },
+        }
+      }
+
       if (respHasMore && nextCursor <= currentAfter) {
         return {
           ok: false,
@@ -353,6 +362,13 @@ export function createSyncPullService({
     // ── 7. Sort records by sync_sequence ASC ──────────────────────────────────
     allRecords.sort((a, b) => a.sync_sequence - b.sync_sequence)
 
+    // ── 8. Resolve domain stores and build prospective next state ─────────────
+    const productStore = stores?.productStore ?? (pinia ? useProductStore(pinia) : null)
+    const customerStore = stores?.customerStore ?? (pinia ? useCustomerStore(pinia) : null)
+    const expenseStore = stores?.expenseStore ?? (pinia ? useExpenseStore(pinia) : null)
+    const transactionStore =
+      stores?.transactionStore ?? (pinia ? useTransactionStore(pinia) : null)
+
     // Helper to scan for conflicts against all pending outbox mutations
     async function checkForPendingConflicts(records) {
       let pendingItems = []
@@ -387,6 +403,67 @@ export function createSyncPullService({
         }
 
         if (!syncId) continue
+
+        // Check if category rename affects any local product with pending outbox mutations
+        if (record.entity === 'categories') {
+          const newCatName = record.data.name
+          let existingLocalName = null
+          if (activeRegistry) {
+            existingLocalName = await activeRegistry.findLocalKeyBySyncId('category', syncId)
+          }
+          if (existingLocalName && existingLocalName !== newCatName) {
+            const localProducts = productStore ? productStore.products : []
+            const affectedProducts = localProducts.filter((p) => p.category === existingLocalName)
+
+            for (const affProd of affectedProducts) {
+              for (const pending of pendingItems) {
+                if (pending.entityType !== 'product') continue
+
+                let isProdMatch = false
+                if (String(pending.entityId) === String(affProd.id)) {
+                  isProdMatch = true
+                } else if (
+                  String(pending.entityId).toLowerCase() === String(affProd.id).toLowerCase()
+                ) {
+                  isProdMatch = true
+                } else if (activeRegistry) {
+                  const resolvedProdSyncId = activeRegistry.peekSyncId('product', pending.entityId)
+                  if (
+                    resolvedProdSyncId &&
+                    String(resolvedProdSyncId).toLowerCase() === String(affProd.id).toLowerCase()
+                  ) {
+                    isProdMatch = true
+                  }
+                  const affProdSyncId = activeRegistry.peekSyncId('product', affProd.id)
+                  if (
+                    affProdSyncId &&
+                    String(affProdSyncId).toLowerCase() === String(pending.entityId).toLowerCase()
+                  ) {
+                    isProdMatch = true
+                  }
+                }
+
+                if (isProdMatch) {
+                  return {
+                    ok: false,
+                    code: 'LOCAL_PENDING_SYNC_CONFLICT',
+                    conflict: {
+                      entity: 'categories',
+                      syncId: record.data.sync_id,
+                      localEntityId: pending.entityId,
+                      syncSequence: record.sync_sequence,
+                    },
+                    message: `Remote category rename for ${existingLocalName} -> ${newCatName} (sync_id: ${record.data.sync_id}) conflicts with pending local product outbox item ${pending.entityId}.`,
+                    error: {
+                      code: 'LOCAL_PENDING_SYNC_CONFLICT',
+                      message: `Remote category rename for ${existingLocalName} -> ${newCatName} (sync_id: ${record.data.sync_id}) conflicts with pending local product outbox item ${pending.entityId}.`,
+                    },
+                  }
+                }
+              }
+            }
+          }
+        }
 
         for (const pending of pendingItems) {
           let isMatch = false
@@ -447,18 +524,11 @@ export function createSyncPullService({
       return null
     }
 
-    // ── 8. Early local pending outbox conflict check ──────────────────────────
+    // ── 8.5. Early local pending outbox conflict check ────────────────────────
     const earlyConflict = await checkForPendingConflicts(allRecords)
     if (earlyConflict) {
       return earlyConflict
     }
-
-    // ── 9. Resolve domain stores and build prospective next state ─────────────
-    const productStore = stores?.productStore ?? (pinia ? useProductStore(pinia) : null)
-    const customerStore = stores?.customerStore ?? (pinia ? useCustomerStore(pinia) : null)
-    const expenseStore = stores?.expenseStore ?? (pinia ? useExpenseStore(pinia) : null)
-    const transactionStore =
-      stores?.transactionStore ?? (pinia ? useTransactionStore(pinia) : null)
 
     const nextCategories = productStore ? [...productStore.categories] : []
     const nextProducts = productStore ? productStore.products.map((p) => ({ ...p })) : []

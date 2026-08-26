@@ -591,6 +591,46 @@ describe('P13: Pagination & Validation', () => {
     expect(productStore.products.length).toBe(0)
     expect(await adapter.loadSyncPullState()).toBeNull()
   })
+
+  it('rejects regressive next_cursor (< currentAfter) with REGRESSIVE_PULL_CURSOR', async () => {
+    // Pre-save pull state with cursor = 20
+    await adapter.saveSyncPullState({
+      version: 1,
+      cursor: 20,
+      serverSequence: 20,
+      updatedAt: new Date().toISOString(),
+    })
+
+    const transport = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: {
+        data: {
+          records: [],
+          next_cursor: 10, // regressed before after=20!
+          server_sequence: 30,
+          has_more: false,
+        },
+      },
+    })
+
+    const pullService = createSyncPullService({
+      adapter,
+      queueService,
+      registry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const res = await pullService.pullNow({ context: makeValidCloudContext() })
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('REGRESSIVE_PULL_CURSOR')
+
+    // Cursor must remain 20
+    const state = await adapter.loadSyncPullState()
+    expect(state.cursor).toBe(20)
+  })
 })
 
 describe('P13: Entity Apply & Domain Logic', () => {
@@ -1546,6 +1586,88 @@ describe('P13: Conflict Protection & Outbox Integrity', () => {
 
     // Server versions must NOT have been saved
     expect(await adapter.loadSyncServerVersions()).toBeNull()
+  })
+
+  it('detects conflict when remote category rename affects local product with pending mutation', async () => {
+    const catUuid = '11111111-1111-4111-8111-111111111111'
+
+    // Setup existing local category 'Minuman' bound to catUuid
+    await registry.bindSyncId('category', 'Minuman', catUuid)
+
+    const productStore = useProductStore(pinia)
+    productStore.categories = ['Minuman']
+    productStore.products = [
+      { id: 'P1', name: 'Es Teh Manis', category: 'Minuman', price: 5000, stock: 10, isActive: true },
+    ]
+
+    // P1 has a pending local mutation in outbox with category = Minuman
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'P1', {
+      id: 'P1',
+      name: 'Es Teh Manis Jumbo',
+      category: 'Minuman',
+      price: 7000,
+    })
+
+    expect(await queueService.countPending()).toBe(1)
+
+    // Remote snapshot attempts to rename category 'Minuman' to 'Beverage'
+    const transport = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: {
+        data: {
+          records: [
+            {
+              entity: 'categories',
+              sync_sequence: 1,
+              data: {
+                sync_id: catUuid,
+                sync_version: 2,
+                name: 'Beverage',
+                status: 'active',
+              },
+            },
+          ],
+          next_cursor: 10,
+          server_sequence: 10,
+          has_more: false,
+        },
+      },
+    })
+
+    const pullService = createSyncPullService({
+      adapter,
+      queueService,
+      registry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const res = await pullService.pullNow({ context: makeValidCloudContext() })
+
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('LOCAL_PENDING_SYNC_CONFLICT')
+    expect(res.conflict).toBeDefined()
+    expect(res.conflict.entity).toBe('categories')
+    expect(res.conflict.localEntityId).toBe('P1')
+
+    // Local product must remain 'Minuman'
+    const p1 = productStore.products.find((p) => p.id === 'P1')
+    expect(p1.category).toBe('Minuman')
+
+    // Category in productStore must remain 'Minuman'
+    expect(productStore.categories).toContain('Minuman')
+    expect(productStore.categories).not.toContain('Beverage')
+
+    // Queue must remain untouched
+    expect(await queueService.countPending()).toBe(1)
+
+    // Registry must remain 'Minuman' -> catUuid
+    expect(await registry.findLocalKeyBySyncId('category', catUuid)).toBe('Minuman')
+
+    // Cursor must NOT have advanced
+    expect(await adapter.loadSyncPullState()).toBeNull()
   })
 
   it('does NOT create new P9 outbox entries when applying server changes', async () => {
