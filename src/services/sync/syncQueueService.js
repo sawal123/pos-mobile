@@ -131,16 +131,17 @@ export function createSyncQueueService({ adapter, scheduler }) {
         })
       }
 
-      try {
-        if (typeof adapter.upsertSyncQueueItems === 'function') {
-          await runTask(() => adapter.upsertSyncQueueItems(formattedEntries), 'sync:bulk_upsert')
-        } else {
-          await runTask(async () => {
-            for (const entry of formattedEntries) {
-              await adapter.upsertSyncQueueItem(entry)
-            }
-          }, 'sync:bulk_upsert_fallback')
+      if (typeof adapter.upsertSyncQueueItems !== 'function') {
+        const error = new Error('Adapter does not support atomic bulk queue operations.')
+        return {
+          ok: false,
+          code: 'ATOMIC_BULK_QUEUE_UNSUPPORTED',
+          error,
         }
+      }
+
+      try {
+        await runTask(() => adapter.upsertSyncQueueItems(formattedEntries), 'sync:bulk_upsert')
 
         return {
           ok: true,

@@ -56,14 +56,18 @@ export const useSyncBootstrapStore = defineStore('syncBootstrap', () => {
   })
 
   function init({ bootstrapService = null, adapter = null, scheduler = null } = {}) {
+    if (adapter) {
+      _adapter = adapter
+    }
+    if (scheduler) {
+      _scheduler = scheduler
+    }
     if (bootstrapService) {
       _bootstrapService = bootstrapService
-    } else if (adapter) {
-      _adapter = adapter
-      _scheduler = scheduler
+    } else if (_adapter) {
       _bootstrapService = createSyncBootstrapService({
-        adapter,
-        scheduler,
+        adapter: _adapter,
+        scheduler: _scheduler,
         cloudStore,
       })
     }

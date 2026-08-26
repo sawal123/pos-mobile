@@ -432,7 +432,7 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
         return
       }
 
-      await runInTransaction(async (db) => {
+      await withTransaction(async (db) => {
         for (const entry of entries) {
           await db.run(
             `INSERT INTO sync_queue

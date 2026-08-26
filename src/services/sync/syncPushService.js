@@ -158,13 +158,6 @@ export function createSyncPushService({
         }
       }
 
-      if (!existingBinding && adapter && typeof adapter.saveSyncPushBinding === 'function') {
-        await adapter.saveSyncPushBinding({
-          businessId: currentBusinessId,
-          boundAt: new Date().toISOString(),
-        })
-      }
-
       // ── 3. Check for in-flight envelope (idempotent retry) ────────────────────
       const existingEnvelope = adapter && typeof adapter.loadSyncPushInflight === 'function'
         ? await adapter.loadSyncPushInflight()
@@ -354,6 +347,30 @@ export function createSyncPushService({
           }
         }
 
+        // ── 4.5. Persist business binding on first real push before in-flight envelope and HTTP
+        if (!existingBinding && adapter && typeof adapter.saveSyncPushBinding === 'function') {
+          try {
+            await adapter.saveSyncPushBinding({
+              businessId: currentBusinessId,
+              boundAt: new Date().toISOString(),
+            })
+          } catch (err) {
+            const remaining = await activeQueueService.countPending()
+            return {
+              ok: false,
+              code: 'SYNC_BINDING_PERSIST_FAILED',
+              message: 'Failed to persist business binding before push.',
+              error: err,
+              remaining,
+              sentQueueIds: [],
+              removedQueueIds: [],
+              preservedQueueIds: [],
+              blocked: [],
+              warnings: [],
+            }
+          }
+        }
+
         requestId = generateUuid()
         envelope = {
           version: 1,
@@ -369,6 +386,30 @@ export function createSyncPushService({
 
         if (adapter && typeof adapter.saveSyncPushInflight === 'function') {
           await adapter.saveSyncPushInflight(envelope)
+        }
+      }
+
+      // If envelope is reused but binding was somehow missing, ensure it's saved before HTTP
+      if (!existingBinding && adapter && typeof adapter.saveSyncPushBinding === 'function') {
+        try {
+          await adapter.saveSyncPushBinding({
+            businessId: currentBusinessId,
+            boundAt: new Date().toISOString(),
+          })
+        } catch (err) {
+          const remaining = await activeQueueService.countPending()
+          return {
+            ok: false,
+            code: 'SYNC_BINDING_PERSIST_FAILED',
+            message: 'Failed to persist business binding before push.',
+            error: err,
+            remaining,
+            sentQueueIds: [],
+            removedQueueIds: [],
+            preservedQueueIds: [],
+            blocked: [],
+            warnings: [],
+          }
         }
       }
 

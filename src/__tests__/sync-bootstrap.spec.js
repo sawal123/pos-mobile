@@ -24,6 +24,7 @@ import { createMemoryAdapter } from '../services/database/memoryAdapter'
 import { createSyncQueueService } from '../services/sync/syncQueueService'
 import { createSyncIdentityRegistry, isUuid } from '../services/sync/syncIdentityRegistry'
 import { createSyncBootstrapService } from '../services/sync/syncBootstrapService'
+import { createSyncPushService } from '../services/sync/syncPushService'
 import { initializeSyncFoundation } from '../services/sync/index'
 import { SYNC_ENTITY_TYPES, SYNC_OPERATIONS, SYNC_RESERVED_CATEGORY } from '../services/sync/syncConstants'
 import { useProductStore } from '../stores/productStore'
@@ -685,6 +686,87 @@ describe('P14: Queue Semantics, Conflicts, & Idempotent Retry', () => {
     expect(res.ok).toBe(true)
     expect(res.warnings).toContain('UNSUPPORTED_BUSINESS_OUTBOX_PRESENT')
   })
+
+  it('fails with ATOMIC_BULK_QUEUE_UNSUPPORTED when adapter lacks atomic bulk API', async () => {
+    // Adapter without upsertSyncQueueItems
+    const nonAtomicAdapter = {
+      listSyncQueueItems: vi.fn().mockResolvedValue([]),
+      countSyncQueueItems: vi.fn().mockResolvedValue(0),
+    }
+
+    const customQueueService = createSyncQueueService({ adapter: nonAtomicAdapter })
+    const res = await customQueueService.enqueueManyUpserts([
+      { entityType: SYNC_ENTITY_TYPES.PRODUCT, entityId: 'p-1', payload: { name: 'Test' } },
+    ])
+
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('ATOMIC_BULK_QUEUE_UNSUPPORTED')
+  })
+
+  it('rolls back whole batch atomically when bulk staging fails on a single row', async () => {
+    productStore.categories = ['Minuman']
+    productStore.products = [
+      { id: 'p-1', name: 'Kopi', price: 10000, category: 'Minuman' },
+      { id: 'p-2', name: 'Teh', price: 5000, category: 'Minuman' },
+    ]
+
+    // Mock upsertSyncQueueItems to simulate SQLite transaction rollback
+    adapter.upsertSyncQueueItems = vi.fn().mockImplementation(async () => {
+      throw new Error('SQLite statement constraint failed on row 2')
+    })
+
+    const service = createSyncBootstrapService({
+      adapter,
+      queueService,
+      registry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport: mockEmptyServerTransport(),
+    })
+
+    const res = await service.bootstrapNow({ context: makeValidCloudContext() })
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('BOOTSTRAP_STAGE_FAILED')
+
+    // Atomicity: nothing saved in queue
+    expect(await queueService.countPending()).toBe(0)
+    expect(await adapter.loadSyncBootstrapState()).toBeNull()
+  })
+
+  it('allows P14 bootstrap after an empty P12 push because no push binding was created', async () => {
+    // 1. User clicks Sync Sekarang before bootstrap with empty queue
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport: vi.fn(),
+    })
+
+    const pushResult = await pushService.pushNow({ context: makeValidCloudContext() })
+    expect(pushResult.ok).toBe(true)
+    expect(await adapter.loadSyncPushBinding()).toBeNull()
+
+    // 2. Now user runs P14 bootstrap
+    productStore.categories = ['Makanan']
+    productStore.products = [
+      { id: 'p-1', name: 'Roti Bakar', price: 15000, category: 'Makanan' },
+    ]
+
+    const bootstrapService = createSyncBootstrapService({
+      adapter,
+      queueService,
+      registry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport: mockEmptyServerTransport(),
+    })
+
+    const bootstrapResult = await bootstrapService.bootstrapNow({ context: makeValidCloudContext() })
+    expect(bootstrapResult.ok).toBe(true)
+    expect(bootstrapResult.staged).toBe(2)
+    expect(await adapter.loadSyncBootstrapState()).toBeDefined()
+  })
 })
 
 describe('P14: Shared Registry & Production Wiring', () => {
@@ -702,6 +784,39 @@ describe('P14: Shared Registry & Production Wiring', () => {
     expect(syncFoundation.bootstrapService.registry).toBe(syncFoundation.registry)
     expect(syncFoundation.bootstrapService.registry).toBe(syncFoundation.pushService.registry)
     expect(syncFoundation.bootstrapService.registry).toBe(syncFoundation.pullService.registry)
+  })
+
+  it('survives restart and hydrates bootstrap state with isStaged = true when initialized with bootstrapService and adapter', async () => {
+    const pinia = createPinia()
+    const adapter = createMemoryAdapter()
+    await adapter.initialize()
+
+    // 1. Pre-save durable bootstrap state
+    await adapter.saveSyncBootstrapState({
+      version: 1,
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
+      registeredDeviceId: 55,
+      status: 'staged',
+      stagedAt: new Date().toISOString(),
+      counts: { categories: 1, products: 2, customers: 0, expenses: 0, transactions: 0 },
+    })
+
+    // 2. Simulate fresh app restart with new store
+    const syncBootstrapStore = useSyncBootstrapStore(pinia)
+    const mockService = { bootstrapNow: vi.fn() }
+
+    syncBootstrapStore.init({
+      bootstrapService: mockService,
+      adapter,
+    })
+
+    await syncBootstrapStore.loadBootstrapState()
+
+    expect(syncBootstrapStore.bootstrapState).toBeDefined()
+    expect(syncBootstrapStore.bootstrapState.status).toBe('staged')
+    expect(syncBootstrapStore.isStaged).toBe(true)
   })
 })
 

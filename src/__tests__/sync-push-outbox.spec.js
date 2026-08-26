@@ -1328,3 +1328,97 @@ describe('P12: Server Success + Local Queue Cleanup Failure (LOCAL_SYNC_CLEANUP_
     expect(await adapter.loadSyncPushInflight()).toBeNull()
   })
 })
+
+describe('P12: Business Binding Timing & Anti-Cross-Tenant', () => {
+  let adapter
+  let queueService
+  let registry
+
+  beforeEach(async () => {
+    adapter = createMemoryAdapter()
+    await adapter.initialize()
+    queueService = createSyncQueueService({ adapter })
+    registry = createSyncIdentityRegistry({ adapter })
+  })
+
+  it('does NOT save sync_push_binding_v1 on empty push', async () => {
+    const transport = vi.fn()
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const result = await pushService.pushNow({ context: makeValidCloudContext() })
+
+    expect(result.ok).toBe(true)
+    expect(result.requestId).toBeNull()
+    expect(transport).not.toHaveBeenCalled()
+    expect(await adapter.loadSyncPushBinding()).toBeNull()
+  })
+
+  it('does NOT save sync_push_binding_v1 when queue contains only blocked or unsupported items', async () => {
+    // Only reserved category 'Semua' and unsupported business
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.CATEGORY, 'Semua', { name: 'Semua' })
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.BUSINESS, 'biz-1', { name: 'Business' })
+
+    const transport = vi.fn()
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const result = await pushService.pushNow({ context: makeValidCloudContext() })
+
+    expect(result.ok).toBe(true)
+    expect(result.requestId).toBeNull()
+    expect(transport).not.toHaveBeenCalled()
+    expect(await adapter.loadSyncPushBinding()).toBeNull()
+  })
+
+  it('saves sync_push_binding_v1 before HTTP transport on first real push batch', async () => {
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-1', {
+      id: 'p-1',
+      name: 'Kopi Susu',
+      price: 15000,
+    })
+
+    let bindingAtTransportTime = null
+    const transport = vi.fn().mockImplementation(async ({ body }) => {
+      // Check that binding is already durable before HTTP request is processed
+      bindingAtTransportTime = await adapter.loadSyncPushBinding()
+      return {
+        ok: true,
+        status: 200,
+        data: {
+          data: {
+            request_id: body.request_id,
+            duplicate: false,
+          },
+        },
+      }
+    })
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const result = await pushService.pushNow({ context: makeValidCloudContext() })
+
+    expect(result.ok).toBe(true)
+    expect(transport).toHaveBeenCalled()
+    expect(bindingAtTransportTime).toBeDefined()
+    expect(bindingAtTransportTime.businessId).toBe(10)
+    expect(await adapter.loadSyncPushBinding()).toBeDefined()
+  })
+})
+
