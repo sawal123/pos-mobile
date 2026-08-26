@@ -1841,6 +1841,326 @@ describe('P14: Bootstrap Context Verification & Dependency-Aware Push', () => {
     expect(capturedChanges.expenses).toHaveLength(1)
     expect(capturedChanges.expenses[0].description).toBe('Listrik')
   })
+
+  it('fails with SYNC_BOOTSTRAP_CONTEXT_MISMATCH on reused envelope when bootstrap deviceIdentifier differs', async () => {
+    // 1. Existing inflight envelope with DEVICE-A
+    await adapter.saveSyncPushInflight({
+      version: 1,
+      requestId: 'req-reused-1',
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: 'DEVICE-A',
+      registeredDeviceId: 55,
+      createdAt: new Date().toISOString(),
+      queueSnapshots: [{ id: 'q1', entityType: SYNC_ENTITY_TYPES.PRODUCT, entityId: 'p-1', operation: 'upsert' }],
+      changes: { products: [{ sync_id: 'prod-uuid', name: 'Product' }] },
+    })
+
+    // 2. Bootstrap state has DEVICE-B (mismatched device)
+    await adapter.saveSyncBootstrapState({
+      version: 1,
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: 'DEVICE-B',
+      registeredDeviceId: 55,
+      status: 'staged',
+      stagedAt: new Date().toISOString(),
+      counts: { categories: 0, products: 1, customers: 0, expenses: 0, transactions: 0 },
+    })
+
+    const transport = vi.fn()
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const result = await pushService.pushNow({
+      context: makeValidCloudContext({ deviceIdentifier: 'DEVICE-A' }),
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_BOOTSTRAP_CONTEXT_MISMATCH')
+    expect(transport).not.toHaveBeenCalled()
+    expect(await adapter.loadSyncPushBinding()).toBeNull()
+    expect(await adapter.loadSyncPushInflight()).not.toBeNull() // Envelope preserved
+  })
+
+  it('fails with SYNC_BOOTSTRAP_CONTEXT_MISMATCH when existing push binding is present but current context differs from staged bootstrap state', async () => {
+    // Existing push binding
+    await adapter.saveSyncPushBinding({
+      businessId: 10,
+      boundAt: new Date().toISOString(),
+    })
+
+    // Staged bootstrap state for Outlet 101
+    await adapter.saveSyncBootstrapState({
+      version: 1,
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
+      registeredDeviceId: 55,
+      status: 'staged',
+      stagedAt: new Date().toISOString(),
+      counts: { categories: 0, products: 1, customers: 0, expenses: 0, transactions: 0 },
+    })
+
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-1', {
+      id: 'p-1',
+      name: 'Kopi Susu',
+      category: 'Minuman',
+      price: 15000,
+    })
+
+    const transport = vi.fn()
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    // Caller attempts push with Outlet 202
+    const result = await pushService.pushNow({
+      context: makeValidCloudContext({ selectedOutlet: { id: 202, name: 'Outlet 202' } }),
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_BOOTSTRAP_CONTEXT_MISMATCH')
+    expect(transport).not.toHaveBeenCalled()
+    expect(await adapter.loadSyncPushInflight()).toBeNull()
+    expect(await queueService.countPending()).toBe(1)
+  })
+
+  it('blocks second batch in multi-batch bootstrap if outlet is switched after first push', async () => {
+    await adapter.saveSyncBootstrapState({
+      version: 1,
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
+      registeredDeviceId: 55,
+      status: 'staged',
+      stagedAt: new Date().toISOString(),
+      counts: { categories: 1, products: 101, customers: 0, expenses: 0, transactions: 0 },
+    })
+
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.CATEGORY, 'Minuman', { name: 'Minuman' })
+
+    for (let i = 1; i <= 101; i++) {
+      await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, `p-${i}`, {
+        id: `p-${i}`,
+        name: `Product ${i}`,
+        category: 'Minuman',
+        price: 10000,
+      })
+    }
+
+    const transport = vi.fn().mockImplementation(async ({ body }) => ({
+      ok: true,
+      status: 200,
+      data: { data: { request_id: body.request_id, duplicate: false } },
+    }))
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    // Push 1: Context is Outlet 101 -> succeeds
+    const res1 = await pushService.pushNow({
+      context: makeValidCloudContext({ selectedOutlet: { id: 101, name: 'Outlet 101' } }),
+    })
+    expect(res1.ok).toBe(true)
+    expect(transport).toHaveBeenCalledTimes(1)
+    expect(await queueService.countPending()).toBe(1) // 1 product left
+
+    // Push 2: Context is switched to Outlet 202 -> BLOCKED
+    const res2 = await pushService.pushNow({
+      context: makeValidCloudContext({ selectedOutlet: { id: 202, name: 'Outlet 202' } }),
+    })
+    expect(res2.ok).toBe(false)
+    expect(res2.code).toBe('SYNC_BOOTSTRAP_CONTEXT_MISMATCH')
+    expect(transport).toHaveBeenCalledTimes(1) // No new HTTP request
+    expect(await queueService.countPending()).toBe(1)
+  })
+
+  it('blocks second batch in multi-batch bootstrap if deviceIdentifier is switched after first push', async () => {
+    await adapter.saveSyncBootstrapState({
+      version: 1,
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: 'DEVICE-ORIGINAL',
+      registeredDeviceId: 55,
+      status: 'staged',
+      stagedAt: new Date().toISOString(),
+      counts: { categories: 0, products: 2, customers: 0, expenses: 0, transactions: 0 },
+    })
+
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-1', {
+      id: 'p-1',
+      name: 'Product 1',
+      category: 'Minuman',
+      price: 10000,
+    })
+
+    const transport = vi.fn().mockImplementation(async ({ body }) => ({
+      ok: true,
+      status: 200,
+      data: { data: { request_id: body.request_id, duplicate: false } },
+    }))
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    // Push 1: DEVICE-ORIGINAL -> succeeds
+    const res1 = await pushService.pushNow({
+      context: makeValidCloudContext({ deviceIdentifier: 'DEVICE-ORIGINAL' }),
+    })
+    expect(res1.ok).toBe(true)
+
+    // Add new product
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-2', {
+      id: 'p-2',
+      name: 'Product 2',
+      category: 'Minuman',
+      price: 15000,
+    })
+
+    // Push 2: DEVICE-SWITCHED -> BLOCKED
+    const res2 = await pushService.pushNow({
+      context: makeValidCloudContext({ deviceIdentifier: 'DEVICE-SWITCHED' }),
+    })
+    expect(res2.ok).toBe(false)
+    expect(res2.code).toBe('SYNC_BOOTSTRAP_CONTEXT_MISMATCH')
+    expect(transport).toHaveBeenCalledTimes(1)
+  })
+
+  it('handles crash window where binding was saved but envelope persist threw: blocks mismatched context retry and allows valid context retry', async () => {
+    await adapter.saveSyncBootstrapState({
+      version: 1,
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
+      registeredDeviceId: 55,
+      status: 'staged',
+      stagedAt: new Date().toISOString(),
+      counts: { categories: 0, products: 1, customers: 0, expenses: 0, transactions: 0 },
+    })
+
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-crash', {
+      id: 'p-crash',
+      name: 'Crash Product',
+      category: 'Minuman',
+      price: 10000,
+    })
+
+    // Mock saveSyncPushInflight failure
+    const originalSaveInflight = adapter.saveSyncPushInflight.bind(adapter)
+    adapter.saveSyncPushInflight = vi.fn().mockRejectedValueOnce(new Error('Disk write failed on envelope'))
+
+    const transport = vi.fn().mockImplementation(async ({ body }) => ({
+      ok: true,
+      status: 200,
+      data: { data: { request_id: body.request_id, duplicate: false } },
+    }))
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    // Push 1 fails at envelope save
+    const res1 = await pushService.pushNow({ context: makeValidCloudContext() })
+    expect(res1.ok).toBe(false)
+    expect(res1.code).toBe('SYNC_ENVELOPE_PERSIST_FAILED')
+    expect(transport).not.toHaveBeenCalled()
+    expect(await adapter.loadSyncPushBinding()).not.toBeNull() // Binding was saved
+    expect(await queueService.countPending()).toBe(1) // Queue intact
+
+    // Retry with mismatched outlet -> BLOCKED
+    const res2 = await pushService.pushNow({
+      context: makeValidCloudContext({ selectedOutlet: { id: 999, name: 'Wrong Outlet' } }),
+    })
+    expect(res2.ok).toBe(false)
+    expect(res2.code).toBe('SYNC_BOOTSTRAP_CONTEXT_MISMATCH')
+    expect(transport).not.toHaveBeenCalled()
+
+    // Retry with correct context -> SUCCEEDS
+    adapter.saveSyncPushInflight = originalSaveInflight
+    const res3 = await pushService.pushNow({ context: makeValidCloudContext() })
+    expect(res3.ok).toBe(true)
+    expect(transport).toHaveBeenCalledTimes(1)
+    expect(await queueService.countPending()).toBe(0)
+  })
+
+  it('re-uses in-flight envelope when bootstrap state is staged and context is valid', async () => {
+    await adapter.saveSyncPushBinding({
+      businessId: 10,
+      boundAt: new Date().toISOString(),
+    })
+
+    await adapter.saveSyncBootstrapState({
+      version: 1,
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
+      registeredDeviceId: 55,
+      status: 'staged',
+      stagedAt: new Date().toISOString(),
+      counts: { categories: 0, products: 1, customers: 0, expenses: 0, transactions: 0 },
+    })
+
+    await adapter.saveSyncPushInflight({
+      version: 1,
+      requestId: 'req-inflight-valid',
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
+      registeredDeviceId: 55,
+      createdAt: new Date().toISOString(),
+      queueSnapshots: [{ id: 'q1', entityType: SYNC_ENTITY_TYPES.PRODUCT, entityId: 'p-1', operation: 'upsert' }],
+      changes: { products: [{ sync_id: 'prod-uuid', name: 'Product' }] },
+    })
+
+    let sentRequestId = null
+    const transport = vi.fn().mockImplementation(async ({ body }) => {
+      sentRequestId = body.request_id
+      return {
+        ok: true,
+        status: 200,
+        data: { data: { request_id: body.request_id, duplicate: true } },
+      }
+    })
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const result = await pushService.pushNow({ context: makeValidCloudContext() })
+    expect(result.ok).toBe(true)
+    expect(result.requestId).toBe('req-inflight-valid')
+    expect(sentRequestId).toBe('req-inflight-valid')
+    expect(transport).toHaveBeenCalledTimes(1)
+  })
 })
+
 
 

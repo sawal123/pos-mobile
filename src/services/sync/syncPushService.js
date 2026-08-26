@@ -7,6 +7,18 @@ import { getToken } from '@/services/cloud/tokenRepository'
 
 const MAX_ENTITY_PER_TYPE = 100
 
+function isBootstrapContextMatch(
+  bootstrapState,
+  { businessId, outletId, deviceIdentifier, registeredDeviceId },
+) {
+  return (
+    Number(bootstrapState.businessId) === Number(businessId) &&
+    Number(bootstrapState.outletId) === Number(outletId) &&
+    String(bootstrapState.deviceIdentifier) === String(deviceIdentifier) &&
+    String(bootstrapState.registeredDeviceId) === String(registeredDeviceId)
+  )
+}
+
 /**
  * Creates a P12 Sync Push Service.
  * Coordinates manual push from local durable outbox to Laravel /api/sync/push.
@@ -159,6 +171,35 @@ export function createSyncPushService({
         }
       }
 
+      // ── 2.5. Bootstrap context validation (always enforced if staged/completed) ──
+      const bootstrapState = adapter && typeof adapter.loadSyncBootstrapState === 'function'
+        ? await adapter.loadSyncBootstrapState()
+        : null
+
+      if (bootstrapState && (bootstrapState.status === 'staged' || bootstrapState.status === 'completed')) {
+        const isMatch = isBootstrapContextMatch(bootstrapState, {
+          businessId: currentBusinessId,
+          outletId: selectedOutlet.id,
+          deviceIdentifier,
+          registeredDeviceId,
+        })
+        if (!isMatch) {
+          const remaining = await activeQueueService.countPending()
+          return {
+            ok: false,
+            code: 'SYNC_BOOTSTRAP_CONTEXT_MISMATCH',
+            message: 'Bootstrap context does not match current cloud context.',
+            error: { code: 'SYNC_BOOTSTRAP_CONTEXT_MISMATCH' },
+            remaining,
+            sentQueueIds: [],
+            removedQueueIds: [],
+            preservedQueueIds: [],
+            blocked: [],
+            warnings: [],
+          }
+        }
+      }
+
       // ── 3. Check for in-flight envelope (idempotent retry) ────────────────────
       const existingEnvelope = adapter && typeof adapter.loadSyncPushInflight === 'function'
         ? await adapter.loadSyncPushInflight()
@@ -196,9 +237,8 @@ export function createSyncPushService({
           }
         }
 
-        // When envelope exists but push binding is missing, validate bootstrap context
-        if (!existingBinding && adapter && typeof adapter.loadSyncBootstrapState === 'function') {
-          const bootstrapState = await adapter.loadSyncBootstrapState()
+        // When envelope exists but push binding is missing, validate that bootstrap state exists
+        if (!existingBinding) {
           if (!bootstrapState || (bootstrapState.status !== 'staged' && bootstrapState.status !== 'completed')) {
             const remaining = await activeQueueService.countPending()
             return {
@@ -206,25 +246,6 @@ export function createSyncPushService({
               code: 'SYNC_BOOTSTRAP_REQUIRED',
               message: 'Initial bootstrap is required before first cloud sync.',
               error: { code: 'SYNC_BOOTSTRAP_REQUIRED' },
-              remaining,
-              sentQueueIds: [],
-              removedQueueIds: [],
-              preservedQueueIds: [],
-              blocked: [],
-              warnings: [],
-            }
-          }
-          const isBizMatch = Number(bootstrapState.businessId) === currentBusinessId
-          const isOutletMatch = Number(bootstrapState.outletId) === Number(selectedOutlet.id)
-          const isDevMatch = String(bootstrapState.deviceIdentifier) === String(deviceIdentifier)
-          const isRegDevMatch = String(bootstrapState.registeredDeviceId) === String(registeredDeviceId)
-          if (!isBizMatch || !isOutletMatch || !isDeviceMatch || !isRegDevMatch) {
-            const remaining = await activeQueueService.countPending()
-            return {
-              ok: false,
-              code: 'SYNC_BOOTSTRAP_CONTEXT_MISMATCH',
-              message: 'Bootstrap context does not match current cloud context.',
-              error: { code: 'SYNC_BOOTSTRAP_CONTEXT_MISMATCH' },
               remaining,
               sentQueueIds: [],
               removedQueueIds: [],
@@ -466,9 +487,8 @@ export function createSyncPushService({
           }
         }
 
-        // ── 4.5. Verify Bootstrap State and Context before first real push
-        if (!existingBinding && adapter && typeof adapter.loadSyncBootstrapState === 'function') {
-          const bootstrapState = await adapter.loadSyncBootstrapState()
+        // ── 4.5. Verify Bootstrap State when no existing push binding
+        if (!existingBinding) {
           if (!bootstrapState || (bootstrapState.status !== 'staged' && bootstrapState.status !== 'completed')) {
             const remaining = await activeQueueService.countPending()
             return {
@@ -476,25 +496,6 @@ export function createSyncPushService({
               code: 'SYNC_BOOTSTRAP_REQUIRED',
               message: 'Initial bootstrap is required before first cloud sync.',
               error: { code: 'SYNC_BOOTSTRAP_REQUIRED' },
-              remaining,
-              sentQueueIds: [],
-              removedQueueIds: [],
-              preservedQueueIds: [],
-              blocked: [],
-              warnings: [],
-            }
-          }
-          const isBizMatch = Number(bootstrapState.businessId) === currentBusinessId
-          const isOutletMatch = Number(bootstrapState.outletId) === Number(selectedOutlet.id)
-          const isDeviceMatch = String(bootstrapState.deviceIdentifier) === String(deviceIdentifier)
-          const isRegDevMatch = String(bootstrapState.registeredDeviceId) === String(registeredDeviceId)
-          if (!isBizMatch || !isOutletMatch || !isDeviceMatch || !isRegDevMatch) {
-            const remaining = await activeQueueService.countPending()
-            return {
-              ok: false,
-              code: 'SYNC_BOOTSTRAP_CONTEXT_MISMATCH',
-              message: 'Bootstrap context does not match current cloud context.',
-              error: { code: 'SYNC_BOOTSTRAP_CONTEXT_MISMATCH' },
               remaining,
               sentQueueIds: [],
               removedQueueIds: [],
@@ -543,7 +544,23 @@ export function createSyncPushService({
         }
 
         if (adapter && typeof adapter.saveSyncPushInflight === 'function') {
-          await adapter.saveSyncPushInflight(envelope)
+          try {
+            await adapter.saveSyncPushInflight(envelope)
+          } catch (err) {
+            const remaining = await activeQueueService.countPending()
+            return {
+              ok: false,
+              code: 'SYNC_ENVELOPE_PERSIST_FAILED',
+              message: 'Failed to persist in-flight sync push envelope.',
+              error: err,
+              remaining,
+              sentQueueIds: [],
+              removedQueueIds: [],
+              preservedQueueIds: [],
+              blocked: [],
+              warnings: [],
+            }
+          }
         }
       }
 
