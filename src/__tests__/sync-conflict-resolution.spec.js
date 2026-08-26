@@ -468,10 +468,10 @@ describe('P15: Manual Conflict Resolution (useServer & keepLocal)', () => {
     expect(res.code).toBe('SYNC_CONFLICT_RESOLVED')
     expect(res.message).toContain('Sync Sekarang')
 
-    // 1. sync_server_versions_v1 must have products / prodSyncId = 7
+    // 1. sync_server_versions_v1 must have products:prodSyncId in flat P13 format
     const serverVersions = await adapter.loadSyncServerVersions()
     expect(serverVersions).not.toBeNull()
-    expect(serverVersions.products[prodSyncId]).toBe(7)
+    expect(serverVersions[`products:${prodSyncId}`].syncVersion).toBe(7)
 
     // 2. Queue item must remain intact
     expect(await queueService.countPending()).toBe(1)
@@ -780,4 +780,235 @@ describe('P15: UI Integration in CloudLoginView', () => {
     expect(mockConflictService.useServer).toHaveBeenCalledWith('conf-ui-1')
     expect(wrapper.text()).toContain('Gunakan Tarik Data Cloud untuk mengambil data server.')
   })
+
+  it('immediately updates conflict section in UI when handleSyncNow receives 409 SYNC_CONFLICT without page refresh', async () => {
+    const cloudStore = useCloudSessionStore(pinia)
+    cloudStore.user = { id: 1, name: 'Owner User', email: 'owner@example.com' }
+    cloudStore.selectedBusiness = { id: 10, name: 'Kedai Kopi Utama' }
+    cloudStore.selectedOutlet = { id: 101, name: 'Outlet Pusat' }
+    cloudStore.cloudAccess = true
+    cloudStore.deviceIdentifier = '123e4567-e89b-12d3-a456-426614174000'
+    cloudStore.registeredDeviceId = 55
+    cloudStore.businesses = [
+      {
+        id: 10,
+        name: 'Kedai Kopi Utama',
+        cloud_access: true,
+        outlets: [{ id: 101, name: 'Outlet Pusat', status: 'active' }],
+      },
+    ]
+
+    const syncPushStore = useSyncPushStore(pinia)
+    const syncConflictStore = useSyncConflictStore(pinia)
+
+    syncPushStore.pushNow = vi.fn().mockImplementation(async () => {
+      // Simulate push saving conflict to adapter and returning 409
+      await adapter.saveSyncConflicts({
+        version: 1,
+        conflicts: [
+          {
+            id: 'conf-live-409',
+            requestId: 'req-409',
+            queueId: 'q-live',
+            entityType: 'product',
+            entityId: 'p-live',
+            serverEntity: 'products',
+            syncId: 'uuid-live',
+            serverSyncVersion: 2,
+            status: 'open',
+            createdAt: new Date().toISOString(),
+          },
+        ],
+      })
+      return {
+        ok: false,
+        code: 'SYNC_CONFLICT',
+        message: 'Sync data conflict detected on server.',
+        error: { code: 'SYNC_CONFLICT' },
+      }
+    })
+
+    syncConflictStore.init({ adapter })
+
+    const wrapper = mount(CloudLoginView, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          BaseCard: { template: '<div><slot /></div>' },
+          BaseButton: {
+            props: ['loading', 'disabled', 'variant', 'size'],
+            template: '<button :disabled="disabled || loading" @click="$emit(\'click\')"><slot /></button>',
+          },
+          BaseInput: true,
+        },
+      },
+    })
+
+    await flushPromises()
+    expect(wrapper.find('#cloud-conflict-section').exists()).toBe(false)
+
+    // Trigger Sync Sekarang
+    const syncBtn = wrapper.find('#sync-now-btn')
+    expect(syncBtn.exists()).toBe(true)
+    await syncBtn.trigger('click')
+    await flushPromises()
+
+    // Conflict section must now appear immediately!
+    const conflictSection = wrapper.find('#cloud-conflict-section')
+    expect(conflictSection.exists()).toBe(true)
+    expect(conflictSection.text()).toContain('p-live')
+  })
 })
+
+describe('P15: Regression — P13 Compatibility, Async Registry Mapping, & Fail-Safe CAS', () => {
+  let adapter
+  let queueService
+  let registry
+  let conflictService
+
+  beforeEach(async () => {
+    adapter = createMemoryAdapter()
+    await adapter.initialize()
+    await adapter.saveSyncPushBinding({
+      businessId: 10,
+      boundAt: new Date().toISOString(),
+    })
+    queueService = createSyncQueueService({ adapter })
+    registry = createSyncIdentityRegistry({ adapter })
+    conflictService = createSyncConflictService({ adapter, queueService, registry })
+  })
+
+  it('maps base_sync_version from flat P13 sync_server_versions_v1 metadata', async () => {
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-p13', {
+      id: 'p-p13',
+      name: 'P13 Product',
+      category: 'Minuman',
+      price: 15000,
+    })
+    const prodSyncId = await registry.resolveSyncId(SYNC_ENTITY_TYPES.PRODUCT, 'p-p13')
+
+    // Save version in flat P13 format
+    await adapter.saveSyncServerVersions({
+      [`products:${prodSyncId}`]: { syncVersion: 12, syncSequence: 100 },
+    })
+
+    let capturedChanges = null
+    const mockTransport = vi.fn().mockImplementation(async ({ body }) => {
+      capturedChanges = body.changes
+      return {
+        ok: true,
+        status: 200,
+        data: { data: { request_id: body.request_id, duplicate: false } },
+      }
+    })
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport: mockTransport,
+    })
+
+    const res = await pushService.pushNow({ context: makeValidCloudContext() })
+    expect(res.ok).toBe(true)
+    expect(capturedChanges.products[0].base_sync_version).toBe(12)
+  })
+
+  it('correctly maps 409 conflict to the specific legacy product in a multi-item batch without grabbing first entity', async () => {
+    // Legacy product A (local ID 'p-legacy-a')
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-legacy-a', {
+      id: 'p-legacy-a',
+      name: 'Legacy Product A',
+      category: 'Minuman',
+      price: 10000,
+    })
+    // Legacy product B (local ID 'p-legacy-b')
+    const qB = await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-legacy-b', {
+      id: 'p-legacy-b',
+      name: 'Legacy Product B',
+      category: 'Minuman',
+      price: 20000,
+    })
+
+    const uuidA = await registry.resolveSyncId(SYNC_ENTITY_TYPES.PRODUCT, 'p-legacy-a')
+    const uuidB = await registry.resolveSyncId(SYNC_ENTITY_TYPES.PRODUCT, 'p-legacy-b')
+
+    // Server returns conflict specifically for Product B
+    const mockTransport = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      data: {
+        code: 'SYNC_CONFLICT',
+        conflicts: [
+          {
+            entity: 'products',
+            sync_id: uuidB,
+            server_sync_version: 3,
+          },
+        ],
+      },
+    })
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport: mockTransport,
+    })
+
+    const res = await pushService.pushNow({ context: makeValidCloudContext() })
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('SYNC_CONFLICT')
+
+    const savedConflicts = await adapter.loadSyncConflicts()
+    expect(savedConflicts.conflicts).toHaveLength(1)
+    // Must be mapped to Product B, NOT Product A!
+    expect(savedConflicts.conflicts[0].entityId).toBe('p-legacy-b')
+    expect(savedConflicts.conflicts[0].queueId).toBe(qB.entry.id)
+    expect(savedConflicts.conflicts[0].syncId).toBe(uuidB)
+  })
+
+  it('safely rolls back and restores queue item if adapter.saveSyncConflicts fails during useServer', async () => {
+    const q1 = await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-atomic', {
+      id: 'p-atomic',
+      name: 'Atomic Product',
+      price: 10000,
+    })
+
+    const conflictRecord = {
+      id: 'conf-atomic',
+      requestId: 'req-atomic',
+      queueId: q1.entry.id,
+      entityType: SYNC_ENTITY_TYPES.PRODUCT,
+      entityId: 'p-atomic',
+      serverEntity: 'products',
+      syncId: 'uuid-atomic',
+      serverSyncVersion: 2,
+      queueSnapshot: q1.entry,
+      status: 'open',
+      createdAt: new Date().toISOString(),
+    }
+
+    await adapter.saveSyncConflicts({
+      version: 1,
+      conflicts: [conflictRecord],
+    })
+
+    // Force saveSyncConflicts to fail on next call
+    const origSave = adapter.saveSyncConflicts.bind(adapter)
+    vi.spyOn(adapter, 'saveSyncConflicts').mockRejectedValueOnce(new Error('SQLite disk I/O error'))
+
+    const res = await conflictService.useServer('conf-atomic')
+
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('SYNC_CONFLICT_PERSIST_FAILED')
+
+    // Local queue item MUST be restored by rollback!
+    expect(await queueService.countPending()).toBe(1)
+    const pending = await queueService.listPending()
+    expect(pending[0].payload.name).toBe('Atomic Product')
+  })
+})
+

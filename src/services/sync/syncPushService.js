@@ -19,135 +19,10 @@ function isBootstrapContextMatch(
   )
 }
 
-function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegistry) {
+async function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegistry) {
   const { entity, sync_id } = conflict
   const queueSnapshots = Array.isArray(envelope?.queueSnapshots) ? envelope.queueSnapshots : []
   const changes = envelope?.changes || {}
-
-  // 1. Transaction / Sale / SaleItem mapping
-  if (entity === 'sales' || entity === 'sale_items') {
-    let saleSyncId = sync_id
-    if (entity === 'sale_items') {
-      const item = (changes.sale_items || []).find((si) => si.sync_id === sync_id)
-      if (item && item.sale_sync_id) {
-        saleSyncId = item.sale_sync_id
-      }
-    }
-
-    const sale = (changes.sales || []).find((s) => s.sync_id === saleSyncId)
-    const foundTrx = queueSnapshots.find((snap) => {
-      if (snap.entityType !== SYNC_ENTITY_TYPES.TRANSACTION) return false
-      if (sale && sale.sync_id) {
-        const snapSyncId = activeRegistry.resolveSyncId('transactions', snap.entityId)
-        if (snapSyncId === sale.sync_id) return true
-        const saleResolved = activeRegistry.resolveSyncId('sales', snap.entityId)
-        if (saleResolved === sale.sync_id) return true
-      }
-      if (snap.entityId === saleSyncId || snap.id === saleSyncId) return true
-      return false
-    })
-
-    if (foundTrx) {
-      return {
-        snapshot: foundTrx,
-        entityType: SYNC_ENTITY_TYPES.TRANSACTION,
-        entityId: foundTrx.entityId,
-      }
-    }
-
-    const fallbackTrx = queueSnapshots.find((snap) => snap.entityType === SYNC_ENTITY_TYPES.TRANSACTION)
-    if (fallbackTrx) {
-      return {
-        snapshot: fallbackTrx,
-        entityType: SYNC_ENTITY_TYPES.TRANSACTION,
-        entityId: fallbackTrx.entityId,
-      }
-    }
-  }
-
-  // 2. Product mapping
-  if (entity === 'products') {
-    const prod = (changes.products || []).find((p) => p.sync_id === sync_id)
-    const foundProd = queueSnapshots.find((snap) => {
-      if (snap.entityType !== SYNC_ENTITY_TYPES.PRODUCT) return false
-      if (prod && prod.sync_id) {
-        const snapSyncId = activeRegistry.resolveSyncId(SYNC_ENTITY_TYPES.PRODUCT, snap.entityId)
-        if (snapSyncId === prod.sync_id) return true
-      }
-      if (snap.entityId === sync_id || snap.id === sync_id) return true
-      return false
-    })
-    if (foundProd) {
-      return {
-        snapshot: foundProd,
-        entityType: SYNC_ENTITY_TYPES.PRODUCT,
-        entityId: foundProd.entityId,
-      }
-    }
-  }
-
-  // 3. Customer mapping
-  if (entity === 'customers') {
-    const cust = (changes.customers || []).find((c) => c.sync_id === sync_id)
-    const foundCust = queueSnapshots.find((snap) => {
-      if (snap.entityType !== SYNC_ENTITY_TYPES.CUSTOMER) return false
-      if (cust && cust.sync_id) {
-        const snapSyncId = activeRegistry.resolveSyncId(SYNC_ENTITY_TYPES.CUSTOMER, snap.entityId)
-        if (snapSyncId === cust.sync_id) return true
-      }
-      if (snap.entityId === sync_id || snap.id === sync_id) return true
-      return false
-    })
-    if (foundCust) {
-      return {
-        snapshot: foundCust,
-        entityType: SYNC_ENTITY_TYPES.CUSTOMER,
-        entityId: foundCust.entityId,
-      }
-    }
-  }
-
-  // 4. Category mapping
-  if (entity === 'categories') {
-    const cat = (changes.categories || []).find((c) => c.sync_id === sync_id)
-    const foundCat = queueSnapshots.find((snap) => {
-      if (snap.entityType !== SYNC_ENTITY_TYPES.CATEGORY) return false
-      if (cat && cat.name) {
-        const name = snap.payload?.name || snap.entityId
-        if (name === cat.name) return true
-      }
-      if (snap.entityId === sync_id || snap.id === sync_id) return true
-      return false
-    })
-    if (foundCat) {
-      return {
-        snapshot: foundCat,
-        entityType: SYNC_ENTITY_TYPES.CATEGORY,
-        entityId: foundCat.entityId,
-      }
-    }
-  }
-
-  // 5. Expense mapping
-  if (entity === 'expenses') {
-    const exp = (changes.expenses || []).find((e) => e.sync_id === sync_id)
-    const foundExp = queueSnapshots.find((snap) => {
-      if (snap.entityType !== SYNC_ENTITY_TYPES.EXPENSE) return false
-      if (exp && exp.sync_id) {
-        const snapSyncId = activeRegistry.resolveSyncId(SYNC_ENTITY_TYPES.EXPENSE, snap.entityId)
-        if (snapSyncId === exp.sync_id) return true
-      }
-      if (snap.entityId === sync_id || snap.id === sync_id) return true
-      return false
-    })
-    if (foundExp) {
-      return {
-        snapshot: foundExp,
-        entityType: SYNC_ENTITY_TYPES.EXPENSE,
-        entityId: foundExp.entityId,
-      }
-    }
-  }
 
   const entityTypeMap = {
     categories: SYNC_ENTITY_TYPES.CATEGORY,
@@ -156,13 +31,136 @@ function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegistry) {
     expenses: SYNC_ENTITY_TYPES.EXPENSE,
     sales: SYNC_ENTITY_TYPES.TRANSACTION,
     sale_items: SYNC_ENTITY_TYPES.TRANSACTION,
+    shifts: 'shift',
   }
   const targetEntityType = entityTypeMap[entity] || entity
-  const foundGeneric = queueSnapshots.find((snap) => snap.entityType === targetEntityType)
+
+  // 1. Transaction / Sale / SaleItem mapping
+  if (entity === 'sales' || entity === 'sale_items') {
+    let targetSaleSyncId = sync_id
+    if (entity === 'sale_items') {
+      const item = (changes.sale_items || []).find((si) => si.sync_id === sync_id)
+      if (item && item.sale_sync_id) {
+        targetSaleSyncId = item.sale_sync_id
+      }
+    }
+
+    for (const snap of queueSnapshots) {
+      if (snap.entityType !== SYNC_ENTITY_TYPES.TRANSACTION) continue
+      const trxId = snap.payload?.id ?? snap.entityId
+      const snapSyncId = await activeRegistry.resolveSyncId(SYNC_ENTITY_TYPES.TRANSACTION, trxId)
+      if (
+        snapSyncId === targetSaleSyncId ||
+        snap.entityId === targetSaleSyncId ||
+        snap.id === targetSaleSyncId
+      ) {
+        return {
+          snapshot: snap,
+          entityType: SYNC_ENTITY_TYPES.TRANSACTION,
+          entityId: trxId,
+        }
+      }
+    }
+
+    return {
+      snapshot: null,
+      entityType: SYNC_ENTITY_TYPES.TRANSACTION,
+      entityId: sync_id,
+    }
+  }
+
+  // 2. Product mapping
+  if (entity === 'products') {
+    for (const snap of queueSnapshots) {
+      if (snap.entityType !== SYNC_ENTITY_TYPES.PRODUCT) continue
+      const prodId = snap.payload?.id ?? snap.entityId
+      const snapSyncId = await activeRegistry.resolveSyncId(SYNC_ENTITY_TYPES.PRODUCT, prodId)
+      if (snapSyncId === sync_id || snap.entityId === sync_id || snap.id === sync_id) {
+        return {
+          snapshot: snap,
+          entityType: SYNC_ENTITY_TYPES.PRODUCT,
+          entityId: prodId,
+        }
+      }
+    }
+
+    return {
+      snapshot: null,
+      entityType: SYNC_ENTITY_TYPES.PRODUCT,
+      entityId: sync_id,
+    }
+  }
+
+  // 3. Customer mapping
+  if (entity === 'customers') {
+    for (const snap of queueSnapshots) {
+      if (snap.entityType !== SYNC_ENTITY_TYPES.CUSTOMER) continue
+      const custId = snap.payload?.id ?? snap.entityId
+      const snapSyncId = await activeRegistry.resolveSyncId(SYNC_ENTITY_TYPES.CUSTOMER, custId)
+      if (snapSyncId === sync_id || snap.entityId === sync_id || snap.id === sync_id) {
+        return {
+          snapshot: snap,
+          entityType: SYNC_ENTITY_TYPES.CUSTOMER,
+          entityId: custId,
+        }
+      }
+    }
+
+    return {
+      snapshot: null,
+      entityType: SYNC_ENTITY_TYPES.CUSTOMER,
+      entityId: sync_id,
+    }
+  }
+
+  // 4. Category mapping
+  if (entity === 'categories') {
+    for (const snap of queueSnapshots) {
+      if (snap.entityType !== SYNC_ENTITY_TYPES.CATEGORY) continue
+      const catName = snap.payload?.name || snap.entityId
+      const snapSyncId = await activeRegistry.resolveSyncId(SYNC_ENTITY_TYPES.CATEGORY, catName)
+      if (snapSyncId === sync_id || snap.entityId === sync_id || snap.id === sync_id) {
+        return {
+          snapshot: snap,
+          entityType: SYNC_ENTITY_TYPES.CATEGORY,
+          entityId: catName,
+        }
+      }
+    }
+
+    return {
+      snapshot: null,
+      entityType: SYNC_ENTITY_TYPES.CATEGORY,
+      entityId: sync_id,
+    }
+  }
+
+  // 5. Expense mapping
+  if (entity === 'expenses') {
+    for (const snap of queueSnapshots) {
+      if (snap.entityType !== SYNC_ENTITY_TYPES.EXPENSE) continue
+      const expId = snap.payload?.id ?? snap.entityId
+      const snapSyncId = await activeRegistry.resolveSyncId(SYNC_ENTITY_TYPES.EXPENSE, expId)
+      if (snapSyncId === sync_id || snap.entityId === sync_id || snap.id === sync_id) {
+        return {
+          snapshot: snap,
+          entityType: SYNC_ENTITY_TYPES.EXPENSE,
+          entityId: expId,
+        }
+      }
+    }
+
+    return {
+      snapshot: null,
+      entityType: SYNC_ENTITY_TYPES.EXPENSE,
+      entityId: sync_id,
+    }
+  }
+
   return {
-    snapshot: foundGeneric || null,
+    snapshot: null,
     entityType: targetEntityType,
-    entityId: foundGeneric?.entityId || sync_id,
+    entityId: sync_id,
   }
 }
 
@@ -922,7 +920,7 @@ export function createSyncPushService({
         // Build durable conflict records
         const newConflicts = []
         for (const item of rawConflicts) {
-          const resolved = mapServerConflictToQueueSnapshot(item, envelope, activeRegistry)
+          const resolved = await mapServerConflictToQueueSnapshot(item, envelope, activeRegistry)
           newConflicts.push({
             id: generateUuid(),
             requestId: envelope.requestId,

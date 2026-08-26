@@ -40,6 +40,32 @@ function isPositiveInteger(value) {
  * @param {object} [options.scheduler] Optional serialized task scheduler.
  * @returns {Promise<object>}
  */
+function extractServerSyncVersion(serverVersions, entityKey, syncId) {
+  if (!serverVersions || typeof serverVersions !== 'object' || !syncId) return undefined
+  // 1. Flat format P13: `${entityKey}:${syncId}`
+  const flatKey = `${entityKey}:${syncId}`
+  const flatVal = serverVersions[flatKey]
+  if (flatVal !== undefined && flatVal !== null) {
+    if (typeof flatVal === 'object' && flatVal.syncVersion !== undefined) {
+      return Number(flatVal.syncVersion)
+    }
+    if (Number.isInteger(Number(flatVal))) {
+      return Number(flatVal)
+    }
+  }
+  // 2. Nested format: serverVersions[entityKey]?.[syncId]
+  const nestedVal = serverVersions[entityKey]?.[syncId]
+  if (nestedVal !== undefined && nestedVal !== null) {
+    if (typeof nestedVal === 'object' && nestedVal.syncVersion !== undefined) {
+      return Number(nestedVal.syncVersion)
+    }
+    if (Number.isInteger(Number(nestedVal))) {
+      return Number(nestedVal)
+    }
+  }
+  return undefined
+}
+
 export async function mapOutboxEntries(
   entries = [],
   { registry = null, adapter = null, scheduler = null, serverVersions: serverVersionsParam = null } = {},
@@ -160,8 +186,9 @@ export async function mapOutboxEntries(
         sync_id: syncId,
         name: trimmedName,
       }
-      if (serverVersions.categories?.[syncId] !== undefined) {
-        categoryChange.base_sync_version = Number(serverVersions.categories[syncId])
+      const catBaseVer = extractServerSyncVersion(serverVersions, 'categories', syncId)
+      if (catBaseVer !== undefined) {
+        categoryChange.base_sync_version = catBaseVer
       }
       changes.categories.push(categoryChange)
       mappedQueueIds.push(queueId)
@@ -242,8 +269,9 @@ export async function mapOutboxEntries(
         price: payload.price,
         status,
       }
-      if (serverVersions.products?.[syncId] !== undefined) {
-        productChange.base_sync_version = Number(serverVersions.products[syncId])
+      const prodBaseVer = extractServerSyncVersion(serverVersions, 'products', syncId)
+      if (prodBaseVer !== undefined) {
+        productChange.base_sync_version = prodBaseVer
       }
       changes.products.push(productChange)
       mappedQueueIds.push(queueId)
@@ -308,8 +336,9 @@ export async function mapOutboxEntries(
         address: null,
         notes: null,
       }
-      if (serverVersions.customers?.[syncId] !== undefined) {
-        customerChange.base_sync_version = Number(serverVersions.customers[syncId])
+      const custBaseVer = extractServerSyncVersion(serverVersions, 'customers', syncId)
+      if (custBaseVer !== undefined) {
+        customerChange.base_sync_version = custBaseVer
       }
       changes.customers.push(customerChange)
       mappedQueueIds.push(queueId)
@@ -395,8 +424,9 @@ export async function mapOutboxEntries(
         occurred_at: new Date(occurredAt).toISOString(),
         notes,
       }
-      if (serverVersions.expenses?.[syncId] !== undefined) {
-        expenseChange.base_sync_version = Number(serverVersions.expenses[syncId])
+      const expBaseVer = extractServerSyncVersion(serverVersions, 'expenses', syncId)
+      if (expBaseVer !== undefined) {
+        expenseChange.base_sync_version = expBaseVer
       }
       changes.expenses.push(expenseChange)
       mappedQueueIds.push(queueId)
@@ -551,8 +581,9 @@ export async function mapOutboxEntries(
           quantity: qty,
           line_total: lineTotal,
         }
-        if (serverVersions.sale_items?.[itemSyncId] !== undefined) {
-          saleItemChange.base_sync_version = Number(serverVersions.sale_items[itemSyncId])
+        const itemBaseVer = extractServerSyncVersion(serverVersions, 'sale_items', itemSyncId)
+        if (itemBaseVer !== undefined) {
+          saleItemChange.base_sync_version = itemBaseVer
         }
         mappedSaleItems.push(saleItemChange)
       }
@@ -605,8 +636,9 @@ export async function mapOutboxEntries(
         total_amount: payload.total,
         sold_at: new Date(soldAt).toISOString(),
       }
-      if (serverVersions.sales?.[saleSyncId] !== undefined) {
-        saleChange.base_sync_version = Number(serverVersions.sales[saleSyncId])
+      const saleBaseVer = extractServerSyncVersion(serverVersions, 'sales', saleSyncId)
+      if (saleBaseVer !== undefined) {
+        saleChange.base_sync_version = saleBaseVer
       }
       changes.sales.push(saleChange)
 

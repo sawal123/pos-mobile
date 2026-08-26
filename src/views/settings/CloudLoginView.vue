@@ -77,6 +77,7 @@ function getPlatform() {
 async function handleSyncNow() {
   syncMessage.value = ''
   const result = await syncPushStore.pushNow()
+  await syncConflictStore.loadConflicts()
   if (result.ok) {
     syncSuccess.value = true
     const sent = result.removedQueueIds?.length ?? 0
@@ -95,6 +96,7 @@ async function handleSyncNow() {
 async function handlePullNow() {
   pullMessage.value = ''
   const result = await syncPullStore.pullNow()
+  await syncConflictStore.loadConflicts()
   if (result.ok) {
     pullSuccess.value = true
     const applied = result.applied ?? 0

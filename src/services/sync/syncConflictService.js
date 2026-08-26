@@ -76,14 +76,36 @@ export function createSyncConflictService({
       }
     }
 
-    // Attempt CAS queue removal with the recorded snapshot
-    const casResult = await activeQueueService.removeIfUnchanged(conflict.queueSnapshot)
+    let casRemoved = false
 
-    if (!casResult.ok || !casResult.removed) {
-      return {
-        ok: false,
-        code: 'SYNC_CONFLICT_LOCAL_CHANGED',
-        message: 'Local data has changed since conflict was recorded.',
+    if (conflict.queueSnapshot) {
+      // Attempt CAS queue removal with the recorded snapshot
+      const casResult = await activeQueueService.removeIfUnchanged(conflict.queueSnapshot)
+
+      if (!casResult.ok) {
+        return {
+          ok: false,
+          code: 'SYNC_CONFLICT_QUEUE_ERROR',
+          message: 'Storage error while conditionally removing queue item.',
+        }
+      }
+
+      if (!casResult.removed) {
+        // Check if item exists with modified data in queue
+        const totalPending = await activeQueueService.countPending()
+        const pendingItems = totalPending > 0 ? await activeQueueService.listPending({ limit: totalPending }) : []
+        const existingInQueue = pendingItems.find((p) => p.id === conflict.queueId)
+
+        if (existingInQueue) {
+          return {
+            ok: false,
+            code: 'SYNC_CONFLICT_LOCAL_CHANGED',
+            message: 'Local data has changed since conflict was recorded.',
+          }
+        }
+        // If not in queue, it was already removed earlier
+      } else {
+        casRemoved = true
       }
     }
 
@@ -92,10 +114,26 @@ export function createSyncConflictService({
     conflict.resolvedAt = new Date().toISOString()
     conflict.resolution = 'use_server'
 
-    await adapter.saveSyncConflicts({
-      version: 1,
-      conflicts,
-    })
+    try {
+      await adapter.saveSyncConflicts({
+        version: 1,
+        conflicts,
+      })
+    } catch (saveErr) {
+      // Fail-safe atomic rollback: re-insert the removed snapshot so local mutation is never lost
+      if (casRemoved && conflict.queueSnapshot && typeof adapter.upsertSyncQueueItems === 'function') {
+        try {
+          await adapter.upsertSyncQueueItems([conflict.queueSnapshot])
+        } catch {
+          // best-effort rollback
+        }
+      }
+      return {
+        ok: false,
+        code: 'SYNC_CONFLICT_PERSIST_FAILED',
+        message: 'Failed to persist durable sync conflict resolution.',
+      }
+    }
 
     return {
       ok: true,
@@ -106,7 +144,7 @@ export function createSyncConflictService({
 
   /**
    * Manual Resolution — KEEP LOCAL:
-   * Updates sync_server_versions_v1 with serverSyncVersion so next push uses it as base_sync_version.
+   * Updates sync_server_versions_v1 with serverSyncVersion in flat P13 format so next push uses it as base_sync_version.
    * Preserves local queue item and marks conflict resolved.
    * Does NOT auto-push.
    *
@@ -130,13 +168,21 @@ export function createSyncConflictService({
       }
     }
 
-    // Update server versions map
+    // Update server versions map with flat P13 format `${serverEntity}:${syncId}`
     if (typeof adapter.loadSyncServerVersions === 'function' && typeof adapter.saveSyncServerVersions === 'function') {
       const serverVersions = (await adapter.loadSyncServerVersions()) || {}
-      if (!serverVersions[conflict.serverEntity]) {
-        serverVersions[conflict.serverEntity] = {}
+      const flatKey = `${conflict.serverEntity}:${conflict.syncId}`
+      if (serverVersions[flatKey] && typeof serverVersions[flatKey] === 'object') {
+        serverVersions[flatKey].syncVersion = Number(conflict.serverSyncVersion)
+      } else {
+        serverVersions[flatKey] = {
+          syncVersion: Number(conflict.serverSyncVersion),
+        }
       }
-      serverVersions[conflict.serverEntity][conflict.syncId] = Number(conflict.serverSyncVersion)
+      // Also write nested if parent key exists for full compatibility
+      if (serverVersions[conflict.serverEntity] && typeof serverVersions[conflict.serverEntity] === 'object') {
+        serverVersions[conflict.serverEntity][conflict.syncId] = Number(conflict.serverSyncVersion)
+      }
       await adapter.saveSyncServerVersions(serverVersions)
     }
 
