@@ -1271,6 +1271,148 @@ describe('P13: Conflict Protection & Outbox Integrity', () => {
     expect(await queueService.countPending()).toBe(110)
   })
 
+  it('detects conflict for remote sale_item using sale_sync_id against pending transaction mutation', async () => {
+    const saleUuid = '66666666-6666-4666-8666-666666666666'
+    const itemUuid = '77777777-7777-4777-8777-777777777771'
+
+    // Enqueue a local pending transaction mutation for saleUuid
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.TRANSACTION, saleUuid, {
+      id: saleUuid,
+      total: 50000,
+    })
+
+    // Remote snapshot contains a standalone sale_item referencing saleUuid
+    const transport = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: {
+        data: {
+          records: [
+            {
+              entity: 'sale_items',
+              sync_sequence: 1,
+              data: {
+                sync_id: itemUuid,
+                sync_version: 1,
+                sale_sync_id: saleUuid,
+                product_sync_id: '88888888-8888-4888-8888-888888888881',
+                product_name: 'Cappuccino',
+                unit_price: 20000,
+                quantity: 2,
+                line_total: 40000,
+              },
+            },
+          ],
+          next_cursor: 10,
+          server_sequence: 10,
+          has_more: false,
+        },
+      },
+    })
+
+    const pullService = createSyncPullService({
+      adapter,
+      queueService,
+      registry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const res = await pullService.pullNow({ context: makeValidCloudContext() })
+
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('LOCAL_PENDING_SYNC_CONFLICT')
+    expect(res.conflict).toBeDefined()
+    expect(res.conflict.entity).toBe('sale_items')
+    expect(res.conflict.localEntityId).toBe(saleUuid)
+
+    // Cursor must NOT have advanced
+    expect(await adapter.loadSyncPullState()).toBeNull()
+  })
+
+  it('detects conflict enqueued during build-plan right before commit and aborts without mutating stores or advancing cursor', async () => {
+    const prodUuid = '22222222-2222-4222-8222-222222222222'
+    const catUuid = '11111111-1111-4111-8111-111111111111'
+
+    await registry.bindSyncId('category', 'Kopi', catUuid)
+
+    const productStore = useProductStore(pinia)
+    productStore.categories = ['Kopi']
+    productStore.products = [
+      { id: prodUuid, name: 'Original Product Name', category: 'Kopi', price: 10000, stock: 5, isActive: true },
+    ]
+
+    // Intercept findLocalKeyBySyncId to simulate user editing Product during plan building
+    const originalFindKey = registry.findLocalKeyBySyncId.bind(registry)
+    let enqueuedDuringPlan = false
+    registry.findLocalKeyBySyncId = vi.fn().mockImplementation(async (entityType, syncId) => {
+      if (!enqueuedDuringPlan) {
+        enqueuedDuringPlan = true
+        // User mutates local product during pull plan resolution
+        await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, prodUuid, {
+          id: prodUuid,
+          name: 'Concurrent User Edit',
+          price: 99000,
+        })
+      }
+      return originalFindKey(entityType, syncId)
+    })
+
+    const transport = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: {
+        data: {
+          records: [
+            {
+              entity: 'products',
+              sync_sequence: 1,
+              data: {
+                sync_id: prodUuid,
+                sync_version: 2,
+                category_sync_id: catUuid,
+                name: 'Server Overwrite Product',
+                price: 15000,
+                status: 'active',
+              },
+            },
+          ],
+          next_cursor: 10,
+          server_sequence: 10,
+          has_more: false,
+        },
+      },
+    })
+
+    const pullService = createSyncPullService({
+      adapter,
+      queueService,
+      registry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const res = await pullService.pullNow({ context: makeValidCloudContext() })
+
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('LOCAL_PENDING_SYNC_CONFLICT')
+    expect(res.conflict).toBeDefined()
+    expect(res.conflict.syncId).toBe(prodUuid)
+
+    // Store must NOT have been patched with server changes
+    const currentProd = productStore.products.find((p) => p.id === prodUuid)
+    expect(currentProd.name).toBe('Original Product Name')
+    expect(currentProd.price).toBe(10000)
+
+    // Cursor must NOT have advanced
+    expect(await adapter.loadSyncPullState()).toBeNull()
+
+    // Server versions must NOT have been saved
+    expect(await adapter.loadSyncServerVersions()).toBeNull()
+  })
+
   it('does NOT create new P9 outbox entries when applying server changes', async () => {
     const catUuid = '11111111-1111-4111-8111-111111111111'
     const prodUuid = '22222222-2222-4222-8222-222222222222'

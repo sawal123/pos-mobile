@@ -353,31 +353,40 @@ export function createSyncPullService({
     // ── 7. Sort records by sync_sequence ASC ──────────────────────────────────
     allRecords.sort((a, b) => a.sync_sequence - b.sync_sequence)
 
-    // ── 8. Pre-commit local pending outbox conflict re-check ──────────────────
-    let pendingItems = []
-    if (activeQueueService && typeof activeQueueService.listPending === 'function') {
-      if (typeof activeQueueService.countPending === 'function') {
-        const totalPending = await activeQueueService.countPending()
-        if (totalPending > 0) {
-          pendingItems = await activeQueueService.listPending({ limit: totalPending })
+    // Helper to scan for conflicts against all pending outbox mutations
+    async function checkForPendingConflicts(records) {
+      let pendingItems = []
+      if (activeQueueService && typeof activeQueueService.listPending === 'function') {
+        if (typeof activeQueueService.countPending === 'function') {
+          const totalPending = await activeQueueService.countPending()
+          if (totalPending > 0) {
+            pendingItems = await activeQueueService.listPending({ limit: totalPending })
+          }
+        } else {
+          pendingItems = await activeQueueService.listPending({ limit: 100000 })
         }
-      } else {
-        pendingItems = await activeQueueService.listPending({ limit: 100000 })
       }
-    }
 
-    if (pendingItems.length > 0) {
-      for (const record of allRecords) {
+      if (!pendingItems || pendingItems.length === 0) {
+        return null
+      }
+
+      for (const record of records) {
         if (record.entity === 'shifts') continue
 
-        const syncId = record.data.sync_id.toLowerCase()
+        let syncId = (record.data.sync_id || '').toLowerCase()
         let outboxType = null
         if (record.entity === 'categories') outboxType = 'category'
         else if (record.entity === 'products') outboxType = 'product'
         else if (record.entity === 'customers') outboxType = 'customer'
         else if (record.entity === 'expenses') outboxType = 'expense'
         else if (record.entity === 'sales') outboxType = 'transaction'
-        else if (record.entity === 'sale_items') outboxType = 'transaction'
+        else if (record.entity === 'sale_items') {
+          outboxType = 'transaction'
+          syncId = (record.data.sale_sync_id || '').toLowerCase()
+        }
+
+        if (!syncId) continue
 
         for (const pending of pendingItems) {
           let isMatch = false
@@ -434,6 +443,14 @@ export function createSyncPullService({
           }
         }
       }
+
+      return null
+    }
+
+    // ── 8. Early local pending outbox conflict check ──────────────────────────
+    const earlyConflict = await checkForPendingConflicts(allRecords)
+    if (earlyConflict) {
+      return earlyConflict
     }
 
     // ── 9. Resolve domain stores and build prospective next state ─────────────
@@ -997,6 +1014,12 @@ export function createSyncPullService({
         syncVersion: data.sync_version,
         syncSequence: sync_sequence,
       }
+    }
+
+    // ── 9.5. Final pre-commit conflict re-check right before domain $patch ────
+    const preCommitConflict = await checkForPendingConflicts(allRecords)
+    if (preCommitConflict) {
+      return preCommitConflict
     }
 
     // ── 10. Apply mutations safely to Pinia stores via $patch ─────────────────
