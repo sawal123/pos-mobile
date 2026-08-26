@@ -241,20 +241,21 @@ export function createSyncPullService({
       const records = respData.records
       const nextCursor = respData.next_cursor
       const serverSeq = respData.server_sequence
-      const respHasMore = Boolean(respData.has_more)
+      const respHasMore = respData.has_more
 
       if (
         !Array.isArray(records) ||
         typeof nextCursor !== 'number' ||
         nextCursor < 0 ||
         typeof serverSeq !== 'number' ||
-        serverSeq < 0
+        serverSeq < 0 ||
+        typeof respHasMore !== 'boolean'
       ) {
         return {
           ok: false,
           code: 'INVALID_PULL_RESPONSE',
           message:
-            'Server returned invalid response fields (records, next_cursor, server_sequence).',
+            'Server returned invalid response fields (records, next_cursor, server_sequence, has_more).',
           error: { code: 'INVALID_PULL_RESPONSE', message: 'Invalid response fields' },
         }
       }
@@ -353,10 +354,17 @@ export function createSyncPullService({
     allRecords.sort((a, b) => a.sync_sequence - b.sync_sequence)
 
     // ── 8. Pre-commit local pending outbox conflict re-check ──────────────────
-    const pendingItems =
-      activeQueueService && typeof activeQueueService.listPending === 'function'
-        ? await activeQueueService.listPending()
-        : []
+    let pendingItems = []
+    if (activeQueueService && typeof activeQueueService.listPending === 'function') {
+      if (typeof activeQueueService.countPending === 'function') {
+        const totalPending = await activeQueueService.countPending()
+        if (totalPending > 0) {
+          pendingItems = await activeQueueService.listPending({ limit: totalPending })
+        }
+      } else {
+        pendingItems = await activeQueueService.listPending({ limit: 100000 })
+      }
+    }
 
     if (pendingItems.length > 0) {
       for (const record of allRecords) {
@@ -776,12 +784,41 @@ export function createSyncPullService({
         let customerSnapshot = null
 
         if (customer_sync_id) {
-          resolvedCustomerId = customer_sync_id
-          const matchedCust = nextCustomers.find(
-            (c) => String(c.id).toLowerCase() === customer_sync_id.toLowerCase(),
+          let localCustKey = null
+          if (activeRegistry) {
+            localCustKey = await activeRegistry.findLocalKeyBySyncId('customer', customer_sync_id)
+          }
+          if (!localCustKey) {
+            const plannedCustBind = plannedRegistryBinds.find(
+              (p) =>
+                p.entityType === 'customer' &&
+                p.syncId.toLowerCase() === customer_sync_id.toLowerCase(),
+            )
+            if (plannedCustBind) {
+              localCustKey = plannedCustBind.key
+            }
+          }
+
+          const targetCustId = localCustKey ?? customer_sync_id
+          resolvedCustomerId = targetCustId
+
+          let matchedCust = nextCustomers.find(
+            (c) => String(c.id).toLowerCase() === String(targetCustId).toLowerCase(),
           )
+          if (!matchedCust && localCustKey) {
+            matchedCust = nextCustomers.find(
+              (c) => String(c.id).toLowerCase() === String(localCustKey).toLowerCase(),
+            )
+          }
+          if (!matchedCust) {
+            matchedCust = nextCustomers.find(
+              (c) => String(c.id).toLowerCase() === customer_sync_id.toLowerCase(),
+            )
+          }
+
           if (matchedCust) {
             customerName = matchedCust.name
+            resolvedCustomerId = matchedCust.id
             customerSnapshot = {
               id: matchedCust.id,
               name: matchedCust.name,
@@ -793,15 +830,36 @@ export function createSyncPullService({
 
         let mappedItems = []
         if (saleItemRecords.length > 0) {
-          mappedItems = saleItemRecords.map((siRecord) => {
-            const siData = siRecord.data
-            return {
-              id: siData.product_sync_id,
-              name: siData.product_name,
-              price: Number(siData.unit_price),
-              qty: Number(siData.quantity),
-            }
-          })
+          mappedItems = await Promise.all(
+            saleItemRecords.map(async (siRecord) => {
+              const siData = siRecord.data
+              let localProdKey = null
+              if (activeRegistry) {
+                localProdKey = await activeRegistry.findLocalKeyBySyncId(
+                  'product',
+                  siData.product_sync_id,
+                )
+              }
+              if (!localProdKey) {
+                const plannedProdBind = plannedRegistryBinds.find(
+                  (p) =>
+                    p.entityType === 'product' &&
+                    p.syncId.toLowerCase() === siData.product_sync_id.toLowerCase(),
+                )
+                if (plannedProdBind) {
+                  localProdKey = plannedProdBind.key
+                }
+              }
+              const resolvedProductId = localProdKey ?? siData.product_sync_id
+
+              return {
+                id: resolvedProductId,
+                name: siData.product_name,
+                price: Number(siData.unit_price),
+                qty: Number(siData.quantity),
+              }
+            }),
+          )
         } else if (existingTrx) {
           mappedItems = existingTrx.items
         }
@@ -892,11 +950,32 @@ export function createSyncPullService({
         }
       }
 
+      let localProdKey = null
+      if (activeRegistry) {
+        localProdKey = await activeRegistry.findLocalKeyBySyncId(
+          'product',
+          data.product_sync_id,
+        )
+      }
+      if (!localProdKey) {
+        const plannedProdBind = plannedRegistryBinds.find(
+          (p) =>
+            p.entityType === 'product' &&
+            p.syncId.toLowerCase() === data.product_sync_id.toLowerCase(),
+        )
+        if (plannedProdBind) {
+          localProdKey = plannedProdBind.key
+        }
+      }
+      const resolvedProductId = localProdKey ?? data.product_sync_id
+
       const itemIdx = existingTrx.items.findIndex(
-        (it) => String(it.id).toLowerCase() === data.product_sync_id.toLowerCase(),
+        (it) =>
+          String(it.id).toLowerCase() === String(resolvedProductId).toLowerCase() ||
+          String(it.id).toLowerCase() === data.product_sync_id.toLowerCase(),
       )
       const newItem = {
-        id: data.product_sync_id,
+        id: resolvedProductId,
         name: data.product_name,
         price: Number(data.unit_price),
         qty: Number(data.quantity),

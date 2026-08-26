@@ -99,12 +99,6 @@ describe('P13: Sync Pull Service Preconditions & Bindings', () => {
   let adapter
   let queueService
   let registry
-  let productStore
-  let customerStore
-  let expenseStore
-  let transactionStore
-  let shiftStore
-  let businessStore
 
   beforeEach(async () => {
     pinia = createPinia()
@@ -123,13 +117,6 @@ describe('P13: Sync Pull Service Preconditions & Bindings', () => {
 
     queueService = createSyncQueueService({ adapter })
     registry = createSyncIdentityRegistry({ adapter })
-
-    productStore = useProductStore(pinia)
-    customerStore = useCustomerStore(pinia)
-    expenseStore = useExpenseStore(pinia)
-    transactionStore = useTransactionStore(pinia)
-    shiftStore = useShiftStore(pinia)
-    businessStore = useBusinessStore(pinia)
   })
 
   it('fails with PRECONDITION_FAILED when context is incomplete', async () => {
@@ -437,6 +424,37 @@ describe('P13: Pagination & Validation', () => {
 
     expect(result.ok).toBe(false)
     expect(result.code).toBe('NON_ADVANCING_PULL_CURSOR')
+  })
+
+  it('rejects malformed or non-boolean has_more with INVALID_PULL_RESPONSE (fail-closed)', async () => {
+    for (const invalidHasMore of ['false', 'true', 0, 1, null, undefined, {}]) {
+      const transport = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        data: {
+          data: {
+            records: [],
+            next_cursor: 10,
+            server_sequence: 10,
+            has_more: invalidHasMore,
+          },
+        },
+      })
+
+      const pullService = createSyncPullService({
+        adapter,
+        queueService,
+        registry,
+        pinia,
+        tokenFetcher: async () => 'test-token',
+        transport,
+      })
+
+      const result = await pullService.pullNow({ context: makeValidCloudContext() })
+
+      expect(result.ok).toBe(false)
+      expect(result.code).toBe('INVALID_PULL_RESPONSE')
+    }
   })
 })
 
@@ -856,6 +874,182 @@ describe('P13: Entity Apply & Domain Logic', () => {
     expect(transactionStore.lastTransaction.id).toBe('old-trx')
   })
 
+  it('reconstructs remote sales preserving legacy Customer and Product IDs from identity registry', async () => {
+    const saleUuid = '66666666-6666-4666-8666-666666666666'
+    const itemUuid1 = '77777777-7777-4777-8777-777777777771'
+    const itemUuid2 = '77777777-7777-4777-8777-777777777772'
+    const custUuid = '99999999-9999-4999-8999-999999999991'
+    const prodUuid1 = '88888888-8888-4888-8888-888888888881'
+    const prodUuid2 = '88888888-8888-4888-8888-888888888882'
+
+    // Pre-bind legacy identities into registry
+    await registry.bindSyncId('customer', 'c-legacy-101', custUuid)
+    await registry.bindSyncId('product', 'p-legacy-coffee', prodUuid1)
+    await registry.bindSyncId('product', 'p-legacy-croissant', prodUuid2)
+
+    // Populate local stores with legacy IDs
+    customerStore.customers = [
+      { id: 'c-legacy-101', name: 'Budi Santoso', phone: '08123456789', email: 'budi@example.com' },
+    ]
+    productStore.products = [
+      { id: 'p-legacy-coffee', name: 'Kopi Susu', category: 'Kopi', price: 20000, stock: 10, isActive: true },
+      { id: 'p-legacy-croissant', name: 'Croissant', category: 'Makanan', price: 15000, stock: 5, isActive: true },
+    ]
+
+    const transport = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: {
+        data: {
+          records: [
+            {
+              entity: 'sales',
+              sync_sequence: 1,
+              data: {
+                sync_id: saleUuid,
+                sync_version: 1,
+                transaction_number: 'INV-20260101-LEGACY',
+                status: 'paid',
+                subtotal: 35000,
+                tax_amount: 3500,
+                total_amount: 38500,
+                sold_at: '2026-01-01T10:00:00Z',
+                customer_sync_id: custUuid,
+              },
+            },
+            {
+              entity: 'sale_items',
+              sync_sequence: 2,
+              data: {
+                sync_id: itemUuid1,
+                sync_version: 1,
+                sale_sync_id: saleUuid,
+                product_sync_id: prodUuid1,
+                product_name: 'Kopi Susu',
+                unit_price: 20000,
+                quantity: 1,
+                line_total: 20000,
+              },
+            },
+            {
+              entity: 'sale_items',
+              sync_sequence: 3,
+              data: {
+                sync_id: itemUuid2,
+                sync_version: 1,
+                sale_sync_id: saleUuid,
+                product_sync_id: prodUuid2,
+                product_name: 'Croissant',
+                unit_price: 15000,
+                quantity: 1,
+                line_total: 15000,
+              },
+            },
+          ],
+          next_cursor: 10,
+          server_sequence: 10,
+          has_more: false,
+        },
+      },
+    })
+
+    const pullService = createSyncPullService({
+      adapter,
+      queueService,
+      registry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const res = await pullService.pullNow({ context: makeValidCloudContext() })
+    expect(res.ok).toBe(true)
+
+    const trx = transactionStore.items.find((t) => t.id === saleUuid)
+    expect(trx).toBeDefined()
+    expect(trx.customerId).toBe('c-legacy-101') // Must resolve to local legacy customer ID!
+    expect(trx.customer).toBe('Budi Santoso')
+    expect(trx.customerSnapshot).toEqual({
+      id: 'c-legacy-101',
+      name: 'Budi Santoso',
+      phone: '08123456789',
+      email: 'budi@example.com',
+    })
+    expect(trx.items.length).toBe(2)
+    expect(trx.items[0].id).toBe('p-legacy-coffee') // Must resolve to local legacy product ID!
+    expect(trx.items[1].id).toBe('p-legacy-croissant') // Must resolve to local legacy product ID!
+  })
+
+  it('updates standalone sale_item on legacy product without creating duplicate items', async () => {
+    const saleUuid = '66666666-6666-4666-8666-666666666666'
+    const itemUuid1 = '77777777-7777-4777-8777-777777777771'
+    const prodUuid1 = '88888888-8888-4888-8888-888888888881'
+
+    await registry.bindSyncId('product', 'p-legacy-coffee', prodUuid1)
+
+    transactionStore.items = [
+      {
+        id: saleUuid,
+        invoiceNumber: 'INV-001',
+        customer: 'Walk-in Customer',
+        customerId: null,
+        status: 'paid',
+        items: [
+          { id: 'p-legacy-coffee', name: 'Kopi Susu', price: 20000, qty: 1 },
+        ],
+        itemCount: 1,
+        total: 20000,
+      },
+    ]
+
+    const transport = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: {
+        data: {
+          records: [
+            {
+              entity: 'sale_items',
+              sync_sequence: 1,
+              data: {
+                sync_id: itemUuid1,
+                sync_version: 2,
+                sale_sync_id: saleUuid,
+                product_sync_id: prodUuid1,
+                product_name: 'Kopi Susu Updated',
+                unit_price: 22000,
+                quantity: 3,
+                line_total: 66000,
+              },
+            },
+          ],
+          next_cursor: 10,
+          server_sequence: 10,
+          has_more: false,
+        },
+      },
+    })
+
+    const pullService = createSyncPullService({
+      adapter,
+      queueService,
+      registry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const res = await pullService.pullNow({ context: makeValidCloudContext() })
+    expect(res.ok).toBe(true)
+
+    const trx = transactionStore.items.find((t) => t.id === saleUuid)
+    expect(trx.items.length).toBe(1) // No duplicate item created!
+    expect(trx.items[0].id).toBe('p-legacy-coffee')
+    expect(trx.items[0].price).toBe(22000)
+    expect(trx.items[0].qty).toBe(3)
+    expect(trx.itemCount).toBe(3)
+  })
+
   it('records shift version metadata, issues UNSUPPORTED_LOCAL_SHIFT_APPLY warning, leaves ShiftStore untouched', async () => {
     const shiftUuid = '99999999-9999-4999-8999-999999999999'
 
@@ -914,7 +1108,6 @@ describe('P13: Conflict Protection & Outbox Integrity', () => {
   let adapter
   let queueService
   let registry
-  let tracker
 
   beforeEach(async () => {
     pinia = createPinia()
@@ -932,7 +1125,6 @@ describe('P13: Conflict Protection & Outbox Integrity', () => {
 
     queueService = createSyncQueueService({ adapter })
     registry = createSyncIdentityRegistry({ adapter })
-    tracker = createSyncChangeTracker({ pinia, queueService })
 
     const bizStore = useBusinessStore(pinia)
     bizStore.mode = 'cloud'
@@ -997,6 +1189,86 @@ describe('P13: Conflict Protection & Outbox Integrity', () => {
 
     // Queue must remain untouched
     expect(await queueService.countPending()).toBe(1)
+  })
+
+  it('detects conflict beyond the first 100 outbox items (>100 pending queue items)', async () => {
+    const targetProdUuid = '55555555-5555-4555-8555-555555555555'
+
+    // Enqueue 104 dummy mutations
+    for (let i = 1; i <= 104; i++) {
+      await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, `dummy-prod-${i}`, {
+        id: `dummy-prod-${i}`,
+        name: `Dummy Product ${i}`,
+        price: 10000,
+      })
+    }
+
+    // Mutation #105 is our conflict target
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, targetProdUuid, {
+      id: targetProdUuid,
+      name: 'Local Target Product',
+      price: 25000,
+    })
+
+    // Enqueue a few more mutations after #105
+    for (let i = 106; i <= 110; i++) {
+      await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, `dummy-prod-${i}`, {
+        id: `dummy-prod-${i}`,
+        name: `Dummy Product ${i}`,
+        price: 10000,
+      })
+    }
+
+    expect(await queueService.countPending()).toBe(110)
+
+    const transport = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: {
+        data: {
+          records: [
+            {
+              entity: 'products',
+              sync_sequence: 1,
+              data: {
+                sync_id: targetProdUuid,
+                sync_version: 2,
+                category_sync_id: '11111111-1111-4111-8111-111111111111',
+                name: 'Server Conflicted Product',
+                price: 30000,
+                status: 'active',
+              },
+            },
+          ],
+          next_cursor: 10,
+          server_sequence: 10,
+          has_more: false,
+        },
+      },
+    })
+
+    const pullService = createSyncPullService({
+      adapter,
+      queueService,
+      registry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const res = await pullService.pullNow({ context: makeValidCloudContext() })
+
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('LOCAL_PENDING_SYNC_CONFLICT')
+    expect(res.conflict).toBeDefined()
+    expect(res.conflict.syncId).toBe(targetProdUuid)
+    expect(res.conflict.localEntityId).toBe(targetProdUuid)
+
+    // Cursor must NOT have advanced
+    expect(await adapter.loadSyncPullState()).toBeNull()
+
+    // Queue must remain intact with all 110 items
+    expect(await queueService.countPending()).toBe(110)
   })
 
   it('does NOT create new P9 outbox entries when applying server changes', async () => {
