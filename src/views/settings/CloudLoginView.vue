@@ -8,10 +8,12 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useSyncPushStore } from '@/stores/syncPushStore'
 import { useSyncPullStore } from '@/stores/syncPullStore'
+import { useSyncBootstrapStore } from '@/stores/syncBootstrapStore'
 
 const cloudStore = useCloudSessionStore()
 const syncPushStore = useSyncPushStore()
 const syncPullStore = useSyncPullStore()
+const syncBootstrapStore = useSyncBootstrapStore()
 
 // ── Form state ──────────────────────────────────────────────────────────────
 const email = ref('')
@@ -21,6 +23,8 @@ const syncMessage = ref('')
 const syncSuccess = ref(false)
 const pullMessage = ref('')
 const pullSuccess = ref(false)
+const bootstrapMessage = ref('')
+const bootstrapSuccess = ref(false)
 
 // ── Derived ─────────────────────────────────────────────────────────────────
 const isZeroBusiness = computed(
@@ -98,6 +102,24 @@ async function handlePullNow() {
   } else {
     pullSuccess.value = false
     pullMessage.value = result.error?.message ?? result.message ?? 'Gagal menarik data cloud.'
+  }
+}
+
+async function handleBootstrapNow() {
+  bootstrapMessage.value = ''
+  const result = await syncBootstrapStore.bootstrapNow()
+  if (result.ok) {
+    bootstrapSuccess.value = true
+    bootstrapMessage.value = 'Data lokal siap disinkronkan. Gunakan Sync Sekarang.'
+    await syncPushStore.refreshPendingCount()
+  } else {
+    bootstrapSuccess.value = false
+    if (result.code === 'BOOTSTRAP_PREFLIGHT_FAILED') {
+      bootstrapMessage.value = 'Sebagian data lokal belum kompatibel untuk sinkronisasi.'
+    } else {
+      bootstrapMessage.value =
+        result.error?.message ?? result.message ?? 'Gagal menyiapkan data lokal.'
+    }
   }
 }
 
@@ -244,6 +266,57 @@ onMounted(async () => {
           <span class="text-sm text-ink-secondary">Device</span>
           <span class="font-medium text-emerald-600">Terdaftar</span>
         </div>
+      </div>
+
+      <!-- P14: Initial Bootstrap Section (Free to Cloud) -->
+      <div
+        v-if="canSync && !syncBootstrapStore.isStaged"
+        id="cloud-bootstrap-section"
+        class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
+      >
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-sm font-semibold text-ink-primary">Siapkan Data Lokal ke Cloud</p>
+            <p class="text-xs text-ink-secondary">
+              Upload data offline/FREE yang sudah ada ke server cloud untuk pertama kali
+            </p>
+          </div>
+          <BaseButton
+            id="bootstrap-btn"
+            variant="primary"
+            size="sm"
+            :loading="syncBootstrapStore.loading"
+            @click="handleBootstrapNow"
+          >
+            Siapkan Data Lokal ke Cloud
+          </BaseButton>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2 text-xs text-ink-secondary sm:grid-cols-3">
+          <div id="preview-products">Produk: {{ syncBootstrapStore.previewCounts.products }}</div>
+          <div id="preview-categories">Kategori: {{ syncBootstrapStore.previewCounts.categories }}</div>
+          <div id="preview-customers">Pelanggan: {{ syncBootstrapStore.previewCounts.customers }}</div>
+          <div id="preview-expenses">Pengeluaran: {{ syncBootstrapStore.previewCounts.expenses }}</div>
+          <div id="preview-transactions">Transaksi: {{ syncBootstrapStore.previewCounts.transactions }}</div>
+        </div>
+
+        <p
+          v-if="bootstrapMessage && !syncBootstrapStore.isStaged"
+          id="bootstrap-result-message"
+          class="rounded-xl px-3 py-2 text-xs font-medium"
+          :class="bootstrapSuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'"
+        >
+          {{ bootstrapMessage }}
+        </p>
+      </div>
+
+      <!-- P14: Bootstrap Staged Notice -->
+      <div
+        v-else-if="canSync && syncBootstrapStore.isStaged"
+        id="cloud-bootstrap-staged-notice"
+        class="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-medium text-emerald-800"
+      >
+        Data lokal siap disinkronkan. Gunakan Sync Sekarang.
       </div>
 
       <!-- P12: Manual Sync Section -->

@@ -104,6 +104,57 @@ export function createSyncQueueService({ adapter, scheduler }) {
     async enqueueUpsert(entityType, entityId, payload) {
       return enqueue(entityType, entityId, SYNC_OPERATIONS.UPSERT, payload)
     },
+    async enqueueManyUpserts(entries) {
+      if (!Array.isArray(entries) || entries.length === 0) {
+        return { ok: true, count: 0, entries: [] }
+      }
+
+      const now = new Date().toISOString()
+      const formattedEntries = []
+
+      for (const item of entries) {
+        if (!isValidEntityType(item.entityType)) {
+          const error = new Error(`Unsupported sync entity type: ${item.entityType}`)
+          return { ok: false, error }
+        }
+
+        formattedEntries.push({
+          id: item.id || createQueueEntryId(),
+          entityType: item.entityType,
+          entityId: String(item.entityId),
+          operation: SYNC_OPERATIONS.UPSERT,
+          payload: clonePayload(item.payload),
+          createdAt: item.createdAt || now,
+          updatedAt: now,
+          attemptCount: 0,
+          lastError: null,
+        })
+      }
+
+      try {
+        if (typeof adapter.upsertSyncQueueItems === 'function') {
+          await runTask(() => adapter.upsertSyncQueueItems(formattedEntries), 'sync:bulk_upsert')
+        } else {
+          await runTask(async () => {
+            for (const entry of formattedEntries) {
+              await adapter.upsertSyncQueueItem(entry)
+            }
+          }, 'sync:bulk_upsert_fallback')
+        }
+
+        return {
+          ok: true,
+          count: formattedEntries.length,
+          entries: formattedEntries,
+        }
+      } catch (error) {
+        console.error('Failed to atomically enqueue sync queue items.', error)
+        return {
+          ok: false,
+          error,
+        }
+      }
+    },
     async enqueueDelete(entityType, entityId) {
       return enqueue(entityType, entityId, SYNC_OPERATIONS.DELETE, null)
     },

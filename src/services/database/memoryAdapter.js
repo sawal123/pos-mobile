@@ -251,6 +251,42 @@ export function createMemoryAdapter() {
     async saveSyncServerVersions(versions) {
       state.syncServerVersions = cloneValue(versions)
     },
+    async upsertSyncQueueItems(entries) {
+      if (!Array.isArray(entries) || entries.length === 0) {
+        return
+      }
+      const nextQueue = cloneValue(state.syncQueue)
+      for (const entry of entries) {
+        const index = nextQueue.findIndex(
+          (item) => item.entityType === entry.entityType && item.entityId === entry.entityId,
+        )
+
+        if (index === -1) {
+          nextQueue.push(cloneValue(entry))
+        } else {
+          const existing = nextQueue[index]
+          nextQueue[index] = {
+            ...existing,
+            operation: entry.operation,
+            payload:
+              entry.payload === null || entry.payload === undefined
+                ? null
+                : cloneValue(entry.payload),
+            updatedAt: entry.updatedAt,
+            attemptCount: 0,
+            lastError: null,
+          }
+        }
+      }
+      state.syncQueue = nextQueue
+    },
+    // P14: sync bootstrap state (durable, survives restart & logout)
+    async loadSyncBootstrapState() {
+      return state.syncBootstrapState ? cloneValue(state.syncBootstrapState) : null
+    },
+    async saveSyncBootstrapState(bootstrapState) {
+      state.syncBootstrapState = cloneValue(bootstrapState)
+    },
     async close() {},
   }
 }

@@ -427,6 +427,39 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
         ],
       )
     },
+    async upsertSyncQueueItems(entries) {
+      if (!Array.isArray(entries) || entries.length === 0) {
+        return
+      }
+
+      await runInTransaction(async (db) => {
+        for (const entry of entries) {
+          await db.run(
+            `INSERT INTO sync_queue
+               (id, entity_type, entity_id, operation, payload, created_at, updated_at, attempt_count, last_error)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL)
+             ON CONFLICT(entity_type, entity_id) DO UPDATE SET
+               operation = excluded.operation,
+               payload = excluded.payload,
+               updated_at = excluded.updated_at,
+               attempt_count = 0,
+               last_error = NULL`,
+            [
+              entry.id,
+              entry.entityType,
+              entry.entityId,
+              entry.operation,
+              entry.payload === null || entry.payload === undefined
+                ? null
+                : JSON.stringify(entry.payload),
+              entry.createdAt,
+              entry.updatedAt,
+            ],
+            false,
+          )
+        }
+      })
+    },
     async listSyncQueueItems({ limit = 100 } = {}) {
       const db = await ensureConnection()
       const { values = [] } = await db.query(
@@ -577,6 +610,13 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
     },
     async saveSyncServerVersions(versions) {
       await writeMetaValue('sync_server_versions_v1', versions)
+    },
+    // P14: sync bootstrap state (durable, survives restart & logout)
+    async loadSyncBootstrapState() {
+      return readMetaValue('sync_bootstrap_state_v1', null)
+    },
+    async saveSyncBootstrapState(state) {
+      await writeMetaValue('sync_bootstrap_state_v1', state)
     },
     async close() {
       if (!dbConnection) {
