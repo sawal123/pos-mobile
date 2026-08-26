@@ -28,8 +28,9 @@ import { createPinia, setActivePinia } from 'pinia'
 
 import { createMemoryAdapter } from '../services/database/memoryAdapter'
 import { createSyncQueueService } from '../services/sync/syncQueueService'
-import { createSyncIdentityRegistry } from '../services/sync/syncIdentityRegistry'
+import { createSyncIdentityRegistry, isUuid } from '../services/sync/syncIdentityRegistry'
 import { createSyncPullService } from '../services/sync/syncPullService'
+import { initializeSyncFoundation } from '../services/sync/index'
 import { pullSyncChanges } from '../services/sync/syncPullTransport'
 import { createSyncChangeTracker } from '../services/sync/syncTracker'
 import { SYNC_ENTITY_TYPES, SYNC_OPERATIONS } from '../services/sync/syncConstants'
@@ -455,6 +456,140 @@ describe('P13: Pagination & Validation', () => {
       expect(result.ok).toBe(false)
       expect(result.code).toBe('INVALID_PULL_RESPONSE')
     }
+  })
+
+  it('rejects non-integer next_cursor, server_sequence, sync_sequence, and sync_version with fail-closed errors', async () => {
+    const productStore = useProductStore(pinia)
+    productStore.categories = ['Kopi']
+    productStore.products = []
+
+    // 1. next_cursor = 1.5 -> INVALID_PULL_RESPONSE
+    const res1 = await createSyncPullService({
+      adapter,
+      queueService,
+      registry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport: vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        data: {
+          data: {
+            records: [],
+            next_cursor: 1.5,
+            server_sequence: 10,
+            has_more: false,
+          },
+        },
+      }),
+    }).pullNow({ context: makeValidCloudContext() })
+
+    expect(res1.ok).toBe(false)
+    expect(res1.code).toBe('INVALID_PULL_RESPONSE')
+    expect(await adapter.loadSyncPullState()).toBeNull()
+
+    // 2. server_sequence = 10.2 -> INVALID_PULL_RESPONSE
+    const res2 = await createSyncPullService({
+      adapter,
+      queueService,
+      registry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport: vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        data: {
+          data: {
+            records: [],
+            next_cursor: 10,
+            server_sequence: 10.2,
+            has_more: false,
+          },
+        },
+      }),
+    }).pullNow({ context: makeValidCloudContext() })
+
+    expect(res2.ok).toBe(false)
+    expect(res2.code).toBe('INVALID_PULL_RESPONSE')
+    expect(await adapter.loadSyncPullState()).toBeNull()
+
+    // 3. record.sync_sequence = 1.5 -> INVALID_PULL_RECORD
+    const res3 = await createSyncPullService({
+      adapter,
+      queueService,
+      registry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport: vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        data: {
+          data: {
+            records: [
+              {
+                entity: 'products',
+                sync_sequence: 1.5,
+                data: {
+                  sync_id: '22222222-2222-4222-8222-222222222222',
+                  sync_version: 1,
+                  category_sync_id: '11111111-1111-4111-8111-111111111111',
+                  name: 'Non integer sync seq product',
+                  price: 15000,
+                  status: 'active',
+                },
+              },
+            ],
+            next_cursor: 10,
+            server_sequence: 10,
+            has_more: false,
+          },
+        },
+      }),
+    }).pullNow({ context: makeValidCloudContext() })
+
+    expect(res3.ok).toBe(false)
+    expect(res3.code).toBe('INVALID_PULL_RECORD')
+    expect(productStore.products.length).toBe(0)
+    expect(await adapter.loadSyncPullState()).toBeNull()
+
+    // 4. record.data.sync_version = 2.5 -> INVALID_PULL_RECORD
+    const res4 = await createSyncPullService({
+      adapter,
+      queueService,
+      registry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport: vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        data: {
+          data: {
+            records: [
+              {
+                entity: 'products',
+                sync_sequence: 1,
+                data: {
+                  sync_id: '22222222-2222-4222-8222-222222222222',
+                  sync_version: 2.5,
+                  category_sync_id: '11111111-1111-4111-8111-111111111111',
+                  name: 'Non integer sync version product',
+                  price: 15000,
+                  status: 'active',
+                },
+              },
+            ],
+            next_cursor: 10,
+            server_sequence: 10,
+            has_more: false,
+          },
+        },
+      }),
+    }).pullNow({ context: makeValidCloudContext() })
+
+    expect(res4.ok).toBe(false)
+    expect(res4.code).toBe('INVALID_PULL_RECORD')
+    expect(productStore.products.length).toBe(0)
+    expect(await adapter.loadSyncPullState()).toBeNull()
   })
 })
 
@@ -1600,5 +1735,67 @@ describe('P13: UI Integration in CloudLoginView', () => {
 
     expect(mockPullService.pullNow).toHaveBeenCalled()
     expect(wrapper.text()).toContain('5 perubahan cloud diterapkan.')
+  })
+})
+
+describe('P13: Shared Registry & Production Wiring', () => {
+  it('wires a single shared sync identity registry across pushService and pullService', async () => {
+    const pinia = createPinia()
+    const adapter = createMemoryAdapter()
+    await adapter.initialize()
+
+    const syncFoundation = initializeSyncFoundation({
+      pinia,
+      adapter,
+    })
+
+    expect(syncFoundation.registry).toBeDefined()
+    expect(syncFoundation.pushService.registry).toBe(syncFoundation.registry)
+    expect(syncFoundation.pullService.registry).toBe(syncFoundation.registry)
+    expect(syncFoundation.pushService.registry).toBe(syncFoundation.pullService.registry)
+  })
+
+  it('prevents lost updates across push and pull services sharing the durable registry', async () => {
+    const pinia = createPinia()
+    const adapter = createMemoryAdapter()
+    await adapter.initialize()
+
+    const syncFoundation = initializeSyncFoundation({
+      pinia,
+      adapter,
+    })
+
+    // 1. Push-side registry resolves legacy Product A
+    const uuidA = await syncFoundation.pushService.registry.resolveSyncId(
+      'product',
+      'legacy-product-a',
+    )
+    expect(isUuid(uuidA)).toBe(true)
+
+    // 2. Pull-side registry binds Customer B
+    const uuidB = '33333333-3333-4333-8333-333333333333'
+    await syncFoundation.pullService.registry.bindSyncId(
+      'customer',
+      'legacy-customer-b',
+      uuidB,
+    )
+
+    // 3. Push-side registry resolves Product C
+    const uuidC = await syncFoundation.pushService.registry.resolveSyncId(
+      'product',
+      'legacy-product-c',
+    )
+    expect(isUuid(uuidC)).toBe(true)
+
+    // 4. Create new registry from the same adapter to simulate restart
+    const restartedRegistry = createSyncIdentityRegistry({ adapter })
+    const resolvedA = await restartedRegistry.resolveSyncId('product', 'legacy-product-a')
+    const localB = await restartedRegistry.findLocalKeyBySyncId('customer', uuidB)
+    const resolvedC = await restartedRegistry.resolveSyncId('product', 'legacy-product-c')
+
+    // 5. Assert all mappings are preserved without lost updates
+    expect(resolvedA).toBe(uuidA)
+    expect(localB).toBe('legacy-customer-b')
+    expect(resolvedC).toBe(uuidC)
   })
 })

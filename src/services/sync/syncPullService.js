@@ -245,9 +245,9 @@ export function createSyncPullService({
 
       if (
         !Array.isArray(records) ||
-        typeof nextCursor !== 'number' ||
+        !Number.isInteger(nextCursor) ||
         nextCursor < 0 ||
-        typeof serverSeq !== 'number' ||
+        !Number.isInteger(serverSeq) ||
         serverSeq < 0 ||
         typeof respHasMore !== 'boolean'
       ) {
@@ -274,12 +274,12 @@ export function createSyncPullService({
           !record ||
           typeof record !== 'object' ||
           !KNOWN_ENTITIES.has(record.entity) ||
-          typeof record.sync_sequence !== 'number' ||
+          !Number.isInteger(record.sync_sequence) ||
           record.sync_sequence <= 0 ||
           !record.data ||
           typeof record.data !== 'object' ||
           !isUuid(record.data.sync_id) ||
-          typeof record.data.sync_version !== 'number' ||
+          !Number.isInteger(record.data.sync_version) ||
           record.data.sync_version < 1
         ) {
           return {

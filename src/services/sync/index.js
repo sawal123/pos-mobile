@@ -1,5 +1,8 @@
 import { createSyncChangeTracker } from './syncTracker'
 import { createSyncQueueService } from './syncQueueService'
+import { createSyncIdentityRegistry } from './syncIdentityRegistry'
+import { createSyncPushService } from './syncPushService'
+import { createSyncPullService } from './syncPullService'
 
 export { SYNC_ENTITY_TYPES, SYNC_OPERATIONS, SYNC_RESERVED_CATEGORY } from './syncConstants'
 export { createSyncChangeTracker } from './syncTracker'
@@ -23,12 +26,14 @@ export { createSyncPullService } from './syncPullService'
  */
 export function initializeSyncFoundation({ pinia, adapter, scheduler }) {
   const queueService = createSyncQueueService({ adapter, scheduler })
+  const registry = createSyncIdentityRegistry({ adapter, scheduler })
   const tracker = createSyncChangeTracker({ pinia, queueService })
-  const pushService = createSyncPushService({ adapter, scheduler, queueService })
-  const pullService = createSyncPullService({ adapter, scheduler, queueService, pinia })
+  const pushService = createSyncPushService({ adapter, scheduler, queueService, registry })
+  const pullService = createSyncPullService({ adapter, scheduler, queueService, registry, pinia })
 
   return {
     queueService,
+    registry,
     tracker,
     pushService,
     pullService,
