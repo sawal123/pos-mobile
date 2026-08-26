@@ -11,6 +11,7 @@ import { resolveDeviceIdentifier } from './services/cloud/deviceIdentifier'
 import { useCloudSessionStore } from './stores/cloudSessionStore'
 import { useSyncPushStore } from './stores/syncPushStore'
 import { useSyncPullStore } from './stores/syncPullStore'
+import { useSyncBootstrapStore } from './stores/syncBootstrapStore'
 
 export async function bootstrapApp({
   appFactory = createApp,
@@ -58,6 +59,11 @@ export async function bootstrapApp({
       if (syncFoundation?.pullService) {
         const syncPullStore = useSyncPullStore(pinia)
         syncPullStore.init({ pullService: syncFoundation.pullService })
+      }
+      if (syncFoundation?.bootstrapService) {
+        const syncBootstrapStore = useSyncBootstrapStore(pinia)
+        syncBootstrapStore.init({ bootstrapService: syncFoundation.bootstrapService, adapter })
+        await syncBootstrapStore.loadBootstrapState()
       }
     } catch {
       // Never block POS startup on cloud errors

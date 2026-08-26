@@ -54,6 +54,10 @@ describe('P12: Push Transport & Request Contract', () => {
   beforeEach(async () => {
     adapter = createMemoryAdapter()
     await adapter.initialize()
+    await adapter.saveSyncPushBinding({
+      businessId: 10,
+      boundAt: new Date().toISOString(),
+    })
     queueService = createSyncQueueService({ adapter })
     registry = createSyncIdentityRegistry({ adapter })
     mockTransport = vi.fn().mockResolvedValue({
@@ -158,6 +162,10 @@ describe('P12: Success & Idempotent Duplicate Handling', () => {
   beforeEach(async () => {
     adapter = createMemoryAdapter()
     await adapter.initialize()
+    await adapter.saveSyncPushBinding({
+      businessId: 10,
+      boundAt: new Date().toISOString(),
+    })
     queueService = createSyncQueueService({ adapter })
     registry = createSyncIdentityRegistry({ adapter })
   })
@@ -250,6 +258,10 @@ describe('P12: Network Timeout, In-Flight Envelope & Idempotent Retry', () => {
   beforeEach(async () => {
     adapter = createMemoryAdapter()
     await adapter.initialize()
+    await adapter.saveSyncPushBinding({
+      businessId: 10,
+      boundAt: new Date().toISOString(),
+    })
     queueService = createSyncQueueService({ adapter })
     registry = createSyncIdentityRegistry({ adapter })
   })
@@ -344,6 +356,10 @@ describe('P12: Compare-And-Swap (CAS) Mutation Safety', () => {
   beforeEach(async () => {
     adapter = createMemoryAdapter()
     await adapter.initialize()
+    await adapter.saveSyncPushBinding({
+      businessId: 10,
+      boundAt: new Date().toISOString(),
+    })
     queueService = createSyncQueueService({ adapter })
     registry = createSyncIdentityRegistry({ adapter })
   })
@@ -460,6 +476,10 @@ describe('P12: Server Batch Limits (Max 100 per Entity Array)', () => {
   beforeEach(async () => {
     adapter = createMemoryAdapter()
     await adapter.initialize()
+    await adapter.saveSyncPushBinding({
+      businessId: 10,
+      boundAt: new Date().toISOString(),
+    })
     queueService = createSyncQueueService({ adapter })
     registry = createSyncIdentityRegistry({ adapter })
   })
@@ -562,6 +582,17 @@ describe('P12: Business Binding & Anti-Cross-Tenant Leakage', () => {
   })
 
   it('binds outbox to first pushed business and blocks subsequent push to different business', async () => {
+    await adapter.saveSyncBootstrapState({
+      version: 1,
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
+      registeredDeviceId: 55,
+      status: 'staged',
+      stagedAt: new Date().toISOString(),
+      counts: { categories: 0, products: 1, customers: 0, expenses: 0, transactions: 0 },
+    })
+
     await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-biz', {
       id: 'p-biz',
       name: 'Business Item',
@@ -626,6 +657,10 @@ describe('P12: Preconditions & Error Handling', () => {
   beforeEach(async () => {
     adapter = createMemoryAdapter()
     await adapter.initialize()
+    await adapter.saveSyncPushBinding({
+      businessId: 10,
+      boundAt: new Date().toISOString(),
+    })
     queueService = createSyncQueueService({ adapter })
     registry = createSyncIdentityRegistry({ adapter })
     mockTransport = vi.fn()
@@ -888,6 +923,10 @@ describe('P12: Mixed Limits & Candidate Deferral', () => {
   beforeEach(async () => {
     adapter = createMemoryAdapter()
     await adapter.initialize()
+    await adapter.saveSyncPushBinding({
+      businessId: 10,
+      boundAt: new Date().toISOString(),
+    })
     queueService = createSyncQueueService({ adapter })
     registry = createSyncIdentityRegistry({ adapter })
   })
@@ -947,6 +986,10 @@ describe('P12: Zero-Mapped Entry & Reserved Category Handling', () => {
   beforeEach(async () => {
     adapter = createMemoryAdapter()
     await adapter.initialize()
+    await adapter.saveSyncPushBinding({
+      businessId: 10,
+      boundAt: new Date().toISOString(),
+    })
     queueService = createSyncQueueService({ adapter })
     registry = createSyncIdentityRegistry({ adapter })
     mockTransport = vi.fn()
@@ -1032,6 +1075,10 @@ describe('P12: Production-Like Store Wiring', () => {
     setActivePinia(pinia)
     adapter = createMemoryAdapter()
     await adapter.initialize()
+    await adapter.saveSyncPushBinding({
+      businessId: 10,
+      boundAt: new Date().toISOString(),
+    })
     queueService = createSyncQueueService({ adapter })
     registry = createSyncIdentityRegistry({ adapter })
     mockTransport = vi.fn().mockImplementation(async ({ body }) => ({
@@ -1177,6 +1224,10 @@ describe('P12: Server Success + Local Queue Cleanup Failure (LOCAL_SYNC_CLEANUP_
   beforeEach(async () => {
     adapter = createMemoryAdapter()
     await adapter.initialize()
+    await adapter.saveSyncPushBinding({
+      businessId: 10,
+      boundAt: new Date().toISOString(),
+    })
     queueService = createSyncQueueService({ adapter })
     registry = createSyncIdentityRegistry({ adapter })
   })
@@ -1328,3 +1379,788 @@ describe('P12: Server Success + Local Queue Cleanup Failure (LOCAL_SYNC_CLEANUP_
     expect(await adapter.loadSyncPushInflight()).toBeNull()
   })
 })
+
+describe('P12: Business Binding Timing & Anti-Cross-Tenant', () => {
+  let adapter
+  let queueService
+  let registry
+
+  beforeEach(async () => {
+    adapter = createMemoryAdapter()
+    await adapter.initialize()
+    queueService = createSyncQueueService({ adapter })
+    registry = createSyncIdentityRegistry({ adapter })
+  })
+
+  it('does NOT save sync_push_binding_v1 on empty push', async () => {
+    const transport = vi.fn()
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const result = await pushService.pushNow({ context: makeValidCloudContext() })
+
+    expect(result.ok).toBe(true)
+    expect(result.requestId).toBeNull()
+    expect(transport).not.toHaveBeenCalled()
+    expect(await adapter.loadSyncPushBinding()).toBeNull()
+  })
+
+  it('does NOT save sync_push_binding_v1 when queue contains only blocked or unsupported items', async () => {
+    // Only reserved category 'Semua' and unsupported business
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.CATEGORY, 'Semua', { name: 'Semua' })
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.BUSINESS, 'biz-1', { name: 'Business' })
+
+    const transport = vi.fn()
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const result = await pushService.pushNow({ context: makeValidCloudContext() })
+
+    expect(result.ok).toBe(true)
+    expect(result.requestId).toBeNull()
+    expect(transport).not.toHaveBeenCalled()
+    expect(await adapter.loadSyncPushBinding()).toBeNull()
+  })
+
+  it('saves sync_push_binding_v1 before HTTP transport on first real push batch', async () => {
+    await adapter.saveSyncBootstrapState({
+      version: 1,
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
+      registeredDeviceId: 55,
+      status: 'staged',
+      stagedAt: new Date().toISOString(),
+      counts: { categories: 0, products: 1, customers: 0, expenses: 0, transactions: 0 },
+    })
+
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-1', {
+      id: 'p-1',
+      name: 'Kopi Susu',
+      price: 15000,
+    })
+
+    let bindingAtTransportTime = null
+    const transport = vi.fn().mockImplementation(async ({ body }) => {
+      // Check that binding is already durable before HTTP request is processed
+      bindingAtTransportTime = await adapter.loadSyncPushBinding()
+      return {
+        ok: true,
+        status: 200,
+        data: {
+          data: {
+            request_id: body.request_id,
+            duplicate: false,
+          },
+        },
+      }
+    })
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const result = await pushService.pushNow({ context: makeValidCloudContext() })
+
+    expect(result.ok).toBe(true)
+    expect(transport).toHaveBeenCalled()
+    expect(bindingAtTransportTime).toBeDefined()
+    expect(bindingAtTransportTime.businessId).toBe(10)
+    expect(await adapter.loadSyncPushBinding()).toBeDefined()
+  })
+})
+
+describe('P14: Bootstrap Context Verification & Dependency-Aware Push', () => {
+  let adapter
+  let queueService
+  let registry
+
+  beforeEach(async () => {
+    adapter = createMemoryAdapter()
+    await adapter.initialize()
+    queueService = createSyncQueueService({ adapter })
+    registry = createSyncIdentityRegistry({ adapter })
+  })
+
+  it('fails with SYNC_BOOTSTRAP_REQUIRED when queue has entries but no push binding and no bootstrap state', async () => {
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-1', {
+      id: 'p-1',
+      name: 'Kopi Susu',
+      price: 15000,
+    })
+
+    const transport = vi.fn()
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const result = await pushService.pushNow({ context: makeValidCloudContext() })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_BOOTSTRAP_REQUIRED')
+    expect(transport).not.toHaveBeenCalled()
+    expect(await adapter.loadSyncPushBinding()).toBeNull()
+    expect(await queueService.countPending()).toBe(1)
+  })
+
+  it('returns ok: true on empty push even without bootstrap state or binding', async () => {
+    const transport = vi.fn()
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const result = await pushService.pushNow({ context: makeValidCloudContext() })
+
+    expect(result.ok).toBe(true)
+    expect(result.requestId).toBeNull()
+    expect(transport).not.toHaveBeenCalled()
+    expect(await adapter.loadSyncPushBinding()).toBeNull()
+  })
+
+  it('proceeds with push if valid push binding already exists even without bootstrap state', async () => {
+    await adapter.saveSyncPushBinding({
+      businessId: 10,
+      boundAt: new Date().toISOString(),
+    })
+
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-1', {
+      id: 'p-1',
+      name: 'Kopi Susu',
+      category: 'Minuman',
+      price: 15000,
+    })
+
+    const transport = vi.fn().mockImplementation(async ({ body }) => ({
+      ok: true,
+      status: 200,
+      data: { data: { request_id: body.request_id, duplicate: false } },
+    }))
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const result = await pushService.pushNow({ context: makeValidCloudContext() })
+
+    expect(result.ok).toBe(true)
+    expect(transport).toHaveBeenCalled()
+  })
+
+  it('fails with SYNC_BOOTSTRAP_CONTEXT_MISMATCH when bootstrap businessId differs', async () => {
+    await adapter.saveSyncBootstrapState({
+      version: 1,
+      businessId: 99, // Mismatched business
+      outletId: 101,
+      deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
+      registeredDeviceId: 55,
+      status: 'staged',
+      stagedAt: new Date().toISOString(),
+      counts: { categories: 0, products: 1, customers: 0, expenses: 0, transactions: 0 },
+    })
+
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-1', {
+      id: 'p-1',
+      name: 'Kopi Susu',
+      price: 15000,
+    })
+
+    const transport = vi.fn()
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const result = await pushService.pushNow({ context: makeValidCloudContext() })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_BOOTSTRAP_CONTEXT_MISMATCH')
+    expect(transport).not.toHaveBeenCalled()
+    expect(await adapter.loadSyncPushBinding()).toBeNull()
+    expect(await queueService.countPending()).toBe(1)
+  })
+
+  it('fails with SYNC_BOOTSTRAP_CONTEXT_MISMATCH when bootstrap outletId or device differs', async () => {
+    // 1. Outlet mismatch
+    await adapter.saveSyncBootstrapState({
+      version: 1,
+      businessId: 10,
+      outletId: 999, // Mismatched outlet
+      deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
+      registeredDeviceId: 55,
+      status: 'staged',
+      stagedAt: new Date().toISOString(),
+      counts: { categories: 0, products: 1, customers: 0, expenses: 0, transactions: 0 },
+    })
+
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-1', {
+      id: 'p-1',
+      name: 'Kopi Susu',
+      price: 15000,
+    })
+
+    const transport = vi.fn()
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const res1 = await pushService.pushNow({ context: makeValidCloudContext() })
+    expect(res1.ok).toBe(false)
+    expect(res1.code).toBe('SYNC_BOOTSTRAP_CONTEXT_MISMATCH')
+
+    // 2. Device mismatch
+    await adapter.saveSyncBootstrapState({
+      version: 1,
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: 'other-device-uuid',
+      registeredDeviceId: 55,
+      status: 'staged',
+      stagedAt: new Date().toISOString(),
+      counts: { categories: 0, products: 1, customers: 0, expenses: 0, transactions: 0 },
+    })
+
+    const res2 = await pushService.pushNow({ context: makeValidCloudContext() })
+    expect(res2.ok).toBe(false)
+    expect(res2.code).toBe('SYNC_BOOTSTRAP_CONTEXT_MISMATCH')
+  })
+
+  it('defers transaction when referenced product parent is pending and not included in current batch (>100 products limit)', async () => {
+    await adapter.saveSyncPushBinding({
+      businessId: 10,
+      boundAt: new Date().toISOString(),
+    })
+
+    // Queue: 1 category, 101 products, 1 transaction using product #101
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.CATEGORY, 'Minuman', { name: 'Minuman' })
+
+    for (let i = 1; i <= 101; i++) {
+      await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, `prod-${i}`, {
+        id: `prod-${i}`,
+        name: `Product ${i}`,
+        category: 'Minuman',
+        price: 10000,
+        isActive: true,
+      })
+    }
+
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.TRANSACTION, 'trx-1', {
+      id: 'trx-1',
+      invoiceNumber: 'INV-101',
+      customerId: null,
+      status: 'paid',
+      subtotal: 10000,
+      tax: 0,
+      total: 10000,
+      createdAt: '2026-08-26T10:00:00.000Z',
+      items: [{ id: 'prod-101', name: 'Product 101', price: 10000, qty: 1 }],
+    })
+
+    let push1Changes = null
+    let push2Changes = null
+
+    const transport = vi.fn().mockImplementation(async ({ body }) => {
+      if (!push1Changes) {
+        push1Changes = body.changes
+      } else {
+        push2Changes = body.changes
+      }
+      return {
+        ok: true,
+        status: 200,
+        data: { data: { request_id: body.request_id, duplicate: false } },
+      }
+    })
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    // ── Push 1: Should send 1 category + 100 products. Transaction must be DEFERRED because prod-101 is not in batch 1.
+    const res1 = await pushService.pushNow({ context: makeValidCloudContext() })
+    expect(res1.ok).toBe(true)
+    expect(push1Changes.categories).toHaveLength(1)
+    expect(push1Changes.products).toHaveLength(100)
+    expect(push1Changes.sales).toHaveLength(0) // Deferred
+    expect(push1Changes.sale_items).toHaveLength(0)
+
+    // ── Push 2: prod-101 is now in batch 2, so Transaction is allowed to be included in batch 2!
+    const res2 = await pushService.pushNow({ context: makeValidCloudContext() })
+    expect(res2.ok).toBe(true)
+    expect(push2Changes.products).toHaveLength(1) // prod-101
+    expect(push2Changes.sales).toHaveLength(1) // Transaction is now included!
+    expect(push2Changes.sale_items).toHaveLength(1)
+  })
+
+  it('defers transaction when referenced customer parent is pending and deferred (>100 customers limit)', async () => {
+    await adapter.saveSyncPushBinding({
+      businessId: 10,
+      boundAt: new Date().toISOString(),
+    })
+
+    for (let i = 1; i <= 101; i++) {
+      await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.CUSTOMER, `cust-${i}`, {
+        id: `cust-${i}`,
+        name: `Customer ${i}`,
+        phone: `081234567${i.toString().padStart(3, '0')}`,
+      })
+    }
+
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.TRANSACTION, 'trx-cust', {
+      id: 'trx-cust',
+      invoiceNumber: 'INV-CUST',
+      customerId: 'cust-101',
+      status: 'paid',
+      subtotal: 10000,
+      tax: 0,
+      total: 10000,
+      createdAt: '2026-08-26T10:00:00.000Z',
+      items: [{ id: 'p-existing', name: 'Existing Product', price: 10000, qty: 1 }],
+    })
+
+    let push1Changes = null
+    const transport = vi.fn().mockImplementation(async ({ body }) => {
+      if (!push1Changes) {
+        push1Changes = body.changes
+      }
+      return {
+        ok: true,
+        status: 200,
+        data: { data: { request_id: body.request_id, duplicate: false } },
+      }
+    })
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const res1 = await pushService.pushNow({ context: makeValidCloudContext() })
+    expect(res1.ok).toBe(true)
+    expect(push1Changes.customers).toHaveLength(100)
+    expect(push1Changes.sales).toHaveLength(0) // Deferred because cust-101 is not yet pushed
+  })
+
+  it('defers transaction when referenced product parent is blocked, without starving independent expenses', async () => {
+    await adapter.saveSyncPushBinding({
+      businessId: 10,
+      boundAt: new Date().toISOString(),
+    })
+
+    // Blocked product in queue (e.g. invalid price)
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'prod-bad', {
+      id: 'prod-bad',
+      name: 'Bad Product',
+      price: -500, // Invalid -> blocked by mapper
+    })
+
+    // Transaction dependent on prod-bad
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.TRANSACTION, 'trx-bad', {
+      id: 'trx-bad',
+      invoiceNumber: 'INV-BAD',
+      customerId: null,
+      status: 'paid',
+      subtotal: 10000,
+      tax: 0,
+      total: 10000,
+      createdAt: '2026-08-26T10:00:00.000Z',
+      items: [{ id: 'prod-bad', name: 'Bad Product', price: 10000, qty: 1 }],
+    })
+
+    // Independent valid expense
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.EXPENSE, 'exp-1', {
+      id: 'exp-1',
+      amount: 50000,
+      description: 'Listrik',
+      occurred_at: '2026-08-26T00:00:00.000Z',
+    })
+
+    let capturedChanges = null
+    const transport = vi.fn().mockImplementation(async ({ body }) => {
+      capturedChanges = body.changes
+      return {
+        ok: true,
+        status: 200,
+        data: { data: { request_id: body.request_id, duplicate: false } },
+      }
+    })
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const res = await pushService.pushNow({ context: makeValidCloudContext() })
+    expect(res.ok).toBe(true)
+    // Product is blocked, Transaction is deferred
+    expect(capturedChanges.products).toHaveLength(0)
+    expect(capturedChanges.sales).toHaveLength(0)
+    // Independent expense must not be starved!
+    expect(capturedChanges.expenses).toHaveLength(1)
+    expect(capturedChanges.expenses[0].description).toBe('Listrik')
+  })
+
+  it('fails with SYNC_BOOTSTRAP_CONTEXT_MISMATCH on reused envelope when bootstrap deviceIdentifier differs', async () => {
+    // 1. Existing inflight envelope with DEVICE-A
+    await adapter.saveSyncPushInflight({
+      version: 1,
+      requestId: 'req-reused-1',
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: 'DEVICE-A',
+      registeredDeviceId: 55,
+      createdAt: new Date().toISOString(),
+      queueSnapshots: [{ id: 'q1', entityType: SYNC_ENTITY_TYPES.PRODUCT, entityId: 'p-1', operation: 'upsert' }],
+      changes: { products: [{ sync_id: 'prod-uuid', name: 'Product' }] },
+    })
+
+    // 2. Bootstrap state has DEVICE-B (mismatched device)
+    await adapter.saveSyncBootstrapState({
+      version: 1,
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: 'DEVICE-B',
+      registeredDeviceId: 55,
+      status: 'staged',
+      stagedAt: new Date().toISOString(),
+      counts: { categories: 0, products: 1, customers: 0, expenses: 0, transactions: 0 },
+    })
+
+    const transport = vi.fn()
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const result = await pushService.pushNow({
+      context: makeValidCloudContext({ deviceIdentifier: 'DEVICE-A' }),
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_BOOTSTRAP_CONTEXT_MISMATCH')
+    expect(transport).not.toHaveBeenCalled()
+    expect(await adapter.loadSyncPushBinding()).toBeNull()
+    expect(await adapter.loadSyncPushInflight()).not.toBeNull() // Envelope preserved
+  })
+
+  it('fails with SYNC_BOOTSTRAP_CONTEXT_MISMATCH when existing push binding is present but current context differs from staged bootstrap state', async () => {
+    // Existing push binding
+    await adapter.saveSyncPushBinding({
+      businessId: 10,
+      boundAt: new Date().toISOString(),
+    })
+
+    // Staged bootstrap state for Outlet 101
+    await adapter.saveSyncBootstrapState({
+      version: 1,
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
+      registeredDeviceId: 55,
+      status: 'staged',
+      stagedAt: new Date().toISOString(),
+      counts: { categories: 0, products: 1, customers: 0, expenses: 0, transactions: 0 },
+    })
+
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-1', {
+      id: 'p-1',
+      name: 'Kopi Susu',
+      category: 'Minuman',
+      price: 15000,
+    })
+
+    const transport = vi.fn()
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    // Caller attempts push with Outlet 202
+    const result = await pushService.pushNow({
+      context: makeValidCloudContext({ selectedOutlet: { id: 202, name: 'Outlet 202' } }),
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_BOOTSTRAP_CONTEXT_MISMATCH')
+    expect(transport).not.toHaveBeenCalled()
+    expect(await adapter.loadSyncPushInflight()).toBeNull()
+    expect(await queueService.countPending()).toBe(1)
+  })
+
+  it('blocks second batch in multi-batch bootstrap if outlet is switched after first push', async () => {
+    await adapter.saveSyncBootstrapState({
+      version: 1,
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
+      registeredDeviceId: 55,
+      status: 'staged',
+      stagedAt: new Date().toISOString(),
+      counts: { categories: 1, products: 101, customers: 0, expenses: 0, transactions: 0 },
+    })
+
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.CATEGORY, 'Minuman', { name: 'Minuman' })
+
+    for (let i = 1; i <= 101; i++) {
+      await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, `p-${i}`, {
+        id: `p-${i}`,
+        name: `Product ${i}`,
+        category: 'Minuman',
+        price: 10000,
+      })
+    }
+
+    const transport = vi.fn().mockImplementation(async ({ body }) => ({
+      ok: true,
+      status: 200,
+      data: { data: { request_id: body.request_id, duplicate: false } },
+    }))
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    // Push 1: Context is Outlet 101 -> succeeds
+    const res1 = await pushService.pushNow({
+      context: makeValidCloudContext({ selectedOutlet: { id: 101, name: 'Outlet 101' } }),
+    })
+    expect(res1.ok).toBe(true)
+    expect(transport).toHaveBeenCalledTimes(1)
+    expect(await queueService.countPending()).toBe(1) // 1 product left
+
+    // Push 2: Context is switched to Outlet 202 -> BLOCKED
+    const res2 = await pushService.pushNow({
+      context: makeValidCloudContext({ selectedOutlet: { id: 202, name: 'Outlet 202' } }),
+    })
+    expect(res2.ok).toBe(false)
+    expect(res2.code).toBe('SYNC_BOOTSTRAP_CONTEXT_MISMATCH')
+    expect(transport).toHaveBeenCalledTimes(1) // No new HTTP request
+    expect(await queueService.countPending()).toBe(1)
+  })
+
+  it('blocks second batch in multi-batch bootstrap if deviceIdentifier is switched after first push', async () => {
+    await adapter.saveSyncBootstrapState({
+      version: 1,
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: 'DEVICE-ORIGINAL',
+      registeredDeviceId: 55,
+      status: 'staged',
+      stagedAt: new Date().toISOString(),
+      counts: { categories: 0, products: 2, customers: 0, expenses: 0, transactions: 0 },
+    })
+
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-1', {
+      id: 'p-1',
+      name: 'Product 1',
+      category: 'Minuman',
+      price: 10000,
+    })
+
+    const transport = vi.fn().mockImplementation(async ({ body }) => ({
+      ok: true,
+      status: 200,
+      data: { data: { request_id: body.request_id, duplicate: false } },
+    }))
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    // Push 1: DEVICE-ORIGINAL -> succeeds
+    const res1 = await pushService.pushNow({
+      context: makeValidCloudContext({ deviceIdentifier: 'DEVICE-ORIGINAL' }),
+    })
+    expect(res1.ok).toBe(true)
+
+    // Add new product
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-2', {
+      id: 'p-2',
+      name: 'Product 2',
+      category: 'Minuman',
+      price: 15000,
+    })
+
+    // Push 2: DEVICE-SWITCHED -> BLOCKED
+    const res2 = await pushService.pushNow({
+      context: makeValidCloudContext({ deviceIdentifier: 'DEVICE-SWITCHED' }),
+    })
+    expect(res2.ok).toBe(false)
+    expect(res2.code).toBe('SYNC_BOOTSTRAP_CONTEXT_MISMATCH')
+    expect(transport).toHaveBeenCalledTimes(1)
+  })
+
+  it('handles crash window where binding was saved but envelope persist threw: blocks mismatched context retry and allows valid context retry', async () => {
+    await adapter.saveSyncBootstrapState({
+      version: 1,
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
+      registeredDeviceId: 55,
+      status: 'staged',
+      stagedAt: new Date().toISOString(),
+      counts: { categories: 0, products: 1, customers: 0, expenses: 0, transactions: 0 },
+    })
+
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-crash', {
+      id: 'p-crash',
+      name: 'Crash Product',
+      category: 'Minuman',
+      price: 10000,
+    })
+
+    // Mock saveSyncPushInflight failure
+    const originalSaveInflight = adapter.saveSyncPushInflight.bind(adapter)
+    adapter.saveSyncPushInflight = vi.fn().mockRejectedValueOnce(new Error('Disk write failed on envelope'))
+
+    const transport = vi.fn().mockImplementation(async ({ body }) => ({
+      ok: true,
+      status: 200,
+      data: { data: { request_id: body.request_id, duplicate: false } },
+    }))
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    // Push 1 fails at envelope save
+    const res1 = await pushService.pushNow({ context: makeValidCloudContext() })
+    expect(res1.ok).toBe(false)
+    expect(res1.code).toBe('SYNC_ENVELOPE_PERSIST_FAILED')
+    expect(transport).not.toHaveBeenCalled()
+    expect(await adapter.loadSyncPushBinding()).not.toBeNull() // Binding was saved
+    expect(await queueService.countPending()).toBe(1) // Queue intact
+
+    // Retry with mismatched outlet -> BLOCKED
+    const res2 = await pushService.pushNow({
+      context: makeValidCloudContext({ selectedOutlet: { id: 999, name: 'Wrong Outlet' } }),
+    })
+    expect(res2.ok).toBe(false)
+    expect(res2.code).toBe('SYNC_BOOTSTRAP_CONTEXT_MISMATCH')
+    expect(transport).not.toHaveBeenCalled()
+
+    // Retry with correct context -> SUCCEEDS
+    adapter.saveSyncPushInflight = originalSaveInflight
+    const res3 = await pushService.pushNow({ context: makeValidCloudContext() })
+    expect(res3.ok).toBe(true)
+    expect(transport).toHaveBeenCalledTimes(1)
+    expect(await queueService.countPending()).toBe(0)
+  })
+
+  it('re-uses in-flight envelope when bootstrap state is staged and context is valid', async () => {
+    await adapter.saveSyncPushBinding({
+      businessId: 10,
+      boundAt: new Date().toISOString(),
+    })
+
+    await adapter.saveSyncBootstrapState({
+      version: 1,
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
+      registeredDeviceId: 55,
+      status: 'staged',
+      stagedAt: new Date().toISOString(),
+      counts: { categories: 0, products: 1, customers: 0, expenses: 0, transactions: 0 },
+    })
+
+    await adapter.saveSyncPushInflight({
+      version: 1,
+      requestId: 'req-inflight-valid',
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
+      registeredDeviceId: 55,
+      createdAt: new Date().toISOString(),
+      queueSnapshots: [{ id: 'q1', entityType: SYNC_ENTITY_TYPES.PRODUCT, entityId: 'p-1', operation: 'upsert' }],
+      changes: { products: [{ sync_id: 'prod-uuid', name: 'Product' }] },
+    })
+
+    let sentRequestId = null
+    const transport = vi.fn().mockImplementation(async ({ body }) => {
+      sentRequestId = body.request_id
+      return {
+        ok: true,
+        status: 200,
+        data: { data: { request_id: body.request_id, duplicate: true } },
+      }
+    })
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const result = await pushService.pushNow({ context: makeValidCloudContext() })
+    expect(result.ok).toBe(true)
+    expect(result.requestId).toBe('req-inflight-valid')
+    expect(sentRequestId).toBe('req-inflight-valid')
+    expect(transport).toHaveBeenCalledTimes(1)
+  })
+})
+
+
+
