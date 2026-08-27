@@ -80,6 +80,21 @@ watch(canSync, async (isReady) => {
   }
 })
 
+// Invalidate health result when cloud context changes
+watch(
+  () => [
+    cloudStore.user?.id,
+    cloudStore.selectedBusiness?.id,
+    cloudStore.selectedOutlet?.id,
+    cloudStore.cloudAccess,
+    cloudStore.deviceIdentifier,
+    cloudStore.registeredDeviceId,
+  ],
+  () => {
+    syncHealthStore.resetResult()
+  },
+)
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 function getPlatform() {
   try {
@@ -98,6 +113,7 @@ async function handleCheckSyncHealth() {
 
 async function handleSyncAll() {
   if (isAnySyncOperationBusy.value) return
+  syncHealthStore.resetResult()
   syncAllMessage.value = ''
   const result = await syncOrchestratorStore.syncAll()
   await syncConflictStore.loadConflicts()
@@ -132,6 +148,7 @@ async function handleSyncAll() {
 
 async function handleSyncNow() {
   if (isAnySyncOperationBusy.value) return
+  syncHealthStore.resetResult()
   syncMessage.value = ''
   const result = await syncPushStore.pushNow()
   await syncConflictStore.loadConflicts()
@@ -152,6 +169,7 @@ async function handleSyncNow() {
 
 async function handlePullNow() {
   if (isAnySyncOperationBusy.value) return
+  syncHealthStore.resetResult()
   pullMessage.value = ''
   const result = await syncPullStore.pullNow()
   await syncConflictStore.loadConflicts()
@@ -171,6 +189,7 @@ async function handlePullNow() {
 
 async function handleBootstrapNow() {
   if (isAnySyncOperationBusy.value) return
+  syncHealthStore.resetResult()
   bootstrapMessage.value = ''
   const result = await syncBootstrapStore.bootstrapNow()
   if (result.ok) {
@@ -190,6 +209,7 @@ async function handleBootstrapNow() {
 
 async function handleUseServer(conflictId) {
   if (isAnySyncOperationBusy.value) return
+  syncHealthStore.resetResult()
   conflictMessage.value = ''
   const result = await syncConflictStore.useServer(conflictId)
   if (result.ok) {
@@ -204,6 +224,7 @@ async function handleUseServer(conflictId) {
 
 async function handleKeepLocal(conflictId) {
   if (isAnySyncOperationBusy.value) return
+  syncHealthStore.resetResult()
   conflictMessage.value = ''
   const result = await syncConflictStore.keepLocal(conflictId)
   if (result.ok) {
@@ -285,6 +306,7 @@ async function tryRegisterDevice() {
 
 async function handleLogout() {
   if (isAnySyncOperationBusy.value) return
+  syncHealthStore.resetResult()
   await cloudStore.logout()
   email.value = ''
   password.value = ''
@@ -488,9 +510,9 @@ onMounted(async () => {
 
           <div v-if="syncHealthStore.issues && syncHealthStore.issues.length > 0" class="mt-2 space-y-1">
             <div
-              v-for="issue in syncHealthStore.issues"
-              :key="issue.code"
-              :id="`health-issue-${issue.code}`"
+              v-for="(issue, index) in syncHealthStore.issues"
+              :key="`${issue.code}-${index}`"
+              :id="`health-issue-${issue.code}-${index}`"
               class="flex items-center justify-between rounded-lg px-3 py-1.5 text-xs"
               :class="issue.severity === 'blocked' ? 'bg-danger/5 text-danger' : 'bg-amber-500/10 text-amber-800'"
             >
@@ -498,6 +520,14 @@ onMounted(async () => {
               <span class="font-mono uppercase font-semibold text-[10px]">{{ issue.severity }}</span>
             </div>
           </div>
+
+          <p
+            v-if="syncHealthStore.lastCheckedAt"
+            id="health-last-checked-at"
+            class="mt-2 text-[10px] text-ink-secondary"
+          >
+            Terakhir diperiksa: {{ syncHealthStore.lastCheckedAt }}
+          </p>
         </div>
       </div>
 

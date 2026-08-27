@@ -32,16 +32,44 @@ export function createSyncHealthService({
       registeredDeviceId,
     } = context
 
-    // ── 1. Validate Context Preconditions ───────────────────────────────────
-    const isContextComplete =
+    // ── 1. Strict Context Validation ────────────────────────────────────────
+    const isUserValid =
       Boolean(user) &&
+      typeof user === 'object' &&
+      user.id != null &&
+      String(user.id).trim().length > 0
+
+    const isBusinessValid =
       Boolean(selectedBusiness) &&
+      typeof selectedBusiness === 'object' &&
       selectedBusiness.id != null &&
+      Number.isInteger(Number(selectedBusiness.id)) &&
+      Number(selectedBusiness.id) > 0
+
+    const isOutletValid =
       Boolean(selectedOutlet) &&
+      typeof selectedOutlet === 'object' &&
       selectedOutlet.id != null &&
-      cloudAccess === true &&
-      Boolean(deviceIdentifier) &&
-      registeredDeviceId != null
+      Number.isInteger(Number(selectedOutlet.id)) &&
+      Number(selectedOutlet.id) > 0
+
+    const isCloudAccessValid = cloudAccess === true
+
+    const isDeviceIdentifierValid =
+      typeof deviceIdentifier === 'string' && deviceIdentifier.trim().length > 0
+
+    const isRegisteredDeviceIdValid =
+      registeredDeviceId != null &&
+      Number.isInteger(Number(registeredDeviceId)) &&
+      Number(registeredDeviceId) > 0
+
+    const isContextComplete =
+      isUserValid &&
+      isBusinessValid &&
+      isOutletValid &&
+      isCloudAccessValid &&
+      isDeviceIdentifierValid &&
+      isRegisteredDeviceIdValid
 
     if (!isContextComplete) {
       return {
@@ -66,38 +94,137 @@ export function createSyncHealthService({
       }
     }
 
+    // ── 2. Required Reader Capability Check (Fail Closed) ───────────────────
+    const hasQueueReader =
+      (queueService && typeof queueService.countPending === 'function') ||
+      (adapter && typeof adapter.countSyncQueueItems === 'function')
+
+    const hasPushBindingReader = adapter && typeof adapter.loadSyncPushBinding === 'function'
+    const hasPullBindingReader = adapter && typeof adapter.loadSyncPullBinding === 'function'
+    const hasPullStateReader = adapter && typeof adapter.loadSyncPullState === 'function'
+    const hasPushInflightReader = adapter && typeof adapter.loadSyncPushInflight === 'function'
+    const hasBootstrapStateReader = adapter && typeof adapter.loadSyncBootstrapState === 'function'
+    const hasConflictsReader = adapter && typeof adapter.loadSyncConflicts === 'function'
+
+    if (
+      !hasQueueReader ||
+      !hasPushBindingReader ||
+      !hasPullBindingReader ||
+      !hasPullStateReader ||
+      !hasPushInflightReader ||
+      !hasBootstrapStateReader ||
+      !hasConflictsReader
+    ) {
+      return {
+        ok: false,
+        code: 'SYNC_HEALTH_READ_FAILED',
+        status: 'blocked',
+        checkedAt: new Date().toISOString(),
+        summary: {
+          pendingCount: 0,
+          openConflictCount: 0,
+          hasInflight: false,
+          bootstrapStatus: 'none',
+          pullCursor: 0,
+        },
+        issues: [
+          {
+            code: 'SYNC_HEALTH_READ_FAILED',
+            severity: 'blocked',
+            message: 'Required local sync diagnostic readers are not supported by adapter.',
+          },
+        ],
+      }
+    }
+
     const currentBusinessId = Number(selectedBusiness.id)
     const currentOutletId = Number(selectedOutlet.id)
-    const currentDeviceIdentifier = String(deviceIdentifier)
+    const currentDeviceIdentifier = String(deviceIdentifier).trim()
     const currentRegisteredDeviceId = String(registeredDeviceId)
 
     const issues = []
 
     try {
-      // ── 2. Read Outbox Pending Count ──────────────────────────────────────
-      let pendingCount = 0
+      // ── 3. Read & Validate Outbox Pending Count ────────────────────────────
+      let rawPendingCount
       if (queueService && typeof queueService.countPending === 'function') {
-        pendingCount = await queueService.countPending()
-      } else if (adapter && typeof adapter.countSyncQueueItems === 'function') {
-        pendingCount = await adapter.countSyncQueueItems()
+        rawPendingCount = await queueService.countPending()
+      } else {
+        rawPendingCount = await adapter.countSyncQueueItems()
       }
 
-      if (pendingCount > 0) {
+      let pendingCount = 0
+      const isPendingValid =
+        rawPendingCount != null &&
+        Number.isInteger(Number(rawPendingCount)) &&
+        Number(rawPendingCount) >= 0
+
+      if (!isPendingValid) {
         issues.push({
-          code: 'SYNC_PENDING_QUEUE',
-          severity: 'attention',
-          message: `Terdapat ${pendingCount} perubahan data lokal yang menunggu sinkronisasi.`,
+          code: 'SYNC_HEALTH_METADATA_INVALID',
+          severity: 'blocked',
+          message: 'Metadata pending queue count lokal tidak valid.',
         })
+      } else {
+        pendingCount = Number(rawPendingCount)
+        if (pendingCount > 0) {
+          issues.push({
+            code: 'SYNC_PENDING_QUEUE',
+            severity: 'attention',
+            message: `Terdapat ${pendingCount} perubahan data lokal yang menunggu sinkronisasi.`,
+          })
+        }
       }
 
-      // ── 3. Read Open Conflict Count ───────────────────────────────────────
+      // ── 4. Read & Validate Raw sync_conflicts_v1 ───────────────────────────
+      const rawConflictState = await adapter.loadSyncConflicts()
       let openConflictCount = 0
-      if (conflictService && typeof conflictService.countOpenConflicts === 'function') {
-        openConflictCount = await conflictService.countOpenConflicts()
-      } else if (adapter && typeof adapter.loadSyncConflicts === 'function') {
-        const conflictState = await adapter.loadSyncConflicts()
-        const conflicts = Array.isArray(conflictState?.conflicts) ? conflictState.conflicts : []
-        openConflictCount = conflicts.filter((c) => c.status === 'open').length
+
+      if (rawConflictState != null) {
+        let isConflictStateValid =
+          typeof rawConflictState === 'object' &&
+          rawConflictState.version === 1 &&
+          Array.isArray(rawConflictState.conflicts)
+
+        if (isConflictStateValid) {
+          for (const c of rawConflictState.conflicts) {
+            const isConflictItemValid =
+              c &&
+              typeof c === 'object' &&
+              typeof c.id === 'string' &&
+              c.id.trim().length > 0 &&
+              typeof c.requestId === 'string' &&
+              c.requestId.trim().length > 0 &&
+              typeof c.queueId === 'string' &&
+              c.queueId.trim().length > 0 &&
+              typeof c.entityType === 'string' &&
+              c.entityType.trim().length > 0 &&
+              typeof c.serverEntity === 'string' &&
+              c.serverEntity.trim().length > 0 &&
+              typeof c.syncId === 'string' &&
+              c.syncId.trim().length > 0 &&
+              c.serverSyncVersion != null &&
+              Number.isInteger(Number(c.serverSyncVersion)) &&
+              Number(c.serverSyncVersion) >= 0 &&
+              (c.status === 'open' || c.status === 'resolved') &&
+              (c.status !== 'open' || (typeof c.queueSnapshot === 'object' && c.queueSnapshot !== null))
+
+            if (!isConflictItemValid) {
+              isConflictStateValid = false
+              break
+            }
+          }
+        }
+
+        if (!isConflictStateValid) {
+          issues.push({
+            code: 'SYNC_HEALTH_METADATA_INVALID',
+            severity: 'blocked',
+            message: 'Metadata konflik sinkronisasi lokal tidak valid.',
+          })
+        } else {
+          openConflictCount = rawConflictState.conflicts.filter((c) => c.status === 'open').length
+        }
       }
 
       if (openConflictCount > 0) {
@@ -108,18 +235,17 @@ export function createSyncHealthService({
         })
       }
 
-      // ── 4. Read Push Binding ──────────────────────────────────────────────
-      const pushBinding =
-        adapter && typeof adapter.loadSyncPushBinding === 'function'
-          ? await adapter.loadSyncPushBinding()
-          : null
+      // ── 5. Read & Validate Push Binding ───────────────────────────────────
+      const pushBinding = await adapter.loadSyncPushBinding()
 
-      if (pushBinding) {
-        if (
-          pushBinding.businessId == null ||
-          !Number.isInteger(Number(pushBinding.businessId)) ||
-          Number(pushBinding.businessId) <= 0
-        ) {
+      if (pushBinding != null) {
+        const isPushBindingValid =
+          typeof pushBinding === 'object' &&
+          pushBinding.businessId != null &&
+          Number.isInteger(Number(pushBinding.businessId)) &&
+          Number(pushBinding.businessId) > 0
+
+        if (!isPushBindingValid) {
           issues.push({
             code: 'SYNC_HEALTH_METADATA_INVALID',
             severity: 'blocked',
@@ -134,19 +260,25 @@ export function createSyncHealthService({
         }
       }
 
-      // ── 5. Read Pull Binding ──────────────────────────────────────────────
-      const pullBinding =
-        adapter && typeof adapter.loadSyncPullBinding === 'function'
-          ? await adapter.loadSyncPullBinding()
-          : null
+      // ── 6. Read & Validate Pull Binding ───────────────────────────────────
+      const pullBinding = await adapter.loadSyncPullBinding()
 
-      if (pullBinding) {
-        if (
-          pullBinding.businessId == null ||
-          pullBinding.outletId == null ||
-          !pullBinding.deviceIdentifier ||
-          pullBinding.registeredDeviceId == null
-        ) {
+      if (pullBinding != null) {
+        const isPullBindingValid =
+          typeof pullBinding === 'object' &&
+          pullBinding.businessId != null &&
+          Number.isInteger(Number(pullBinding.businessId)) &&
+          Number(pullBinding.businessId) > 0 &&
+          pullBinding.outletId != null &&
+          Number.isInteger(Number(pullBinding.outletId)) &&
+          Number(pullBinding.outletId) > 0 &&
+          typeof pullBinding.deviceIdentifier === 'string' &&
+          pullBinding.deviceIdentifier.trim().length > 0 &&
+          pullBinding.registeredDeviceId != null &&
+          Number.isInteger(Number(pullBinding.registeredDeviceId)) &&
+          Number(pullBinding.registeredDeviceId) > 0
+
+        if (!isPullBindingValid) {
           issues.push({
             code: 'SYNC_HEALTH_METADATA_INVALID',
             severity: 'blocked',
@@ -156,7 +288,7 @@ export function createSyncHealthService({
           const isPullMatch =
             Number(pullBinding.businessId) === currentBusinessId &&
             Number(pullBinding.outletId) === currentOutletId &&
-            String(pullBinding.deviceIdentifier) === currentDeviceIdentifier &&
+            String(pullBinding.deviceIdentifier).trim() === currentDeviceIdentifier &&
             String(pullBinding.registeredDeviceId) === currentRegisteredDeviceId
 
           if (!isPullMatch) {
@@ -169,21 +301,58 @@ export function createSyncHealthService({
         }
       }
 
-      // ── 6. Read In-flight Envelope ────────────────────────────────────────
-      const inflightEnvelope =
-        adapter && typeof adapter.loadSyncPushInflight === 'function'
-          ? await adapter.loadSyncPushInflight()
-          : null
-
+      // ── 7. Read & Validate Full In-flight Envelope P12 ────────────────────
+      const inflightEnvelope = await adapter.loadSyncPushInflight()
       const hasInflight = Boolean(inflightEnvelope)
 
-      if (inflightEnvelope) {
-        if (
-          inflightEnvelope.businessId == null ||
-          inflightEnvelope.outletId == null ||
-          !inflightEnvelope.deviceIdentifier ||
-          inflightEnvelope.registeredDeviceId == null
-        ) {
+      if (inflightEnvelope != null) {
+        let isInflightValid =
+          typeof inflightEnvelope === 'object' &&
+          inflightEnvelope.version === 1 &&
+          typeof inflightEnvelope.requestId === 'string' &&
+          inflightEnvelope.requestId.trim().length > 0 &&
+          inflightEnvelope.businessId != null &&
+          Number.isInteger(Number(inflightEnvelope.businessId)) &&
+          Number(inflightEnvelope.businessId) > 0 &&
+          inflightEnvelope.outletId != null &&
+          Number.isInteger(Number(inflightEnvelope.outletId)) &&
+          Number(inflightEnvelope.outletId) > 0 &&
+          typeof inflightEnvelope.deviceIdentifier === 'string' &&
+          inflightEnvelope.deviceIdentifier.trim().length > 0 &&
+          inflightEnvelope.registeredDeviceId != null &&
+          Number.isInteger(Number(inflightEnvelope.registeredDeviceId)) &&
+          Number(inflightEnvelope.registeredDeviceId) > 0 &&
+          inflightEnvelope.createdAt != null &&
+          String(inflightEnvelope.createdAt).trim().length > 0 &&
+          Array.isArray(inflightEnvelope.queueSnapshots) &&
+          inflightEnvelope.queueSnapshots.length > 0 &&
+          typeof inflightEnvelope.changes === 'object' &&
+          inflightEnvelope.changes !== null
+
+        if (isInflightValid) {
+          for (const snap of inflightEnvelope.queueSnapshots) {
+            const isSnapValid =
+              snap &&
+              typeof snap === 'object' &&
+              typeof snap.id === 'string' &&
+              snap.id.trim().length > 0 &&
+              typeof snap.entityType === 'string' &&
+              snap.entityType.trim().length > 0 &&
+              snap.entityId != null &&
+              String(snap.entityId).trim().length > 0 &&
+              typeof snap.operation === 'string' &&
+              snap.operation.trim().length > 0 &&
+              snap.updatedAt != null &&
+              String(snap.updatedAt).trim().length > 0
+
+            if (!isSnapValid) {
+              isInflightValid = false
+              break
+            }
+          }
+        }
+
+        if (!isInflightValid) {
           issues.push({
             code: 'SYNC_HEALTH_METADATA_INVALID',
             severity: 'blocked',
@@ -193,7 +362,7 @@ export function createSyncHealthService({
           const isInflightMatch =
             Number(inflightEnvelope.businessId) === currentBusinessId &&
             Number(inflightEnvelope.outletId) === currentOutletId &&
-            String(inflightEnvelope.deviceIdentifier) === currentDeviceIdentifier &&
+            String(inflightEnvelope.deviceIdentifier).trim() === currentDeviceIdentifier &&
             String(inflightEnvelope.registeredDeviceId) === currentRegisteredDeviceId
 
           if (isInflightMatch) {
@@ -212,31 +381,40 @@ export function createSyncHealthService({
         }
       }
 
-      // ── 7. Read Bootstrap State ───────────────────────────────────────────
-      const bootstrapState =
-        adapter && typeof adapter.loadSyncBootstrapState === 'function'
-          ? await adapter.loadSyncBootstrapState()
-          : null
+      // ── 8. Read & Validate Bootstrap State ────────────────────────────────
+      const bootstrapState = await adapter.loadSyncBootstrapState()
+      let bootstrapStatus = 'none'
 
-      const bootstrapStatus = bootstrapState?.status || 'none'
+      if (bootstrapState != null) {
+        const isBootstrapStructValid =
+          typeof bootstrapState === 'object' &&
+          bootstrapState.version === 1 &&
+          (bootstrapState.status === 'staged' || bootstrapState.status === 'completed') &&
+          bootstrapState.businessId != null &&
+          Number.isInteger(Number(bootstrapState.businessId)) &&
+          Number(bootstrapState.businessId) > 0 &&
+          bootstrapState.outletId != null &&
+          Number.isInteger(Number(bootstrapState.outletId)) &&
+          Number(bootstrapState.outletId) > 0 &&
+          typeof bootstrapState.deviceIdentifier === 'string' &&
+          bootstrapState.deviceIdentifier.trim().length > 0 &&
+          bootstrapState.registeredDeviceId != null &&
+          Number.isInteger(Number(bootstrapState.registeredDeviceId)) &&
+          Number(bootstrapState.registeredDeviceId) > 0
 
-      if (bootstrapState && (bootstrapState.status === 'staged' || bootstrapState.status === 'completed')) {
-        if (
-          bootstrapState.businessId == null ||
-          bootstrapState.outletId == null ||
-          !bootstrapState.deviceIdentifier ||
-          bootstrapState.registeredDeviceId == null
-        ) {
+        if (!isBootstrapStructValid) {
+          bootstrapStatus = 'invalid'
           issues.push({
             code: 'SYNC_HEALTH_METADATA_INVALID',
             severity: 'blocked',
             message: 'Metadata bootstrap lokal tidak valid.',
           })
         } else {
+          bootstrapStatus = bootstrapState.status
           const isBootstrapMatch =
             Number(bootstrapState.businessId) === currentBusinessId &&
             Number(bootstrapState.outletId) === currentOutletId &&
-            String(bootstrapState.deviceIdentifier) === currentDeviceIdentifier &&
+            String(bootstrapState.deviceIdentifier).trim() === currentDeviceIdentifier &&
             String(bootstrapState.registeredDeviceId) === currentRegisteredDeviceId
 
           if (!isBootstrapMatch) {
@@ -253,7 +431,7 @@ export function createSyncHealthService({
             })
           }
         }
-      } else if (!pushBinding && (!bootstrapState || (bootstrapState.status !== 'staged' && bootstrapState.status !== 'completed'))) {
+      } else if (!pushBinding) {
         issues.push({
           code: 'SYNC_BOOTSTRAP_NOT_PREPARED',
           severity: 'attention',
@@ -261,18 +439,33 @@ export function createSyncHealthService({
         })
       }
 
-      // ── 8. Read Pull Cursor ───────────────────────────────────────────────
-      const pullState =
-        adapter && typeof adapter.loadSyncPullState === 'function'
-          ? await adapter.loadSyncPullState()
-          : null
+      // ── 9. Read & Validate Pull State ─────────────────────────────────────
+      const pullState = await adapter.loadSyncPullState()
+      let pullCursor = 0
 
-      const pullCursor =
-        pullState?.cursor != null && Number.isInteger(Number(pullState.cursor))
-          ? Number(pullState.cursor)
-          : 0
+      if (pullState != null) {
+        const isPullStateValid =
+          typeof pullState === 'object' &&
+          pullState.version === 1 &&
+          pullState.cursor != null &&
+          Number.isInteger(Number(pullState.cursor)) &&
+          Number(pullState.cursor) >= 0 &&
+          pullState.serverSequence != null &&
+          Number.isInteger(Number(pullState.serverSequence)) &&
+          Number(pullState.serverSequence) >= 0
 
-      // ── 9. Calculate Final Status & Code ──────────────────────────────────
+        if (!isPullStateValid) {
+          issues.push({
+            code: 'SYNC_HEALTH_METADATA_INVALID',
+            severity: 'blocked',
+            message: 'Metadata pull state lokal tidak valid.',
+          })
+        } else {
+          pullCursor = Number(pullState.cursor)
+        }
+      }
+
+      // ── 10. Calculate Final Status & Code ─────────────────────────────────
       const hasBlocked = issues.some((i) => i.severity === 'blocked')
       const hasAttention = issues.some((i) => i.severity === 'attention')
 

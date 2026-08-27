@@ -3,6 +3,33 @@ import { ref } from 'vue'
 import { createSyncHealthService } from '@/services/sync/syncHealthService'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 
+function sanitizeContext(source = {}) {
+  const user = source.user
+    ? { id: source.user.id, email: source.user.email }
+    : null
+
+  const selectedBusiness = source.selectedBusiness
+    ? { id: source.selectedBusiness.id, name: source.selectedBusiness.name }
+    : null
+
+  const selectedOutlet = source.selectedOutlet
+    ? { id: source.selectedOutlet.id, name: source.selectedOutlet.name }
+    : null
+
+  const cloudAccess = source.cloudAccess === true
+  const deviceIdentifier = source.deviceIdentifier != null ? String(source.deviceIdentifier) : null
+  const registeredDeviceId = source.registeredDeviceId != null ? source.registeredDeviceId : null
+
+  return {
+    user,
+    selectedBusiness,
+    selectedOutlet,
+    cloudAccess,
+    deviceIdentifier,
+    registeredDeviceId,
+  }
+}
+
 export const useSyncHealthStore = defineStore('syncHealth', () => {
   const loading = ref(false)
   const status = ref(null)
@@ -29,6 +56,15 @@ export const useSyncHealthStore = defineStore('syncHealth', () => {
         conflictService,
       })
     }
+  }
+
+  function resetResult() {
+    status.value = null
+    summary.value = null
+    issues.value = []
+    lastResult.value = null
+    lastError.value = null
+    lastCheckedAt.value = null
   }
 
   async function checkHealth(options = {}) {
@@ -63,18 +99,8 @@ export const useSyncHealthStore = defineStore('syncHealth', () => {
 
     try {
       const cloudStore = useCloudSessionStore()
-      const context = options.context ?? {
-        user: cloudStore.user ? { ...cloudStore.user } : null,
-        selectedBusiness: cloudStore.selectedBusiness
-          ? { ...cloudStore.selectedBusiness }
-          : null,
-        selectedOutlet: cloudStore.selectedOutlet
-          ? { ...cloudStore.selectedOutlet }
-          : null,
-        cloudAccess: cloudStore.cloudAccess === true,
-        deviceIdentifier: cloudStore.deviceIdentifier,
-        registeredDeviceId: cloudStore.registeredDeviceId,
-      }
+      const rawSource = options.context ?? cloudStore
+      const context = sanitizeContext(rawSource)
 
       const result = await _healthService.checkHealth({
         ...options,
@@ -138,6 +164,7 @@ export const useSyncHealthStore = defineStore('syncHealth', () => {
     lastError,
     lastCheckedAt,
     init,
+    resetResult,
     checkHealth,
     getHealthService: () => _healthService,
   }

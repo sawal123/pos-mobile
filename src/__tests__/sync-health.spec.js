@@ -36,9 +36,10 @@ describe('P17: Sync Health & Diagnostics Service', () => {
         deviceIdentifier: 'dev-uuid-123',
         registeredDeviceId: 77,
       }),
-      loadSyncPullState: vi.fn().mockResolvedValue({ cursor: 120, serverSequence: 120 }),
+      loadSyncPullState: vi.fn().mockResolvedValue({ version: 1, cursor: 120, serverSequence: 120 }),
       loadSyncPushInflight: vi.fn().mockResolvedValue(null),
       loadSyncBootstrapState: vi.fn().mockResolvedValue({
+        version: 1,
         status: 'completed',
         businessId: 10,
         outletId: 101,
@@ -108,14 +109,29 @@ describe('P17: Sync Health & Diagnostics Service', () => {
   })
 
   it('TEST — CONFLICT: returns SYNC_HEALTH_BLOCKED and SYNC_OPEN_CONFLICT when open conflicts exist', async () => {
-    mockConflictService.countOpenConflicts.mockResolvedValue(2)
+    mockAdapter.loadSyncConflicts.mockResolvedValue({
+      version: 1,
+      conflicts: [
+        {
+          id: 'c1',
+          requestId: 'req-1',
+          queueId: 'q1',
+          entityType: 'products',
+          serverEntity: 'products',
+          syncId: 'p1-uuid',
+          serverSyncVersion: 2,
+          status: 'open',
+          queueSnapshot: { id: 'q1', entityType: 'products' },
+        },
+      ],
+    })
 
     const result = await healthService.checkHealth({ context: validContext })
 
     expect(result.ok).toBe(true)
     expect(result.code).toBe('SYNC_HEALTH_BLOCKED')
     expect(result.status).toBe('blocked')
-    expect(result.summary.openConflictCount).toBe(2)
+    expect(result.summary.openConflictCount).toBe(1)
     expect(result.issues).toContainEqual(
       expect.objectContaining({
         code: 'SYNC_OPEN_CONFLICT',
@@ -124,13 +140,25 @@ describe('P17: Sync Health & Diagnostics Service', () => {
     )
   })
 
-  it('TEST — INFLIGHT VALID: returns SYNC_HEALTH_ATTENTION and SYNC_PUSH_INFLIGHT without clearing inflight', async () => {
+  it('TEST — VALID INFLIGHT: returns SYNC_HEALTH_ATTENTION and SYNC_PUSH_INFLIGHT with full P12 shape without clearing inflight', async () => {
     mockAdapter.loadSyncPushInflight.mockResolvedValue({
+      version: 1,
       requestId: 'req-1',
       businessId: 10,
       outletId: 101,
       deviceIdentifier: 'dev-uuid-123',
       registeredDeviceId: 77,
+      createdAt: '2026-08-27T00:00:00.000Z',
+      queueSnapshots: [
+        {
+          id: 'q1',
+          entityType: 'products',
+          entityId: 'p1',
+          operation: 'create',
+          updatedAt: '2026-08-27T00:00:00.000Z',
+        },
+      ],
+      changes: { products: [{ id: 'p1' }] },
     })
 
     const result = await healthService.checkHealth({ context: validContext })
@@ -150,11 +178,23 @@ describe('P17: Sync Health & Diagnostics Service', () => {
 
   it('TEST — INFLIGHT MISMATCH: returns SYNC_HEALTH_BLOCKED and SYNC_INFLIGHT_CONTEXT_MISMATCH without clearing inflight', async () => {
     mockAdapter.loadSyncPushInflight.mockResolvedValue({
+      version: 1,
       requestId: 'req-1',
       businessId: 10,
       outletId: 202, // Different outlet
       deviceIdentifier: 'dev-uuid-123',
       registeredDeviceId: 77,
+      createdAt: '2026-08-27T00:00:00.000Z',
+      queueSnapshots: [
+        {
+          id: 'q1',
+          entityType: 'products',
+          entityId: 'p1',
+          operation: 'create',
+          updatedAt: '2026-08-27T00:00:00.000Z',
+        },
+      ],
+      changes: { products: [{ id: 'p1' }] },
     })
 
     const result = await healthService.checkHealth({ context: validContext })
@@ -169,6 +209,31 @@ describe('P17: Sync Health & Diagnostics Service', () => {
       }),
     )
     expect(mockAdapter.clearSyncPushInflight).not.toHaveBeenCalled()
+  })
+
+  it('TEST — MALFORMED INFLIGHT: returns SYNC_HEALTH_BLOCKED and SYNC_HEALTH_METADATA_INVALID when envelope shape is invalid', async () => {
+    const invalidEnvelopes = [
+      { version: 2 }, // bad version
+      { version: 1, requestId: '' }, // missing requestId
+      { version: 1, requestId: 'req-1', queueSnapshots: [] }, // empty queueSnapshots
+      { version: 1, requestId: 'req-1', queueSnapshots: [{ id: 'q1' }], changes: null }, // changes missing
+    ]
+
+    for (const env of invalidEnvelopes) {
+      mockAdapter.loadSyncPushInflight.mockResolvedValueOnce(env)
+
+      const result = await healthService.checkHealth({ context: validContext })
+
+      expect(result.ok).toBe(true)
+      expect(result.code).toBe('SYNC_HEALTH_BLOCKED')
+      expect(result.status).toBe('blocked')
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({
+          code: 'SYNC_HEALTH_METADATA_INVALID',
+          severity: 'blocked',
+        }),
+      )
+    }
   })
 
   it('TEST — PUSH BINDING MISMATCH: returns SYNC_HEALTH_BLOCKED and SYNC_PUSH_BINDING_MISMATCH when business differs', async () => {
@@ -210,6 +275,7 @@ describe('P17: Sync Health & Diagnostics Service', () => {
 
   it('TEST — BOOTSTRAP MISMATCH: returns SYNC_HEALTH_BLOCKED and SYNC_BOOTSTRAP_CONTEXT_MISMATCH when staged context differs', async () => {
     mockAdapter.loadSyncBootstrapState.mockResolvedValue({
+      version: 1,
       status: 'staged',
       businessId: 10,
       outletId: 999, // mismatch
@@ -249,6 +315,7 @@ describe('P17: Sync Health & Diagnostics Service', () => {
 
   it('TEST — BOOTSTRAP STAGED: returns SYNC_BOOTSTRAP_STAGED (attention) when staged and context matches', async () => {
     mockAdapter.loadSyncBootstrapState.mockResolvedValue({
+      version: 1,
       status: 'staged',
       businessId: 10,
       outletId: 101,
@@ -269,13 +336,91 @@ describe('P17: Sync Health & Diagnostics Service', () => {
     )
   })
 
+  it('TEST — MALFORMED BOOTSTRAP STATUS: returns SYNC_HEALTH_METADATA_INVALID and summary.bootstrapStatus invalid', async () => {
+    mockAdapter.loadSyncBootstrapState.mockResolvedValue({
+      version: 1,
+      status: 'unknown_status',
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: 'dev-uuid-123',
+      registeredDeviceId: 77,
+    })
+
+    const result = await healthService.checkHealth({ context: validContext })
+
+    expect(result.ok).toBe(true)
+    expect(result.code).toBe('SYNC_HEALTH_BLOCKED')
+    expect(result.status).toBe('blocked')
+    expect(result.summary.bootstrapStatus).toBe('invalid')
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        code: 'SYNC_HEALTH_METADATA_INVALID',
+        severity: 'blocked',
+      }),
+    )
+  })
+
   it('TEST — PULL CURSOR: reads cursor accurately without modifying state', async () => {
-    mockAdapter.loadSyncPullState.mockResolvedValue({ cursor: 9988 })
+    mockAdapter.loadSyncPullState.mockResolvedValue({ version: 1, cursor: 9988, serverSequence: 9988 })
 
     const result = await healthService.checkHealth({ context: validContext })
 
     expect(result.summary.pullCursor).toBe(9988)
     expect(mockAdapter.saveSyncPullState).not.toHaveBeenCalled()
+  })
+
+  it('TEST — MALFORMED PULL CURSOR: fails closed on invalid cursor / sequence / version', async () => {
+    const invalidPullStates = [
+      { version: 1, cursor: -1, serverSequence: 0 },
+      { version: 1, cursor: 'abc', serverSequence: 0 },
+      { version: 1, cursor: null, serverSequence: 0 },
+      { version: 99, cursor: 10, serverSequence: 10 },
+      { version: 1, cursor: 10, serverSequence: -1 },
+    ]
+
+    for (const ps of invalidPullStates) {
+      mockAdapter.loadSyncPullState.mockResolvedValueOnce(ps)
+
+      const result = await healthService.checkHealth({ context: validContext })
+
+      expect(result.ok).toBe(true)
+      expect(result.code).toBe('SYNC_HEALTH_BLOCKED')
+      expect(result.status).toBe('blocked')
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({
+          code: 'SYNC_HEALTH_METADATA_INVALID',
+          severity: 'blocked',
+        }),
+      )
+    }
+  })
+
+  it('TEST — MALFORMED CONFLICT STATE: fails closed when conflict object or open item is malformed', async () => {
+    const invalidConflictStates = [
+      { version: 1, conflicts: 'not-an-array' },
+      {
+        version: 1,
+        conflicts: [
+          { id: 'c1', status: 'open' }, // missing queueId, requestId, entityType, etc.
+        ],
+      },
+    ]
+
+    for (const cs of invalidConflictStates) {
+      mockAdapter.loadSyncConflicts.mockResolvedValueOnce(cs)
+
+      const result = await healthService.checkHealth({ context: validContext })
+
+      expect(result.ok).toBe(true)
+      expect(result.code).toBe('SYNC_HEALTH_BLOCKED')
+      expect(result.status).toBe('blocked')
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({
+          code: 'SYNC_HEALTH_METADATA_INVALID',
+          severity: 'blocked',
+        }),
+      )
+    }
   })
 
   it('TEST — READ FAILURE: catches adapter throw and returns SYNC_HEALTH_READ_FAILED fail-closed', async () => {
@@ -289,22 +434,40 @@ describe('P17: Sync Health & Diagnostics Service', () => {
     expect(result.issues[0].code).toBe('SYNC_HEALTH_READ_FAILED')
   })
 
-  it('TEST — CONTEXT INCOMPLETE: returns SYNC_HEALTH_CONTEXT_INCOMPLETE when required fields are missing', async () => {
-    const incompleteContexts = [
-      { ...validContext, user: null },
-      { ...validContext, selectedBusiness: null },
-      { ...validContext, selectedOutlet: null },
+  it('TEST — REQUIRED READ CAPABILITY MISSING: returns SYNC_HEALTH_READ_FAILED if adapter lacks required reader', async () => {
+    const incompleteAdapter = { ...mockAdapter, loadSyncPushInflight: undefined }
+    const partialHealthService = createSyncHealthService({
+      adapter: incompleteAdapter,
+      queueService: mockQueueService,
+      conflictService: mockConflictService,
+    })
+
+    const result = await partialHealthService.checkHealth({ context: validContext })
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_HEALTH_READ_FAILED')
+    expect(result.status).toBe('blocked')
+  })
+
+  it('TEST — INVALID CONTEXT VALUES: returns SYNC_HEALTH_CONTEXT_INCOMPLETE without calling durable reads', async () => {
+    const invalidContexts = [
+      { ...validContext, user: { email: 'no-id@example.com' } }, // user without id
+      { ...validContext, selectedBusiness: { id: 0 } }, // business id = 0
+      { ...validContext, selectedBusiness: { id: 'abc' } }, // business id = "abc"
+      { ...validContext, selectedOutlet: { id: -1 } }, // outlet id = -1
       { ...validContext, cloudAccess: false },
-      { ...validContext, deviceIdentifier: null },
-      { ...validContext, registeredDeviceId: null },
+      { ...validContext, deviceIdentifier: '   ' }, // empty whitespace
+      { ...validContext, registeredDeviceId: 0 },
     ]
 
-    for (const ctx of incompleteContexts) {
+    for (const ctx of invalidContexts) {
       const result = await healthService.checkHealth({ context: ctx })
       expect(result.ok).toBe(false)
       expect(result.code).toBe('SYNC_HEALTH_CONTEXT_INCOMPLETE')
       expect(result.status).toBe('blocked')
     }
+
+    expect(mockAdapter.loadSyncPushBinding).not.toHaveBeenCalled()
+    expect(mockAdapter.loadSyncPullBinding).not.toHaveBeenCalled()
   })
 
   it('TEST — ZERO MUTATION: checkHealth does not trigger any save/clear/delete/mutation operations', async () => {
@@ -331,7 +494,6 @@ describe('P17: Sync Health & Diagnostics Service', () => {
     const result = await healthService.checkHealth({ context: contextWithToken })
     expect(result.ok).toBe(true)
 
-    // Verify issues / summary contains no sensitive info
     const serialized = JSON.stringify(result)
     expect(serialized).not.toContain('secret-token-123')
     expect(serialized).not.toContain('secret-password')
@@ -343,6 +505,7 @@ describe('P17: Pinia Store (useSyncHealthStore)', () => {
   let store
   let cloudStore
   let mockHealthService
+  let validContext
 
   beforeEach(() => {
     pinia = createPinia()
@@ -356,6 +519,15 @@ describe('P17: Pinia Store (useSyncHealthStore)', () => {
     cloudStore.cloudAccess = true
     cloudStore.deviceIdentifier = 'dev-uuid-123'
     cloudStore.registeredDeviceId = 77
+
+    validContext = {
+      user: { id: 1, email: 'test@example.com' },
+      selectedBusiness: { id: 10, name: 'Biz 10' },
+      selectedOutlet: { id: 101, name: 'Outlet 1' },
+      cloudAccess: true,
+      deviceIdentifier: 'dev-uuid-123',
+      registeredDeviceId: 77,
+    }
 
     mockHealthService = {
       checkHealth: vi.fn(),
@@ -390,7 +562,7 @@ describe('P17: Pinia Store (useSyncHealthStore)', () => {
     expect(store.status).toBe('ready')
   })
 
-  it('TEST — CONTEXT SNAPSHOT: creates snapshot from cloudStore without token', async () => {
+  it('TEST — OPTIONS CONTEXT SANITIZATION: sanitizes options.context and strips token/password', async () => {
     let capturedOptions
     mockHealthService.checkHealth.mockImplementation(async (opts) => {
       capturedOptions = opts
@@ -403,17 +575,36 @@ describe('P17: Pinia Store (useSyncHealthStore)', () => {
       }
     })
 
-    await store.checkHealth()
-
-    expect(capturedOptions.context).toEqual({
-      user: { id: 1, email: 'test@example.com' },
-      selectedBusiness: { id: 10, name: 'Biz 10' },
-      selectedOutlet: { id: 101, name: 'Outlet 1' },
-      cloudAccess: true,
-      deviceIdentifier: 'dev-uuid-123',
-      registeredDeviceId: 77,
+    await store.checkHealth({
+      context: {
+        ...validContext,
+        token: 'SUPER_SECRET_TOKEN',
+        password: 'SUPER_SECRET_PASSWORD',
+        authorization: 'Bearer xyz',
+      },
     })
+
+    expect(capturedOptions.context).toBeDefined()
+    expect(capturedOptions.context.user.id).toBe(1)
     expect(capturedOptions.context.token).toBeUndefined()
+    expect(capturedOptions.context.password).toBeUndefined()
+    expect(capturedOptions.context.authorization).toBeUndefined()
+  })
+
+  it('TEST — RESET RESULT: clears diagnostic UI state without touching persistence', () => {
+    store.status = 'ready'
+    store.summary = { pendingCount: 0 }
+    store.issues = [{ code: 'TEST' }]
+    store.lastResult = { ok: true }
+    store.lastCheckedAt = '2026-08-27T00:00:00.000Z'
+
+    store.resetResult()
+
+    expect(store.status).toBeNull()
+    expect(store.summary).toBeNull()
+    expect(store.issues).toEqual([])
+    expect(store.lastResult).toBeNull()
+    expect(store.lastCheckedAt).toBeNull()
   })
 })
 
@@ -454,6 +645,7 @@ describe('P17: UI Integration in CloudLoginView', () => {
         ok: true,
         code: 'SYNC_HEALTH_READY',
         status: 'ready',
+        checkedAt: '2026-08-27T10:00:00.000Z',
         summary: {
           pendingCount: 0,
           openConflictCount: 0,
@@ -491,6 +683,113 @@ describe('P17: UI Integration in CloudLoginView', () => {
     expect(wrapper.find('#sync-health-status-message').text()).toContain('Status sinkronisasi lokal sehat')
     expect(wrapper.find('#health-pending-count').text()).toContain('Pending: 0')
     expect(wrapper.find('#health-pull-cursor').text()).toContain('Pull Cursor: 45')
+    expect(wrapper.find('#health-last-checked-at').text()).toContain('Terakhir diperiksa:')
+  })
+
+  it('TEST — CONTEXT CHANGE INVALIDATES OLD RESULT: resets health result when context changes without auto check', async () => {
+    healthStore.status = 'ready'
+    healthStore.summary = { pendingCount: 0 }
+    healthStore.lastCheckedAt = '2026-08-27T10:00:00.000Z'
+
+    const wrapper = mount(CloudLoginView, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          BaseButton: true,
+          BaseInput: true,
+          BaseCard: { template: '<div><slot /></div>' },
+        },
+      },
+    })
+
+    await flushPromises()
+
+    // Switch business
+    cloudStore.selectedBusiness = { id: 20, name: 'Biz 20' }
+    await flushPromises()
+
+    expect(healthStore.status).toBeNull()
+    expect(healthStore.summary).toBeNull()
+    expect(healthStore.lastCheckedAt).toBeNull()
+  })
+
+  it('TEST — SYNC MUTATION INVALIDATES RESULT: resetResult called when sync action is triggered', async () => {
+    healthStore.status = 'ready'
+    healthStore.summary = { pendingCount: 0 }
+
+    vi.spyOn(orchestratorStore, 'syncAll').mockResolvedValue({ ok: true, code: 'SYNC_ALL_COMPLETED' })
+    vi.spyOn(conflictStore, 'loadConflicts').mockResolvedValue()
+    vi.spyOn(pushStore, 'refreshPendingCount').mockResolvedValue()
+
+    const wrapper = mount(CloudLoginView, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          BaseButton: {
+            template: '<button :id="$attrs.id" :disabled="$attrs.disabled"><slot /></button>',
+          },
+          BaseInput: true,
+          BaseCard: { template: '<div><slot /></div>' },
+        },
+      },
+    })
+
+    await flushPromises()
+
+    await wrapper.find('#sync-all-btn').trigger('click')
+    await flushPromises()
+
+    expect(healthStore.status).toBeNull()
+    expect(healthStore.summary).toBeNull()
+  })
+
+  it('TEST — LOGOUT INVALIDATES HEALTH RESULT: resetResult called on logout', async () => {
+    healthStore.status = 'ready'
+    vi.spyOn(cloudStore, 'logout').mockResolvedValue()
+
+    const wrapper = mount(CloudLoginView, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          BaseButton: {
+            template: '<button :id="$attrs.id" :disabled="$attrs.disabled"><slot /></button>',
+          },
+          BaseInput: true,
+          BaseCard: { template: '<div><slot /></div>' },
+        },
+      },
+    })
+
+    await flushPromises()
+
+    await wrapper.find('#cloud-logout-btn').trigger('click')
+    await flushPromises()
+
+    expect(healthStore.status).toBeNull()
+  })
+
+  it('TEST — MULTIPLE METADATA INVALID UI: renders multiple issues without duplicate key warning', async () => {
+    healthStore.status = 'blocked'
+    healthStore.issues = [
+      { code: 'SYNC_HEALTH_METADATA_INVALID', severity: 'blocked', message: 'Push binding invalid' },
+      { code: 'SYNC_HEALTH_METADATA_INVALID', severity: 'blocked', message: 'Pull state invalid' },
+    ]
+
+    const wrapper = mount(CloudLoginView, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          BaseButton: true,
+          BaseInput: true,
+          BaseCard: { template: '<div><slot /></div>' },
+        },
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.find('#health-issue-SYNC_HEALTH_METADATA_INVALID-0').exists()).toBe(true)
+    expect(wrapper.find('#health-issue-SYNC_HEALTH_METADATA_INVALID-1').exists()).toBe(true)
   })
 
   it('TEST — UI MUTUAL EXCLUSION: healthStore.loading disables other buttons', async () => {
@@ -526,7 +825,7 @@ describe('P17: UI Integration in CloudLoginView', () => {
     expect(wrapper.find('#keep-local-btn-c1').attributes('disabled')).toBeDefined()
   })
 
-  it('TEST — UI MUTUAL EXCLUSION: orchestrator/push/pull/conflict loading disables #sync-health-btn', async () => {
+  it('TEST — UI MUTUAL EXCLUSION: orchestrator/push/pull loading disables #sync-health-btn', async () => {
     const wrapper = mount(CloudLoginView, {
       global: {
         plugins: [pinia],
