@@ -30,6 +30,7 @@ export function createMemoryAdapter() {
     syncPullBinding: null,
     syncPullState: null,
     syncServerVersions: null,
+    syncConflicts: null,
   }
 
   return {
@@ -286,6 +287,95 @@ export function createMemoryAdapter() {
     },
     async saveSyncBootstrapState(bootstrapState) {
       state.syncBootstrapState = cloneValue(bootstrapState)
+    },
+    // P15: sync conflicts (durable, survives restart & logout)
+    async loadSyncConflicts() {
+      return state.syncConflicts ? cloneValue(state.syncConflicts) : null
+    },
+    async saveSyncConflicts(conflictsState) {
+      state.syncConflicts = cloneValue(conflictsState)
+    },
+    async clearSyncConflicts() {
+      state.syncConflicts = null
+    },
+    async persistSyncConflictsAndClearInflightAtomic({ expectedRequestId, conflictsState }) {
+      if (!state.syncPushInflight) {
+        return {
+          ok: false,
+          code: 'SYNC_CONFLICT_INFLIGHT_MISSING',
+          message: 'In-flight sync push envelope is missing.',
+        }
+      }
+
+      if (String(state.syncPushInflight.requestId) !== String(expectedRequestId)) {
+        return {
+          ok: false,
+          code: 'SYNC_CONFLICT_INFLIGHT_MISMATCH',
+          message: `In-flight requestId mismatch: expected ${expectedRequestId}, found ${state.syncPushInflight.requestId}`,
+        }
+      }
+
+      state.syncConflicts = cloneValue(conflictsState)
+      state.syncPushInflight = null
+
+      return {
+        ok: true,
+        code: 'SYNC_CONFLICT_PERSISTED',
+      }
+    },
+    async resolveSyncConflictUseServerAtomic({ queueSnapshot, conflictsState }) {
+      if (!queueSnapshot || !queueSnapshot.id) {
+        return {
+          ok: false,
+          code: 'SYNC_CONFLICT_QUEUE_MISSING',
+          message: 'Queue snapshot is required for atomic useServer resolution.',
+        }
+      }
+
+      const nextQueue = cloneValue(state.syncQueue)
+      const nextConflicts = cloneValue(conflictsState)
+
+      const index = nextQueue.findIndex((item) => item.id === queueSnapshot.id)
+      if (index === -1) {
+        return {
+          ok: false,
+          code: 'SYNC_CONFLICT_QUEUE_MISSING',
+          message: 'Queue item is missing from sync_queue.',
+        }
+      }
+
+      const existing = nextQueue[index]
+      const snapPayloadStr =
+        queueSnapshot.payload === null || queueSnapshot.payload === undefined
+          ? null
+          : JSON.stringify(queueSnapshot.payload)
+      const itemPayloadStr =
+        existing.payload === null || existing.payload === undefined
+          ? null
+          : JSON.stringify(existing.payload)
+
+      const isUnchanged =
+        String(existing.updatedAt) === String(queueSnapshot.updatedAt) &&
+        String(existing.operation) === String(queueSnapshot.operation) &&
+        itemPayloadStr === snapPayloadStr
+
+      if (!isUnchanged) {
+        return {
+          ok: false,
+          code: 'SYNC_CONFLICT_LOCAL_CHANGED',
+          message: 'Local queue item has changed since conflict was recorded.',
+        }
+      }
+
+      nextQueue.splice(index, 1)
+
+      state.syncQueue = nextQueue
+      state.syncConflicts = nextConflicts
+
+      return {
+        ok: true,
+        code: 'SYNC_CONFLICT_RESOLVED',
+      }
     },
     async close() {},
   }

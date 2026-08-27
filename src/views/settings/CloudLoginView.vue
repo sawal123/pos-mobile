@@ -9,11 +9,13 @@ import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useSyncPushStore } from '@/stores/syncPushStore'
 import { useSyncPullStore } from '@/stores/syncPullStore'
 import { useSyncBootstrapStore } from '@/stores/syncBootstrapStore'
+import { useSyncConflictStore } from '@/stores/syncConflictStore'
 
 const cloudStore = useCloudSessionStore()
 const syncPushStore = useSyncPushStore()
 const syncPullStore = useSyncPullStore()
 const syncBootstrapStore = useSyncBootstrapStore()
+const syncConflictStore = useSyncConflictStore()
 
 // ── Form state ──────────────────────────────────────────────────────────────
 const email = ref('')
@@ -25,6 +27,8 @@ const pullMessage = ref('')
 const pullSuccess = ref(false)
 const bootstrapMessage = ref('')
 const bootstrapSuccess = ref(false)
+const conflictMessage = ref('')
+const conflictSuccess = ref(false)
 
 // ── Derived ─────────────────────────────────────────────────────────────────
 const isZeroBusiness = computed(
@@ -73,6 +77,7 @@ function getPlatform() {
 async function handleSyncNow() {
   syncMessage.value = ''
   const result = await syncPushStore.pushNow()
+  await syncConflictStore.loadConflicts()
   if (result.ok) {
     syncSuccess.value = true
     const sent = result.removedQueueIds?.length ?? 0
@@ -91,6 +96,7 @@ async function handleSyncNow() {
 async function handlePullNow() {
   pullMessage.value = ''
   const result = await syncPullStore.pullNow()
+  await syncConflictStore.loadConflicts()
   if (result.ok) {
     pullSuccess.value = true
     const applied = result.applied ?? 0
@@ -120,6 +126,33 @@ async function handleBootstrapNow() {
       bootstrapMessage.value =
         result.error?.message ?? result.message ?? 'Gagal menyiapkan data lokal.'
     }
+  }
+}
+
+async function handleUseServer(conflictId) {
+  conflictMessage.value = ''
+  const result = await syncConflictStore.useServer(conflictId)
+  if (result.ok) {
+    conflictSuccess.value = true
+    conflictMessage.value = 'Gunakan Tarik Data Cloud untuk mengambil data server.'
+    await syncPushStore.refreshPendingCount()
+  } else {
+    conflictSuccess.value = false
+    conflictMessage.value = result.message || 'Gagal menyelesaikan konflik.'
+  }
+}
+
+async function handleKeepLocal(conflictId) {
+  conflictMessage.value = ''
+  const result = await syncConflictStore.keepLocal(conflictId)
+  if (result.ok) {
+    conflictSuccess.value = true
+    conflictMessage.value =
+      'Konflik selesai. Gunakan Sync Sekarang untuk mengirim ulang data lokal.'
+    await syncPushStore.refreshPendingCount()
+  } else {
+    conflictSuccess.value = false
+    conflictMessage.value = result.message || 'Gagal menyelesaikan konflik.'
   }
 }
 
@@ -201,6 +234,7 @@ onMounted(async () => {
   if (cloudStore.isAuthenticated) {
     step.value = 'done'
     await syncPushStore.refreshPendingCount()
+    await syncConflictStore.loadConflicts()
   }
 })
 </script>
@@ -394,6 +428,64 @@ onMounted(async () => {
           :class="pullSuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'"
         >
           {{ pullMessage }}
+        </p>
+      </div>
+
+      <!-- P15: Manual Conflict Resolution Section -->
+      <div
+        v-if="canSync && syncConflictStore.openConflictCount > 0"
+        id="cloud-conflict-section"
+        class="space-y-3 rounded-2xl border border-danger/20 bg-danger/5 p-4"
+      >
+        <div>
+          <p class="text-sm font-semibold text-danger">Konflik Sinkronisasi</p>
+          <p class="text-xs text-ink-secondary">
+            Ada {{ syncConflictStore.openConflictCount }} data konflik yang memerlukan keputusan manual Anda
+          </p>
+        </div>
+
+        <div class="space-y-2">
+          <div
+            v-for="conflict in syncConflictStore.openConflicts"
+            :key="conflict.id"
+            :id="`conflict-item-${conflict.id}`"
+            class="flex flex-col gap-2 rounded-xl bg-surface p-3 sm:flex-row sm:items-center sm:justify-between"
+          >
+            <div class="text-xs">
+              <span class="font-semibold text-ink-primary uppercase">{{ conflict.serverEntity || conflict.entityType }}</span>
+              <span class="text-ink-secondary"> • ID: {{ conflict.entityId }}</span>
+              <span class="text-ink-secondary"> • Server Version: {{ conflict.serverSyncVersion }}</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <BaseButton
+                :id="`use-server-btn-${conflict.id}`"
+                variant="secondary"
+                size="sm"
+                :loading="syncConflictStore.loading"
+                @click="handleUseServer(conflict.id)"
+              >
+                Gunakan Cloud
+              </BaseButton>
+              <BaseButton
+                :id="`keep-local-btn-${conflict.id}`"
+                variant="primary"
+                size="sm"
+                :loading="syncConflictStore.loading"
+                @click="handleKeepLocal(conflict.id)"
+              >
+                Pertahankan Lokal
+              </BaseButton>
+            </div>
+          </div>
+        </div>
+
+        <p
+          v-if="conflictMessage"
+          id="conflict-result-message"
+          class="rounded-xl px-3 py-2 text-xs font-medium"
+          :class="conflictSuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'"
+        >
+          {{ conflictMessage }}
         </p>
       </div>
 

@@ -618,6 +618,145 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
     async saveSyncBootstrapState(state) {
       await writeMetaValue('sync_bootstrap_state_v1', state)
     },
+    // P15: sync conflicts (durable, survives restart & logout)
+    async loadSyncConflicts() {
+      return readMetaValue('sync_conflicts_v1', null)
+    },
+    async saveSyncConflicts(conflictsState) {
+      await writeMetaValue('sync_conflicts_v1', conflictsState)
+    },
+    async clearSyncConflicts() {
+      const db = await ensureConnection()
+      await db.run("DELETE FROM app_meta WHERE key = 'sync_conflicts_v1'", [])
+    },
+    async persistSyncConflictsAndClearInflightAtomic({ expectedRequestId, conflictsState }) {
+      return await withTransaction(async (db) => {
+        const { values = [] } = await db.query(
+          'SELECT value FROM app_meta WHERE key = ? LIMIT 1',
+          ['sync_push_inflight_v1'],
+        )
+
+        if (!values.length || !values[0].value) {
+          return {
+            ok: false,
+            code: 'SYNC_CONFLICT_INFLIGHT_MISSING',
+            message: 'In-flight sync push envelope is missing.',
+          }
+        }
+
+        let inflight
+        try {
+          inflight = JSON.parse(values[0].value)
+        } catch {
+          return {
+            ok: false,
+            code: 'SYNC_CONFLICT_INFLIGHT_MISSING',
+            message: 'In-flight sync push envelope is corrupted.',
+          }
+        }
+
+        if (String(inflight.requestId) !== String(expectedRequestId)) {
+          return {
+            ok: false,
+            code: 'SYNC_CONFLICT_INFLIGHT_MISMATCH',
+            message: `In-flight requestId mismatch: expected ${expectedRequestId}, found ${inflight.requestId}`,
+          }
+        }
+
+        await db.run(
+          'INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)',
+          ['sync_conflicts_v1', JSON.stringify(conflictsState)],
+          false,
+        )
+
+        const deleteResult = await db.run(
+          'DELETE FROM app_meta WHERE key = ?',
+          ['sync_push_inflight_v1'],
+          false,
+        )
+
+        const changes = deleteResult?.changes?.changes ?? 0
+        if (Number(changes) !== 1) {
+          throw new Error('Failed to delete in-flight envelope atomically.')
+        }
+
+        return {
+          ok: true,
+          code: 'SYNC_CONFLICT_PERSISTED',
+        }
+      })
+    },
+    async resolveSyncConflictUseServerAtomic({ queueSnapshot, conflictsState }) {
+      if (!queueSnapshot || !queueSnapshot.id) {
+        return {
+          ok: false,
+          code: 'SYNC_CONFLICT_QUEUE_MISSING',
+          message: 'Queue snapshot is required for atomic useServer resolution.',
+        }
+      }
+
+      return await withTransaction(async (db) => {
+        const { values = [] } = await db.query(
+          'SELECT id, updated_at, operation, payload FROM sync_queue WHERE id = ? LIMIT 1',
+          [queueSnapshot.id],
+        )
+
+        if (!values.length) {
+          return {
+            ok: false,
+            code: 'SYNC_CONFLICT_QUEUE_MISSING',
+            message: 'Queue item is missing from sync_queue.',
+          }
+        }
+
+        const existingRow = values[0]
+        const snapPayloadStr =
+          queueSnapshot.payload === null || queueSnapshot.payload === undefined
+            ? null
+            : JSON.stringify(queueSnapshot.payload)
+
+        const isUnchanged =
+          String(existingRow.updated_at) === String(queueSnapshot.updatedAt) &&
+          String(existingRow.operation) === String(queueSnapshot.operation) &&
+          (existingRow.payload === snapPayloadStr ||
+            (existingRow.payload === null && snapPayloadStr === null))
+
+        if (!isUnchanged) {
+          return {
+            ok: false,
+            code: 'SYNC_CONFLICT_LOCAL_CHANGED',
+            message: 'Local queue item has changed since conflict was recorded.',
+          }
+        }
+
+        await db.run(
+          `DELETE FROM sync_queue
+           WHERE id = ?
+             AND updated_at = ?
+             AND operation = ?
+             AND ((payload IS NULL AND ? IS NULL) OR payload = ?)`,
+          [
+            queueSnapshot.id,
+            queueSnapshot.updatedAt,
+            queueSnapshot.operation,
+            snapPayloadStr,
+            snapPayloadStr,
+          ],
+          false,
+        )
+
+        await db.run(
+          'INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)',
+          ['sync_conflicts_v1', JSON.stringify(conflictsState)],
+          false,
+        )
+
+        return {
+          ok: true,
+          code: 'SYNC_CONFLICT_RESOLVED',
+        }
+      })
+    },
     async close() {
       if (!dbConnection) {
         return

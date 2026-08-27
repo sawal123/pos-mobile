@@ -40,9 +40,35 @@ function isPositiveInteger(value) {
  * @param {object} [options.scheduler] Optional serialized task scheduler.
  * @returns {Promise<object>}
  */
+function extractServerSyncVersion(serverVersions, entityKey, syncId) {
+  if (!serverVersions || typeof serverVersions !== 'object' || !syncId) return undefined
+  // 1. Flat format P13: `${entityKey}:${syncId}`
+  const flatKey = `${entityKey}:${syncId}`
+  const flatVal = serverVersions[flatKey]
+  if (flatVal !== undefined && flatVal !== null) {
+    if (typeof flatVal === 'object' && flatVal.syncVersion !== undefined) {
+      return Number(flatVal.syncVersion)
+    }
+    if (Number.isInteger(Number(flatVal))) {
+      return Number(flatVal)
+    }
+  }
+  // 2. Nested format: serverVersions[entityKey]?.[syncId]
+  const nestedVal = serverVersions[entityKey]?.[syncId]
+  if (nestedVal !== undefined && nestedVal !== null) {
+    if (typeof nestedVal === 'object' && nestedVal.syncVersion !== undefined) {
+      return Number(nestedVal.syncVersion)
+    }
+    if (Number.isInteger(Number(nestedVal))) {
+      return Number(nestedVal)
+    }
+  }
+  return undefined
+}
+
 export async function mapOutboxEntries(
   entries = [],
-  { registry = null, adapter = null, scheduler = null } = {},
+  { registry = null, adapter = null, scheduler = null, serverVersions: serverVersionsParam = null } = {},
 ) {
   let activeRegistry = registry
   if (!activeRegistry && adapter) {
@@ -54,6 +80,11 @@ export async function mapOutboxEntries(
   }
 
   await activeRegistry.ensureLoaded()
+
+  const serverVersions =
+    adapter && typeof adapter.loadSyncServerVersions === 'function'
+      ? (await adapter.loadSyncServerVersions()) || {}
+      : serverVersionsParam || {}
 
   const changes = {
     categories: [],
@@ -151,10 +182,15 @@ export async function mapOutboxEntries(
         continue
       }
 
-      changes.categories.push({
+      const categoryChange = {
         sync_id: syncId,
         name: trimmedName,
-      })
+      }
+      const catBaseVer = extractServerSyncVersion(serverVersions, 'categories', syncId)
+      if (catBaseVer !== undefined) {
+        categoryChange.base_sync_version = catBaseVer
+      }
+      changes.categories.push(categoryChange)
       mappedQueueIds.push(queueId)
       continue
     }
@@ -224,7 +260,7 @@ export async function mapOutboxEntries(
         })
       }
 
-      changes.products.push({
+      const productChange = {
         sync_id: syncId,
         category_sync_id: categorySyncId,
         name: payload.name.trim(),
@@ -232,7 +268,12 @@ export async function mapOutboxEntries(
         barcode: null,
         price: payload.price,
         status,
-      })
+      }
+      const prodBaseVer = extractServerSyncVersion(serverVersions, 'products', syncId)
+      if (prodBaseVer !== undefined) {
+        productChange.base_sync_version = prodBaseVer
+      }
+      changes.products.push(productChange)
       mappedQueueIds.push(queueId)
       continue
     }
@@ -287,14 +328,19 @@ export async function mapOutboxEntries(
         continue
       }
 
-      changes.customers.push({
+      const customerChange = {
         sync_id: syncId,
         name: payload.name.trim(),
         phone,
         email,
         address: null,
         notes: null,
-      })
+      }
+      const custBaseVer = extractServerSyncVersion(serverVersions, 'customers', syncId)
+      if (custBaseVer !== undefined) {
+        customerChange.base_sync_version = custBaseVer
+      }
+      changes.customers.push(customerChange)
       mappedQueueIds.push(queueId)
       continue
     }
@@ -370,14 +416,19 @@ export async function mapOutboxEntries(
           ? payload.notes.trim()
           : null
 
-      changes.expenses.push({
+      const expenseChange = {
         sync_id: syncId,
         shift_sync_id: null,
         description: description.trim(),
         amount: payload.amount,
         occurred_at: new Date(occurredAt).toISOString(),
         notes,
-      })
+      }
+      const expBaseVer = extractServerSyncVersion(serverVersions, 'expenses', syncId)
+      if (expBaseVer !== undefined) {
+        expenseChange.base_sync_version = expBaseVer
+      }
+      changes.expenses.push(expenseChange)
       mappedQueueIds.push(queueId)
       continue
     }
@@ -520,7 +571,7 @@ export async function mapOutboxEntries(
         const sku = buildProductSyncSku(prodSyncId)
         const lineTotal = item.price * qty
 
-        mappedSaleItems.push({
+        const saleItemChange = {
           sync_id: itemSyncId,
           sale_sync_id: saleSyncId,
           product_sync_id: prodSyncId,
@@ -529,7 +580,12 @@ export async function mapOutboxEntries(
           unit_price: item.price,
           quantity: qty,
           line_total: lineTotal,
-        })
+        }
+        const itemBaseVer = extractServerSyncVersion(serverVersions, 'sale_items', itemSyncId)
+        if (itemBaseVer !== undefined) {
+          saleItemChange.base_sync_version = itemBaseVer
+        }
+        mappedSaleItems.push(saleItemChange)
       }
 
       if (itemValidationError) {
@@ -568,7 +624,7 @@ export async function mapOutboxEntries(
 
       const status = isNonEmptyString(payload.status) ? payload.status.trim() : 'completed'
 
-      changes.sales.push({
+      const saleChange = {
         sync_id: saleSyncId,
         customer_sync_id: customerSyncId,
         shift_sync_id: null,
@@ -579,7 +635,12 @@ export async function mapOutboxEntries(
         tax_amount: taxAmount,
         total_amount: payload.total,
         sold_at: new Date(soldAt).toISOString(),
-      })
+      }
+      const saleBaseVer = extractServerSyncVersion(serverVersions, 'sales', saleSyncId)
+      if (saleBaseVer !== undefined) {
+        saleChange.base_sync_version = saleBaseVer
+      }
+      changes.sales.push(saleChange)
 
       changes.sale_items.push(...mappedSaleItems)
       mappedQueueIds.push(queueId)
