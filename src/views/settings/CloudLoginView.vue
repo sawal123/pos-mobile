@@ -484,7 +484,9 @@ onMounted(async () => {
                 ? 'Completed'
                 : syncHealthStore.summary.bootstrapStatus === 'staged'
                   ? 'Staged'
-                  : 'Belum'
+                  : syncHealthStore.summary.bootstrapStatus === 'invalid'
+                    ? 'Invalid'
+                    : 'Belum'
             }}
           </div>
         </div>

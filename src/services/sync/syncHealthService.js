@@ -14,6 +14,16 @@ export function createSyncHealthService({
   queueService = null,
   conflictService = null,
 } = {}) {
+  const REQUIRED_CHANGES_KEYS = [
+    'categories',
+    'products',
+    'customers',
+    'shifts',
+    'sales',
+    'sale_items',
+    'expenses',
+  ]
+
   /**
    * Evaluates the health of the local sync subsystem against the provided Cloud Context.
    *
@@ -183,14 +193,17 @@ export function createSyncHealthService({
       if (rawConflictState != null) {
         let isConflictStateValid =
           typeof rawConflictState === 'object' &&
+          rawConflictState !== null &&
+          !Array.isArray(rawConflictState) &&
           rawConflictState.version === 1 &&
           Array.isArray(rawConflictState.conflicts)
 
         if (isConflictStateValid) {
           for (const c of rawConflictState.conflicts) {
-            const isConflictItemValid =
+            const isBaseConflictValid =
               c &&
               typeof c === 'object' &&
+              !Array.isArray(c) &&
               typeof c.id === 'string' &&
               c.id.trim().length > 0 &&
               typeof c.requestId === 'string' &&
@@ -206,12 +219,35 @@ export function createSyncHealthService({
               c.serverSyncVersion != null &&
               Number.isInteger(Number(c.serverSyncVersion)) &&
               Number(c.serverSyncVersion) >= 0 &&
-              (c.status === 'open' || c.status === 'resolved') &&
-              (c.status !== 'open' || (typeof c.queueSnapshot === 'object' && c.queueSnapshot !== null))
+              (c.status === 'open' || c.status === 'resolved')
 
-            if (!isConflictItemValid) {
+            if (!isBaseConflictValid) {
               isConflictStateValid = false
               break
+            }
+
+            if (c.status === 'open') {
+              const snap = c.queueSnapshot
+              const isOpenSnapValid =
+                snap &&
+                typeof snap === 'object' &&
+                !Array.isArray(snap) &&
+                typeof snap.id === 'string' &&
+                snap.id.trim().length > 0 &&
+                typeof snap.entityType === 'string' &&
+                snap.entityType.trim().length > 0 &&
+                snap.entityId != null &&
+                String(snap.entityId).trim().length > 0 &&
+                typeof snap.operation === 'string' &&
+                snap.operation.trim().length > 0 &&
+                snap.updatedAt != null &&
+                String(snap.updatedAt).trim().length > 0 &&
+                String(snap.id) === String(c.queueId)
+
+              if (!isOpenSnapValid) {
+                isConflictStateValid = false
+                break
+              }
             }
           }
         }
@@ -235,15 +271,18 @@ export function createSyncHealthService({
         })
       }
 
-      // ── 5. Read & Validate Push Binding ───────────────────────────────────
+      // ── 5. Read & Validate Push Binding (Strict P12 Number Type) ───────────
       const pushBinding = await adapter.loadSyncPushBinding()
+      let isPushBindingValid = false
 
       if (pushBinding != null) {
-        const isPushBindingValid =
+        isPushBindingValid =
           typeof pushBinding === 'object' &&
-          pushBinding.businessId != null &&
-          Number.isInteger(Number(pushBinding.businessId)) &&
-          Number(pushBinding.businessId) > 0
+          pushBinding !== null &&
+          !Array.isArray(pushBinding) &&
+          typeof pushBinding.businessId === 'number' &&
+          Number.isInteger(pushBinding.businessId) &&
+          pushBinding.businessId > 0
 
         if (!isPushBindingValid) {
           issues.push({
@@ -251,7 +290,7 @@ export function createSyncHealthService({
             severity: 'blocked',
             message: 'Metadata push binding lokal tidak valid.',
           })
-        } else if (Number(pushBinding.businessId) !== currentBusinessId) {
+        } else if (pushBinding.businessId !== currentBusinessId) {
           issues.push({
             code: 'SYNC_PUSH_BINDING_MISMATCH',
             severity: 'blocked',
@@ -266,6 +305,8 @@ export function createSyncHealthService({
       if (pullBinding != null) {
         const isPullBindingValid =
           typeof pullBinding === 'object' &&
+          pullBinding !== null &&
+          !Array.isArray(pullBinding) &&
           pullBinding.businessId != null &&
           Number.isInteger(Number(pullBinding.businessId)) &&
           Number(pullBinding.businessId) > 0 &&
@@ -306,8 +347,16 @@ export function createSyncHealthService({
       const hasInflight = Boolean(inflightEnvelope)
 
       if (inflightEnvelope != null) {
+        const isChangesValid =
+          typeof inflightEnvelope.changes === 'object' &&
+          inflightEnvelope.changes !== null &&
+          !Array.isArray(inflightEnvelope.changes) &&
+          REQUIRED_CHANGES_KEYS.every((k) => Array.isArray(inflightEnvelope.changes[k]))
+
         let isInflightValid =
           typeof inflightEnvelope === 'object' &&
+          inflightEnvelope !== null &&
+          !Array.isArray(inflightEnvelope) &&
           inflightEnvelope.version === 1 &&
           typeof inflightEnvelope.requestId === 'string' &&
           inflightEnvelope.requestId.trim().length > 0 &&
@@ -326,14 +375,14 @@ export function createSyncHealthService({
           String(inflightEnvelope.createdAt).trim().length > 0 &&
           Array.isArray(inflightEnvelope.queueSnapshots) &&
           inflightEnvelope.queueSnapshots.length > 0 &&
-          typeof inflightEnvelope.changes === 'object' &&
-          inflightEnvelope.changes !== null
+          isChangesValid
 
         if (isInflightValid) {
           for (const snap of inflightEnvelope.queueSnapshots) {
             const isSnapValid =
               snap &&
               typeof snap === 'object' &&
+              !Array.isArray(snap) &&
               typeof snap.id === 'string' &&
               snap.id.trim().length > 0 &&
               typeof snap.entityType === 'string' &&
@@ -385,9 +434,14 @@ export function createSyncHealthService({
       const bootstrapState = await adapter.loadSyncBootstrapState()
       let bootstrapStatus = 'none'
 
+      const isPushBindingValidAndMatch =
+        isPushBindingValid && pushBinding?.businessId === currentBusinessId
+
       if (bootstrapState != null) {
         const isBootstrapStructValid =
           typeof bootstrapState === 'object' &&
+          bootstrapState !== null &&
+          !Array.isArray(bootstrapState) &&
           bootstrapState.version === 1 &&
           (bootstrapState.status === 'staged' || bootstrapState.status === 'completed') &&
           bootstrapState.businessId != null &&
@@ -424,14 +478,18 @@ export function createSyncHealthService({
               message: 'Data bootstrap lokal terikat pada konteks Business/Outlet/Device yang berbeda.',
             })
           } else if (bootstrapState.status === 'staged') {
-            issues.push({
-              code: 'SYNC_BOOTSTRAP_STAGED',
-              severity: 'attention',
-              message: 'Data lokal sudah disiapkan (staged) dan siap disinkronkan ke cloud.',
-            })
+            // Only generate attention if push binding is not established or pending items remain
+            const needsBootstrapAttention = !isPushBindingValidAndMatch || pendingCount > 0
+            if (needsBootstrapAttention) {
+              issues.push({
+                code: 'SYNC_BOOTSTRAP_STAGED',
+                severity: 'attention',
+                message: 'Data lokal sudah disiapkan (staged) dan siap disinkronkan ke cloud.',
+              })
+            }
           }
         }
-      } else if (!pushBinding) {
+      } else if (!isPushBindingValidAndMatch) {
         issues.push({
           code: 'SYNC_BOOTSTRAP_NOT_PREPARED',
           severity: 'attention',
@@ -446,6 +504,8 @@ export function createSyncHealthService({
       if (pullState != null) {
         const isPullStateValid =
           typeof pullState === 'object' &&
+          pullState !== null &&
+          !Array.isArray(pullState) &&
           pullState.version === 1 &&
           pullState.cursor != null &&
           Number.isInteger(Number(pullState.cursor)) &&
