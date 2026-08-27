@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { createSyncOrchestratorService } from '@/services/sync/syncOrchestratorService'
+import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 
 export const useSyncOrchestratorStore = defineStore('syncOrchestrator', () => {
   const loading = ref(false)
@@ -28,6 +29,19 @@ export const useSyncOrchestratorStore = defineStore('syncOrchestrator', () => {
   }
 
   async function syncAll(options = {}) {
+    if (loading.value === true) {
+      return {
+        ok: false,
+        code: 'SYNC_ALREADY_IN_PROGRESS',
+        stage: 'init',
+        message: 'A full sync operation is already in progress.',
+        error: {
+          code: 'SYNC_ALREADY_IN_PROGRESS',
+          message: 'A full sync operation is already in progress.',
+        },
+      }
+    }
+
     if (!_orchestratorService) {
       return {
         ok: false,
@@ -45,7 +59,24 @@ export const useSyncOrchestratorStore = defineStore('syncOrchestrator', () => {
     lastError.value = null
 
     try {
-      const result = await _orchestratorService.syncAll(options)
+      const cloudStore = useCloudSessionStore()
+      const context = options.context ?? {
+        user: cloudStore.user ? { ...cloudStore.user } : null,
+        selectedBusiness: cloudStore.selectedBusiness
+          ? { ...cloudStore.selectedBusiness }
+          : null,
+        selectedOutlet: cloudStore.selectedOutlet
+          ? { ...cloudStore.selectedOutlet }
+          : null,
+        cloudAccess: cloudStore.cloudAccess === true,
+        deviceIdentifier: cloudStore.deviceIdentifier,
+        registeredDeviceId: cloudStore.registeredDeviceId,
+      }
+
+      const result = await _orchestratorService.syncAll({
+        ...options,
+        context,
+      })
       lastResult.value = result
 
       if (result.ok && result.code === 'SYNC_ALL_COMPLETED') {
@@ -84,3 +115,4 @@ export const useSyncOrchestratorStore = defineStore('syncOrchestrator', () => {
     getOrchestratorService: () => _orchestratorService,
   }
 })
+

@@ -4,8 +4,12 @@
  *
  * Sequence:
  * 1. Push local mutations (pushNow)
- * 2. If push is clean & completed (remaining === 0) -> Pull cloud changes (pullNow)
- * 3. If push has remaining items or produces conflict/error -> STOP (do not pull)
+ * 2. If push produces error or conflict -> STOP (do not pull)
+ * 3. Check open conflicts in conflictService -> If any, STOP (SYNC_CONFLICT_PENDING)
+ * 4. Validate remaining -> If invalid, STOP (SYNC_INVALID_PUSH_RESULT)
+ * 5. If blocked entries exist and remaining > 0 -> STOP (SYNC_PUSH_BLOCKED_PENDING)
+ * 6. If remaining > 0 -> STOP (SYNC_MORE_PUSH_PENDING)
+ * 7. Pull cloud changes (pullNow)
  *
  * @param {object} options
  * @param {object} options.pushService SyncPushService instance
@@ -67,8 +71,24 @@ export function createSyncOrchestratorService({
     isSyncing = true
 
     try {
-      // ── Step 1: Execute Push ─────────────────────────────────────────────
-      const pushResult = await pushService.pushNow(options)
+      // ── Step 1: Execute Push (wrapped for unexpected exceptions) ───────────
+      let pushResult
+      try {
+        pushResult = await pushService.pushNow(options)
+      } catch (err) {
+        return {
+          ok: false,
+          code: 'SYNC_PUSH_EXCEPTION',
+          stage: 'push',
+          message: err instanceof Error ? err.message : String(err),
+          push: null,
+          pull: null,
+          error: {
+            code: 'SYNC_PUSH_EXCEPTION',
+            message: err instanceof Error ? err.message : String(err),
+          },
+        }
+      }
 
       // ── Step 2: Evaluate Push Result ─────────────────────────────────────
       if (!pushResult || !pushResult.ok) {
@@ -81,14 +101,85 @@ export function createSyncOrchestratorService({
             pushResult?.message ??
             pushResult?.error?.message ??
             'Sinkronisasi push data lokal gagal.',
-          push: pushResult,
+          push: pushResult ?? null,
           pull: null,
           error: pushResult?.error ?? null,
         }
       }
 
-      // If push succeeded but still has remaining items in outbox (e.g. batch limit)
-      const remaining = Number(pushResult.remaining ?? 0)
+      // ── Step 3: Check Open Conflicts ─────────────────────────────────────
+      if (conflictService && typeof conflictService.countOpenConflicts === 'function') {
+        let openConflictCount = 0
+        try {
+          openConflictCount = await conflictService.countOpenConflicts()
+        } catch (err) {
+          return {
+            ok: false,
+            code: 'SYNC_CONFLICT_STATE_READ_FAILED',
+            stage: 'push',
+            message: 'Gagal memeriksa status konflik sinkronisasi.',
+            push: pushResult,
+            pull: null,
+            error: {
+              code: 'SYNC_CONFLICT_STATE_READ_FAILED',
+              message: err instanceof Error ? err.message : String(err),
+            },
+          }
+        }
+
+        if (openConflictCount > 0) {
+          return {
+            ok: false,
+            code: 'SYNC_CONFLICT_PENDING',
+            stage: 'push',
+            message: 'Ada konflik sinkronisasi yang harus diselesaikan terlebih dahulu.',
+            push: pushResult,
+            pull: null,
+            openConflictCount,
+          }
+        }
+      }
+
+      // ── Step 4: Validate remaining Fail Closed ────────────────────────────
+      const isRemainingValid =
+        pushResult.remaining !== null &&
+        pushResult.remaining !== undefined &&
+        pushResult.remaining !== '' &&
+        Number.isInteger(Number(pushResult.remaining)) &&
+        Number(pushResult.remaining) >= 0
+
+      if (!isRemainingValid) {
+        return {
+          ok: false,
+          code: 'SYNC_INVALID_PUSH_RESULT',
+          stage: 'push',
+          message: 'Hasil push tidak valid.',
+          push: pushResult,
+          pull: null,
+        }
+      }
+
+      const remaining = Number(pushResult.remaining)
+
+      // ── Step 5: Check Blocked Pending ────────────────────────────────────
+      if (
+        remaining > 0 &&
+        Array.isArray(pushResult.blocked) &&
+        pushResult.blocked.length > 0
+      ) {
+        return {
+          ok: false,
+          code: 'SYNC_PUSH_BLOCKED_PENDING',
+          stage: 'push',
+          message: 'Ada data lokal yang belum dapat disinkronkan dan perlu diperiksa.',
+          push: pushResult,
+          pull: null,
+          blocked: pushResult.blocked,
+          remaining,
+        }
+      }
+
+      // ── Step 6: Check Normal More Pending ────────────────────────────────
       if (remaining > 0) {
         return {
           ok: false,
@@ -101,8 +192,24 @@ export function createSyncOrchestratorService({
         }
       }
 
-      // ── Step 3: Execute Pull (only when push is completely clean) ─────────
-      const pullResult = await pullService.pullNow(options)
+      // ── Step 7: Execute Pull (only when push is completely clean) ─────────
+      let pullResult
+      try {
+        pullResult = await pullService.pullNow(options)
+      } catch (err) {
+        return {
+          ok: false,
+          code: 'SYNC_PULL_EXCEPTION',
+          stage: 'pull',
+          message: err instanceof Error ? err.message : String(err),
+          push: pushResult,
+          pull: null,
+          error: {
+            code: 'SYNC_PULL_EXCEPTION',
+            message: err instanceof Error ? err.message : String(err),
+          },
+        }
+      }
 
       if (!pullResult || !pullResult.ok) {
         return {
@@ -114,12 +221,12 @@ export function createSyncOrchestratorService({
             pullResult?.error?.message ??
             'Gagal menarik data cloud.',
           push: pushResult,
-          pull: pullResult,
+          pull: pullResult ?? null,
           error: pullResult?.error ?? null,
         }
       }
 
-      // ── Step 4: Both Push & Pull Completed Successfully ───────────────────
+      // ── Step 8: Both Push & Pull Completed Successfully ───────────────────
       return {
         ok: true,
         code: 'SYNC_ALL_COMPLETED',
