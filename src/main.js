@@ -13,6 +13,7 @@ import { useSyncPushStore } from './stores/syncPushStore'
 import { useSyncPullStore } from './stores/syncPullStore'
 import { useSyncBootstrapStore } from './stores/syncBootstrapStore'
 import { useSyncConflictStore } from './stores/syncConflictStore'
+import { useSyncOrchestratorStore } from './stores/syncOrchestratorStore'
 
 export async function bootstrapApp({
   appFactory = createApp,
@@ -70,6 +71,10 @@ export async function bootstrapApp({
         const syncConflictStore = useSyncConflictStore(pinia)
         syncConflictStore.init({ conflictService: syncFoundation.conflictService, adapter })
         await syncConflictStore.loadConflicts()
+      }
+      if (syncFoundation?.orchestratorService) {
+        const syncOrchestratorStore = useSyncOrchestratorStore(pinia)
+        syncOrchestratorStore.init({ orchestratorService: syncFoundation.orchestratorService })
       }
     } catch {
       // Never block POS startup on cloud errors

@@ -10,17 +10,21 @@ import { useSyncPushStore } from '@/stores/syncPushStore'
 import { useSyncPullStore } from '@/stores/syncPullStore'
 import { useSyncBootstrapStore } from '@/stores/syncBootstrapStore'
 import { useSyncConflictStore } from '@/stores/syncConflictStore'
+import { useSyncOrchestratorStore } from '@/stores/syncOrchestratorStore'
 
 const cloudStore = useCloudSessionStore()
 const syncPushStore = useSyncPushStore()
 const syncPullStore = useSyncPullStore()
 const syncBootstrapStore = useSyncBootstrapStore()
 const syncConflictStore = useSyncConflictStore()
+const syncOrchestratorStore = useSyncOrchestratorStore()
 
 // ── Form state ──────────────────────────────────────────────────────────────
 const email = ref('')
 const password = ref('')
 const step = ref('login') // 'login' | 'select-business' | 'select-outlet' | 'done'
+const syncAllMessage = ref('')
+const syncAllSuccess = ref(false)
 const syncMessage = ref('')
 const syncSuccess = ref(false)
 const pullMessage = ref('')
@@ -72,6 +76,33 @@ function getPlatform() {
     // web / test
   }
   return null
+}
+
+async function handleSyncAll() {
+  syncAllMessage.value = ''
+  const result = await syncOrchestratorStore.syncAll()
+  await syncConflictStore.loadConflicts()
+  await syncPushStore.refreshPendingCount()
+
+  if (result.ok) {
+    syncAllSuccess.value = true
+    const sent = result.push?.removedQueueIds?.length ?? 0
+    const applied = result.pull?.applied ?? 0
+    if (sent === 0 && applied === 0) {
+      syncAllMessage.value = 'Sinkronisasi selesai. Semua data sudah terbaru.'
+    } else {
+      syncAllMessage.value = `Sinkronisasi selesai. ${sent} data dikirim, ${applied} perubahan diterapkan.`
+    }
+  } else {
+    syncAllSuccess.value = false
+    if (result.code === 'SYNC_MORE_PUSH_PENDING') {
+      syncAllMessage.value =
+        'Masih ada data lokal yang menunggu dikirim. Tekan Sinkronkan Semua kembali.'
+    } else {
+      syncAllMessage.value =
+        result.error?.message ?? result.message ?? 'Sinkronisasi gagal.'
+    }
+  }
 }
 
 async function handleSyncNow() {
@@ -360,6 +391,41 @@ onMounted(async () => {
         class="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-medium text-emerald-800"
       >
         Data lokal siap disinkronkan. Gunakan Sync Sekarang.
+      </div>
+
+      <!-- P16: Manual Full Sync Section -->
+      <div
+        v-if="canSync"
+        id="cloud-sync-all-section"
+        class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
+      >
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-sm font-semibold text-ink-primary">Sinkronkan Semua</p>
+            <p class="text-xs text-ink-secondary">
+              Kirim data lokal tertunda lalu ambil pembaruan dari cloud
+            </p>
+          </div>
+          <BaseButton
+            id="sync-all-btn"
+            variant="primary"
+            size="sm"
+            :disabled="syncBootstrapStore.hasContextMismatch || syncPushStore.loading || syncPullStore.loading"
+            :loading="syncOrchestratorStore.loading"
+            @click="handleSyncAll"
+          >
+            Sinkronkan Semua
+          </BaseButton>
+        </div>
+
+        <p
+          v-if="syncAllMessage"
+          id="sync-all-result-message"
+          class="rounded-xl px-3 py-2 text-xs font-medium"
+          :class="syncAllSuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'"
+        >
+          {{ syncAllMessage }}
+        </p>
       </div>
 
       <!-- P12: Manual Sync Section -->
