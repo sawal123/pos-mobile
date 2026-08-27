@@ -10,17 +10,21 @@ import { useSyncPushStore } from '@/stores/syncPushStore'
 import { useSyncPullStore } from '@/stores/syncPullStore'
 import { useSyncBootstrapStore } from '@/stores/syncBootstrapStore'
 import { useSyncConflictStore } from '@/stores/syncConflictStore'
+import { useSyncOrchestratorStore } from '@/stores/syncOrchestratorStore'
 
 const cloudStore = useCloudSessionStore()
 const syncPushStore = useSyncPushStore()
 const syncPullStore = useSyncPullStore()
 const syncBootstrapStore = useSyncBootstrapStore()
 const syncConflictStore = useSyncConflictStore()
+const syncOrchestratorStore = useSyncOrchestratorStore()
 
 // ── Form state ──────────────────────────────────────────────────────────────
 const email = ref('')
 const password = ref('')
 const step = ref('login') // 'login' | 'select-business' | 'select-outlet' | 'done'
+const syncAllMessage = ref('')
+const syncAllSuccess = ref(false)
 const syncMessage = ref('')
 const syncSuccess = ref(false)
 const pullMessage = ref('')
@@ -31,6 +35,17 @@ const conflictMessage = ref('')
 const conflictSuccess = ref(false)
 
 // ── Derived ─────────────────────────────────────────────────────────────────
+// ── Derived ─────────────────────────────────────────────────────────────────
+const isAnySyncOperationBusy = computed(
+  () =>
+    syncOrchestratorStore.loading ||
+    syncPushStore.loading ||
+    syncPullStore.loading ||
+    syncBootstrapStore.loading ||
+    syncConflictStore.loading ||
+    cloudStore.loading,
+)
+
 const isZeroBusiness = computed(
   () =>
     cloudStore.isAuthenticated &&
@@ -74,7 +89,42 @@ function getPlatform() {
   return null
 }
 
+async function handleSyncAll() {
+  if (isAnySyncOperationBusy.value) return
+  syncAllMessage.value = ''
+  const result = await syncOrchestratorStore.syncAll()
+  await syncConflictStore.loadConflicts()
+  await syncPushStore.refreshPendingCount()
+
+  if (result.ok) {
+    syncAllSuccess.value = true
+    const sent = result.push?.removedQueueIds?.length ?? 0
+    const applied = result.pull?.applied ?? 0
+    if (sent === 0 && applied === 0) {
+      syncAllMessage.value = 'Sinkronisasi selesai. Semua data sudah terbaru.'
+    } else {
+      syncAllMessage.value = `Sinkronisasi selesai. ${sent} data dikirim, ${applied} perubahan diterapkan.`
+    }
+  } else {
+    syncAllSuccess.value = false
+    if (result.code === 'SYNC_MORE_PUSH_PENDING') {
+      syncAllMessage.value =
+        'Masih ada data lokal yang menunggu dikirim. Tekan Sinkronkan Semua kembali.'
+    } else if (result.code === 'SYNC_CONFLICT_PENDING') {
+      syncAllMessage.value =
+        'Ada konflik sinkronisasi yang harus diselesaikan terlebih dahulu.'
+    } else if (result.code === 'SYNC_PUSH_BLOCKED_PENDING') {
+      syncAllMessage.value =
+        'Ada data lokal yang belum dapat disinkronkan dan perlu diperiksa.'
+    } else {
+      syncAllMessage.value =
+        result.error?.message ?? result.message ?? 'Sinkronisasi gagal.'
+    }
+  }
+}
+
 async function handleSyncNow() {
+  if (isAnySyncOperationBusy.value) return
   syncMessage.value = ''
   const result = await syncPushStore.pushNow()
   await syncConflictStore.loadConflicts()
@@ -94,6 +144,7 @@ async function handleSyncNow() {
 }
 
 async function handlePullNow() {
+  if (isAnySyncOperationBusy.value) return
   pullMessage.value = ''
   const result = await syncPullStore.pullNow()
   await syncConflictStore.loadConflicts()
@@ -112,6 +163,7 @@ async function handlePullNow() {
 }
 
 async function handleBootstrapNow() {
+  if (isAnySyncOperationBusy.value) return
   bootstrapMessage.value = ''
   const result = await syncBootstrapStore.bootstrapNow()
   if (result.ok) {
@@ -130,6 +182,7 @@ async function handleBootstrapNow() {
 }
 
 async function handleUseServer(conflictId) {
+  if (isAnySyncOperationBusy.value) return
   conflictMessage.value = ''
   const result = await syncConflictStore.useServer(conflictId)
   if (result.ok) {
@@ -143,6 +196,7 @@ async function handleUseServer(conflictId) {
 }
 
 async function handleKeepLocal(conflictId) {
+  if (isAnySyncOperationBusy.value) return
   conflictMessage.value = ''
   const result = await syncConflictStore.keepLocal(conflictId)
   if (result.ok) {
@@ -223,6 +277,7 @@ async function tryRegisterDevice() {
 }
 
 async function handleLogout() {
+  if (isAnySyncOperationBusy.value) return
   await cloudStore.logout()
   email.value = ''
   password.value = ''
@@ -258,6 +313,7 @@ onMounted(async () => {
       <BaseButton
         id="cloud-logout-btn"
         variant="danger"
+        :disabled="isAnySyncOperationBusy"
         :loading="cloudStore.loading"
         @click="handleLogout"
       >
@@ -319,6 +375,7 @@ onMounted(async () => {
             id="bootstrap-btn"
             variant="primary"
             size="sm"
+            :disabled="isAnySyncOperationBusy"
             :loading="syncBootstrapStore.loading"
             @click="handleBootstrapNow"
           >
@@ -362,6 +419,41 @@ onMounted(async () => {
         Data lokal siap disinkronkan. Gunakan Sync Sekarang.
       </div>
 
+      <!-- P16: Manual Full Sync Section -->
+      <div
+        v-if="canSync"
+        id="cloud-sync-all-section"
+        class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
+      >
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-sm font-semibold text-ink-primary">Sinkronkan Semua</p>
+            <p class="text-xs text-ink-secondary">
+              Kirim data lokal tertunda lalu ambil pembaruan dari cloud
+            </p>
+          </div>
+          <BaseButton
+            id="sync-all-btn"
+            variant="primary"
+            size="sm"
+            :disabled="syncBootstrapStore.hasContextMismatch || isAnySyncOperationBusy"
+            :loading="syncOrchestratorStore.loading"
+            @click="handleSyncAll"
+          >
+            Sinkronkan Semua
+          </BaseButton>
+        </div>
+
+        <p
+          v-if="syncAllMessage"
+          id="sync-all-result-message"
+          class="rounded-xl px-3 py-2 text-xs font-medium"
+          :class="syncAllSuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'"
+        >
+          {{ syncAllMessage }}
+        </p>
+      </div>
+
       <!-- P12: Manual Sync Section -->
       <div
         v-if="canSync"
@@ -379,7 +471,7 @@ onMounted(async () => {
             id="sync-now-btn"
             variant="primary"
             size="sm"
-            :disabled="syncBootstrapStore.hasContextMismatch"
+            :disabled="syncBootstrapStore.hasContextMismatch || isAnySyncOperationBusy"
             :loading="syncPushStore.loading"
             @click="handleSyncNow"
           >
@@ -414,6 +506,7 @@ onMounted(async () => {
             id="pull-now-btn"
             variant="secondary"
             size="sm"
+            :disabled="isAnySyncOperationBusy"
             :loading="syncPullStore.loading"
             @click="handlePullNow"
           >
@@ -461,6 +554,7 @@ onMounted(async () => {
                 :id="`use-server-btn-${conflict.id}`"
                 variant="secondary"
                 size="sm"
+                :disabled="isAnySyncOperationBusy"
                 :loading="syncConflictStore.loading"
                 @click="handleUseServer(conflict.id)"
               >
@@ -470,6 +564,7 @@ onMounted(async () => {
                 :id="`keep-local-btn-${conflict.id}`"
                 variant="primary"
                 size="sm"
+                :disabled="isAnySyncOperationBusy"
                 :loading="syncConflictStore.loading"
                 @click="handleKeepLocal(conflict.id)"
               >
@@ -510,6 +605,7 @@ onMounted(async () => {
       <BaseButton
         id="cloud-logout-btn"
         variant="danger"
+        :disabled="isAnySyncOperationBusy"
         :loading="cloudStore.loading"
         @click="handleLogout"
       >
