@@ -11,6 +11,7 @@ import { useSyncPullStore } from '@/stores/syncPullStore'
 import { useSyncBootstrapStore } from '@/stores/syncBootstrapStore'
 import { useSyncConflictStore } from '@/stores/syncConflictStore'
 import { useSyncOrchestratorStore } from '@/stores/syncOrchestratorStore'
+import { useSyncHealthStore } from '@/stores/syncHealthStore'
 
 const cloudStore = useCloudSessionStore()
 const syncPushStore = useSyncPushStore()
@@ -18,6 +19,7 @@ const syncPullStore = useSyncPullStore()
 const syncBootstrapStore = useSyncBootstrapStore()
 const syncConflictStore = useSyncConflictStore()
 const syncOrchestratorStore = useSyncOrchestratorStore()
+const syncHealthStore = useSyncHealthStore()
 
 // ── Form state ──────────────────────────────────────────────────────────────
 const email = ref('')
@@ -35,7 +37,6 @@ const conflictMessage = ref('')
 const conflictSuccess = ref(false)
 
 // ── Derived ─────────────────────────────────────────────────────────────────
-// ── Derived ─────────────────────────────────────────────────────────────────
 const isAnySyncOperationBusy = computed(
   () =>
     syncOrchestratorStore.loading ||
@@ -43,6 +44,7 @@ const isAnySyncOperationBusy = computed(
     syncPullStore.loading ||
     syncBootstrapStore.loading ||
     syncConflictStore.loading ||
+    syncHealthStore.loading ||
     cloudStore.loading,
 )
 
@@ -78,6 +80,21 @@ watch(canSync, async (isReady) => {
   }
 })
 
+// Invalidate health result when cloud context changes
+watch(
+  () => [
+    cloudStore.user?.id,
+    cloudStore.selectedBusiness?.id,
+    cloudStore.selectedOutlet?.id,
+    cloudStore.cloudAccess,
+    cloudStore.deviceIdentifier,
+    cloudStore.registeredDeviceId,
+  ],
+  () => {
+    syncHealthStore.resetResult()
+  },
+)
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 function getPlatform() {
   try {
@@ -89,8 +106,14 @@ function getPlatform() {
   return null
 }
 
+async function handleCheckSyncHealth() {
+  if (isAnySyncOperationBusy.value) return
+  await syncHealthStore.checkHealth()
+}
+
 async function handleSyncAll() {
   if (isAnySyncOperationBusy.value) return
+  syncHealthStore.resetResult()
   syncAllMessage.value = ''
   const result = await syncOrchestratorStore.syncAll()
   await syncConflictStore.loadConflicts()
@@ -125,6 +148,7 @@ async function handleSyncAll() {
 
 async function handleSyncNow() {
   if (isAnySyncOperationBusy.value) return
+  syncHealthStore.resetResult()
   syncMessage.value = ''
   const result = await syncPushStore.pushNow()
   await syncConflictStore.loadConflicts()
@@ -145,6 +169,7 @@ async function handleSyncNow() {
 
 async function handlePullNow() {
   if (isAnySyncOperationBusy.value) return
+  syncHealthStore.resetResult()
   pullMessage.value = ''
   const result = await syncPullStore.pullNow()
   await syncConflictStore.loadConflicts()
@@ -164,6 +189,7 @@ async function handlePullNow() {
 
 async function handleBootstrapNow() {
   if (isAnySyncOperationBusy.value) return
+  syncHealthStore.resetResult()
   bootstrapMessage.value = ''
   const result = await syncBootstrapStore.bootstrapNow()
   if (result.ok) {
@@ -183,6 +209,7 @@ async function handleBootstrapNow() {
 
 async function handleUseServer(conflictId) {
   if (isAnySyncOperationBusy.value) return
+  syncHealthStore.resetResult()
   conflictMessage.value = ''
   const result = await syncConflictStore.useServer(conflictId)
   if (result.ok) {
@@ -197,6 +224,7 @@ async function handleUseServer(conflictId) {
 
 async function handleKeepLocal(conflictId) {
   if (isAnySyncOperationBusy.value) return
+  syncHealthStore.resetResult()
   conflictMessage.value = ''
   const result = await syncConflictStore.keepLocal(conflictId)
   if (result.ok) {
@@ -278,6 +306,7 @@ async function tryRegisterDevice() {
 
 async function handleLogout() {
   if (isAnySyncOperationBusy.value) return
+  syncHealthStore.resetResult()
   await cloudStore.logout()
   email.value = ''
   password.value = ''
@@ -417,6 +446,91 @@ onMounted(async () => {
         class="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-medium text-emerald-800"
       >
         Data lokal siap disinkronkan. Gunakan Sync Sekarang.
+      </div>
+
+      <!-- P17: Sync Health & Diagnostics Section -->
+      <div
+        v-if="canSync"
+        id="cloud-health-section"
+        class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
+      >
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-sm font-semibold text-ink-primary">Status Sinkronisasi</p>
+            <p class="text-xs text-ink-secondary">
+              Periksa kondisi outbox, konflik, envelope, dan binding lokal
+            </p>
+          </div>
+          <BaseButton
+            id="sync-health-btn"
+            variant="secondary"
+            size="sm"
+            :disabled="isAnySyncOperationBusy"
+            :loading="syncHealthStore.loading"
+            @click="handleCheckSyncHealth"
+          >
+            Periksa Status Sync
+          </BaseButton>
+        </div>
+
+        <div v-if="syncHealthStore.summary" class="grid grid-cols-2 gap-2 text-xs text-ink-secondary sm:grid-cols-3">
+          <div id="health-pending-count">Pending: {{ syncHealthStore.summary.pendingCount }}</div>
+          <div id="health-conflict-count">Konflik: {{ syncHealthStore.summary.openConflictCount }}</div>
+          <div id="health-inflight-status">In-flight: {{ syncHealthStore.summary.hasInflight ? 'Ya' : 'Tidak' }}</div>
+          <div id="health-pull-cursor">Pull Cursor: {{ syncHealthStore.summary.pullCursor }}</div>
+          <div id="health-bootstrap-status">
+            Bootstrap: {{
+              syncHealthStore.summary.bootstrapStatus === 'completed'
+                ? 'Completed'
+                : syncHealthStore.summary.bootstrapStatus === 'staged'
+                  ? 'Staged'
+                  : syncHealthStore.summary.bootstrapStatus === 'invalid'
+                    ? 'Invalid'
+                    : 'Belum'
+            }}
+          </div>
+        </div>
+
+        <div v-if="syncHealthStore.status">
+          <p
+            id="sync-health-status-message"
+            class="rounded-xl px-3 py-2 text-xs font-medium"
+            :class="{
+              'bg-emerald-50 text-emerald-700': syncHealthStore.status === 'ready',
+              'bg-amber-50 text-amber-700': syncHealthStore.status === 'attention',
+              'bg-danger/10 text-danger': syncHealthStore.status === 'blocked',
+            }"
+          >
+            {{
+              syncHealthStore.status === 'ready'
+                ? 'Status sinkronisasi lokal sehat.'
+                : syncHealthStore.status === 'attention'
+                  ? 'Sinkronisasi memerlukan perhatian.'
+                  : 'Sinkronisasi memerlukan tindakan sebelum dapat dilanjutkan.'
+            }}
+          </p>
+
+          <div v-if="syncHealthStore.issues && syncHealthStore.issues.length > 0" class="mt-2 space-y-1">
+            <div
+              v-for="(issue, index) in syncHealthStore.issues"
+              :key="`${issue.code}-${index}`"
+              :id="`health-issue-${issue.code}-${index}`"
+              class="flex items-center justify-between rounded-lg px-3 py-1.5 text-xs"
+              :class="issue.severity === 'blocked' ? 'bg-danger/5 text-danger' : 'bg-amber-500/10 text-amber-800'"
+            >
+              <span>{{ issue.message }}</span>
+              <span class="font-mono uppercase font-semibold text-[10px]">{{ issue.severity }}</span>
+            </div>
+          </div>
+
+          <p
+            v-if="syncHealthStore.lastCheckedAt"
+            id="health-last-checked-at"
+            class="mt-2 text-[10px] text-ink-secondary"
+          >
+            Terakhir diperiksa: {{ syncHealthStore.lastCheckedAt }}
+          </p>
+        </div>
       </div>
 
       <!-- P16: Manual Full Sync Section -->
