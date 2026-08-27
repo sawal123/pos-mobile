@@ -629,6 +629,63 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
       const db = await ensureConnection()
       await db.run("DELETE FROM app_meta WHERE key = 'sync_conflicts_v1'", [])
     },
+    async persistSyncConflictsAndClearInflightAtomic({ expectedRequestId, conflictsState }) {
+      return await withTransaction(async (db) => {
+        const { values = [] } = await db.query(
+          'SELECT value FROM app_meta WHERE key = ? LIMIT 1',
+          ['sync_push_inflight_v1'],
+        )
+
+        if (!values.length || !values[0].value) {
+          return {
+            ok: false,
+            code: 'SYNC_CONFLICT_INFLIGHT_MISSING',
+            message: 'In-flight sync push envelope is missing.',
+          }
+        }
+
+        let inflight
+        try {
+          inflight = JSON.parse(values[0].value)
+        } catch {
+          return {
+            ok: false,
+            code: 'SYNC_CONFLICT_INFLIGHT_MISSING',
+            message: 'In-flight sync push envelope is corrupted.',
+          }
+        }
+
+        if (String(inflight.requestId) !== String(expectedRequestId)) {
+          return {
+            ok: false,
+            code: 'SYNC_CONFLICT_INFLIGHT_MISMATCH',
+            message: `In-flight requestId mismatch: expected ${expectedRequestId}, found ${inflight.requestId}`,
+          }
+        }
+
+        await db.run(
+          'INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)',
+          ['sync_conflicts_v1', JSON.stringify(conflictsState)],
+          false,
+        )
+
+        const deleteResult = await db.run(
+          'DELETE FROM app_meta WHERE key = ?',
+          ['sync_push_inflight_v1'],
+          false,
+        )
+
+        const changes = deleteResult?.changes?.changes ?? 0
+        if (Number(changes) !== 1) {
+          throw new Error('Failed to delete in-flight envelope atomically.')
+        }
+
+        return {
+          ok: true,
+          code: 'SYNC_CONFLICT_PERSISTED',
+        }
+      })
+    },
     async resolveSyncConflictUseServerAtomic({ queueSnapshot, conflictsState }) {
       if (!queueSnapshot || !queueSnapshot.id) {
         return {

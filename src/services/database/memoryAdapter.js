@@ -298,6 +298,31 @@ export function createMemoryAdapter() {
     async clearSyncConflicts() {
       state.syncConflicts = null
     },
+    async persistSyncConflictsAndClearInflightAtomic({ expectedRequestId, conflictsState }) {
+      if (!state.syncPushInflight) {
+        return {
+          ok: false,
+          code: 'SYNC_CONFLICT_INFLIGHT_MISSING',
+          message: 'In-flight sync push envelope is missing.',
+        }
+      }
+
+      if (String(state.syncPushInflight.requestId) !== String(expectedRequestId)) {
+        return {
+          ok: false,
+          code: 'SYNC_CONFLICT_INFLIGHT_MISMATCH',
+          message: `In-flight requestId mismatch: expected ${expectedRequestId}, found ${state.syncPushInflight.requestId}`,
+        }
+      }
+
+      state.syncConflicts = cloneValue(conflictsState)
+      state.syncPushInflight = null
+
+      return {
+        ok: true,
+        code: 'SYNC_CONFLICT_PERSISTED',
+      }
+    },
     async resolveSyncConflictUseServerAtomic({ queueSnapshot, conflictsState }) {
       if (!queueSnapshot || !queueSnapshot.id) {
         return {

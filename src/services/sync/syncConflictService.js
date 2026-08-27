@@ -88,12 +88,15 @@ export function createSyncConflictService({
       }
     }
 
+    const targetQueueId = conflict.queueId
+    const resolvedAt = new Date().toISOString()
+
     const nextConflicts = conflicts.map((c) => {
-      if (c.id === conflictId) {
+      if (c.status === 'open' && (c.id === conflictId || (targetQueueId && c.queueId === targetQueueId))) {
         return {
           ...c,
           status: 'resolved',
-          resolvedAt: new Date().toISOString(),
+          resolvedAt,
           resolution: 'use_server',
         }
       }

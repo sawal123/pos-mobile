@@ -42,6 +42,10 @@ async function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegist
     }
   }
 
+  if (activeRegistry && typeof activeRegistry.ensureLoaded === 'function') {
+    await activeRegistry.ensureLoaded()
+  }
+
   // 1. Transaction / Sale / SaleItem mapping
   if (entity === 'sales' || entity === 'sale_items') {
     let targetSaleSyncId = sync_id
@@ -62,11 +66,13 @@ async function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegist
     for (const snap of queueSnapshots) {
       if (snap.entityType !== SYNC_ENTITY_TYPES.TRANSACTION) continue
       const trxId = snap.payload?.id ?? snap.entityId
-      const snapSyncId = await activeRegistry.resolveSyncId(SYNC_ENTITY_TYPES.TRANSACTION, trxId)
+      const snapSyncId = activeRegistry && typeof activeRegistry.peekSyncId === 'function'
+        ? activeRegistry.peekSyncId(SYNC_ENTITY_TYPES.TRANSACTION, trxId)
+        : null
       if (
-        snapSyncId === targetSaleSyncId ||
-        snap.entityId === targetSaleSyncId ||
-        snap.id === targetSaleSyncId
+        (snapSyncId && snapSyncId.toLowerCase() === targetSaleSyncId.toLowerCase()) ||
+        String(snap.entityId).toLowerCase() === targetSaleSyncId.toLowerCase() ||
+        String(snap.id).toLowerCase() === targetSaleSyncId.toLowerCase()
       ) {
         return {
           snapshot: snap,
@@ -90,8 +96,14 @@ async function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegist
     for (const snap of queueSnapshots) {
       if (snap.entityType !== SYNC_ENTITY_TYPES.PRODUCT) continue
       const prodId = snap.payload?.id ?? snap.entityId
-      const snapSyncId = await activeRegistry.resolveSyncId(SYNC_ENTITY_TYPES.PRODUCT, prodId)
-      if (snapSyncId === sync_id || snap.entityId === sync_id || snap.id === sync_id) {
+      const snapSyncId = activeRegistry && typeof activeRegistry.peekSyncId === 'function'
+        ? activeRegistry.peekSyncId(SYNC_ENTITY_TYPES.PRODUCT, prodId)
+        : null
+      if (
+        (snapSyncId && snapSyncId.toLowerCase() === sync_id.toLowerCase()) ||
+        String(snap.entityId).toLowerCase() === sync_id.toLowerCase() ||
+        String(snap.id).toLowerCase() === sync_id.toLowerCase()
+      ) {
         return {
           snapshot: snap,
           queueId: snap.id,
@@ -114,8 +126,14 @@ async function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegist
     for (const snap of queueSnapshots) {
       if (snap.entityType !== SYNC_ENTITY_TYPES.CUSTOMER) continue
       const custId = snap.payload?.id ?? snap.entityId
-      const snapSyncId = await activeRegistry.resolveSyncId(SYNC_ENTITY_TYPES.CUSTOMER, custId)
-      if (snapSyncId === sync_id || snap.entityId === sync_id || snap.id === sync_id) {
+      const snapSyncId = activeRegistry && typeof activeRegistry.peekSyncId === 'function'
+        ? activeRegistry.peekSyncId(SYNC_ENTITY_TYPES.CUSTOMER, custId)
+        : null
+      if (
+        (snapSyncId && snapSyncId.toLowerCase() === sync_id.toLowerCase()) ||
+        String(snap.entityId).toLowerCase() === sync_id.toLowerCase() ||
+        String(snap.id).toLowerCase() === sync_id.toLowerCase()
+      ) {
         return {
           snapshot: snap,
           queueId: snap.id,
@@ -138,8 +156,14 @@ async function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegist
     for (const snap of queueSnapshots) {
       if (snap.entityType !== SYNC_ENTITY_TYPES.CATEGORY) continue
       const catName = snap.payload?.name || snap.entityId
-      const snapSyncId = await activeRegistry.resolveSyncId(SYNC_ENTITY_TYPES.CATEGORY, catName)
-      if (snapSyncId === sync_id || snap.entityId === sync_id || snap.id === sync_id) {
+      const snapSyncId = activeRegistry && typeof activeRegistry.peekSyncId === 'function'
+        ? activeRegistry.peekSyncId(SYNC_ENTITY_TYPES.CATEGORY, catName)
+        : null
+      if (
+        (snapSyncId && snapSyncId.toLowerCase() === sync_id.toLowerCase()) ||
+        String(snap.entityId).toLowerCase() === sync_id.toLowerCase() ||
+        String(snap.id).toLowerCase() === sync_id.toLowerCase()
+      ) {
         return {
           snapshot: snap,
           queueId: snap.id,
@@ -162,8 +186,14 @@ async function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegist
     for (const snap of queueSnapshots) {
       if (snap.entityType !== SYNC_ENTITY_TYPES.EXPENSE) continue
       const expId = snap.payload?.id ?? snap.entityId
-      const snapSyncId = await activeRegistry.resolveSyncId(SYNC_ENTITY_TYPES.EXPENSE, expId)
-      if (snapSyncId === sync_id || snap.entityId === sync_id || snap.id === sync_id) {
+      const snapSyncId = activeRegistry && typeof activeRegistry.peekSyncId === 'function'
+        ? activeRegistry.peekSyncId(SYNC_ENTITY_TYPES.EXPENSE, expId)
+        : null
+      if (
+        (snapSyncId && snapSyncId.toLowerCase() === sync_id.toLowerCase()) ||
+        String(snap.entityId).toLowerCase() === sync_id.toLowerCase() ||
+        String(snap.id).toLowerCase() === sync_id.toLowerCase()
+      ) {
         return {
           snapshot: snap,
           queueId: snap.id,
@@ -402,8 +432,61 @@ export function createSyncPushService({
             sentQueueIds: [],
             removedQueueIds: [],
             preservedQueueIds: [],
-            blocked: [],
-            warnings: [],
+            blocked,
+            warnings,
+          }
+        }
+
+        // Defense check: if existingEnvelope already has conflicts recorded in sync_conflicts_v1
+        const conflictsState =
+          adapter && typeof adapter.loadSyncConflicts === 'function'
+            ? (await adapter.loadSyncConflicts()) || { version: 1, conflicts: [] }
+            : { version: 1, conflicts: [] }
+
+        const matchingConflicts = (
+          Array.isArray(conflictsState?.conflicts) ? conflictsState.conflicts : []
+        ).filter((c) => String(c.requestId) === String(existingEnvelope.requestId))
+
+        if (matchingConflicts.length > 0) {
+          const hasOpenConflict = matchingConflicts.some((c) => c.status === 'open')
+          if (hasOpenConflict) {
+            const remaining = await activeQueueService.countPending()
+            return {
+              ok: false,
+              code: 'SYNC_CONFLICT_PENDING',
+              message: 'In-flight envelope has open sync conflicts that must be resolved first.',
+              error: {
+                code: 'SYNC_CONFLICT_PENDING',
+                message: 'In-flight envelope has open sync conflicts that must be resolved first.',
+              },
+              remaining,
+              sentQueueIds: [],
+              removedQueueIds: [],
+              preservedQueueIds: [],
+              blocked: [],
+              warnings: [],
+            }
+          } else {
+            // All conflicts for this request were resolved, but stale envelope remained in storage
+            if (adapter && typeof adapter.clearSyncPushInflight === 'function') {
+              await adapter.clearSyncPushInflight()
+            }
+            const remaining = await activeQueueService.countPending()
+            return {
+              ok: false,
+              code: 'SYNC_STALE_CONFLICT_ENVELOPE_CLEARED',
+              message: 'Stale conflicted envelope cleared. Please sync again.',
+              error: {
+                code: 'SYNC_STALE_CONFLICT_ENVELOPE_CLEARED',
+                message: 'Stale conflicted envelope cleared. Please sync again.',
+              },
+              remaining,
+              sentQueueIds: [],
+              removedQueueIds: [],
+              preservedQueueIds: [],
+              blocked: [],
+              warnings: [],
+            }
           }
         }
 
@@ -925,13 +1008,7 @@ export function createSyncPushService({
           })
 
         if (!isValidConflictArray) {
-          for (const snapshot of envelope.queueSnapshots) {
-            await activeQueueService.markFailedIfUnchanged(
-              snapshot,
-              'INVALID_SYNC_CONFLICT_RESPONSE: Server returned 409 SYNC_CONFLICT with invalid or empty conflicts array.',
-            )
-          }
-
+          // MALFORMED CONFLICT: DO NOT MUTATE QUEUE
           const remaining = await activeQueueService.countPending()
           return {
             ok: false,
@@ -981,13 +1058,7 @@ export function createSyncPushService({
         }
 
         if (hasMappingFailure) {
-          for (const snapshot of envelope.queueSnapshots) {
-            await activeQueueService.markFailedIfUnchanged(
-              snapshot,
-              'SYNC_CONFLICT_MAPPING_FAILED: server conflict could not be mapped to local queue entry',
-            )
-          }
-
+          // MAPPING FAILED: DO NOT MUTATE QUEUE
           const remaining = await activeQueueService.countPending()
           return {
             ok: false,
@@ -1031,12 +1102,39 @@ export function createSyncPushService({
           }
         }
 
-        if (adapter && typeof adapter.saveSyncConflicts === 'function') {
+        const nextConflictsState = {
+          version: 1,
+          conflicts: mergedConflicts,
+        }
+
+        if (
+          adapter &&
+          typeof adapter.persistSyncConflictsAndClearInflightAtomic === 'function'
+        ) {
           try {
-            await adapter.saveSyncConflicts({
-              version: 1,
-              conflicts: mergedConflicts,
+            const atomicResult = await adapter.persistSyncConflictsAndClearInflightAtomic({
+              expectedRequestId: envelope.requestId,
+              conflictsState: nextConflictsState,
             })
+
+            if (!atomicResult || !atomicResult.ok) {
+              const remaining = await activeQueueService.countPending()
+              return {
+                ok: false,
+                code: atomicResult?.code || 'SYNC_CONFLICT_PERSIST_FAILED',
+                message: atomicResult?.message || 'Failed to persist durable sync conflict state.',
+                error: {
+                  code: atomicResult?.code || 'SYNC_CONFLICT_PERSIST_FAILED',
+                  message: atomicResult?.message || 'Failed to persist durable sync conflict state.',
+                },
+                remaining,
+                sentQueueIds,
+                removedQueueIds: [],
+                preservedQueueIds: [],
+                blocked,
+                warnings,
+              }
+            }
           } catch (err) {
             const remaining = await activeQueueService.countPending()
             return {
@@ -1055,11 +1153,30 @@ export function createSyncPushService({
               warnings,
             }
           }
-        }
-
-        // Clear in-flight envelope only AFTER conflict state is durable
-        if (adapter && typeof adapter.clearSyncPushInflight === 'function') {
-          await adapter.clearSyncPushInflight()
+        } else if (adapter && typeof adapter.saveSyncConflicts === 'function') {
+          try {
+            await adapter.saveSyncConflicts(nextConflictsState)
+            if (typeof adapter.clearSyncPushInflight === 'function') {
+              await adapter.clearSyncPushInflight()
+            }
+          } catch (err) {
+            const remaining = await activeQueueService.countPending()
+            return {
+              ok: false,
+              code: 'SYNC_CONFLICT_PERSIST_FAILED',
+              message: 'Failed to persist durable sync conflict state.',
+              error: {
+                code: 'SYNC_CONFLICT_PERSIST_FAILED',
+                message: 'Failed to persist durable sync conflict state.',
+              },
+              remaining,
+              sentQueueIds,
+              removedQueueIds: [],
+              preservedQueueIds: [],
+              blocked,
+              warnings,
+            }
+          }
         }
 
         const remaining = await activeQueueService.countPending()

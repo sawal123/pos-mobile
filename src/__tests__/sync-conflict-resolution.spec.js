@@ -1391,12 +1391,51 @@ describe('P15: Strict 409 Conflict Detection & Exact Mapping', () => {
     expect(await adapter.loadSyncPushInflight()).not.toBeNull()
   })
 
-  it('fails closed with SYNC_CONFLICT_MAPPING_FAILED when server returns shifts conflict', async () => {
-    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-shift-test', {
-      id: 'p-shift-test',
-      name: 'Item',
-      price: 10000,
+  it('keeps queue byte-for-byte unchanged when server returns malformed 409 SYNC_CONFLICT', async () => {
+    const q1 = await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-malformed', {
+      id: 'p-malformed',
+      name: 'Malformed Item',
+      price: 20000,
     })
+
+    const queueBefore = (await queueService.listPending())[0]
+
+    const mockTransport = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      data: {
+        code: 'SYNC_CONFLICT',
+        conflicts: [], // Invalid empty conflicts
+      },
+    })
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport: mockTransport,
+    })
+
+    const result = await pushService.pushNow({ context: makeValidCloudContext() })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('INVALID_SYNC_CONFLICT_RESPONSE')
+
+    const queueAfter = (await queueService.listPending())[0]
+    expect(queueAfter).toEqual(queueBefore)
+    expect(queueAfter.attemptCount).toBe(0)
+    expect(queueAfter.lastError).toBeNull()
+  })
+
+  it('keeps queue byte-for-byte unchanged when server conflict fails mapping', async () => {
+    const q1 = await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-unmapped-exact', {
+      id: 'p-unmapped-exact',
+      name: 'Unmapped Item',
+      price: 30000,
+    })
+
+    const queueBefore = (await queueService.listPending())[0]
 
     const mockTransport = vi.fn().mockResolvedValue({
       ok: false,
@@ -1405,8 +1444,8 @@ describe('P15: Strict 409 Conflict Detection & Exact Mapping', () => {
         code: 'SYNC_CONFLICT',
         conflicts: [
           {
-            entity: 'shifts',
-            sync_id: 'shift-uuid-1',
+            entity: 'products',
+            sync_id: 'unknown-uuid-xyz',
             server_sync_version: 1,
           },
         ],
@@ -1426,11 +1465,367 @@ describe('P15: Strict 409 Conflict Detection & Exact Mapping', () => {
     expect(result.ok).toBe(false)
     expect(result.code).toBe('SYNC_CONFLICT_MAPPING_FAILED')
 
-    // No durable conflicts saved
-    expect(await adapter.loadSyncConflicts()).toBeNull()
+    const queueAfter = (await queueService.listPending())[0]
+    expect(queueAfter).toEqual(queueBefore)
+    expect(queueAfter.attemptCount).toBe(0)
+    expect(queueAfter.lastError).toBeNull()
+  })
 
-    // Inflight envelope retained
-    expect(await adapter.loadSyncPushInflight()).not.toBeNull()
+  it('does not mutate sync identity map during failed conflict mapping (side-effect free)', async () => {
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-side-effect', {
+      id: 'p-side-effect',
+      name: 'Side Effect Test',
+      price: 5000,
+    })
+    // Pre-resolve product so initial outbox mapping is already durable
+    await registry.resolveSyncId(SYNC_ENTITY_TYPES.PRODUCT, 'p-side-effect')
+
+    // Establish baseline identity map
+    const initialMap = (await adapter.loadSyncIdentityMap()) || {}
+
+    const mockTransport = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      data: {
+        code: 'SYNC_CONFLICT',
+        conflicts: [
+          {
+            entity: 'products',
+            sync_id: 'unknown-ghost-uuid',
+            server_sync_version: 1,
+          },
+        ],
+      },
+    })
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport: mockTransport,
+    })
+
+    const result = await pushService.pushNow({ context: makeValidCloudContext() })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_CONFLICT_MAPPING_FAILED')
+
+    const finalMap = (await adapter.loadSyncIdentityMap()) || {}
+    expect(finalMap).toEqual(initialMap)
+    expect(Object.keys(finalMap)).not.toContain('products:unknown-ghost-uuid')
+  })
+})
+
+describe('P15: Stale Conflicted Envelope Defense & Atomic Inflight Clear', () => {
+  let adapter
+  let queueService
+  let registry
+
+  beforeEach(async () => {
+    adapter = createMemoryAdapter()
+    await adapter.initialize()
+    await adapter.saveSyncPushBinding({
+      businessId: 10,
+      boundAt: new Date().toISOString(),
+    })
+    queueService = createSyncQueueService({ adapter })
+    registry = createSyncIdentityRegistry({ adapter })
+  })
+
+  it('blocks push and prevents HTTP request if existing in-flight envelope has open conflicts', async () => {
+    const q1 = await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-stale', {
+      id: 'p-stale',
+      name: 'Stale Product',
+      price: 10000,
+    })
+
+    await adapter.saveSyncPushInflight({
+      version: 1,
+      requestId: 'req-stale-1',
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
+      registeredDeviceId: 55,
+      createdAt: new Date().toISOString(),
+      queueSnapshots: [q1.entry],
+      changes: { products: [{ sync_id: 'prod-uuid-stale', name: 'Stale Product' }] },
+    })
+
+    await adapter.saveSyncConflicts({
+      version: 1,
+      conflicts: [
+        {
+          id: 'conf-stale-1',
+          requestId: 'req-stale-1',
+          queueId: q1.entry.id,
+          entityType: 'product',
+          entityId: 'p-stale',
+          serverEntity: 'products',
+          syncId: 'prod-uuid-stale',
+          serverSyncVersion: 2,
+          queueSnapshot: q1.entry,
+          status: 'open',
+          createdAt: new Date().toISOString(),
+        },
+      ],
+    })
+
+    const mockTransport = vi.fn()
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport: mockTransport,
+    })
+
+    const result = await pushService.pushNow({ context: makeValidCloudContext() })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_CONFLICT_PENDING')
+    expect(mockTransport).not.toHaveBeenCalled()
+  })
+
+  it('safely clears stale envelope if all its conflicts are resolved and requires user to sync again with fresh requestId', async () => {
+    const q1 = await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-stale-resolved', {
+      id: 'p-stale-resolved',
+      name: 'Resolved Product',
+      price: 10000,
+    })
+
+    await adapter.saveSyncPushInflight({
+      version: 1,
+      requestId: 'req-stale-resolved',
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
+      registeredDeviceId: 55,
+      createdAt: new Date().toISOString(),
+      queueSnapshots: [q1.entry],
+      changes: { products: [{ sync_id: 'prod-uuid-stale-res', name: 'Resolved Product' }] },
+    })
+
+    await adapter.saveSyncConflicts({
+      version: 1,
+      conflicts: [
+        {
+          id: 'conf-stale-res',
+          requestId: 'req-stale-resolved',
+          queueId: q1.entry.id,
+          entityType: 'product',
+          entityId: 'p-stale-resolved',
+          serverEntity: 'products',
+          syncId: 'prod-uuid-stale-res',
+          serverSyncVersion: 2,
+          queueSnapshot: q1.entry,
+          status: 'resolved',
+          resolution: 'use_server',
+          resolvedAt: new Date().toISOString(),
+        },
+      ],
+    })
+
+    const mockTransport = vi.fn()
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport: mockTransport,
+    })
+
+    const result = await pushService.pushNow({ context: makeValidCloudContext() })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_STALE_CONFLICT_ENVELOPE_CLEARED')
+    expect(mockTransport).not.toHaveBeenCalled()
+    expect(await adapter.loadSyncPushInflight()).toBeNull()
+  })
+})
+
+describe('P15: Group useServer Resolution for Same Queue ID', () => {
+  let adapter
+  let queueService
+  let registry
+  let conflictService
+
+  beforeEach(async () => {
+    adapter = createMemoryAdapter()
+    await adapter.initialize()
+    await adapter.saveSyncPushBinding({
+      businessId: 10,
+      boundAt: new Date().toISOString(),
+    })
+    queueService = createSyncQueueService({ adapter })
+    registry = createSyncIdentityRegistry({ adapter })
+    conflictService = createSyncConflictService({ adapter, queueService, registry })
+  })
+
+  it('resolves all open conflicts that point to the same Transaction queue entry when useServer is called', async () => {
+    // 1. Transaction queue item QT1
+    const qTrx = await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.TRANSACTION, 'trx-1', {
+      id: 'trx-1',
+      invoiceNumber: 'INV-001',
+      total: 50000,
+      items: [{ id: 'p-1', name: 'Item', price: 50000, qty: 1 }],
+    })
+
+    // 2. Another independent Product queue item QP2
+    const qProd = await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-2', {
+      id: 'p-2',
+      name: 'Independent Product',
+      price: 20000,
+    })
+
+    const conflicts = [
+      {
+        id: 'conf-sale-trx1',
+        requestId: 'req-multi',
+        queueId: qTrx.entry.id,
+        entityType: 'transaction',
+        entityId: 'trx-1',
+        serverEntity: 'sales',
+        syncId: 'sale-uuid-1',
+        serverSyncVersion: 2,
+        queueSnapshot: qTrx.entry,
+        status: 'open',
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'conf-item-trx1',
+        requestId: 'req-multi',
+        queueId: qTrx.entry.id,
+        entityType: 'transaction',
+        entityId: 'trx-1',
+        serverEntity: 'sale_items',
+        syncId: 'item-uuid-1',
+        serverSyncVersion: 3,
+        queueSnapshot: qTrx.entry,
+        status: 'open',
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'conf-prod2',
+        requestId: 'req-multi',
+        queueId: qProd.entry.id,
+        entityType: 'product',
+        entityId: 'p-2',
+        serverEntity: 'products',
+        syncId: 'prod-uuid-2',
+        serverSyncVersion: 4,
+        queueSnapshot: qProd.entry,
+        status: 'open',
+        createdAt: new Date().toISOString(),
+      },
+    ]
+
+    await adapter.saveSyncConflicts({
+      version: 1,
+      conflicts,
+    })
+
+    // User clicks useServer on the sales conflict
+    const res = await conflictService.useServer('conf-sale-trx1')
+
+    expect(res.ok).toBe(true)
+    expect(res.code).toBe('SYNC_CONFLICT_RESOLVED')
+
+    // QT1 must be deleted from queue
+    expect(await queueService.countPending()).toBe(1)
+    const remainingPending = await queueService.listPending()
+    expect(remainingPending[0].id).toBe(qProd.entry.id)
+
+    // Verify durable conflicts
+    const saved = await adapter.loadSyncConflicts()
+    const salesConf = saved.conflicts.find((c) => c.id === 'conf-sale-trx1')
+    const itemConf = saved.conflicts.find((c) => c.id === 'conf-item-trx1')
+    const prodConf = saved.conflicts.find((c) => c.id === 'conf-prod2')
+
+    // Both conflicts for QT1 must be resolved with same resolvedAt and resolution
+    expect(salesConf.status).toBe('resolved')
+    expect(salesConf.resolution).toBe('use_server')
+    expect(itemConf.status).toBe('resolved')
+    expect(itemConf.resolution).toBe('use_server')
+    expect(salesConf.resolvedAt).toBe(itemConf.resolvedAt)
+
+    // Conflict for QP2 must remain open!
+    expect(prodConf.status).toBe('open')
+  })
+
+  it('keeps keepLocal per-conflict and keeps queue item blocked while any sibling conflict is open', async () => {
+    const qTrx = await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.TRANSACTION, 'trx-keep', {
+      id: 'trx-keep',
+      invoiceNumber: 'INV-KEEP',
+      total: 30000,
+      items: [{ id: 'p-1', name: 'Item', price: 30000, qty: 1 }],
+    })
+
+    const conflicts = [
+      {
+        id: 'conf-keep-sales',
+        requestId: 'req-keep-sibling',
+        queueId: qTrx.entry.id,
+        entityType: 'transaction',
+        entityId: 'trx-keep',
+        serverEntity: 'sales',
+        syncId: 'sale-uuid-keep',
+        serverSyncVersion: 5,
+        queueSnapshot: qTrx.entry,
+        status: 'open',
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'conf-keep-item',
+        requestId: 'req-keep-sibling',
+        queueId: qTrx.entry.id,
+        entityType: 'transaction',
+        entityId: 'trx-keep',
+        serverEntity: 'sale_items',
+        syncId: 'item-uuid-keep',
+        serverSyncVersion: 7,
+        queueSnapshot: qTrx.entry,
+        status: 'open',
+        createdAt: new Date().toISOString(),
+      },
+    ]
+
+    await adapter.saveSyncConflicts({
+      version: 1,
+      conflicts,
+    })
+
+    // Resolve ONLY the sales conflict with keepLocal
+    const res = await conflictService.keepLocal('conf-keep-sales')
+    expect(res.ok).toBe(true)
+
+    const saved = await adapter.loadSyncConflicts()
+    const salesConf = saved.conflicts.find((c) => c.id === 'conf-keep-sales')
+    const itemConf = saved.conflicts.find((c) => c.id === 'conf-keep-item')
+
+    expect(salesConf.status).toBe('resolved')
+    expect(salesConf.resolution).toBe('keep_local')
+    // Sibling sale_item conflict remains open!
+    expect(itemConf.status).toBe('open')
+
+    // Transaction queue item is still in queue and still blocked from push
+    expect(await queueService.countPending()).toBe(1)
+
+    const mockTransport = vi.fn()
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport: mockTransport,
+    })
+
+    const pushRes = await pushService.pushNow({ context: makeValidCloudContext() })
+    expect(pushRes.ok).toBe(false)
+    expect(pushRes.code).toBe('SYNC_CONFLICT_PENDING')
+    expect(mockTransport).not.toHaveBeenCalled()
   })
 })
 
