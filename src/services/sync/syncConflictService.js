@@ -53,15 +53,19 @@ export function createSyncConflictService({
 
   /**
    * Manual Resolution — USE SERVER:
-   * Discards the local pending mutation via CAS and marks conflict resolved.
+   * Discards the local pending mutation via atomic adapter operation and marks conflict resolved.
    * Does NOT auto-pull.
    *
    * @param {string} conflictId
    * @returns {Promise<object>}
    */
   async function useServer(conflictId) {
-    if (!adapter || typeof adapter.loadSyncConflicts !== 'function') {
-      return { ok: false, code: 'ADAPTER_UNSUPPORTED', message: 'Adapter does not support conflicts' }
+    if (!adapter || typeof adapter.resolveSyncConflictUseServerAtomic !== 'function') {
+      return {
+        ok: false,
+        code: 'ADAPTER_UNSUPPORTED',
+        message: 'Adapter does not support atomic conflict resolution',
+      }
     }
 
     const state = (await adapter.loadSyncConflicts()) || { version: 1, conflicts: [] }
@@ -76,69 +80,55 @@ export function createSyncConflictService({
       }
     }
 
-    let casRemoved = false
-
-    if (conflict.queueSnapshot) {
-      // Attempt CAS queue removal with the recorded snapshot
-      const casResult = await activeQueueService.removeIfUnchanged(conflict.queueSnapshot)
-
-      if (!casResult.ok) {
-        return {
-          ok: false,
-          code: 'SYNC_CONFLICT_QUEUE_ERROR',
-          message: 'Storage error while conditionally removing queue item.',
-        }
-      }
-
-      if (!casResult.removed) {
-        // Check if item exists with modified data in queue
-        const totalPending = await activeQueueService.countPending()
-        const pendingItems = totalPending > 0 ? await activeQueueService.listPending({ limit: totalPending }) : []
-        const existingInQueue = pendingItems.find((p) => p.id === conflict.queueId)
-
-        if (existingInQueue) {
-          return {
-            ok: false,
-            code: 'SYNC_CONFLICT_LOCAL_CHANGED',
-            message: 'Local data has changed since conflict was recorded.',
-          }
-        }
-        // If not in queue, it was already removed earlier
-      } else {
-        casRemoved = true
+    if (!conflict.queueSnapshot || !conflict.queueSnapshot.id) {
+      return {
+        ok: false,
+        code: 'SYNC_CONFLICT_QUEUE_MISSING',
+        message: 'Conflict queue snapshot is missing.',
       }
     }
 
-    // Mark conflict as resolved
-    conflict.status = 'resolved'
-    conflict.resolvedAt = new Date().toISOString()
-    conflict.resolution = 'use_server'
-
-    try {
-      await adapter.saveSyncConflicts({
-        version: 1,
-        conflicts,
-      })
-    } catch (saveErr) {
-      // Fail-safe atomic rollback: re-insert the removed snapshot so local mutation is never lost
-      if (casRemoved && conflict.queueSnapshot && typeof adapter.upsertSyncQueueItems === 'function') {
-        try {
-          await adapter.upsertSyncQueueItems([conflict.queueSnapshot])
-        } catch {
-          // best-effort rollback
+    const nextConflicts = conflicts.map((c) => {
+      if (c.id === conflictId) {
+        return {
+          ...c,
+          status: 'resolved',
+          resolvedAt: new Date().toISOString(),
+          resolution: 'use_server',
         }
       }
+      return c
+    })
+
+    try {
+      const result = await adapter.resolveSyncConflictUseServerAtomic({
+        queueSnapshot: conflict.queueSnapshot,
+        conflictsState: {
+          version: 1,
+          conflicts: nextConflicts,
+        },
+      })
+
+      if (!result || !result.ok) {
+        return {
+          ok: false,
+          code: result?.code || 'SYNC_CONFLICT_PERSIST_FAILED',
+          message: result?.message || 'Failed to resolve sync conflict.',
+        }
+      }
+
+      return {
+        ok: true,
+        code: 'SYNC_CONFLICT_RESOLVED',
+        message: 'Konflik selesai. Gunakan Tarik Data Cloud untuk mengambil versi server.',
+      }
+    } catch (err) {
       return {
         ok: false,
         code: 'SYNC_CONFLICT_PERSIST_FAILED',
         message: 'Failed to persist durable sync conflict resolution.',
+        error: err,
       }
-    }
-
-    return {
-      ok: true,
-      code: 'SYNC_CONFLICT_RESOLVED',
-      message: 'Konflik selesai. Gunakan Tarik Data Cloud untuk mengambil versi server.',
     }
   }
 

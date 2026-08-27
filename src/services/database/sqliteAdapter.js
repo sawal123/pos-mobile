@@ -629,6 +629,77 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
       const db = await ensureConnection()
       await db.run("DELETE FROM app_meta WHERE key = 'sync_conflicts_v1'", [])
     },
+    async resolveSyncConflictUseServerAtomic({ queueSnapshot, conflictsState }) {
+      if (!queueSnapshot || !queueSnapshot.id) {
+        return {
+          ok: false,
+          code: 'SYNC_CONFLICT_QUEUE_MISSING',
+          message: 'Queue snapshot is required for atomic useServer resolution.',
+        }
+      }
+
+      return await withTransaction(async (db) => {
+        const { values = [] } = await db.query(
+          'SELECT id, updated_at, operation, payload FROM sync_queue WHERE id = ? LIMIT 1',
+          [queueSnapshot.id],
+        )
+
+        if (!values.length) {
+          return {
+            ok: false,
+            code: 'SYNC_CONFLICT_QUEUE_MISSING',
+            message: 'Queue item is missing from sync_queue.',
+          }
+        }
+
+        const existingRow = values[0]
+        const snapPayloadStr =
+          queueSnapshot.payload === null || queueSnapshot.payload === undefined
+            ? null
+            : JSON.stringify(queueSnapshot.payload)
+
+        const isUnchanged =
+          String(existingRow.updated_at) === String(queueSnapshot.updatedAt) &&
+          String(existingRow.operation) === String(queueSnapshot.operation) &&
+          (existingRow.payload === snapPayloadStr ||
+            (existingRow.payload === null && snapPayloadStr === null))
+
+        if (!isUnchanged) {
+          return {
+            ok: false,
+            code: 'SYNC_CONFLICT_LOCAL_CHANGED',
+            message: 'Local queue item has changed since conflict was recorded.',
+          }
+        }
+
+        await db.run(
+          `DELETE FROM sync_queue
+           WHERE id = ?
+             AND updated_at = ?
+             AND operation = ?
+             AND ((payload IS NULL AND ? IS NULL) OR payload = ?)`,
+          [
+            queueSnapshot.id,
+            queueSnapshot.updatedAt,
+            queueSnapshot.operation,
+            snapPayloadStr,
+            snapPayloadStr,
+          ],
+          false,
+        )
+
+        await db.run(
+          'INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)',
+          ['sync_conflicts_v1', JSON.stringify(conflictsState)],
+          false,
+        )
+
+        return {
+          ok: true,
+          code: 'SYNC_CONFLICT_RESOLVED',
+        }
+      })
+    },
     async close() {
       if (!dbConnection) {
         return

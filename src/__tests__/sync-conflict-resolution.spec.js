@@ -22,6 +22,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 
 import { createMemoryAdapter } from '../services/database/memoryAdapter'
+import { createSQLiteAdapter } from '../services/database/sqliteAdapter'
 import { createSyncQueueService } from '../services/sync/syncQueueService'
 import { createSyncIdentityRegistry } from '../services/sync/syncIdentityRegistry'
 import { createSyncPushService } from '../services/sync/syncPushService'
@@ -31,6 +32,46 @@ import { useCloudSessionStore } from '../stores/cloudSessionStore'
 import { useSyncPushStore } from '../stores/syncPushStore'
 import { useSyncConflictStore } from '../stores/syncConflictStore'
 import CloudLoginView from '../views/settings/CloudLoginView.vue'
+
+const { fakeDb } = vi.hoisted(() => {
+  const fakeDb = {
+    beginTransaction: vi.fn(async () => {}),
+    commitTransaction: vi.fn(async () => {}),
+    rollbackTransaction: vi.fn(async () => {}),
+    run: vi.fn(async () => ({ changes: { changes: 1 } })),
+    query: vi.fn(async () => ({ values: [] })),
+    execute: vi.fn(async () => {}),
+    isDBOpen: async () => ({ result: true }),
+    open: async () => {},
+    close: async () => {},
+  }
+
+  return { fakeDb }
+})
+
+vi.mock('@capacitor-community/sqlite', () => {
+  class SQLiteConnection {
+    async addUpgradeStatement() {}
+    async checkConnectionsConsistency() {
+      return { result: true }
+    }
+    async isConnection() {
+      return { result: false }
+    }
+    async createConnection() {
+      return fakeDb
+    }
+    async retrieveConnection() {
+      return fakeDb
+    }
+    async closeConnection() {}
+  }
+
+  return {
+    CapacitorSQLite: {},
+    SQLiteConnection,
+  }
+})
 
 function makeValidCloudContext(overrides = {}) {
   return {
@@ -970,7 +1011,7 @@ describe('P15: Regression — P13 Compatibility, Async Registry Mapping, & Fail-
     expect(savedConflicts.conflicts[0].syncId).toBe(uuidB)
   })
 
-  it('safely rolls back and restores queue item if adapter.saveSyncConflicts fails during useServer', async () => {
+  it('safely rolls back and restores queue item if adapter.resolveSyncConflictUseServerAtomic fails during useServer', async () => {
     const q1 = await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-atomic', {
       id: 'p-atomic',
       name: 'Atomic Product',
@@ -996,19 +1037,400 @@ describe('P15: Regression — P13 Compatibility, Async Registry Mapping, & Fail-
       conflicts: [conflictRecord],
     })
 
-    // Force saveSyncConflicts to fail on next call
-    const origSave = adapter.saveSyncConflicts.bind(adapter)
-    vi.spyOn(adapter, 'saveSyncConflicts').mockRejectedValueOnce(new Error('SQLite disk I/O error'))
+    // Force adapter atomic method to reject
+    vi.spyOn(adapter, 'resolveSyncConflictUseServerAtomic').mockRejectedValueOnce(
+      new Error('SQLite disk I/O error'),
+    )
 
     const res = await conflictService.useServer('conf-atomic')
 
     expect(res.ok).toBe(false)
     expect(res.code).toBe('SYNC_CONFLICT_PERSIST_FAILED')
 
-    // Local queue item MUST be restored by rollback!
+    // Local queue item MUST remain intact!
     expect(await queueService.countPending()).toBe(1)
     const pending = await queueService.listPending()
     expect(pending[0].payload.name).toBe('Atomic Product')
+
+    // Conflict must remain open
+    const saved = await adapter.loadSyncConflicts()
+    expect(saved.conflicts[0].status).toBe('open')
+  })
+
+  it('fails useServer with SYNC_CONFLICT_QUEUE_MISSING when conflict is open but queue row no longer exists', async () => {
+    const conflictRecord = {
+      id: 'conf-missing-q',
+      requestId: 'req-missing',
+      queueId: 'q-vanished',
+      entityType: SYNC_ENTITY_TYPES.PRODUCT,
+      entityId: 'p-vanished',
+      serverEntity: 'products',
+      syncId: 'uuid-vanished',
+      serverSyncVersion: 2,
+      queueSnapshot: {
+        id: 'q-vanished',
+        entityType: 'product',
+        entityId: 'p-vanished',
+        operation: 'upsert',
+        updatedAt: '2026-08-27T00:00:00Z',
+        payload: { name: 'Ghost' },
+      },
+      status: 'open',
+      createdAt: new Date().toISOString(),
+    }
+
+    await adapter.saveSyncConflicts({
+      version: 1,
+      conflicts: [conflictRecord],
+    })
+
+    const res = await conflictService.useServer('conf-missing-q')
+
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('SYNC_CONFLICT_QUEUE_MISSING')
+
+    // Conflict must remain open
+    const saved = await adapter.loadSyncConflicts()
+    expect(saved.conflicts[0].status).toBe('open')
+  })
+})
+
+describe('P15: SQLite Adapter resolveSyncConflictUseServerAtomic', () => {
+  it('executes in single transaction: deletes queue row and saves updated conflicts', async () => {
+    const sqliteAdapter = createSQLiteAdapter()
+
+    const queueSnapshot = {
+      id: 'q-sql-1',
+      entityType: 'product',
+      entityId: 'p-1',
+      operation: 'upsert',
+      updatedAt: '2026-08-27T00:00:00Z',
+      payload: { name: 'Kopi' },
+    }
+
+    const nextConflictsState = {
+      version: 1,
+      conflicts: [
+        {
+          id: 'conf-1',
+          status: 'resolved',
+          resolution: 'use_server',
+          resolvedAt: '2026-08-27T00:00:00Z',
+        },
+      ],
+    }
+
+    // Mock db.query to return matching row
+    fakeDb.query.mockResolvedValueOnce({
+      values: [
+        {
+          id: 'q-sql-1',
+          updated_at: '2026-08-27T00:00:00Z',
+          operation: 'upsert',
+          payload: JSON.stringify({ name: 'Kopi' }),
+        },
+      ],
+    })
+
+    const result = await sqliteAdapter.resolveSyncConflictUseServerAtomic({
+      queueSnapshot,
+      conflictsState: nextConflictsState,
+    })
+
+    expect(result.ok).toBe(true)
+    expect(result.code).toBe('SYNC_CONFLICT_RESOLVED')
+    expect(fakeDb.beginTransaction).toHaveBeenCalled()
+    expect(fakeDb.commitTransaction).toHaveBeenCalled()
+    expect(fakeDb.run).toHaveBeenCalledWith(
+      expect.stringContaining('DELETE FROM sync_queue'),
+      expect.any(Array),
+      false,
+    )
+    expect(fakeDb.run).toHaveBeenCalledWith(
+      expect.stringContaining('INSERT OR REPLACE INTO app_meta'),
+      ['sync_conflicts_v1', JSON.stringify(nextConflictsState)],
+      false,
+    )
+  })
+
+  it('rolls back whole transaction when app_meta write fails inside transaction', async () => {
+    const sqliteAdapter = createSQLiteAdapter()
+
+    const queueSnapshot = {
+      id: 'q-sql-fail',
+      entityType: 'product',
+      entityId: 'p-1',
+      operation: 'upsert',
+      updatedAt: '2026-08-27T00:00:00Z',
+      payload: { name: 'Kopi' },
+    }
+
+    const nextConflictsState = {
+      version: 1,
+      conflicts: [
+        {
+          id: 'conf-sql-fail',
+          status: 'resolved',
+          resolution: 'use_server',
+          resolvedAt: '2026-08-27T00:00:00Z',
+        },
+      ],
+    }
+
+    fakeDb.query.mockResolvedValueOnce({
+      values: [
+        {
+          id: 'q-sql-fail',
+          updated_at: '2026-08-27T00:00:00Z',
+          operation: 'upsert',
+          payload: JSON.stringify({ name: 'Kopi' }),
+        },
+      ],
+    })
+
+    // Fail during INSERT OR REPLACE INTO app_meta
+    fakeDb.run.mockImplementation(async (sql) => {
+      if (sql.includes('INSERT OR REPLACE INTO app_meta')) {
+        throw new Error('SQLite disk full')
+      }
+      return { changes: { changes: 1 } }
+    })
+
+    await expect(
+      sqliteAdapter.resolveSyncConflictUseServerAtomic({
+        queueSnapshot,
+        conflictsState: nextConflictsState,
+      }),
+    ).rejects.toThrow('SQLite disk full')
+
+    expect(fakeDb.rollbackTransaction).toHaveBeenCalled()
+  })
+})
+
+describe('P15: Strict 409 Conflict Detection & Exact Mapping', () => {
+  let adapter
+  let queueService
+  let registry
+
+  beforeEach(async () => {
+    adapter = createMemoryAdapter()
+    await adapter.initialize()
+    await adapter.saveSyncPushBinding({
+      businessId: 10,
+      boundAt: new Date().toISOString(),
+    })
+    queueService = createSyncQueueService({ adapter })
+    registry = createSyncIdentityRegistry({ adapter })
+  })
+
+  it('handles HTTP 409 with SYNC_DATA_CONFLICT via generic P12 failure handling without creating durable conflicts', async () => {
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-data-conflict', {
+      id: 'p-data-conflict',
+      name: 'Item Data Conflict',
+      price: 10000,
+    })
+
+    const mockTransport = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      data: {
+        code: 'SYNC_DATA_CONFLICT',
+        message: 'Business data validation conflict',
+      },
+    })
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport: mockTransport,
+    })
+
+    const result = await pushService.pushNow({ context: makeValidCloudContext() })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_DATA_CONFLICT')
+    expect(result.code).not.toBe('SYNC_CONFLICT')
+    expect(result.code).not.toBe('INVALID_SYNC_CONFLICT_RESPONSE')
+
+    // No durable sync conflicts created
+    const savedConflicts = await adapter.loadSyncConflicts()
+    expect(savedConflicts).toBeNull()
+
+    // Inflight envelope is retained for retry
+    expect(await adapter.loadSyncPushInflight()).not.toBeNull()
+
+    // Queue item is preserved and marked failed
+    expect(await queueService.countPending()).toBe(1)
+    const pending = await queueService.listPending()
+    expect(pending[0].attemptCount).toBe(1)
+  })
+
+  it('handles generic HTTP 409 without SYNC_CONFLICT code via generic failure handling', async () => {
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-generic-409', {
+      id: 'p-generic-409',
+      name: 'Product 409',
+      price: 5000,
+    })
+
+    const mockTransport = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      data: {
+        error: 'Generic 409 Conflict',
+      },
+    })
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport: mockTransport,
+    })
+
+    const result = await pushService.pushNow({ context: makeValidCloudContext() })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).not.toBe('SYNC_CONFLICT')
+    expect(await adapter.loadSyncConflicts()).toBeNull()
+    expect(await adapter.loadSyncPushInflight()).not.toBeNull()
+  })
+
+  it('fails closed with SYNC_CONFLICT_MAPPING_FAILED when product conflict UUID cannot be mapped to envelope queue snapshot', async () => {
+    const q1 = await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-real', {
+      id: 'p-real',
+      name: 'Real Product',
+      price: 15000,
+    })
+
+    const mockTransport = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      data: {
+        code: 'SYNC_CONFLICT',
+        conflicts: [
+          {
+            entity: 'products',
+            sync_id: 'unknown-uuid-never-in-envelope',
+            server_sync_version: 5,
+          },
+        ],
+      },
+    })
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport: mockTransport,
+    })
+
+    const result = await pushService.pushNow({ context: makeValidCloudContext() })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_CONFLICT_MAPPING_FAILED')
+
+    // No durable conflicts saved
+    expect(await adapter.loadSyncConflicts()).toBeNull()
+
+    // Inflight envelope retained
+    expect(await adapter.loadSyncPushInflight()).not.toBeNull()
+
+    // Queue item untouched
+    expect(await queueService.countPending()).toBe(1)
+  })
+
+  it('fails closed (all-or-nothing) with SYNC_CONFLICT_MAPPING_FAILED when multiple conflicts have partial mapping failure', async () => {
+    const q1 = await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-mapped', {
+      id: 'p-mapped',
+      name: 'Mapped Product',
+      price: 10000,
+    })
+    const mappedUuid = await registry.resolveSyncId(SYNC_ENTITY_TYPES.PRODUCT, 'p-mapped')
+
+    const mockTransport = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      data: {
+        code: 'SYNC_CONFLICT',
+        conflicts: [
+          {
+            entity: 'products',
+            sync_id: mappedUuid, // Resolves to p-mapped
+            server_sync_version: 2,
+          },
+          {
+            entity: 'products',
+            sync_id: 'unknown-unmapped-uuid', // Fails mapping
+            server_sync_version: 3,
+          },
+        ],
+      },
+    })
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport: mockTransport,
+    })
+
+    const result = await pushService.pushNow({ context: makeValidCloudContext() })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_CONFLICT_MAPPING_FAILED')
+
+    // Neither conflict should be persisted (all or nothing)
+    expect(await adapter.loadSyncConflicts()).toBeNull()
+
+    // Inflight envelope retained
+    expect(await adapter.loadSyncPushInflight()).not.toBeNull()
+  })
+
+  it('fails closed with SYNC_CONFLICT_MAPPING_FAILED when server returns shifts conflict', async () => {
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-shift-test', {
+      id: 'p-shift-test',
+      name: 'Item',
+      price: 10000,
+    })
+
+    const mockTransport = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      data: {
+        code: 'SYNC_CONFLICT',
+        conflicts: [
+          {
+            entity: 'shifts',
+            sync_id: 'shift-uuid-1',
+            server_sync_version: 1,
+          },
+        ],
+      },
+    })
+
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport: mockTransport,
+    })
+
+    const result = await pushService.pushNow({ context: makeValidCloudContext() })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_CONFLICT_MAPPING_FAILED')
+
+    // No durable conflicts saved
+    expect(await adapter.loadSyncConflicts()).toBeNull()
+
+    // Inflight envelope retained
+    expect(await adapter.loadSyncPushInflight()).not.toBeNull()
   })
 })
 

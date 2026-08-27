@@ -31,9 +31,16 @@ async function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegist
     expenses: SYNC_ENTITY_TYPES.EXPENSE,
     sales: SYNC_ENTITY_TYPES.TRANSACTION,
     sale_items: SYNC_ENTITY_TYPES.TRANSACTION,
-    shifts: 'shift',
   }
-  const targetEntityType = entityTypeMap[entity] || entity
+  const targetEntityType = entityTypeMap[entity]
+  if (!targetEntityType) {
+    return {
+      snapshot: null,
+      queueId: null,
+      entityType: null,
+      entityId: null,
+    }
+  }
 
   // 1. Transaction / Sale / SaleItem mapping
   if (entity === 'sales' || entity === 'sale_items') {
@@ -42,6 +49,13 @@ async function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegist
       const item = (changes.sale_items || []).find((si) => si.sync_id === sync_id)
       if (item && item.sale_sync_id) {
         targetSaleSyncId = item.sale_sync_id
+      } else {
+        return {
+          snapshot: null,
+          queueId: null,
+          entityType: SYNC_ENTITY_TYPES.TRANSACTION,
+          entityId: null,
+        }
       }
     }
 
@@ -56,6 +70,7 @@ async function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegist
       ) {
         return {
           snapshot: snap,
+          queueId: snap.id,
           entityType: SYNC_ENTITY_TYPES.TRANSACTION,
           entityId: trxId,
         }
@@ -64,8 +79,9 @@ async function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegist
 
     return {
       snapshot: null,
+      queueId: null,
       entityType: SYNC_ENTITY_TYPES.TRANSACTION,
-      entityId: sync_id,
+      entityId: null,
     }
   }
 
@@ -78,6 +94,7 @@ async function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegist
       if (snapSyncId === sync_id || snap.entityId === sync_id || snap.id === sync_id) {
         return {
           snapshot: snap,
+          queueId: snap.id,
           entityType: SYNC_ENTITY_TYPES.PRODUCT,
           entityId: prodId,
         }
@@ -86,8 +103,9 @@ async function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegist
 
     return {
       snapshot: null,
+      queueId: null,
       entityType: SYNC_ENTITY_TYPES.PRODUCT,
-      entityId: sync_id,
+      entityId: null,
     }
   }
 
@@ -100,6 +118,7 @@ async function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegist
       if (snapSyncId === sync_id || snap.entityId === sync_id || snap.id === sync_id) {
         return {
           snapshot: snap,
+          queueId: snap.id,
           entityType: SYNC_ENTITY_TYPES.CUSTOMER,
           entityId: custId,
         }
@@ -108,8 +127,9 @@ async function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegist
 
     return {
       snapshot: null,
+      queueId: null,
       entityType: SYNC_ENTITY_TYPES.CUSTOMER,
-      entityId: sync_id,
+      entityId: null,
     }
   }
 
@@ -122,6 +142,7 @@ async function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegist
       if (snapSyncId === sync_id || snap.entityId === sync_id || snap.id === sync_id) {
         return {
           snapshot: snap,
+          queueId: snap.id,
           entityType: SYNC_ENTITY_TYPES.CATEGORY,
           entityId: catName,
         }
@@ -130,8 +151,9 @@ async function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegist
 
     return {
       snapshot: null,
+      queueId: null,
       entityType: SYNC_ENTITY_TYPES.CATEGORY,
-      entityId: sync_id,
+      entityId: null,
     }
   }
 
@@ -144,6 +166,7 @@ async function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegist
       if (snapSyncId === sync_id || snap.entityId === sync_id || snap.id === sync_id) {
         return {
           snapshot: snap,
+          queueId: snap.id,
           entityType: SYNC_ENTITY_TYPES.EXPENSE,
           entityId: expId,
         }
@@ -152,15 +175,17 @@ async function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegist
 
     return {
       snapshot: null,
+      queueId: null,
       entityType: SYNC_ENTITY_TYPES.EXPENSE,
-      entityId: sync_id,
+      entityId: null,
     }
   }
 
   return {
     snapshot: null,
-    entityType: targetEntityType,
-    entityId: sync_id,
+    queueId: null,
+    entityType: null,
+    entityId: null,
   }
 }
 
@@ -859,11 +884,14 @@ export function createSyncPushService({
       }
 
       // ── 7. Handle 409 SYNC_CONFLICT ──────────────────────────────────────────
-      const is409Conflict =
-        response.status === 409 ||
-        response.error?.status === 409 ||
-        response.error?.code === 'SYNC_CONFLICT' ||
-        response.data?.code === 'SYNC_CONFLICT'
+      const responseCode =
+        response.data?.code ??
+        response.data?.data?.code ??
+        response.error?.code ??
+        response.error?.data?.code
+
+      const responseStatus = response.status ?? response.error?.status
+      const is409Conflict = responseStatus === 409 && responseCode === 'SYNC_CONFLICT'
 
       if (is409Conflict) {
         const rawConflicts =
@@ -897,6 +925,13 @@ export function createSyncPushService({
           })
 
         if (!isValidConflictArray) {
+          for (const snapshot of envelope.queueSnapshots) {
+            await activeQueueService.markFailedIfUnchanged(
+              snapshot,
+              'INVALID_SYNC_CONFLICT_RESPONSE: Server returned 409 SYNC_CONFLICT with invalid or empty conflicts array.',
+            )
+          }
+
           const remaining = await activeQueueService.countPending()
           return {
             ok: false,
@@ -917,14 +952,21 @@ export function createSyncPushService({
           }
         }
 
-        // Build durable conflict records
+        // Build durable conflict records - ALL OR NOTHING exact mapping
         const newConflicts = []
+        let hasMappingFailure = false
+
         for (const item of rawConflicts) {
           const resolved = await mapServerConflictToQueueSnapshot(item, envelope, activeRegistry)
+          if (!resolved.snapshot || !resolved.queueId || !resolved.entityId) {
+            hasMappingFailure = true
+            break
+          }
+
           newConflicts.push({
             id: generateUuid(),
             requestId: envelope.requestId,
-            queueId: resolved.snapshot ? resolved.snapshot.id : null,
+            queueId: resolved.queueId,
             entityType: resolved.entityType,
             entityId: resolved.entityId,
             serverEntity: item.entity,
@@ -936,6 +978,34 @@ export function createSyncPushService({
             resolvedAt: null,
             resolution: null,
           })
+        }
+
+        if (hasMappingFailure) {
+          for (const snapshot of envelope.queueSnapshots) {
+            await activeQueueService.markFailedIfUnchanged(
+              snapshot,
+              'SYNC_CONFLICT_MAPPING_FAILED: server conflict could not be mapped to local queue entry',
+            )
+          }
+
+          const remaining = await activeQueueService.countPending()
+          return {
+            ok: false,
+            code: 'SYNC_CONFLICT_MAPPING_FAILED',
+            message: 'One or more server conflicts could not be mapped to local queue snapshots.',
+            error: {
+              code: 'SYNC_CONFLICT_MAPPING_FAILED',
+              message: 'One or more server conflicts could not be mapped to local queue snapshots.',
+              status: 409,
+              data: response.data ?? response.error?.data ?? null,
+            },
+            remaining,
+            sentQueueIds,
+            removedQueueIds: [],
+            preservedQueueIds: [],
+            blocked,
+            warnings,
+          }
         }
 
         // Load existing conflicts and append without duplicating (requestId + serverEntity + syncId)
@@ -1024,6 +1094,13 @@ export function createSyncPushService({
           status: response.status ?? 200,
           data: response.data ?? null,
         }
+      } else if (!failureError && (response.data || response.status)) {
+        failureError = {
+          code: responseCode || 'SYNC_PUSH_FAILED',
+          message: response.data?.message || response.data?.error || 'Sync push failed',
+          status: response.status,
+          data: response.data,
+        }
       }
 
       // Mark failure only on unchanged snapshots that were part of this request
@@ -1038,6 +1115,7 @@ export function createSyncPushService({
 
       return {
         ok: false,
+        code: failureError?.code ?? 'SYNC_PUSH_FAILED',
         requestId,
         duplicate: false,
         sentQueueIds,
