@@ -37,6 +37,7 @@ export function createSyncBootstrapService({
   transport = null,
   stores = null,
   pinia = null,
+  contextGuardService = null,
 } = {}) {
   const activeQueueService = queueService ?? createSyncQueueService({ adapter, scheduler })
   const activeRegistry = registry ?? createSyncIdentityRegistry({ adapter, scheduler })
@@ -45,11 +46,13 @@ export function createSyncBootstrapService({
 
   async function bootstrapNow(options = {}) {
     // ── 1. Validate Cloud Preconditions ───────────────────────────────────────
-    let token = null
-    try {
-      token = await activeTokenFetcher()
-    } catch {
-      token = null
+    let token = options.token ?? options.context?.token ?? null
+    if (!token) {
+      try {
+        token = await activeTokenFetcher()
+      } catch {
+        token = null
+      }
     }
 
     const ctx = options.context ?? {
@@ -80,6 +83,23 @@ export function createSyncBootstrapService({
           code: 'BOOTSTRAP_PRECONDITION_FAILED',
           message: 'Cloud context incomplete',
         },
+      }
+    }
+
+    // ── 1.5. P23 Context Guard Inspection ────────────────────────────────────
+    if (contextGuardService && typeof contextGuardService.inspect === 'function') {
+      const guard = await contextGuardService.inspect({ context: ctx })
+      if (!guard.ok) {
+        return {
+          ok: false,
+          code: 'SYNC_CONTEXT_GUARD_BLOCKED',
+          contextGuardCode: guard.code,
+          message: 'Initial bootstrap blocked by context guard.',
+          error: {
+            code: 'SYNC_CONTEXT_GUARD_BLOCKED',
+            contextGuardCode: guard.code,
+          },
+        }
       }
     }
 

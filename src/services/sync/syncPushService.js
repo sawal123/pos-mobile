@@ -241,6 +241,7 @@ export function createSyncPushService({
   tokenFetcher = getToken,
   transport = pushSyncRequest,
   cloudStore = null,
+  contextGuardService = null,
 } = {}) {
   const activeQueueService = queueService ?? createSyncQueueService({ adapter, scheduler })
   const activeRegistry = registry ?? createSyncIdentityRegistry({ adapter, scheduler })
@@ -309,7 +310,7 @@ export function createSyncPushService({
       const registeredDeviceId =
         options.context?.registeredDeviceId ?? cloudStore?.registeredDeviceId
 
-      const token = options.token ?? (await tokenFetcher())
+      const token = options.token ?? options.context?.token ?? (await tokenFetcher())
 
       const hasValidUser = user !== null && user !== undefined
       const hasToken = typeof token === 'string' && token.trim().length > 0
@@ -343,6 +344,40 @@ export function createSyncPushService({
           preservedQueueIds: [],
           blocked: [],
           warnings: [],
+        }
+      }
+
+      // ── 1.5. P23 Context Guard Inspection ──────────────────────────────────
+      const resolvedContext = options.context || {
+        user,
+        token,
+        selectedBusiness,
+        selectedOutlet,
+        cloudAccess,
+        deviceIdentifier,
+        registeredDeviceId,
+      }
+
+      if (contextGuardService && typeof contextGuardService.inspect === 'function') {
+        const guard = await contextGuardService.inspect({ context: resolvedContext })
+        if (!guard.ok) {
+          const remaining = await activeQueueService.countPending()
+          return {
+            ok: false,
+            code: 'SYNC_CONTEXT_GUARD_BLOCKED',
+            contextGuardCode: guard.code,
+            message: 'Sync push operation blocked by context guard.',
+            error: {
+              code: 'SYNC_CONTEXT_GUARD_BLOCKED',
+              contextGuardCode: guard.code,
+            },
+            remaining,
+            sentQueueIds: [],
+            removedQueueIds: [],
+            preservedQueueIds: [],
+            blocked: [],
+            warnings: [],
+          }
         }
       }
 

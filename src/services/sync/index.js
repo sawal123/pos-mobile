@@ -22,6 +22,7 @@ import {
   AUTO_SYNC_COOLDOWN_MS,
 } from './syncAutoSyncService'
 import { createSyncStatusService } from './syncStatusService'
+import { createSyncContextGuardService } from './syncContextGuardService'
 
 export { SYNC_ENTITY_TYPES, SYNC_OPERATIONS, SYNC_RESERVED_CATEGORY } from './syncConstants'
 export { createSyncChangeTracker } from './syncTracker'
@@ -64,9 +65,10 @@ export {
   SYNC_UI_CLEAR,
   SYNC_UI_STATUSES,
 } from './syncStatusService'
+export { createSyncContextGuardService } from './syncContextGuardService'
 
 /**
- * Initializes the P9-P19 sync foundation after SQLite persistence is ready.
+ * Initializes the P9-P23 sync foundation after SQLite persistence is ready.
  * The change tracker is attached only after hydration completes, so startup
  * hydration / first-run seeding never produce cloud outbox operations.
  *
@@ -76,17 +78,32 @@ export {
  * @param {object} options.scheduler The PersistenceService (serialized writer).
  */
 export function initializeSyncFoundation({ pinia, adapter, scheduler }) {
+  const contextGuardService = createSyncContextGuardService({ adapter })
   const queueService = createSyncQueueService({ adapter, scheduler })
   const registry = createSyncIdentityRegistry({ adapter, scheduler })
   const tracker = createSyncChangeTracker({ pinia, queueService })
-  const pushService = createSyncPushService({ adapter, scheduler, queueService, registry })
-  const pullService = createSyncPullService({ adapter, scheduler, queueService, registry, pinia })
+  const pushService = createSyncPushService({
+    adapter,
+    scheduler,
+    queueService,
+    registry,
+    contextGuardService,
+  })
+  const pullService = createSyncPullService({
+    adapter,
+    scheduler,
+    queueService,
+    registry,
+    pinia,
+    contextGuardService,
+  })
   const bootstrapService = createSyncBootstrapService({
     adapter,
     scheduler,
     queueService,
     registry,
     pinia,
+    contextGuardService,
   })
   const conflictService = createSyncConflictService({
     adapter,
@@ -128,6 +145,7 @@ export function initializeSyncFoundation({ pinia, adapter, scheduler }) {
   })
 
   return {
+    contextGuardService,
     queueService,
     registry,
     tracker,
