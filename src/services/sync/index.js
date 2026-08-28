@@ -84,6 +84,7 @@ export function initializeSyncFoundation({ pinia, adapter, scheduler }) {
   })
   const activityLogService = createSyncActivityLogService({
     adapter,
+    scheduler,
   })
 
   return {

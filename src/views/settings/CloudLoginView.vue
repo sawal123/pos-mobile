@@ -196,6 +196,71 @@ function formatActivityTime(dateStr) {
   }
 }
 
+function classifyPushStatus(result) {
+  if (result.ok) return 'success'
+  const blockedCodes = ['SYNC_CONFLICT', 'SYNC_CONFLICT_PENDING', 'SYNC_PUSH_BLOCKED_PENDING', 'LOCAL_PENDING_SYNC_CONFLICT']
+  if (blockedCodes.includes(result.code)) return 'blocked'
+  return 'failed'
+}
+
+function classifyPullStatus(result) {
+  if (result.ok) return 'success'
+  const blockedCodes = [
+    'LOCAL_PENDING_SYNC_CONFLICT',
+    'SYNC_PULL_CONTEXT_MISMATCH',
+    'SYNC_BUSINESS_BINDING_MISMATCH',
+    'SYNC_BUSINESS_NOT_BOUND',
+    'SYNC_CONFLICT',
+  ]
+  if (blockedCodes.includes(result.code)) return 'blocked'
+  return 'failed'
+}
+
+function classifyFullSyncStatus(result) {
+  if (result.ok) return 'success'
+  const blockedCodes = [
+    'SYNC_CONFLICT',
+    'SYNC_CONFLICT_PENDING',
+    'SYNC_PUSH_BLOCKED_PENDING',
+    'LOCAL_PENDING_SYNC_CONFLICT',
+  ]
+  if (blockedCodes.includes(result.code)) return 'blocked'
+  return 'failed'
+}
+
+function classifyBootstrapStatus(result) {
+  if (result.ok) return 'success'
+  const blockedCodes = [
+    'BOOTSTRAP_SYNC_ALREADY_STARTED',
+    'BOOTSTRAP_PUSH_INFLIGHT',
+    'BOOTSTRAP_PENDING_DELETE_CONFLICT',
+    'BOOTSTRAP_SERVER_NOT_EMPTY',
+    'BOOTSTRAP_PREFLIGHT_FAILED',
+    'BOOTSTRAP_DEPENDENCY_MISSING',
+  ]
+  if (blockedCodes.includes(result.code)) return 'blocked'
+  return 'failed'
+}
+
+function classifyRecoveryStatus(result) {
+  if (result.ok || result.code === 'SYNC_RECOVERY_NOT_REQUIRED') return 'success'
+  const blockedCodes = [
+    'SYNC_RECOVERY_CONFLICT_ACTION_REQUIRED',
+    'SYNC_RECOVERY_MANUAL_INTERVENTION_REQUIRED',
+    'SYNC_RECOVERY_NO_SAFE_ACTION',
+    'SYNC_RECOVERY_ACTION_NOT_APPLICABLE',
+  ]
+  if (blockedCodes.includes(result.code)) return 'blocked'
+  return 'failed'
+}
+
+function classifyHealthStatus(result) {
+  if (result.status === 'ready') return 'success'
+  if (result.status === 'attention') return 'attention'
+  if (result.status === 'blocked') return 'blocked'
+  return 'failed'
+}
+
 async function handleRefreshActivityLog() {
   if (isAnySyncOperationBusy.value) return
   await syncActivityLogStore.refresh({ limit: 10 })
@@ -231,14 +296,7 @@ async function handleCheckSyncHealth() {
   }
 
   const finishedAt = new Date().toISOString()
-  const status =
-    result.status === 'ready'
-      ? 'success'
-      : result.status === 'attention'
-        ? 'attention'
-        : result.status === 'blocked'
-          ? 'blocked'
-          : 'failed'
+  const status = classifyHealthStatus(result)
 
   void syncActivityLogStore.record({
     type: 'health',
@@ -284,13 +342,7 @@ async function handleRecovery(action) {
   }
 
   const finishedAt = new Date().toISOString()
-  const status = result.ok
-    ? 'success'
-    : ['SYNC_RECOVERY_CONFLICT_ACTION_REQUIRED', 'SYNC_RECOVERY_MANUAL_INTERVENTION_REQUIRED'].includes(
-          result.code,
-        )
-      ? 'blocked'
-      : 'failed'
+  const status = classifyRecoveryStatus(result)
 
   void syncActivityLogStore.record({
     type: 'recovery',
@@ -355,11 +407,7 @@ async function handleSyncAll() {
   }
 
   const finishedAt = new Date().toISOString()
-  const status = result.ok
-    ? 'success'
-    : ['SYNC_CONFLICT_PENDING', 'SYNC_PUSH_BLOCKED_PENDING'].includes(result.code)
-      ? 'blocked'
-      : 'failed'
+  const status = classifyFullSyncStatus(result)
 
   void syncActivityLogStore.record({
     type: 'full_sync',
@@ -434,11 +482,7 @@ async function handleSyncNow() {
   }
 
   const finishedAt = new Date().toISOString()
-  const status = result.ok
-    ? 'success'
-    : ['SYNC_CONFLICT', 'SYNC_CONFLICT_PENDING'].includes(result.code)
-      ? 'blocked'
-      : 'failed'
+  const status = classifyPushStatus(result)
 
   void syncActivityLogStore.record({
     type: 'push',
@@ -499,7 +543,7 @@ async function handlePullNow() {
   }
 
   const finishedAt = new Date().toISOString()
-  const status = result.ok ? 'success' : result.code === 'SYNC_CONFLICT' ? 'blocked' : 'failed'
+  const status = classifyPullStatus(result)
 
   void syncActivityLogStore.record({
     type: 'pull',
@@ -561,11 +605,7 @@ async function handleBootstrapNow() {
   }
 
   const finishedAt = new Date().toISOString()
-  const status = result.ok
-    ? 'success'
-    : result.code === 'BOOTSTRAP_PREFLIGHT_FAILED'
-      ? 'blocked'
-      : 'failed'
+  const status = classifyBootstrapStatus(result)
 
   void syncActivityLogStore.record({
     type: 'bootstrap',
@@ -1304,8 +1344,16 @@ onMounted(async () => {
           </div>
         </div>
 
-        <!-- Activity list -->
-        <div v-if="syncActivityLogStore.entries.length === 0" class="text-xs text-ink-secondary italic py-2">
+        <!-- Activity list error or empty -->
+        <p
+          v-if="syncActivityLogStore.error"
+          id="sync-activity-error"
+          class="rounded-xl bg-danger/10 px-3 py-2 text-xs font-medium text-danger"
+        >
+          Gagal memuat riwayat sinkronisasi.
+        </p>
+
+        <div v-else-if="syncActivityLogStore.entries.length === 0" class="text-xs text-ink-secondary italic py-2">
           Belum ada riwayat aktivitas sinkronisasi.
         </div>
 

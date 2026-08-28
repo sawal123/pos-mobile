@@ -9,18 +9,17 @@ export const useSyncActivityLogStore = defineStore('syncActivityLog', () => {
 
   let _activityLogService = null
 
-  function init({ activityLogService = null, adapter = null } = {}) {
+  function init({ activityLogService = null, adapter = null, scheduler = null } = {}) {
     if (activityLogService) {
       _activityLogService = activityLogService
     } else if (adapter) {
-      _activityLogService = createSyncActivityLogService({ adapter })
+      _activityLogService = createSyncActivityLogService({ adapter, scheduler })
     }
   }
 
   async function refresh({ limit = 20 } = {}) {
     if (!_activityLogService) {
-      entries.value = []
-      return []
+      return entries.value
     }
 
     loading.value = true
@@ -33,7 +32,7 @@ export const useSyncActivityLogStore = defineStore('syncActivityLog', () => {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       error.value = msg
-      return []
+      return entries.value
     } finally {
       loading.value = false
     }

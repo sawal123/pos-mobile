@@ -80,7 +80,7 @@ describe('P19: Sync Activity Log & Audit Trail', () => {
   it('48. caps history at 100 entries and drops oldest when 101st is added', async () => {
     const baseTime = new Date('2026-08-28T00:00:00Z').getTime()
 
-    // Add 100 entries
+    // Add 100 entries sequentially
     for (let i = 1; i <= 100; i++) {
       const startedAt = new Date(baseTime + i * 1000).toISOString()
       const finishedAt = new Date(baseTime + i * 1000 + 100).toISOString()
@@ -196,6 +196,18 @@ describe('P19: Sync Activity Log & Audit Trail', () => {
     expect(res2.ok).toBe(false)
     expect(res2.code).toBe('SYNC_ACTIVITY_LOG_INVALID_ENTRY')
 
+    // Type <-> Action mismatch (e.g. push with PULL_NOW)
+    const resMismatch = await activityLogService.record({
+      type: 'push',
+      action: 'PULL_NOW',
+      status: 'success',
+      code: 'OK',
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+    })
+    expect(resMismatch.ok).toBe(false)
+    expect(resMismatch.code).toBe('SYNC_ACTIVITY_LOG_INVALID_ENTRY')
+
     // finishedAt < startedAt
     const res3 = await activityLogService.record({
       type: 'push',
@@ -212,8 +224,8 @@ describe('P19: Sync Activity Log & Audit Trail', () => {
     expect(list).toHaveLength(0)
   })
 
-  // 52. Test no secret / domain payload sanitization
-  it('52. sanitizes and drops token, password, and domain payload from summary', async () => {
+  // 52. Test strict allowlist summary & secret dropping
+  it('52. sanitizes and drops token, password, and unallowlisted domain fields from summary and entry', async () => {
     const t = new Date().toISOString()
     const result = await activityLogService.record({
       type: 'push',
@@ -222,8 +234,11 @@ describe('P19: Sync Activity Log & Audit Trail', () => {
       code: 'SYNC_PUSH_SUCCESS',
       startedAt: t,
       finishedAt: t,
+      token: 'TOP_SECRET_TOKEN',
+      userEmail: 'leaked@domain.com',
       summary: {
         sent: 2,
+        remaining: 0,
         token: 'secret-token-123',
         password: 'supersecretpass',
         authorization: 'Bearer abc',
@@ -234,7 +249,10 @@ describe('P19: Sync Activity Log & Audit Trail', () => {
     })
 
     expect(result.ok).toBe(true)
+    expect(result.entry.token).toBeUndefined()
+    expect(result.entry.userEmail).toBeUndefined()
     expect(result.entry.summary.sent).toBe(2)
+    expect(result.entry.summary.remaining).toBe(0)
     expect(result.entry.summary.token).toBeUndefined()
     expect(result.entry.summary.password).toBeUndefined()
     expect(result.entry.summary.authorization).toBeUndefined()
@@ -248,6 +266,7 @@ describe('P19: Sync Activity Log & Audit Trail', () => {
     expect(persistedJson).not.toContain('secret-token-123')
     expect(persistedJson).not.toContain('supersecretpass')
     expect(persistedJson).not.toContain('Secret Product')
+    expect(persistedJson).not.toContain('TOP_SECRET_TOKEN')
   })
 
   // 53. Test push success log in CloudLoginView
@@ -850,5 +869,299 @@ describe('P19: Sync Activity Log & Audit Trail', () => {
     const serialized = JSON.stringify(backup)
     expect(serialized).not.toContain('sync_activity_log_v1')
     expect(serialized).not.toContain('entries')
+  })
+
+  // ── Concurrency & Serialization Tests ──────────────────────────────────────────
+
+  it('72. handles concurrent record calls without lost updates', async () => {
+    const startedAt = new Date().toISOString()
+    const finishedAt = new Date().toISOString()
+
+    const results = await Promise.all([
+      activityLogService.record({
+        id: 'concurrent-1',
+        type: 'push',
+        action: 'PUSH_NOW',
+        status: 'success',
+        code: 'PUSH_1',
+        startedAt,
+        finishedAt,
+      }),
+      activityLogService.record({
+        id: 'concurrent-2',
+        type: 'pull',
+        action: 'PULL_NOW',
+        status: 'success',
+        code: 'PULL_2',
+        startedAt,
+        finishedAt,
+      }),
+    ])
+
+    expect(results[0].ok).toBe(true)
+    expect(results[1].ok).toBe(true)
+
+    const list = await activityLogService.listRecent()
+    expect(list).toHaveLength(2)
+    const ids = list.map((e) => e.id)
+    expect(ids).toContain('concurrent-1')
+    expect(ids).toContain('concurrent-2')
+  })
+
+  it('73. handles burst of 20 concurrent records with zero lost entries', async () => {
+    const promises = []
+    const now = Date.now()
+    for (let i = 1; i <= 20; i++) {
+      const t = new Date(now + i * 100).toISOString()
+      promises.push(
+        activityLogService.record({
+          id: `burst-${i}`,
+          type: 'health',
+          action: 'CHECK_HEALTH',
+          status: 'success',
+          code: `HEALTH_${i}`,
+          startedAt: t,
+          finishedAt: t,
+        }),
+      )
+    }
+
+    const results = await Promise.all(promises)
+    expect(results.every((r) => r.ok)).toBe(true)
+
+    const list = await activityLogService.listRecent({ limit: 50 })
+    expect(list).toHaveLength(20)
+    const uniqueIds = new Set(list.map((e) => e.id))
+    expect(uniqueIds.size).toBe(20)
+  })
+
+  it('74. preserves max 100 cap and evicts oldest during concurrent record storm', async () => {
+    // Seed 95 entries
+    const base = Date.now()
+    for (let i = 1; i <= 95; i++) {
+      const t = new Date(base + i * 10).toISOString()
+      await activityLogService.record({
+        id: `seed-${i}`,
+        type: 'push',
+        action: 'PUSH_NOW',
+        status: 'success',
+        code: 'SEED',
+        startedAt: t,
+        finishedAt: t,
+      })
+    }
+
+    // Add 10 concurrent entries
+    const stormPromises = []
+    for (let i = 1; i <= 10; i++) {
+      const t = new Date(base + 1000 + i * 10).toISOString()
+      stormPromises.push(
+        activityLogService.record({
+          id: `storm-${i}`,
+          type: 'pull',
+          action: 'PULL_NOW',
+          status: 'success',
+          code: 'STORM',
+          startedAt: t,
+          finishedAt: t,
+        }),
+      )
+    }
+
+    await Promise.all(stormPromises)
+
+    const list = await activityLogService.listRecent({ limit: 150 })
+    expect(list).toHaveLength(100)
+    for (let i = 1; i <= 10; i++) {
+      expect(list.some((e) => e.id === `storm-${i}`)).toBe(true)
+    }
+  })
+
+  it('75. ensures clearHistory in race with record deterministically empties history', async () => {
+    const t = new Date().toISOString()
+    const p1 = activityLogService.record({
+      id: 'race-record',
+      type: 'push',
+      action: 'PUSH_NOW',
+      status: 'success',
+      code: 'RACE',
+      startedAt: t,
+      finishedAt: t,
+    })
+    const p2 = activityLogService.clearHistory()
+
+    await Promise.all([p1, p2])
+
+    const list = await activityLogService.listRecent()
+    expect(list).toHaveLength(0)
+  })
+
+  it('76. serializes listRecent after pending record calls', async () => {
+    const t = new Date().toISOString()
+    const p1 = activityLogService.record({
+      id: 'order-check',
+      type: 'push',
+      action: 'PUSH_NOW',
+      status: 'success',
+      code: 'PUSH_ORDER',
+      startedAt: t,
+      finishedAt: t,
+    })
+    const p2 = activityLogService.listRecent()
+
+    const [, list] = await Promise.all([p1, p2])
+    expect(list.some((e) => e.id === 'order-check')).toBe(true)
+  })
+
+  // ── Adapter Capability Fail Closed Tests ──────────────────────────────────────
+
+  it('77. fails closed with SYNC_ACTIVITY_LOG_ADAPTER_UNSUPPORTED when adapter lacks capabilities', async () => {
+    const emptyAdapter = {}
+    const svc = createSyncActivityLogService({ adapter: emptyAdapter })
+
+    const recRes = await svc.record({
+      type: 'push',
+      action: 'PUSH_NOW',
+      status: 'success',
+      code: 'PUSH',
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+    })
+    expect(recRes.ok).toBe(false)
+    expect(recRes.code).toBe('SYNC_ACTIVITY_LOG_ADAPTER_UNSUPPORTED')
+
+    const clearRes = await svc.clearHistory()
+    expect(clearRes.ok).toBe(false)
+    expect(clearRes.code).toBe('SYNC_ACTIVITY_LOG_ADAPTER_UNSUPPORTED')
+
+    await expect(svc.listRecent()).rejects.toThrow('Persistence adapter tidak mendukung')
+  })
+
+  // ── Corrupt State Fail Closed Tests ──────────────────────────────────────────
+
+  it('78. refuses to overwrite corrupt state on record and returns SYNC_ACTIVITY_LOG_STATE_INVALID', async () => {
+    // Inject corrupt state (version 99)
+    await adapter.saveSyncActivityLog({ version: 99, entries: [] })
+
+    const res = await activityLogService.record({
+      type: 'push',
+      action: 'PUSH_NOW',
+      status: 'success',
+      code: 'PUSH',
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+    })
+
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('SYNC_ACTIVITY_LOG_STATE_INVALID')
+
+    // Corrupt state remains intact
+    const raw = await adapter.loadSyncActivityLog()
+    expect(raw.version).toBe(99)
+  })
+
+  it('79. refuses to overwrite state containing malformed entries', async () => {
+    // Inject state with malformed entry
+    await adapter.saveSyncActivityLog({
+      version: 1,
+      entries: [{ invalid: 'entry' }],
+    })
+
+    const res = await activityLogService.record({
+      type: 'push',
+      action: 'PUSH_NOW',
+      status: 'success',
+      code: 'PUSH',
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+    })
+
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('SYNC_ACTIVITY_LOG_STATE_INVALID')
+  })
+
+  it('80. allows user-explicit clearHistory to clean up corrupt activity log state', async () => {
+    // Inject corrupt state
+    await adapter.saveSyncActivityLog({ version: 99, entries: 'broken' })
+
+    const clearRes = await activityLogService.clearHistory()
+    expect(clearRes.ok).toBe(true)
+
+    const list = await activityLogService.listRecent()
+    expect(list).toEqual([])
+  })
+
+  // ── Error Propagation to Store & UI ─────────────────────────────────────────
+
+  it('81. propagates listRecent read failure to store and renders error in UI without clobbering existing entries', async () => {
+    const cloudStore = useCloudSessionStore()
+    setupAuthenticatedSession(cloudStore)
+
+    // Prepopulate store entries
+    const syncActivityLogStore = useSyncActivityLogStore()
+    syncActivityLogStore.init({ activityLogService })
+    syncActivityLogStore.entries = [
+      {
+        id: 'preserved-1',
+        type: 'push',
+        action: 'PUSH_NOW',
+        status: 'success',
+        code: 'SYNC_PUSH_SUCCESS',
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+        summary: { sent: 1 },
+      },
+    ]
+
+    // Spy listRecent on activityLogService to reject
+    vi.spyOn(activityLogService, 'listRecent').mockRejectedValue(new Error('Disk I/O error'))
+
+    const wrapper = mount(CloudLoginView)
+    await flushPromises()
+
+    // Trigger refresh button
+    await wrapper.find('#sync-activity-refresh-btn').trigger('click')
+    await flushPromises()
+
+    expect(syncActivityLogStore.error).toContain('Disk I/O error')
+    expect(syncActivityLogStore.entries).toHaveLength(1)
+    expect(syncActivityLogStore.entries[0].id).toBe('preserved-1')
+
+    // Error rendered in UI
+    expect(wrapper.find('#sync-activity-error').exists()).toBe(true)
+    expect(wrapper.find('#sync-activity-error').text()).toContain('Gagal memuat riwayat sinkronisasi')
+  })
+
+  // ── ID Deduplication Test ───────────────────────────────────────────────────
+
+  it('82. deduplicates entries with identical ID by updating to newest', async () => {
+    const t1 = new Date('2026-08-28T09:00:00Z').toISOString()
+    const t2 = new Date('2026-08-28T09:10:00Z').toISOString()
+
+    await activityLogService.record({
+      id: 'unique-key',
+      type: 'push',
+      action: 'PUSH_NOW',
+      status: 'failed',
+      code: 'NETWORK_ERROR',
+      startedAt: t1,
+      finishedAt: t1,
+    })
+
+    await activityLogService.record({
+      id: 'unique-key',
+      type: 'push',
+      action: 'PUSH_NOW',
+      status: 'success',
+      code: 'SYNC_PUSH_SUCCESS',
+      startedAt: t2,
+      finishedAt: t2,
+    })
+
+    const list = await activityLogService.listRecent()
+    expect(list).toHaveLength(1)
+    expect(list[0].id).toBe('unique-key')
+    expect(list[0].status).toBe('success')
+    expect(list[0].code).toBe('SYNC_PUSH_SUCCESS')
   })
 })

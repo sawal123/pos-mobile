@@ -29,7 +29,23 @@ export const SYNC_ACTIVITY_ACTIONS = Object.freeze({
   CONTINUE_BOOTSTRAP: 'CONTINUE_BOOTSTRAP',
 })
 
+export const TYPE_ACTION_MAP = Object.freeze({
+  push: ['PUSH_NOW'],
+  pull: ['PULL_NOW'],
+  bootstrap: ['BOOTSTRAP'],
+  full_sync: ['SYNC_ALL'],
+  conflict: ['USE_SERVER', 'KEEP_LOCAL'],
+  health: ['CHECK_HEALTH'],
+  recovery: [
+    'RETRY_INFLIGHT',
+    'CONTINUE_PENDING',
+    'PREPARE_BOOTSTRAP',
+    'CONTINUE_BOOTSTRAP',
+  ],
+})
+
 const MAX_ACTIVITY_LOG_ENTRIES = 100
+const SAFE_CODE_REGEX = /^[A-Za-z0-9_.:-]+$/
 
 function generateId() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -44,38 +60,103 @@ function isValidDateString(val) {
   return Number.isFinite(time)
 }
 
+function isPlainObject(val) {
+  return val !== null && typeof val === 'object' && !Array.isArray(val)
+}
+
+/**
+ * Strict allowlist sanitizer for P19 summary metadata.
+ */
 function sanitizeSummary(rawSummary) {
-  if (!rawSummary || typeof rawSummary !== 'object' || Array.isArray(rawSummary)) {
+  if (!isPlainObject(rawSummary)) {
     return {}
   }
-  const FORBIDDEN_KEYS = new Set([
-    'token',
-    'password',
-    'authorization',
-    'credentials',
-    'user',
-    'products',
-    'transactions',
-    'items',
-    'records',
-    'sale_items',
-    'expenses',
-    'customers',
-    'queueSnapshot',
-    'conflictQueueSnapshot',
-    'serverPayload',
-    'rawPayload',
-  ])
 
   const sanitized = {}
-  for (const [k, v] of Object.entries(rawSummary)) {
-    if (FORBIDDEN_KEYS.has(k)) continue
-    // Only permit primitive scalar values or small metadata objects
-    if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean' || v === null) {
-      sanitized[k] = v
+
+  // Numeric fields
+  const numericKeys = [
+    'sent',
+    'remaining',
+    'blocked',
+    'fetched',
+    'applied',
+    'ignored',
+    'pushed',
+    'pulled',
+    'stagedCount',
+    'pending',
+    'conflicts',
+  ]
+  for (const k of numericKeys) {
+    if (k in rawSummary) {
+      const v = rawSummary[k]
+      if (v === null) {
+        sanitized[k] = null
+      } else if (Number.isFinite(Number(v))) {
+        sanitized[k] = Number(v)
+      }
     }
   }
+
+  // Boolean fields
+  if ('hasInflight' in rawSummary) {
+    const v = rawSummary.hasInflight
+    if (typeof v === 'boolean') {
+      sanitized.hasInflight = v
+    } else if (v === null) {
+      sanitized.hasInflight = null
+    }
+  }
+
+  // String fields
+  const stringKeys = ['stage', 'healthStatus', 'action', 'cursorBefore', 'cursorAfter']
+  for (const k of stringKeys) {
+    if (k in rawSummary) {
+      const v = rawSummary[k]
+      if (v === null) {
+        sanitized[k] = null
+      } else if (typeof v === 'string' && v.length <= 128) {
+        sanitized[k] = v.trim()
+      } else if (typeof v === 'number') {
+        sanitized[k] = String(v)
+      }
+    }
+  }
+
   return sanitized
+}
+
+/**
+ * Validates an existing entry from durable storage.
+ */
+function isValidStoredEntry(entry) {
+  if (!isPlainObject(entry)) return false
+  if (typeof entry.id !== 'string' || !entry.id.trim() || entry.id.length > 128) return false
+  if (!SYNC_ACTIVITY_TYPES.includes(entry.type)) return false
+  const validActions = TYPE_ACTION_MAP[entry.type] || []
+  if (!validActions.includes(entry.action)) return false
+  if (!SYNC_ACTIVITY_STATUSES.includes(entry.status)) return false
+  if (typeof entry.code !== 'string' || !entry.code.trim() || entry.code.length > 128) return false
+  if (entry.code.includes('\n') || entry.code.includes('\r')) return false
+  if (!isValidDateString(entry.startedAt) || !isValidDateString(entry.finishedAt)) return false
+  if (new Date(entry.finishedAt).getTime() < new Date(entry.startedAt).getTime()) return false
+  if (!isPlainObject(entry.summary)) return false
+
+  if (entry.businessId !== null && (!Number.isInteger(Number(entry.businessId)) || Number(entry.businessId) <= 0)) {
+    return false
+  }
+  if (entry.outletId !== null && (!Number.isInteger(Number(entry.outletId)) || Number(entry.outletId) <= 0)) {
+    return false
+  }
+  if (entry.registeredDeviceId !== null && (!Number.isInteger(Number(entry.registeredDeviceId)) || Number(entry.registeredDeviceId) <= 0)) {
+    return false
+  }
+  if (entry.deviceIdentifier !== null && (typeof entry.deviceIdentifier !== 'string' || !entry.deviceIdentifier.trim() || entry.deviceIdentifier.length > 128)) {
+    return false
+  }
+
+  return true
 }
 
 /**
@@ -83,11 +164,75 @@ function sanitizeSummary(rawSummary) {
  *
  * @param {object} options
  * @param {object} options.adapter Persistence adapter
+ * @param {object} [options.scheduler] Serialized persistence scheduler
  * @returns {object}
  */
-export function createSyncActivityLogService({ adapter } = {}) {
-  if (!adapter) {
-    throw new Error('Adapter is required for createSyncActivityLogService.')
+export function createSyncActivityLogService({ adapter, scheduler } = {}) {
+  let localQueue = Promise.resolve()
+
+  function runSerialized(task, label = 'sync_activity_log') {
+    if (scheduler && typeof scheduler.runSerialized === 'function') {
+      return scheduler.runSerialized(task, label)
+    }
+    const next = localQueue.then(() => task(), () => task())
+    localQueue = next
+    return next
+  }
+
+  function hasReadCapability() {
+    return Boolean(
+      adapter &&
+        (typeof adapter.loadSyncActivityLog === 'function' ||
+          typeof adapter.readMetaValue === 'function'),
+    )
+  }
+
+  function hasWriteCapability() {
+    return Boolean(
+      adapter &&
+        (typeof adapter.saveSyncActivityLog === 'function' ||
+          typeof adapter.writeMetaValue === 'function'),
+    )
+  }
+
+  function hasClearCapability() {
+    return Boolean(
+      adapter &&
+        (typeof adapter.clearSyncActivityLog === 'function' || hasWriteCapability()),
+    )
+  }
+
+  async function readDurableState() {
+    if (typeof adapter.loadSyncActivityLog === 'function') {
+      return await adapter.loadSyncActivityLog()
+    }
+    if (typeof adapter.readMetaValue === 'function') {
+      return await adapter.readMetaValue('sync_activity_log_v1', null)
+    }
+    throw new Error('Adapter does not support read capability.')
+  }
+
+  async function writeDurableState(state) {
+    if (typeof adapter.saveSyncActivityLog === 'function') {
+      return await adapter.saveSyncActivityLog(state)
+    }
+    if (typeof adapter.writeMetaValue === 'function') {
+      return await adapter.writeMetaValue('sync_activity_log_v1', state)
+    }
+    throw new Error('Adapter does not support write capability.')
+  }
+
+  async function deleteDurableState() {
+    if (typeof adapter.clearSyncActivityLog === 'function') {
+      return await adapter.clearSyncActivityLog()
+    }
+    if (typeof adapter.saveSyncActivityLog === 'function') {
+      return await adapter.saveSyncActivityLog({ version: 1, entries: [] })
+    }
+    if (typeof adapter.writeMetaValue === 'function') {
+      return await adapter.writeMetaValue('sync_activity_log_v1', { version: 1, entries: [] })
+    }
+    throw new Error('Adapter does not support clear capability.')
   }
 
   /**
@@ -97,7 +242,15 @@ export function createSyncActivityLogService({ adapter } = {}) {
    * @returns {Promise<object>}
    */
   async function record(rawEntry = {}) {
-    if (!rawEntry || typeof rawEntry !== 'object' || Array.isArray(rawEntry)) {
+    if (!hasReadCapability() || !hasWriteCapability()) {
+      return {
+        ok: false,
+        code: 'SYNC_ACTIVITY_LOG_ADAPTER_UNSUPPORTED',
+        message: 'Persistence adapter tidak mendukung pencatatan activity log.',
+      }
+    }
+
+    if (!isPlainObject(rawEntry)) {
       return {
         ok: false,
         code: 'SYNC_ACTIVITY_LOG_INVALID_ENTRY',
@@ -120,7 +273,15 @@ export function createSyncActivityLogService({ adapter } = {}) {
       summary = {},
     } = rawEntry
 
-    // 1. Validation (Fail Closed)
+    // 1. Strict Validation (Fail Closed)
+    if (typeof id !== 'string' || !id.trim() || id.length > 128) {
+      return {
+        ok: false,
+        code: 'SYNC_ACTIVITY_LOG_INVALID_ENTRY',
+        message: 'ID activity log tidak valid.',
+      }
+    }
+
     if (!type || !SYNC_ACTIVITY_TYPES.includes(type)) {
       return {
         ok: false,
@@ -129,11 +290,12 @@ export function createSyncActivityLogService({ adapter } = {}) {
       }
     }
 
-    if (typeof action !== 'string' || !action.trim()) {
+    const validActions = TYPE_ACTION_MAP[type] || []
+    if (typeof action !== 'string' || !validActions.includes(action.trim())) {
       return {
         ok: false,
         code: 'SYNC_ACTIVITY_LOG_INVALID_ENTRY',
-        message: 'Action activity log tidak boleh kosong.',
+        message: `Action '${action}' tidak valid untuk type '${type}'.`,
       }
     }
 
@@ -145,11 +307,18 @@ export function createSyncActivityLogService({ adapter } = {}) {
       }
     }
 
-    if (typeof code !== 'string' || !code.trim()) {
+    if (
+      typeof code !== 'string' ||
+      !code.trim() ||
+      code.length > 128 ||
+      code.includes('\n') ||
+      code.includes('\r') ||
+      !SAFE_CODE_REGEX.test(code.trim())
+    ) {
       return {
         ok: false,
         code: 'SYNC_ACTIVITY_LOG_INVALID_ENTRY',
-        message: 'Code activity log tidak boleh kosong.',
+        message: 'Code activity log tidak valid.',
       }
     }
 
@@ -169,7 +338,6 @@ export function createSyncActivityLogService({ adapter } = {}) {
       }
     }
 
-    // Context validation if provided
     if (businessId !== null && (!Number.isInteger(Number(businessId)) || Number(businessId) <= 0)) {
       return {
         ok: false,
@@ -191,9 +359,16 @@ export function createSyncActivityLogService({ adapter } = {}) {
         message: 'registeredDeviceId tidak valid.',
       }
     }
+    if (deviceIdentifier !== null && (typeof deviceIdentifier !== 'string' || !deviceIdentifier.trim() || deviceIdentifier.length > 128)) {
+      return {
+        ok: false,
+        code: 'SYNC_ACTIVITY_LOG_INVALID_ENTRY',
+        message: 'deviceIdentifier tidak valid.',
+      }
+    }
 
     const cleanEntry = {
-      id: String(id),
+      id: String(id).trim(),
       type,
       action: String(action).trim(),
       status,
@@ -202,46 +377,72 @@ export function createSyncActivityLogService({ adapter } = {}) {
       finishedAt,
       businessId: businessId != null ? Number(businessId) : null,
       outletId: outletId != null ? Number(outletId) : null,
-      deviceIdentifier: deviceIdentifier != null ? String(deviceIdentifier) : null,
+      deviceIdentifier: deviceIdentifier != null ? String(deviceIdentifier).trim() : null,
       registeredDeviceId: registeredDeviceId != null ? Number(registeredDeviceId) : null,
       summary: sanitizeSummary(summary),
     }
 
-    // 2. Persist to adapter
-    try {
-      let logState = null
-      if (typeof adapter.loadSyncActivityLog === 'function') {
-        logState = await adapter.loadSyncActivityLog()
-      } else if (typeof adapter.readMetaValue === 'function') {
-        logState = await adapter.readMetaValue('sync_activity_log_v1', null)
+    // 2. Serialized critical section: Read -> Validate -> Dedupe -> Append -> Slice -> Save
+    return runSerialized(async () => {
+      let logState
+      try {
+        logState = await readDurableState()
+      } catch (err) {
+        return {
+          ok: false,
+          code: 'SYNC_ACTIVITY_LOG_PERSIST_FAILED',
+          message: err.message || 'Gagal membaca activity log.',
+        }
+      }
+
+      if (logState !== null && logState !== undefined) {
+        if (!isPlainObject(logState) || logState.version !== 1 || !Array.isArray(logState.entries)) {
+          return {
+            ok: false,
+            code: 'SYNC_ACTIVITY_LOG_STATE_INVALID',
+            message: 'Durable activity log state rusak atau tidak sesuai skema v1.',
+          }
+        }
+
+        // Validate all existing entries
+        for (const existing of logState.entries) {
+          if (!isValidStoredEntry(existing)) {
+            return {
+              ok: false,
+              code: 'SYNC_ACTIVITY_LOG_STATE_INVALID',
+              message: 'Ditemukan entri riwayat yang rusak pada storage.',
+            }
+          }
+        }
       }
 
       const existingEntries = Array.isArray(logState?.entries) ? logState.entries : []
-      const nextEntries = [cleanEntry, ...existingEntries].slice(0, MAX_ACTIVITY_LOG_ENTRIES)
+      // Dedupe by id, newest entry at top
+      const nextEntries = [
+        cleanEntry,
+        ...existingEntries.filter((e) => e.id !== cleanEntry.id),
+      ].slice(0, MAX_ACTIVITY_LOG_ENTRIES)
 
       const nextState = {
         version: 1,
         entries: nextEntries,
       }
 
-      if (typeof adapter.saveSyncActivityLog === 'function') {
-        await adapter.saveSyncActivityLog(nextState)
-      } else if (typeof adapter.writeMetaValue === 'function') {
-        await adapter.writeMetaValue('sync_activity_log_v1', nextState)
+      try {
+        await writeDurableState(nextState)
+        return {
+          ok: true,
+          code: 'SYNC_ACTIVITY_LOG_RECORDED',
+          entry: cleanEntry,
+        }
+      } catch (err) {
+        return {
+          ok: false,
+          code: 'SYNC_ACTIVITY_LOG_PERSIST_FAILED',
+          message: err.message || 'Gagal menyimpan activity log.',
+        }
       }
-
-      return {
-        ok: true,
-        code: 'SYNC_ACTIVITY_LOG_RECORDED',
-        entry: cleanEntry,
-      }
-    } catch (err) {
-      return {
-        ok: false,
-        code: 'SYNC_ACTIVITY_LOG_PERSIST_FAILED',
-        message: err.message || 'Gagal menyimpan riwayat aktivitas sinkronisasi.',
-      }
-    }
+    }, 'sync_activity_log_record')
   }
 
   /**
@@ -252,49 +453,63 @@ export function createSyncActivityLogService({ adapter } = {}) {
    * @returns {Promise<Array>}
    */
   async function listRecent({ limit = 20 } = {}) {
-    try {
-      let logState = null
-      if (typeof adapter.loadSyncActivityLog === 'function') {
-        logState = await adapter.loadSyncActivityLog()
-      } else if (typeof adapter.readMetaValue === 'function') {
-        logState = await adapter.readMetaValue('sync_activity_log_v1', null)
+    if (!hasReadCapability()) {
+      throw new Error('Persistence adapter tidak mendukung pembacaan activity log.')
+    }
+
+    return runSerialized(async () => {
+      const logState = await readDurableState()
+
+      if (logState === null || logState === undefined) {
+        return []
       }
 
-      const entries = Array.isArray(logState?.entries) ? logState.entries : []
+      if (!isPlainObject(logState) || logState.version !== 1 || !Array.isArray(logState.entries)) {
+        throw new Error('Durable activity log state rusak atau tidak sesuai skema v1.')
+      }
+
+      for (const existing of logState.entries) {
+        if (!isValidStoredEntry(existing)) {
+          throw new Error('Ditemukan entri riwayat yang rusak pada storage.')
+        }
+      }
+
       const effectiveLimit = Math.max(1, Math.min(Number(limit) || 20, MAX_ACTIVITY_LOG_ENTRIES))
-      return entries.slice(0, effectiveLimit)
-    } catch {
-      return []
-    }
+      return logState.entries.slice(0, effectiveLimit)
+    }, 'sync_activity_log_list')
   }
 
   /**
    * Clears activity log history without modifying sync queue, conflicts, or bindings.
+   * Can be used to reset a corrupt activity log.
    *
    * @returns {Promise<object>}
    */
   async function clearHistory() {
-    try {
-      if (typeof adapter.clearSyncActivityLog === 'function') {
-        await adapter.clearSyncActivityLog()
-      } else if (typeof adapter.saveSyncActivityLog === 'function') {
-        await adapter.saveSyncActivityLog({ version: 1, entries: [] })
-      } else if (typeof adapter.writeMetaValue === 'function') {
-        await adapter.writeMetaValue('sync_activity_log_v1', { version: 1, entries: [] })
-      }
-
-      return {
-        ok: true,
-        code: 'SYNC_ACTIVITY_LOG_CLEARED',
-        message: 'Riwayat aktivitas sinkronisasi berhasil dihapus.',
-      }
-    } catch (err) {
+    if (!hasClearCapability()) {
       return {
         ok: false,
-        code: 'SYNC_ACTIVITY_LOG_PERSIST_FAILED',
-        message: err.message || 'Gagal menghapus riwayat aktivitas sinkronisasi.',
+        code: 'SYNC_ACTIVITY_LOG_ADAPTER_UNSUPPORTED',
+        message: 'Persistence adapter tidak mendukung penghapusan activity log.',
       }
     }
+
+    return runSerialized(async () => {
+      try {
+        await deleteDurableState()
+        return {
+          ok: true,
+          code: 'SYNC_ACTIVITY_LOG_CLEARED',
+          message: 'Riwayat aktivitas sinkronisasi berhasil dihapus.',
+        }
+      } catch (err) {
+        return {
+          ok: false,
+          code: 'SYNC_ACTIVITY_LOG_PERSIST_FAILED',
+          message: err.message || 'Gagal menghapus riwayat aktivitas sinkronisasi.',
+        }
+      }
+    }, 'sync_activity_log_clear')
   }
 
   return {
