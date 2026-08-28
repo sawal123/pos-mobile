@@ -14,6 +14,7 @@ import { useSyncOrchestratorStore } from '@/stores/syncOrchestratorStore'
 import { useSyncHealthStore } from '@/stores/syncHealthStore'
 import { useSyncRecoveryStore } from '@/stores/syncRecoveryStore'
 import { useSyncActivityLogStore } from '@/stores/syncActivityLogStore'
+import { useSyncAutoSyncStore } from '@/stores/syncAutoSyncStore'
 
 const cloudStore = useCloudSessionStore()
 const syncPushStore = useSyncPushStore()
@@ -24,6 +25,7 @@ const syncOrchestratorStore = useSyncOrchestratorStore()
 const syncHealthStore = useSyncHealthStore()
 const syncRecoveryStore = useSyncRecoveryStore()
 const syncActivityLogStore = useSyncActivityLogStore()
+const syncAutoSyncStore = useSyncAutoSyncStore()
 
 // ── Form state ──────────────────────────────────────────────────────────────
 const email = ref('')
@@ -41,6 +43,8 @@ const conflictMessage = ref('')
 const conflictSuccess = ref(false)
 const recoveryMessage = ref('')
 const recoverySuccess = ref(false)
+const autoSyncMessage = ref('')
+const autoSyncSuccess = ref(false)
 const showClearConfirm = ref(false)
 
 // ── Derived ─────────────────────────────────────────────────────────────────
@@ -54,6 +58,7 @@ const isAnySyncOperationBusy = computed(
     syncHealthStore.loading ||
     syncRecoveryStore.loading ||
     syncActivityLogStore.loading ||
+    syncAutoSyncStore.running ||
     cloudStore.loading,
 )
 
@@ -302,6 +307,21 @@ async function handleConfirmClearActivityLog() {
   if (isAnySyncOperationBusy.value) return
   await syncActivityLogStore.clearHistory()
   showClearConfirm.value = false
+}
+
+async function handleToggleAutoSync(event) {
+  if (isAnySyncOperationBusy.value) return
+  const target = event.target.checked
+  const res = await syncAutoSyncStore.setEnabled(target)
+  if (res.ok) {
+    autoSyncSuccess.value = true
+    autoSyncMessage.value = target
+      ? 'Sinkronisasi otomatis aktif untuk koneksi dan konteks ini.'
+      : 'Sinkronisasi otomatis dinonaktifkan.'
+  } else {
+    autoSyncSuccess.value = false
+    autoSyncMessage.value = res.message || 'Gagal mengubah pengaturan sinkronisasi otomatis.'
+  }
 }
 
 async function handleCheckSyncHealth() {
@@ -836,11 +856,35 @@ async function handleLogout() {
   if (isAnySyncOperationBusy.value) return
   resetRecoveryPresentation()
   syncHealthStore.resetResult()
+  autoSyncMessage.value = ''
+  autoSyncSuccess.value = false
+  syncAutoSyncStore.resetPresentation()
   await cloudStore.logout()
   email.value = ''
   password.value = ''
   step.value = 'login'
 }
+
+watch(
+  [
+    () => cloudStore.user?.id,
+    () => cloudStore.selectedBusiness?.id,
+    () => cloudStore.selectedOutlet?.id,
+    () => cloudStore.registeredDeviceId,
+    () => cloudStore.deviceIdentifier,
+    () => canSync.value,
+  ],
+  async () => {
+    autoSyncMessage.value = ''
+    autoSyncSuccess.value = false
+    syncAutoSyncStore.resetPresentation()
+    if (canSync.value) {
+      await syncAutoSyncStore.loadPreference()
+    } else {
+      syncAutoSyncStore.enabled = false
+    }
+  },
+)
 
 // Sync context to adapter on mount (if already hydrated)
 onMounted(async () => {
@@ -850,6 +894,9 @@ onMounted(async () => {
       await syncPushStore.refreshPendingCount()
       await syncConflictStore.loadConflicts()
       await syncActivityLogStore.refresh({ limit: 10 })
+      if (canSync.value) {
+        await syncAutoSyncStore.loadPreference()
+      }
     } catch {
       // Non-blocking best-effort refresh
     }
@@ -1305,6 +1352,55 @@ onMounted(async () => {
           :class="conflictSuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'"
         >
           {{ conflictMessage }}
+        </p>
+      </div>
+
+      <!-- P20: Safe Foreground Auto Sync Section -->
+      <div
+        v-if="canSync"
+        id="auto-sync-section"
+        class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
+      >
+        <div class="flex items-center justify-between">
+          <div class="space-y-0.5">
+            <p class="text-sm font-semibold text-ink-primary">Sinkronisasi Otomatis</p>
+            <p class="text-xs text-ink-secondary">
+              Berjalan hanya saat aplikasi aktif ketika koneksi kembali online atau aplikasi dibuka kembali.
+            </p>
+          </div>
+          <label class="relative inline-flex cursor-pointer items-center">
+            <input
+              id="auto-sync-toggle"
+              type="checkbox"
+              class="peer sr-only"
+              :checked="syncAutoSyncStore.enabled"
+              :disabled="isAnySyncOperationBusy || syncAutoSyncStore.loadingPreference"
+              @change="handleToggleAutoSync"
+            />
+            <div
+              class="peer h-6 w-11 rounded-full bg-surface-muted transition-colors after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:bg-white after:shadow-sm after:transition-all after:content-[''] peer-checked:bg-primary peer-checked:after:translate-x-full peer-disabled:cursor-not-allowed peer-disabled:opacity-50"
+            ></div>
+          </label>
+        </div>
+
+        <p
+          v-if="autoSyncMessage"
+          id="auto-sync-status-message"
+          class="rounded-xl px-3 py-2 text-xs font-medium"
+          :class="autoSyncSuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'"
+        >
+          {{ autoSyncMessage }}
+        </p>
+
+        <p
+          v-else-if="syncAutoSyncStore.lastTriggeredAt"
+          id="auto-sync-last-status"
+          class="text-[11px] text-ink-secondary"
+        >
+          Auto Sync terakhir: {{ formatActivityTime(syncAutoSyncStore.lastTriggeredAt) }}
+          <span v-if="syncAutoSyncStore.lastResult?.code" class="font-mono text-[10px]">
+            ({{ syncAutoSyncStore.lastResult.code }})
+          </span>
         </p>
       </div>
 

@@ -20,6 +20,7 @@ export const SYNC_ACTIVITY_ACTIONS = Object.freeze({
   PULL_NOW: 'PULL_NOW',
   BOOTSTRAP: 'BOOTSTRAP',
   SYNC_ALL: 'SYNC_ALL',
+  AUTO_SYNC: 'AUTO_SYNC',
   USE_SERVER: 'USE_SERVER',
   KEEP_LOCAL: 'KEEP_LOCAL',
   CHECK_HEALTH: 'CHECK_HEALTH',
@@ -33,7 +34,7 @@ export const TYPE_ACTION_MAP = Object.freeze({
   push: ['PUSH_NOW'],
   pull: ['PULL_NOW'],
   bootstrap: ['BOOTSTRAP'],
-  full_sync: ['SYNC_ALL'],
+  full_sync: ['SYNC_ALL', 'AUTO_SYNC'],
   conflict: ['USE_SERVER', 'KEEP_LOCAL'],
   health: ['CHECK_HEALTH'],
   recovery: [
@@ -80,6 +81,7 @@ export const ALLOWED_SUMMARY_KEYS = Object.freeze(
     'conflicts',
     'hasInflight',
     'action',
+    'trigger',
   ]),
 )
 
@@ -99,7 +101,7 @@ const NUMERIC_SUMMARY_KEYS = new Set([
   'conflicts',
 ])
 
-const STRING_SUMMARY_KEYS = new Set(['stage', 'healthStatus', 'action'])
+const STRING_SUMMARY_KEYS = new Set(['stage', 'healthStatus', 'action', 'trigger'])
 
 const MAX_ACTIVITY_LOG_ENTRIES = 100
 const SAFE_CODE_REGEX = /^[A-Za-z0-9_.:-]+$/
@@ -142,6 +144,10 @@ export function isValidSummary(summary) {
       }
     } else if (k === 'hasInflight') {
       if (typeof val !== 'boolean') {
+        return false
+      }
+    } else if (k === 'trigger') {
+      if (typeof val !== 'string' || (val !== 'online' && val !== 'resume')) {
         return false
       }
     } else if (STRING_SUMMARY_KEYS.has(k)) {

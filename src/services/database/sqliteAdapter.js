@@ -640,6 +640,17 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
       const db = await ensureConnection()
       await db.run("DELETE FROM app_meta WHERE key = 'sync_activity_log_v1'", [])
     },
+    // P20: sync auto settings (local device, context bound, default off)
+    async loadSyncAutoSettings() {
+      return readMetaValue('sync_auto_settings_v1', null)
+    },
+    async saveSyncAutoSettings(settings) {
+      await writeMetaValue('sync_auto_settings_v1', settings)
+    },
+    async clearSyncAutoSettings() {
+      const db = await ensureConnection()
+      await db.run("DELETE FROM app_meta WHERE key = 'sync_auto_settings_v1'", [])
+    },
     async persistSyncConflictsAndClearInflightAtomic({ expectedRequestId, conflictsState }) {
       return await withTransaction(async (db) => {
         const { values = [] } = await db.query(
