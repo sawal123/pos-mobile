@@ -14,6 +14,7 @@ export const useSyncContextGuardStore = defineStore('syncContextGuard', () => {
   const lastError = ref(null)
 
   let _contextGuardService = null
+  let _checkSeq = 0
 
   function init({ contextGuardService = null } = {}) {
     if (contextGuardService) {
@@ -22,6 +23,7 @@ export const useSyncContextGuardStore = defineStore('syncContextGuard', () => {
   }
 
   function resetPresentation() {
+    _checkSeq++
     status.value = 'idle'
     code.value = null
     currentContext.value = null
@@ -30,6 +32,18 @@ export const useSyncContextGuardStore = defineStore('syncContextGuard', () => {
     issues.value = []
     lastCheckedAt.value = null
     lastError.value = null
+    loading.value = false
+  }
+
+  function buildContextFingerprint(ctx) {
+    if (!ctx) return ''
+    const userId = ctx.user?.id != null ? String(ctx.user.id) : ''
+    const bizId = ctx.selectedBusiness?.id != null ? String(ctx.selectedBusiness.id) : ''
+    const outletId = ctx.selectedOutlet?.id != null ? String(ctx.selectedOutlet.id) : ''
+    const cloudAccess = ctx.cloudAccess === true ? '1' : '0'
+    const devId = ctx.deviceIdentifier != null ? String(ctx.deviceIdentifier).trim() : ''
+    const regId = ctx.registeredDeviceId != null ? String(ctx.registeredDeviceId) : ''
+    return `${userId}:${bizId}:${outletId}:${cloudAccess}:${devId}:${regId}`
   }
 
   function snapshotCloudContext() {
@@ -53,42 +67,15 @@ export const useSyncContextGuardStore = defineStore('syncContextGuard', () => {
   }
 
   async function check({ context = null } = {}) {
+    const seq = ++_checkSeq
     const effectiveContext = context || snapshotCloudContext()
+    const fingerprintBefore = buildContextFingerprint(effectiveContext)
 
     if (!_contextGuardService) {
       loading.value = false
-      status.value = 'unbound'
-      code.value = 'SYNC_CONTEXT_UNBOUND'
-      issues.value = []
-      lastCheckedAt.value = new Date().toISOString()
-      return {
-        ok: true,
-        code: 'SYNC_CONTEXT_UNBOUND',
-        status: 'unbound',
-        currentContext: null,
-        canonicalContext: null,
-        issues: [],
-      }
-    }
-
-    loading.value = true
-    lastError.value = null
-
-    try {
-      const result = await _contextGuardService.inspect({ context: effectiveContext })
-      status.value = result.status || (result.ok ? 'safe' : 'blocked')
-      code.value = result.code || null
-      currentContext.value = result.currentContext || null
-      canonicalContext.value = result.canonicalContext || null
-      sources.value = Array.isArray(result.sources) ? [...result.sources] : []
-      issues.value = Array.isArray(result.issues) ? [...result.issues] : []
-      lastCheckedAt.value = new Date().toISOString()
-      return result
-    } catch (err) {
       status.value = 'blocked'
       code.value = 'SYNC_CONTEXT_READ_FAILED'
-      issues.value = [{ code: 'INSPECT_FAILED', source: 'store' }]
-      lastError.value = err
+      issues.value = [{ code: 'GUARD_SERVICE_MISSING', source: 'store' }]
       lastCheckedAt.value = new Date().toISOString()
       return {
         ok: false,
@@ -98,8 +85,50 @@ export const useSyncContextGuardStore = defineStore('syncContextGuard', () => {
         canonicalContext: null,
         issues: issues.value,
       }
+    }
+
+    loading.value = true
+    lastError.value = null
+
+    try {
+      const result = await _contextGuardService.inspect({ context: effectiveContext })
+
+      // Stale check protection: only apply if seq is still latest and context fingerprint has not changed
+      const currentFingerprint = buildContextFingerprint(snapshotCloudContext())
+      const isContextStillMatching = context !== null || currentFingerprint === fingerprintBefore
+
+      if (seq === _checkSeq && isContextStillMatching) {
+        status.value = result.status || (result.ok ? 'safe' : 'blocked')
+        code.value = result.code || null
+        currentContext.value = result.currentContext || null
+        canonicalContext.value = result.canonicalContext || null
+        sources.value = Array.isArray(result.sources) ? [...result.sources] : []
+        issues.value = Array.isArray(result.issues) ? [...result.issues] : []
+        lastCheckedAt.value = new Date().toISOString()
+      }
+
+      return result
+    } catch (err) {
+      if (seq === _checkSeq) {
+        status.value = 'blocked'
+        code.value = 'SYNC_CONTEXT_READ_FAILED'
+        issues.value = [{ code: 'INSPECT_FAILED', source: 'store' }]
+        lastError.value = err
+        lastCheckedAt.value = new Date().toISOString()
+      }
+      return {
+        ok: false,
+        code: 'SYNC_CONTEXT_READ_FAILED',
+        status: 'blocked',
+        currentContext: null,
+        canonicalContext: null,
+        issues: [{ code: 'INSPECT_FAILED', source: 'store' }],
+      }
     } finally {
-      loading.value = false
+      // Loading ownership: older check must not reset loading if a newer check is running
+      if (seq === _checkSeq) {
+        loading.value = false
+      }
     }
   }
 

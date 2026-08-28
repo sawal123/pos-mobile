@@ -310,7 +310,7 @@ export function createSyncPushService({
       const registeredDeviceId =
         options.context?.registeredDeviceId ?? cloudStore?.registeredDeviceId
 
-      const token = options.token ?? options.context?.token ?? (await tokenFetcher())
+      const token = options.token ?? (await tokenFetcher())
 
       const hasValidUser = user !== null && user !== undefined
       const hasToken = typeof token === 'string' && token.trim().length > 0
@@ -348,18 +348,17 @@ export function createSyncPushService({
       }
 
       // ── 1.5. P23 Context Guard Inspection ──────────────────────────────────
-      const resolvedContext = options.context || {
-        user,
-        token,
-        selectedBusiness,
-        selectedOutlet,
-        cloudAccess,
+      const guardContext = {
+        user: user ? { id: user.id } : null,
+        selectedBusiness: selectedBusiness ? { id: selectedBusiness.id } : null,
+        selectedOutlet: selectedOutlet ? { id: selectedOutlet.id } : null,
+        cloudAccess: cloudAccess === true,
         deviceIdentifier,
         registeredDeviceId,
       }
 
       if (contextGuardService && typeof contextGuardService.inspect === 'function') {
-        const guard = await contextGuardService.inspect({ context: resolvedContext })
+        const guard = await contextGuardService.inspect({ context: guardContext })
         if (!guard.ok) {
           const remaining = await activeQueueService.countPending()
           return {

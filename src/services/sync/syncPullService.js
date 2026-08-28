@@ -124,18 +124,17 @@ export function createSyncPullService({
     }
 
     // ── 1.5. P23 Context Guard Inspection ────────────────────────────────────
-    const resolvedContext = {
-      user,
-      token,
-      selectedBusiness,
-      selectedOutlet,
-      cloudAccess,
+    const guardContext = {
+      user: user ? { id: user.id } : null,
+      selectedBusiness: selectedBusiness ? { id: selectedBusiness.id } : null,
+      selectedOutlet: selectedOutlet ? { id: selectedOutlet.id } : null,
+      cloudAccess: cloudAccess === true,
       deviceIdentifier,
       registeredDeviceId,
     }
 
     if (contextGuardService && typeof contextGuardService.inspect === 'function') {
-      const guard = await contextGuardService.inspect({ context: resolvedContext })
+      const guard = await contextGuardService.inspect({ context: guardContext })
       if (!guard.ok) {
         return {
           ok: false,

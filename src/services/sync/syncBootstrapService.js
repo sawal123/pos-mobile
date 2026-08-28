@@ -46,13 +46,11 @@ export function createSyncBootstrapService({
 
   async function bootstrapNow(options = {}) {
     // ── 1. Validate Cloud Preconditions ───────────────────────────────────────
-    let token = options.token ?? options.context?.token ?? null
-    if (!token) {
-      try {
-        token = await activeTokenFetcher()
-      } catch {
-        token = null
-      }
+    let token = null
+    try {
+      token = await activeTokenFetcher()
+    } catch {
+      token = null
     }
 
     const ctx = options.context ?? {
@@ -87,8 +85,17 @@ export function createSyncBootstrapService({
     }
 
     // ── 1.5. P23 Context Guard Inspection ────────────────────────────────────
+    const guardContext = {
+      user: ctx?.user ? { id: ctx.user.id } : null,
+      selectedBusiness: ctx?.selectedBusiness ? { id: ctx.selectedBusiness.id } : null,
+      selectedOutlet: ctx?.selectedOutlet ? { id: ctx.selectedOutlet.id } : null,
+      cloudAccess: ctx?.cloudAccess === true,
+      deviceIdentifier: ctx?.deviceIdentifier,
+      registeredDeviceId: ctx?.registeredDeviceId,
+    }
+
     if (contextGuardService && typeof contextGuardService.inspect === 'function') {
-      const guard = await contextGuardService.inspect({ context: ctx })
+      const guard = await contextGuardService.inspect({ context: guardContext })
       if (!guard.ok) {
         return {
           ok: false,

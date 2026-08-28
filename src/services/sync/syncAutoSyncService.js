@@ -583,6 +583,7 @@ export function createSyncAutoSyncService({
           status = 'attention'
         } else if (
           [
+            'SYNC_CONTEXT_GUARD_BLOCKED',
             'SYNC_CONFLICT',
             'SYNC_CONFLICT_PENDING',
             'SYNC_PUSH_BLOCKED_PENDING',

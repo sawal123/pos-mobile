@@ -6,71 +6,41 @@
  *
  * Rules:
  * - Read-only: zero writes, zero metadata updates, zero network calls.
- * - Fail-closed: invalid schema, missing preconditions, or tenant mismatch blocks operations.
- * - Multi-source consistency: checks push_binding, pull_binding, push_inflight,
- *   bootstrap_state, and auto_settings.
- * - Fresh/unbound device: returns ok: true, status: 'unbound'.
- * - Safe matching context: returns ok: true, status: 'safe'.
+ * - Fail-closed: invalid schema, missing preconditions, reader failures, or tenant mismatch blocks operations.
+ * - Multi-source consistency: checks push_binding (P12), pull_binding (P13),
+ *   push_inflight (P12/P21), bootstrap_state (P14), and auto_settings (P20).
+ * - Fresh/unbound device or push-only binding: returns ok: true, status: 'unbound'.
+ * - Safe matching context with full anchor: returns ok: true, status: 'safe'.
  */
+
+const REQUIRED_CHANGE_KEYS = Object.freeze([
+  'categories',
+  'products',
+  'customers',
+  'shifts',
+  'sales',
+  'sale_items',
+  'expenses',
+])
 
 function isPlainObject(val) {
   return val !== null && typeof val === 'object' && !Array.isArray(val)
 }
 
-function isValidNormalizedContext(ctx) {
-  if (!isPlainObject(ctx)) return false
-  const hasValidBiz =
-    typeof ctx.businessId === 'number' &&
-    Number.isInteger(ctx.businessId) &&
-    ctx.businessId > 0
-  const hasValidOutlet =
-    typeof ctx.outletId === 'number' &&
-    Number.isInteger(ctx.outletId) &&
-    ctx.outletId > 0
-  const hasValidDevId =
-    typeof ctx.deviceIdentifier === 'string' &&
-    ctx.deviceIdentifier.trim().length > 0
-  const hasValidRegDevId =
-    typeof ctx.registeredDeviceId === 'number' &&
-    Number.isInteger(ctx.registeredDeviceId) &&
-    ctx.registeredDeviceId > 0
-
-  return hasValidBiz && hasValidOutlet && hasValidDevId && hasValidRegDevId
+function isValidStrictId(val) {
+  return typeof val === 'number' && Number.isInteger(val) && val > 0
 }
 
-function normalizeContext(raw) {
-  if (!isPlainObject(raw)) return null
-  const businessId =
-    raw.businessId !== null && raw.businessId !== undefined
-      ? Number(raw.businessId)
-      : null
-  const outletId =
-    raw.outletId !== null && raw.outletId !== undefined
-      ? Number(raw.outletId)
-      : null
-  const deviceIdentifier =
-    raw.deviceIdentifier !== null && raw.deviceIdentifier !== undefined
-      ? String(raw.deviceIdentifier).trim()
-      : null
-  const registeredDeviceId =
-    raw.registeredDeviceId !== null && raw.registeredDeviceId !== undefined
-      ? Number(raw.registeredDeviceId)
-      : null
-
-  return {
-    businessId,
-    outletId,
-    deviceIdentifier,
-    registeredDeviceId,
-  }
+function isValidDeviceIdentifier(val) {
+  return (
+    typeof val === 'string' &&
+    val.trim().length > 0 &&
+    val.trim().length <= 128
+  )
 }
 
-function extractAutoSettingsContext(autoSettings) {
-  if (!autoSettings || typeof autoSettings !== 'object') return null
-  if (autoSettings.context && typeof autoSettings.context === 'object') {
-    return normalizeContext(autoSettings.context)
-  }
-  return normalizeContext(autoSettings)
+function isValidNonEmptyString(val) {
+  return typeof val === 'string' && val.trim().length > 0
 }
 
 function validateCurrentContext(context) {
@@ -86,36 +56,17 @@ function validateCurrentContext(context) {
   } = context
 
   const hasValidUser =
-    user !== null &&
-    user !== undefined &&
+    isPlainObject(user) &&
     user.id !== null &&
     user.id !== undefined &&
     String(user.id).trim().length > 0
   const hasCloudAccess = cloudAccess === true
   const hasValidBiz =
-    selectedBusiness !== null &&
-    selectedBusiness !== undefined &&
-    selectedBusiness.id !== null &&
-    selectedBusiness.id !== undefined &&
-    Number.isInteger(Number(selectedBusiness.id)) &&
-    Number(selectedBusiness.id) > 0
+    isPlainObject(selectedBusiness) && isValidStrictId(selectedBusiness.id)
   const hasValidOutlet =
-    selectedOutlet !== null &&
-    selectedOutlet !== undefined &&
-    selectedOutlet.id !== null &&
-    selectedOutlet.id !== undefined &&
-    Number.isInteger(Number(selectedOutlet.id)) &&
-    Number(selectedOutlet.id) > 0
-  const hasValidDevId =
-    deviceIdentifier !== null &&
-    deviceIdentifier !== undefined &&
-    typeof deviceIdentifier === 'string' &&
-    deviceIdentifier.trim().length > 0
-  const hasValidRegDevId =
-    registeredDeviceId !== null &&
-    registeredDeviceId !== undefined &&
-    Number.isInteger(Number(registeredDeviceId)) &&
-    Number(registeredDeviceId) > 0
+    isPlainObject(selectedOutlet) && isValidStrictId(selectedOutlet.id)
+  const hasValidDevId = isValidDeviceIdentifier(deviceIdentifier)
+  const hasValidRegDevId = isValidStrictId(registeredDeviceId)
 
   if (
     !hasValidUser ||
@@ -129,11 +80,55 @@ function validateCurrentContext(context) {
   }
 
   return {
-    businessId: Number(selectedBusiness.id),
-    outletId: Number(selectedOutlet.id),
-    deviceIdentifier: String(deviceIdentifier).trim(),
-    registeredDeviceId: Number(registeredDeviceId),
+    businessId: selectedBusiness.id,
+    outletId: selectedOutlet.id,
+    deviceIdentifier: deviceIdentifier.trim(),
+    registeredDeviceId,
   }
+}
+
+function isValidFullContext(ctx) {
+  if (!isPlainObject(ctx)) return false
+  return (
+    isValidStrictId(ctx.businessId) &&
+    isValidStrictId(ctx.outletId) &&
+    isValidDeviceIdentifier(ctx.deviceIdentifier) &&
+    isValidStrictId(ctx.registeredDeviceId)
+  )
+}
+
+function validateInflightEnvelope(val) {
+  if (!isPlainObject(val) || val.version !== 1) return false
+  if (!isValidNonEmptyString(val.requestId)) return false
+  if (!isValidStrictId(val.businessId)) return false
+  if (!isValidStrictId(val.outletId)) return false
+  if (!isValidDeviceIdentifier(val.deviceIdentifier)) return false
+  if (!isValidStrictId(val.registeredDeviceId)) return false
+  if (!isValidNonEmptyString(val.createdAt)) return false
+
+  if (!Array.isArray(val.queueSnapshots) || val.queueSnapshots.length === 0) {
+    return false
+  }
+
+  for (const item of val.queueSnapshots) {
+    if (!isPlainObject(item)) return false
+    if (!isValidNonEmptyString(item.id)) return false
+    if (!isValidNonEmptyString(item.entityType)) return false
+    if (item.entityId === null || item.entityId === undefined || String(item.entityId).trim().length === 0) {
+      return false
+    }
+    if (!isValidNonEmptyString(item.operation)) return false
+    if (item.updatedAt === null || item.updatedAt === undefined || String(item.updatedAt).trim().length === 0) {
+      return false
+    }
+  }
+
+  if (!isPlainObject(val.changes)) return false
+  for (const key of REQUIRED_CHANGE_KEYS) {
+    if (!Array.isArray(val.changes[key])) return false
+  }
+
+  return true
 }
 
 export function createSyncContextGuardService({ adapter } = {}) {
@@ -158,7 +153,15 @@ export function createSyncContextGuardService({ adapter } = {}) {
       }
     }
 
-    if (!adapter) {
+    // Check required reader capabilities (fail closed)
+    if (
+      !adapter ||
+      typeof adapter.loadSyncPushBinding !== 'function' ||
+      typeof adapter.loadSyncPullBinding !== 'function' ||
+      typeof adapter.loadSyncPushInflight !== 'function' ||
+      typeof adapter.loadSyncBootstrapState !== 'function' ||
+      typeof adapter.loadSyncAutoSettings !== 'function'
+    ) {
       return {
         ok: false,
         code: 'SYNC_CONTEXT_READ_FAILED',
@@ -166,7 +169,7 @@ export function createSyncContextGuardService({ adapter } = {}) {
         currentContext,
         canonicalContext: null,
         sources: [],
-        issues: [{ code: 'ADAPTER_MISSING', source: 'adapter' }],
+        issues: [{ code: 'REQUIRED_READER_MISSING', source: 'adapter' }],
       }
     }
 
@@ -178,21 +181,11 @@ export function createSyncContextGuardService({ adapter } = {}) {
 
     try {
       const results = await Promise.all([
-        typeof adapter.loadSyncPushBinding === 'function'
-          ? adapter.loadSyncPushBinding()
-          : null,
-        typeof adapter.loadSyncPullBinding === 'function'
-          ? adapter.loadSyncPullBinding()
-          : null,
-        typeof adapter.loadSyncPushInflight === 'function'
-          ? adapter.loadSyncPushInflight()
-          : null,
-        typeof adapter.loadSyncBootstrapState === 'function'
-          ? adapter.loadSyncBootstrapState()
-          : null,
-        typeof adapter.loadSyncAutoSettings === 'function'
-          ? adapter.loadSyncAutoSettings()
-          : null,
+        adapter.loadSyncPushBinding(),
+        adapter.loadSyncPullBinding(),
+        adapter.loadSyncPushInflight(),
+        adapter.loadSyncBootstrapState(),
+        adapter.loadSyncAutoSettings(),
       ])
 
       pushBinding = results[0]
@@ -214,15 +207,14 @@ export function createSyncContextGuardService({ adapter } = {}) {
 
     const schemaIssues = []
 
-    // 1. Validate push binding schema
+    // 1. Validate push binding schema (Actual P12: { businessId, boundAt }, NO version)
     if (pushBinding !== null && pushBinding !== undefined) {
-      if (
-        !isPlainObject(pushBinding) ||
-        pushBinding.version !== 1 ||
-        typeof pushBinding.businessId !== 'number' ||
-        !Number.isInteger(pushBinding.businessId) ||
-        pushBinding.businessId <= 0
-      ) {
+      const isValidPushBinding =
+        isPlainObject(pushBinding) &&
+        isValidStrictId(pushBinding.businessId) &&
+        isValidNonEmptyString(pushBinding.boundAt)
+
+      if (!isValidPushBinding) {
         schemaIssues.push({
           code: 'INVALID_METADATA_SCHEMA',
           source: 'push_binding',
@@ -230,15 +222,17 @@ export function createSyncContextGuardService({ adapter } = {}) {
       }
     }
 
-    // 2. Validate pull binding schema
+    // 2. Validate pull binding schema (Actual P13: { businessId, outletId, deviceIdentifier, registeredDeviceId, boundAt }, NO version)
     if (pullBinding !== null && pullBinding !== undefined) {
-      const normalizedPull = normalizeContext(pullBinding)
-      if (
-        !isPlainObject(pullBinding) ||
-        pullBinding.version !== 1 ||
-        !normalizedPull ||
-        !isValidNormalizedContext(normalizedPull)
-      ) {
+      const isValidPullBinding =
+        isPlainObject(pullBinding) &&
+        isValidStrictId(pullBinding.businessId) &&
+        isValidStrictId(pullBinding.outletId) &&
+        isValidDeviceIdentifier(pullBinding.deviceIdentifier) &&
+        isValidStrictId(pullBinding.registeredDeviceId) &&
+        isValidNonEmptyString(pullBinding.boundAt)
+
+      if (!isValidPullBinding) {
         schemaIssues.push({
           code: 'INVALID_METADATA_SCHEMA',
           source: 'pull_binding',
@@ -246,15 +240,9 @@ export function createSyncContextGuardService({ adapter } = {}) {
       }
     }
 
-    // 3. Validate push inflight envelope schema
+    // 3. Validate push inflight envelope schema (Actual P12/P21 structural envelope)
     if (inflight !== null && inflight !== undefined) {
-      const normalizedInflight = normalizeContext(inflight)
-      if (
-        !isPlainObject(inflight) ||
-        (inflight.version !== 1 && inflight.version !== undefined) ||
-        !normalizedInflight ||
-        !isValidNormalizedContext(normalizedInflight)
-      ) {
+      if (!validateInflightEnvelope(inflight)) {
         schemaIssues.push({
           code: 'INVALID_METADATA_SCHEMA',
           source: 'inflight',
@@ -262,15 +250,20 @@ export function createSyncContextGuardService({ adapter } = {}) {
       }
     }
 
-    // 4. Validate bootstrap state schema
+    // 4. Validate bootstrap state schema (Actual P14)
     if (bootstrapState !== null && bootstrapState !== undefined) {
-      const normalizedBootstrap = normalizeContext(bootstrapState)
-      if (
-        !isPlainObject(bootstrapState) ||
-        bootstrapState.version !== 1 ||
-        !normalizedBootstrap ||
-        !isValidNormalizedContext(normalizedBootstrap)
-      ) {
+      const isValidBootstrapState =
+        isPlainObject(bootstrapState) &&
+        bootstrapState.version === 1 &&
+        ['staged', 'completed', 'invalid'].includes(bootstrapState.status) &&
+        isValidStrictId(bootstrapState.businessId) &&
+        isValidStrictId(bootstrapState.outletId) &&
+        isValidDeviceIdentifier(bootstrapState.deviceIdentifier) &&
+        isValidStrictId(bootstrapState.registeredDeviceId) &&
+        isValidNonEmptyString(bootstrapState.stagedAt) &&
+        isPlainObject(bootstrapState.counts)
+
+      if (!isValidBootstrapState) {
         schemaIssues.push({
           code: 'INVALID_METADATA_SCHEMA',
           source: 'bootstrap',
@@ -278,26 +271,27 @@ export function createSyncContextGuardService({ adapter } = {}) {
       }
     }
 
-    // 5. Validate auto settings schema
+    // 5. Validate auto settings schema (Actual P20: version: 1, enabled: boolean, context: null | {...}, updatedAt)
     if (autoSettings !== null && autoSettings !== undefined) {
-      const autoCtx = extractAutoSettingsContext(autoSettings)
-      if (
-        !isPlainObject(autoSettings) ||
-        autoSettings.version !== 1 ||
-        typeof autoSettings.enabled !== 'boolean'
-      ) {
+      const isValidBaseShape =
+        isPlainObject(autoSettings) &&
+        autoSettings.version === 1 &&
+        typeof autoSettings.enabled === 'boolean' &&
+        isValidNonEmptyString(autoSettings.updatedAt)
+
+      if (!isValidBaseShape) {
         schemaIssues.push({
           code: 'INVALID_METADATA_SCHEMA',
           source: 'auto_sync',
         })
       } else if (autoSettings.enabled === true) {
-        if (!autoCtx || !isValidNormalizedContext(autoCtx)) {
+        if (!autoSettings.context || !isValidFullContext(autoSettings.context)) {
           schemaIssues.push({
             code: 'INVALID_METADATA_SCHEMA',
             source: 'auto_sync',
           })
         }
-      } else if (autoCtx !== null && !isValidNormalizedContext(autoCtx)) {
+      } else if (autoSettings.context !== null && !isValidFullContext(autoSettings.context)) {
         schemaIssues.push({
           code: 'INVALID_METADATA_SCHEMA',
           source: 'auto_sync',
@@ -329,7 +323,12 @@ export function createSyncContextGuardService({ adapter } = {}) {
       sources.push('pull_binding')
       fullAnchors.push({
         source: 'pull_binding',
-        context: normalizeContext(pullBinding),
+        context: {
+          businessId: pullBinding.businessId,
+          outletId: pullBinding.outletId,
+          deviceIdentifier: pullBinding.deviceIdentifier.trim(),
+          registeredDeviceId: pullBinding.registeredDeviceId,
+        },
       })
     }
 
@@ -337,7 +336,12 @@ export function createSyncContextGuardService({ adapter } = {}) {
       sources.push('inflight')
       fullAnchors.push({
         source: 'inflight',
-        context: normalizeContext(inflight),
+        context: {
+          businessId: inflight.businessId,
+          outletId: inflight.outletId,
+          deviceIdentifier: inflight.deviceIdentifier.trim(),
+          registeredDeviceId: inflight.registeredDeviceId,
+        },
       })
     }
 
@@ -345,19 +349,26 @@ export function createSyncContextGuardService({ adapter } = {}) {
       sources.push('bootstrap')
       fullAnchors.push({
         source: 'bootstrap',
-        context: normalizeContext(bootstrapState),
+        context: {
+          businessId: bootstrapState.businessId,
+          outletId: bootstrapState.outletId,
+          deviceIdentifier: bootstrapState.deviceIdentifier.trim(),
+          registeredDeviceId: bootstrapState.registeredDeviceId,
+        },
       })
     }
 
-    if (autoSettings && autoSettings.enabled === true) {
-      const autoCtx = extractAutoSettingsContext(autoSettings)
-      if (autoCtx && isValidNormalizedContext(autoCtx)) {
-        sources.push('auto_sync')
-        fullAnchors.push({
-          source: 'auto_sync',
-          context: autoCtx,
-        })
-      }
+    if (autoSettings && autoSettings.enabled === true && autoSettings.context) {
+      sources.push('auto_sync')
+      fullAnchors.push({
+        source: 'auto_sync',
+        context: {
+          businessId: autoSettings.context.businessId,
+          outletId: autoSettings.context.outletId,
+          deviceIdentifier: autoSettings.context.deviceIdentifier.trim(),
+          registeredDeviceId: autoSettings.context.registeredDeviceId,
+        },
+      })
     }
 
     // Check consistency between all full-context anchors
@@ -391,17 +402,10 @@ export function createSyncContextGuardService({ adapter } = {}) {
       }
     }
 
-    let canonicalContext = null
-    if (fullAnchors.length > 0) {
-      canonicalContext = { ...fullAnchors[0].context }
-    } else if (pushBinding) {
-      canonicalContext = {
-        businessId: pushBinding.businessId,
-        outletId: null,
-        deviceIdentifier: null,
-        registeredDeviceId: null,
-      }
-    }
+    // Form canonicalContext ONLY when at least one full anchor exists.
+    // Push-only binding is business-level only, NOT canonical full context.
+    const canonicalContext =
+      fullAnchors.length > 0 ? { ...fullAnchors[0].context } : null
 
     // Check push business binding against current and canonical business
     if (pushBinding) {
@@ -423,7 +427,6 @@ export function createSyncContextGuardService({ adapter } = {}) {
       }
       if (
         canonicalContext &&
-        canonicalContext.businessId !== null &&
         pushBinding.businessId !== canonicalContext.businessId
       ) {
         return {
@@ -445,10 +448,7 @@ export function createSyncContextGuardService({ adapter } = {}) {
 
     // Check current context against canonical context if bound
     if (canonicalContext !== null) {
-      if (
-        canonicalContext.businessId !== null &&
-        currentContext.businessId !== canonicalContext.businessId
-      ) {
+      if (currentContext.businessId !== canonicalContext.businessId) {
         return {
           ok: false,
           code: 'SYNC_CONTEXT_BUSINESS_MISMATCH',
@@ -465,10 +465,7 @@ export function createSyncContextGuardService({ adapter } = {}) {
         }
       }
 
-      if (
-        canonicalContext.outletId !== null &&
-        currentContext.outletId !== canonicalContext.outletId
-      ) {
+      if (currentContext.outletId !== canonicalContext.outletId) {
         return {
           ok: false,
           code: 'SYNC_CONTEXT_MISMATCH',
@@ -485,10 +482,7 @@ export function createSyncContextGuardService({ adapter } = {}) {
         }
       }
 
-      if (
-        canonicalContext.deviceIdentifier !== null &&
-        currentContext.deviceIdentifier !== canonicalContext.deviceIdentifier
-      ) {
+      if (currentContext.deviceIdentifier !== canonicalContext.deviceIdentifier) {
         return {
           ok: false,
           code: 'SYNC_CONTEXT_MISMATCH',
@@ -505,10 +499,7 @@ export function createSyncContextGuardService({ adapter } = {}) {
         }
       }
 
-      if (
-        canonicalContext.registeredDeviceId !== null &&
-        currentContext.registeredDeviceId !== canonicalContext.registeredDeviceId
-      ) {
+      if (currentContext.registeredDeviceId !== canonicalContext.registeredDeviceId) {
         return {
           ok: false,
           code: 'SYNC_CONTEXT_MISMATCH',
@@ -526,20 +517,20 @@ export function createSyncContextGuardService({ adapter } = {}) {
       }
     }
 
-    // Fresh unbound state
-    if (sources.length === 0) {
+    // If no full anchor (fresh device OR push-only binding matching current business): UNBOUND
+    if (fullAnchors.length === 0) {
       return {
         ok: true,
         code: 'SYNC_CONTEXT_UNBOUND',
         status: 'unbound',
         currentContext,
         canonicalContext: null,
-        sources: [],
+        sources,
         issues: [],
       }
     }
 
-    // Safe matching state
+    // Full anchor exists and matches current context: SAFE
     return {
       ok: true,
       code: 'SYNC_CONTEXT_SAFE',

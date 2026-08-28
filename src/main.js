@@ -46,7 +46,7 @@ export async function bootstrapApp({
       })
     : null
 
-  const router = routerFactory(pinia)
+  const router = routerFactory()
 
   app.use(router)
 

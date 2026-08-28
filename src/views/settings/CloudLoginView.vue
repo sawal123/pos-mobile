@@ -50,7 +50,16 @@ const autoSyncSuccess = ref(false)
 const showClearConfirm = ref(false)
 
 // ── Derived ─────────────────────────────────────────────────────────────────
-const isContextGuardBlocked = computed(() => syncContextGuardStore.status === 'blocked')
+const canSync = computed(
+  () =>
+    cloudStore.isAuthenticated &&
+    cloudStore.hasCloudAccess &&
+    Boolean(cloudStore.selectedBusiness) &&
+    Boolean(cloudStore.selectedOutlet) &&
+    cloudStore.isDeviceRegistered,
+)
+
+const isContextGuardBlocked = computed(() => canSync.value && syncContextGuardStore.status === 'blocked')
 
 const isAnySyncOperationBusy = computed(
   () =>
@@ -83,15 +92,6 @@ const zeroActiveOutlets = computed(
   () => step.value === 'select-outlet' && activeBusinessOutlets.value.length === 0,
 )
 
-const canSync = computed(
-  () =>
-    cloudStore.isAuthenticated &&
-    cloudStore.hasCloudAccess &&
-    Boolean(cloudStore.selectedBusiness) &&
-    Boolean(cloudStore.selectedOutlet) &&
-    cloudStore.isDeviceRegistered,
-)
-
 const recoveryPlan = computed(() => {
   if (!syncHealthStore.lastResult) return null
   return syncRecoveryStore.getRecoveryPlan(syncHealthStore.lastResult)
@@ -117,17 +117,18 @@ watch(
     syncHealthStore.resetResult()
     resetRecoveryPresentation()
     showClearConfirm.value = false
-    if (cloudStore.isAuthenticated) {
+    syncContextGuardStore.resetPresentation()
+    if (canSync.value && syncContextGuardStore.getContextGuardService()) {
       await syncContextGuardStore.check()
-    } else {
-      syncContextGuardStore.resetPresentation()
     }
   },
 )
 
 onMounted(async () => {
-  if (cloudStore.isAuthenticated) {
+  if (canSync.value && syncContextGuardStore.getContextGuardService()) {
     await syncContextGuardStore.check()
+  } else {
+    syncContextGuardStore.resetPresentation()
   }
 })
 
