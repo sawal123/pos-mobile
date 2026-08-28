@@ -196,9 +196,31 @@ function formatActivityTime(dateStr) {
   }
 }
 
+const visibleActivityEntries = computed(() => syncActivityLogStore.entries.slice(0, 10))
+
 function classifyPushStatus(result) {
-  if (result.ok) return 'success'
-  const blockedCodes = ['SYNC_CONFLICT', 'SYNC_CONFLICT_PENDING', 'SYNC_PUSH_BLOCKED_PENDING', 'LOCAL_PENDING_SYNC_CONFLICT']
+  if (result.ok) {
+    const remaining = result.remaining ?? 0
+    const blockedLen = result.blocked?.length ?? 0
+    if (remaining === 0 && blockedLen === 0) {
+      return 'success'
+    }
+    return 'attention'
+  }
+  if (['PUSH_ALREADY_IN_PROGRESS', 'SYNC_STALE_CONFLICT_ENVELOPE_CLEARED'].includes(result.code)) {
+    return 'attention'
+  }
+  const blockedCodes = [
+    'PRECONDITION_FAILED',
+    'SYNC_BUSINESS_BINDING_MISMATCH',
+    'SYNC_BOOTSTRAP_CONTEXT_MISMATCH',
+    'SYNC_ENVELOPE_CONTEXT_MISMATCH',
+    'SYNC_BOOTSTRAP_REQUIRED',
+    'SYNC_CONFLICT',
+    'SYNC_CONFLICT_PENDING',
+    'SYNC_PUSH_BLOCKED_PENDING',
+    'LOCAL_PENDING_SYNC_CONFLICT',
+  ]
   if (blockedCodes.includes(result.code)) return 'blocked'
   return 'failed'
 }
@@ -206,6 +228,7 @@ function classifyPushStatus(result) {
 function classifyPullStatus(result) {
   if (result.ok) return 'success'
   const blockedCodes = [
+    'PRECONDITION_FAILED',
     'LOCAL_PENDING_SYNC_CONFLICT',
     'SYNC_PULL_CONTEXT_MISMATCH',
     'SYNC_BUSINESS_BINDING_MISMATCH',
@@ -218,11 +241,17 @@ function classifyPullStatus(result) {
 
 function classifyFullSyncStatus(result) {
   if (result.ok) return 'success'
+  if (result.code === 'SYNC_MORE_PUSH_PENDING') return 'attention'
   const blockedCodes = [
     'SYNC_CONFLICT',
     'SYNC_CONFLICT_PENDING',
     'SYNC_PUSH_BLOCKED_PENDING',
     'LOCAL_PENDING_SYNC_CONFLICT',
+    'PRECONDITION_FAILED',
+    'SYNC_BUSINESS_BINDING_MISMATCH',
+    'SYNC_BOOTSTRAP_CONTEXT_MISMATCH',
+    'SYNC_ENVELOPE_CONTEXT_MISMATCH',
+    'SYNC_BOOTSTRAP_REQUIRED',
   ]
   if (blockedCodes.includes(result.code)) return 'blocked'
   return 'failed'
@@ -231,8 +260,10 @@ function classifyFullSyncStatus(result) {
 function classifyBootstrapStatus(result) {
   if (result.ok) return 'success'
   const blockedCodes = [
+    'BOOTSTRAP_PRECONDITION_FAILED',
     'BOOTSTRAP_SYNC_ALREADY_STARTED',
     'BOOTSTRAP_PUSH_INFLIGHT',
+    'BOOTSTRAP_ALREADY_STAGED',
     'BOOTSTRAP_PENDING_DELETE_CONFLICT',
     'BOOTSTRAP_SERVER_NOT_EMPTY',
     'BOOTSTRAP_PREFLIGHT_FAILED',
@@ -244,6 +275,7 @@ function classifyBootstrapStatus(result) {
 
 function classifyRecoveryStatus(result) {
   if (result.ok || result.code === 'SYNC_RECOVERY_NOT_REQUIRED') return 'success'
+  if (result.code === 'SYNC_RECOVERY_ALREADY_IN_PROGRESS') return 'attention'
   const blockedCodes = [
     'SYNC_RECOVERY_CONFLICT_ACTION_REQUIRED',
     'SYNC_RECOVERY_MANUAL_INTERVENTION_REQUIRED',
@@ -554,11 +586,11 @@ async function handlePullNow() {
     finishedAt,
     ...ctx,
     summary: {
-      fetched: result.fetched ?? 0,
-      applied: result.applied ?? 0,
-      ignored: result.ignored ?? 0,
-      cursorBefore: result.cursorBefore ?? null,
-      cursorAfter: result.cursorAfter ?? null,
+      fetched: typeof result.fetched === 'number' ? result.fetched : 0,
+      applied: typeof result.applied === 'number' ? result.applied : 0,
+      ignored: typeof result.ignored === 'number' ? result.ignored : 0,
+      cursorBefore: typeof result.cursorBefore === 'number' && Number.isInteger(result.cursorBefore) && result.cursorBefore >= 0 ? result.cursorBefore : null,
+      cursorAfter: typeof result.cursorAfter === 'number' && Number.isInteger(result.cursorAfter) && result.cursorAfter >= 0 ? result.cursorAfter : null,
     },
   })
 
@@ -1353,13 +1385,13 @@ onMounted(async () => {
           Gagal memuat riwayat sinkronisasi.
         </p>
 
-        <div v-else-if="syncActivityLogStore.entries.length === 0" class="text-xs text-ink-secondary italic py-2">
+        <div v-else-if="visibleActivityEntries.length === 0" class="text-xs text-ink-secondary italic py-2">
           Belum ada riwayat aktivitas sinkronisasi.
         </div>
 
         <div v-else class="space-y-2">
           <div
-            v-for="entry in syncActivityLogStore.entries"
+            v-for="entry in visibleActivityEntries"
             :key="entry.id"
             :id="`activity-entry-${entry.id}`"
             class="flex flex-col gap-1 rounded-xl bg-surface p-3 text-xs sm:flex-row sm:items-center sm:justify-between"

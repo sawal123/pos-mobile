@@ -51,6 +51,7 @@ export const useSyncActivityLogStore = defineStore('syncActivityLog', () => {
       const result = await _activityLogService.record(entry)
       if (result.ok && result.entry) {
         entries.value = [result.entry, ...entries.value.filter((e) => e.id !== result.entry.id)].slice(0, 100)
+        error.value = null
       }
       return result
     } catch (err) {

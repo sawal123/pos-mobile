@@ -44,6 +44,63 @@ export const TYPE_ACTION_MAP = Object.freeze({
   ],
 })
 
+export const ALLOWED_TOP_LEVEL_KEYS = Object.freeze(
+  new Set([
+    'id',
+    'type',
+    'action',
+    'status',
+    'code',
+    'startedAt',
+    'finishedAt',
+    'businessId',
+    'outletId',
+    'deviceIdentifier',
+    'registeredDeviceId',
+    'summary',
+  ]),
+)
+
+export const ALLOWED_SUMMARY_KEYS = Object.freeze(
+  new Set([
+    'sent',
+    'remaining',
+    'blocked',
+    'fetched',
+    'applied',
+    'ignored',
+    'cursorBefore',
+    'cursorAfter',
+    'pushed',
+    'pulled',
+    'stage',
+    'stagedCount',
+    'healthStatus',
+    'pending',
+    'conflicts',
+    'hasInflight',
+    'action',
+  ]),
+)
+
+const NUMERIC_SUMMARY_KEYS = new Set([
+  'sent',
+  'remaining',
+  'blocked',
+  'fetched',
+  'applied',
+  'ignored',
+  'cursorBefore',
+  'cursorAfter',
+  'pushed',
+  'pulled',
+  'stagedCount',
+  'pending',
+  'conflicts',
+])
+
+const STRING_SUMMARY_KEYS = new Set(['stage', 'healthStatus', 'action'])
+
 const MAX_ACTIVITY_LOG_ENTRIES = 100
 const SAFE_CODE_REGEX = /^[A-Za-z0-9_.:-]+$/
 
@@ -65,96 +122,120 @@ function isPlainObject(val) {
 }
 
 /**
- * Strict allowlist sanitizer for P19 summary metadata.
+ * Strict allowlist validation for P19 summary metadata without implicit coercion.
  */
-function sanitizeSummary(rawSummary) {
-  if (!isPlainObject(rawSummary)) {
-    return {}
-  }
+export function isValidSummary(summary) {
+  if (!isPlainObject(summary)) return false
 
-  const sanitized = {}
+  const keys = Object.keys(summary)
+  for (const k of keys) {
+    if (!ALLOWED_SUMMARY_KEYS.has(k)) {
+      return false
+    }
 
-  // Numeric fields
-  const numericKeys = [
-    'sent',
-    'remaining',
-    'blocked',
-    'fetched',
-    'applied',
-    'ignored',
-    'pushed',
-    'pulled',
-    'stagedCount',
-    'pending',
-    'conflicts',
-  ]
-  for (const k of numericKeys) {
-    if (k in rawSummary) {
-      const v = rawSummary[k]
-      if (v === null) {
-        sanitized[k] = null
-      } else if (Number.isFinite(Number(v))) {
-        sanitized[k] = Number(v)
+    const val = summary[k]
+    if (val === null) continue
+
+    if (NUMERIC_SUMMARY_KEYS.has(k)) {
+      if (typeof val !== 'number' || !Number.isInteger(val) || val < 0) {
+        return false
+      }
+    } else if (k === 'hasInflight') {
+      if (typeof val !== 'boolean') {
+        return false
+      }
+    } else if (STRING_SUMMARY_KEYS.has(k)) {
+      if (typeof val !== 'string' || !val.trim() || val.length > 128) {
+        return false
       }
     }
   }
 
-  // Boolean fields
-  if ('hasInflight' in rawSummary) {
-    const v = rawSummary.hasInflight
-    if (typeof v === 'boolean') {
-      sanitized.hasInflight = v
-    } else if (v === null) {
-      sanitized.hasInflight = null
-    }
-  }
+  return true
+}
 
-  // String fields
-  const stringKeys = ['stage', 'healthStatus', 'action', 'cursorBefore', 'cursorAfter']
-  for (const k of stringKeys) {
-    if (k in rawSummary) {
-      const v = rawSummary[k]
-      if (v === null) {
-        sanitized[k] = null
-      } else if (typeof v === 'string' && v.length <= 128) {
-        sanitized[k] = v.trim()
-      } else if (typeof v === 'number') {
-        sanitized[k] = String(v)
+/**
+ * Builds clean summary object containing only allowed keys.
+ */
+function cleanSummary(summary) {
+  if (!isPlainObject(summary)) return {}
+
+  const result = {}
+  for (const [k, v] of Object.entries(summary)) {
+    if (ALLOWED_SUMMARY_KEYS.has(k)) {
+      if (typeof v === 'string') {
+        result[k] = v.trim()
+      } else {
+        result[k] = v
       }
     }
   }
-
-  return sanitized
+  return result
 }
 
 /**
  * Validates an existing entry from durable storage.
+ * Enforces exact allowed top-level keys and identical strict type rules.
  */
-function isValidStoredEntry(entry) {
+export function isValidStoredEntry(entry) {
   if (!isPlainObject(entry)) return false
+
+  // Validate no unknown/secret top-level keys
+  const topKeys = Object.keys(entry)
+  for (const k of topKeys) {
+    if (!ALLOWED_TOP_LEVEL_KEYS.has(k)) {
+      return false
+    }
+  }
+
   if (typeof entry.id !== 'string' || !entry.id.trim() || entry.id.length > 128) return false
   if (!SYNC_ACTIVITY_TYPES.includes(entry.type)) return false
   const validActions = TYPE_ACTION_MAP[entry.type] || []
   if (!validActions.includes(entry.action)) return false
   if (!SYNC_ACTIVITY_STATUSES.includes(entry.status)) return false
-  if (typeof entry.code !== 'string' || !entry.code.trim() || entry.code.length > 128) return false
-  if (entry.code.includes('\n') || entry.code.includes('\r')) return false
+  if (
+    typeof entry.code !== 'string' ||
+    !entry.code.trim() ||
+    entry.code.length > 128 ||
+    entry.code.includes('\n') ||
+    entry.code.includes('\r') ||
+    !SAFE_CODE_REGEX.test(entry.code.trim())
+  ) {
+    return false
+  }
   if (!isValidDateString(entry.startedAt) || !isValidDateString(entry.finishedAt)) return false
   if (new Date(entry.finishedAt).getTime() < new Date(entry.startedAt).getTime()) return false
-  if (!isPlainObject(entry.summary)) return false
 
-  if (entry.businessId !== null && (!Number.isInteger(Number(entry.businessId)) || Number(entry.businessId) <= 0)) {
+  if (
+    entry.businessId !== null &&
+    (typeof entry.businessId !== 'number' || !Number.isInteger(entry.businessId) || entry.businessId <= 0)
+  ) {
     return false
   }
-  if (entry.outletId !== null && (!Number.isInteger(Number(entry.outletId)) || Number(entry.outletId) <= 0)) {
+  if (
+    entry.outletId !== null &&
+    (typeof entry.outletId !== 'number' || !Number.isInteger(entry.outletId) || entry.outletId <= 0)
+  ) {
     return false
   }
-  if (entry.registeredDeviceId !== null && (!Number.isInteger(Number(entry.registeredDeviceId)) || Number(entry.registeredDeviceId) <= 0)) {
+  if (
+    entry.registeredDeviceId !== null &&
+    (typeof entry.registeredDeviceId !== 'number' ||
+      !Number.isInteger(entry.registeredDeviceId) ||
+      entry.registeredDeviceId <= 0)
+  ) {
     return false
   }
-  if (entry.deviceIdentifier !== null && (typeof entry.deviceIdentifier !== 'string' || !entry.deviceIdentifier.trim() || entry.deviceIdentifier.length > 128)) {
+  if (
+    entry.deviceIdentifier !== null &&
+    (typeof entry.deviceIdentifier !== 'string' ||
+      !entry.deviceIdentifier.trim() ||
+      entry.deviceIdentifier.length > 128)
+  ) {
     return false
   }
+
+  if (!isValidSummary(entry.summary)) return false
 
   return true
 }
@@ -338,32 +419,52 @@ export function createSyncActivityLogService({ adapter, scheduler } = {}) {
       }
     }
 
-    if (businessId !== null && (!Number.isInteger(Number(businessId)) || Number(businessId) <= 0)) {
+    if (
+      businessId !== null &&
+      (typeof businessId !== 'number' || !Number.isInteger(businessId) || businessId <= 0)
+    ) {
       return {
         ok: false,
         code: 'SYNC_ACTIVITY_LOG_INVALID_ENTRY',
         message: 'businessId tidak valid.',
       }
     }
-    if (outletId !== null && (!Number.isInteger(Number(outletId)) || Number(outletId) <= 0)) {
+    if (
+      outletId !== null &&
+      (typeof outletId !== 'number' || !Number.isInteger(outletId) || outletId <= 0)
+    ) {
       return {
         ok: false,
         code: 'SYNC_ACTIVITY_LOG_INVALID_ENTRY',
         message: 'outletId tidak valid.',
       }
     }
-    if (registeredDeviceId !== null && (!Number.isInteger(Number(registeredDeviceId)) || Number(registeredDeviceId) <= 0)) {
+    if (
+      registeredDeviceId !== null &&
+      (typeof registeredDeviceId !== 'number' || !Number.isInteger(registeredDeviceId) || registeredDeviceId <= 0)
+    ) {
       return {
         ok: false,
         code: 'SYNC_ACTIVITY_LOG_INVALID_ENTRY',
         message: 'registeredDeviceId tidak valid.',
       }
     }
-    if (deviceIdentifier !== null && (typeof deviceIdentifier !== 'string' || !deviceIdentifier.trim() || deviceIdentifier.length > 128)) {
+    if (
+      deviceIdentifier !== null &&
+      (typeof deviceIdentifier !== 'string' || !deviceIdentifier.trim() || deviceIdentifier.length > 128)
+    ) {
       return {
         ok: false,
         code: 'SYNC_ACTIVITY_LOG_INVALID_ENTRY',
         message: 'deviceIdentifier tidak valid.',
+      }
+    }
+
+    if (!isValidSummary(summary)) {
+      return {
+        ok: false,
+        code: 'SYNC_ACTIVITY_LOG_INVALID_ENTRY',
+        message: 'Summary activity log tidak sesuai allowlist skema P19.',
       }
     }
 
@@ -375,11 +476,11 @@ export function createSyncActivityLogService({ adapter, scheduler } = {}) {
       code: String(code).trim(),
       startedAt,
       finishedAt,
-      businessId: businessId != null ? Number(businessId) : null,
-      outletId: outletId != null ? Number(outletId) : null,
-      deviceIdentifier: deviceIdentifier != null ? String(deviceIdentifier).trim() : null,
-      registeredDeviceId: registeredDeviceId != null ? Number(registeredDeviceId) : null,
-      summary: sanitizeSummary(summary),
+      businessId: businessId !== null ? businessId : null,
+      outletId: outletId !== null ? outletId : null,
+      deviceIdentifier: deviceIdentifier !== null ? String(deviceIdentifier).trim() : null,
+      registeredDeviceId: registeredDeviceId !== null ? registeredDeviceId : null,
+      summary: cleanSummary(summary),
     }
 
     // 2. Serialized critical section: Read -> Validate -> Dedupe -> Append -> Slice -> Save
@@ -404,7 +505,7 @@ export function createSyncActivityLogService({ adapter, scheduler } = {}) {
           }
         }
 
-        // Validate all existing entries
+        // Validate all existing entries strictly
         for (const existing of logState.entries) {
           if (!isValidStoredEntry(existing)) {
             return {

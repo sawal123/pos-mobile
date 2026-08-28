@@ -37,6 +37,24 @@ describe('P19: Sync Activity Log & Audit Trail', () => {
     cloudStore.deviceIdentifier = 'dev-uuid-123'
   }
 
+  function createValidBaseEntry(overrides = {}) {
+    return {
+      id: 'entry-valid-1',
+      type: 'push',
+      action: 'PUSH_NOW',
+      status: 'success',
+      code: 'SYNC_PUSH_SUCCESS',
+      startedAt: '2026-08-28T09:00:00.000Z',
+      finishedAt: '2026-08-28T09:00:01.000Z',
+      businessId: 10,
+      outletId: 20,
+      deviceIdentifier: 'dev-uuid-123',
+      registeredDeviceId: 77,
+      summary: { sent: 1, remaining: 0, blocked: 0 },
+      ...overrides,
+    }
+  }
+
   beforeEach(async () => {
     pinia = createPinia()
     setActivePinia(pinia)
@@ -225,7 +243,7 @@ describe('P19: Sync Activity Log & Audit Trail', () => {
   })
 
   // 52. Test strict allowlist summary & secret dropping
-  it('52. sanitizes and drops token, password, and unallowlisted domain fields from summary and entry', async () => {
+  it('52. rejects invalid summary and unknown fields', async () => {
     const t = new Date().toISOString()
     const result = await activityLogService.record({
       type: 'push',
@@ -234,43 +252,19 @@ describe('P19: Sync Activity Log & Audit Trail', () => {
       code: 'SYNC_PUSH_SUCCESS',
       startedAt: t,
       finishedAt: t,
-      token: 'TOP_SECRET_TOKEN',
-      userEmail: 'leaked@domain.com',
       summary: {
         sent: 2,
         remaining: 0,
         token: 'secret-token-123',
-        password: 'supersecretpass',
-        authorization: 'Bearer abc',
-        products: [{ name: 'Secret Product' }],
-        transactions: [{ total: 50000 }],
-        queueSnapshot: { id: 'q-1' },
       },
     })
 
-    expect(result.ok).toBe(true)
-    expect(result.entry.token).toBeUndefined()
-    expect(result.entry.userEmail).toBeUndefined()
-    expect(result.entry.summary.sent).toBe(2)
-    expect(result.entry.summary.remaining).toBe(0)
-    expect(result.entry.summary.token).toBeUndefined()
-    expect(result.entry.summary.password).toBeUndefined()
-    expect(result.entry.summary.authorization).toBeUndefined()
-    expect(result.entry.summary.products).toBeUndefined()
-    expect(result.entry.summary.transactions).toBeUndefined()
-    expect(result.entry.summary.queueSnapshot).toBeUndefined()
-
-    // Verify durable storage
-    const raw = await adapter.loadSyncActivityLog()
-    const persistedJson = JSON.stringify(raw)
-    expect(persistedJson).not.toContain('secret-token-123')
-    expect(persistedJson).not.toContain('supersecretpass')
-    expect(persistedJson).not.toContain('Secret Product')
-    expect(persistedJson).not.toContain('TOP_SECRET_TOKEN')
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_ACTIVITY_LOG_INVALID_ENTRY')
   })
 
-  // 53. Test push success log in CloudLoginView
-  it('53. records single PUSH_NOW activity when user clicks Sync Sekarang', async () => {
+  // 53. Test push clean success log in CloudLoginView
+  it('53. records single clean PUSH_NOW activity when user clicks Sync Sekarang and remaining is 0', async () => {
     const cloudStore = useCloudSessionStore()
     setupAuthenticatedSession(cloudStore)
 
@@ -1163,5 +1157,338 @@ describe('P19: Sync Activity Log & Audit Trail', () => {
     expect(list[0].id).toBe('unique-key')
     expect(list[0].status).toBe('success')
     expect(list[0].code).toBe('SYNC_PUSH_SUCCESS')
+  })
+
+  // ── P19 Final Blocker Regression Tests ────────────────────────────────────────
+
+  it('83. fails closed when durable history contains secret in summary', async () => {
+    await adapter.saveSyncActivityLog({
+      version: 1,
+      entries: [
+        createValidBaseEntry({
+          summary: {
+            sent: 1,
+            accessToken: 'SECRET_TOKEN',
+          },
+        }),
+      ],
+    })
+
+    await expect(activityLogService.listRecent()).rejects.toThrow()
+
+    const recRes = await activityLogService.record(createValidBaseEntry({ id: 'new-one' }))
+    expect(recRes.ok).toBe(false)
+    expect(recRes.code).toBe('SYNC_ACTIVITY_LOG_STATE_INVALID')
+  })
+
+  it('84. fails closed when durable entry contains unknown top-level field', async () => {
+    await adapter.saveSyncActivityLog({
+      version: 1,
+      entries: [
+        {
+          ...createValidBaseEntry(),
+          token: 'LEAKED_SECRET',
+        },
+      ],
+    })
+
+    await expect(activityLogService.listRecent()).rejects.toThrow()
+
+    const recRes = await activityLogService.record(createValidBaseEntry({ id: 'new-one' }))
+    expect(recRes.ok).toBe(false)
+    expect(recRes.code).toBe('SYNC_ACTIVITY_LOG_STATE_INVALID')
+  })
+
+  it('85. fails closed when durable entry contains domain payload in summary', async () => {
+    await adapter.saveSyncActivityLog({
+      version: 1,
+      entries: [
+        createValidBaseEntry({
+          summary: {
+            products: [{ name: 'Product A' }],
+          },
+        }),
+      ],
+    })
+
+    await expect(activityLogService.listRecent()).rejects.toThrow()
+  })
+
+  it('86. rejects numeric strings and boolean coercion in record summary and context', async () => {
+    const t = new Date().toISOString()
+
+    // Numeric string sent: "2"
+    const r1 = await activityLogService.record({
+      type: 'push',
+      action: 'PUSH_NOW',
+      status: 'success',
+      code: 'SYNC_PUSH_SUCCESS',
+      startedAt: t,
+      finishedAt: t,
+      summary: { sent: '2' },
+    })
+    expect(r1.ok).toBe(false)
+    expect(r1.code).toBe('SYNC_ACTIVITY_LOG_INVALID_ENTRY')
+
+    // Boolean sent: true
+    const r2 = await activityLogService.record({
+      type: 'push',
+      action: 'PUSH_NOW',
+      status: 'success',
+      code: 'SYNC_PUSH_SUCCESS',
+      startedAt: t,
+      finishedAt: t,
+      summary: { sent: true },
+    })
+    expect(r2.ok).toBe(false)
+
+    // Context string businessId: "10"
+    const r3 = await activityLogService.record({
+      type: 'push',
+      action: 'PUSH_NOW',
+      status: 'success',
+      code: 'SYNC_PUSH_SUCCESS',
+      startedAt: t,
+      finishedAt: t,
+      businessId: '10',
+    })
+    expect(r3.ok).toBe(false)
+    expect(r3.code).toBe('SYNC_ACTIVITY_LOG_INVALID_ENTRY')
+  })
+
+  it('87. accepts valid Pull summary and preserves cursor numbers', async () => {
+    const t = new Date().toISOString()
+    const recRes = await activityLogService.record({
+      type: 'pull',
+      action: 'PULL_NOW',
+      status: 'success',
+      code: 'SYNC_PULL_SUCCESS',
+      startedAt: t,
+      finishedAt: t,
+      summary: {
+        fetched: 10,
+        applied: 8,
+        ignored: 2,
+        cursorBefore: 100,
+        cursorAfter: 110,
+      },
+    })
+
+    expect(recRes.ok).toBe(true)
+    expect(recRes.entry.summary.cursorBefore).toBe(100)
+    expect(typeof recRes.entry.summary.cursorBefore).toBe('number')
+    expect(recRes.entry.summary.cursorAfter).toBe(110)
+    expect(typeof recRes.entry.summary.cursorAfter).toBe('number')
+  })
+
+  // ── Status Classifier Tests ──────────────────────────────────────────────────
+
+  it('88. classifies partial Push as attention, safety blocks as blocked', async () => {
+    const cloudStore = useCloudSessionStore()
+    setupAuthenticatedSession(cloudStore)
+
+    const syncPushStore = useSyncPushStore()
+    const syncActivityLogStore = useSyncActivityLogStore()
+    syncActivityLogStore.init({ activityLogService })
+
+    const wrapper = mount(CloudLoginView)
+    await flushPromises()
+
+    // 1. Partial push (remaining > 0) -> attention
+    vi.spyOn(syncPushStore, 'pushNow').mockResolvedValueOnce({
+      ok: true,
+      code: 'SYNC_PUSH_SUCCESS',
+      removedQueueIds: ['q1'],
+      remaining: 3,
+      blocked: [],
+    })
+    await wrapper.find('#sync-now-btn').trigger('click')
+    await flushPromises()
+
+    let list = await activityLogService.listRecent()
+    expect(list[0].status).toBe('attention')
+
+    // 2. Partial push (blocked.length > 0) -> attention
+    vi.spyOn(syncPushStore, 'pushNow').mockResolvedValueOnce({
+      ok: true,
+      code: 'SYNC_PUSH_SUCCESS',
+      removedQueueIds: ['q1'],
+      remaining: 0,
+      blocked: ['b1'],
+    })
+    await wrapper.find('#sync-now-btn').trigger('click')
+    await flushPromises()
+
+    list = await activityLogService.listRecent()
+    expect(list[0].status).toBe('attention')
+
+    // 3. Binding mismatch -> blocked
+    vi.spyOn(syncPushStore, 'pushNow').mockResolvedValueOnce({
+      ok: false,
+      code: 'SYNC_BUSINESS_BINDING_MISMATCH',
+      message: 'Business binding mismatch',
+    })
+    await wrapper.find('#sync-now-btn').trigger('click')
+    await flushPromises()
+
+    list = await activityLogService.listRecent()
+    expect(list[0].status).toBe('blocked')
+    expect(list[0].code).toBe('SYNC_BUSINESS_BINDING_MISMATCH')
+
+    // 4. Bootstrap required -> blocked
+    vi.spyOn(syncPushStore, 'pushNow').mockResolvedValueOnce({
+      ok: false,
+      code: 'SYNC_BOOTSTRAP_REQUIRED',
+      message: 'Bootstrap required',
+    })
+    await wrapper.find('#sync-now-btn').trigger('click')
+    await flushPromises()
+
+    list = await activityLogService.listRecent()
+    expect(list[0].status).toBe('blocked')
+  })
+
+  it('89. classifies Full Sync SYNC_MORE_PUSH_PENDING as attention and safety codes as blocked', async () => {
+    const cloudStore = useCloudSessionStore()
+    setupAuthenticatedSession(cloudStore)
+
+    const syncOrchestratorStore = useSyncOrchestratorStore()
+    const syncActivityLogStore = useSyncActivityLogStore()
+    syncActivityLogStore.init({ activityLogService })
+
+    const wrapper = mount(CloudLoginView)
+    await flushPromises()
+
+    // 1. SYNC_MORE_PUSH_PENDING -> attention
+    vi.spyOn(syncOrchestratorStore, 'syncAll').mockResolvedValueOnce({
+      ok: false,
+      code: 'SYNC_MORE_PUSH_PENDING',
+      message: 'Masih ada data yang menunggu dikirim.',
+    })
+    await wrapper.find('#sync-all-btn').trigger('click')
+    await flushPromises()
+
+    let list = await activityLogService.listRecent()
+    expect(list[0].status).toBe('attention')
+    expect(list[0].code).toBe('SYNC_MORE_PUSH_PENDING')
+
+    // 2. SYNC_BUSINESS_BINDING_MISMATCH -> blocked
+    vi.spyOn(syncOrchestratorStore, 'syncAll').mockResolvedValueOnce({
+      ok: false,
+      code: 'SYNC_BUSINESS_BINDING_MISMATCH',
+      message: 'Business mismatch',
+    })
+    await wrapper.find('#sync-all-btn').trigger('click')
+    await flushPromises()
+
+    list = await activityLogService.listRecent()
+    expect(list[0].status).toBe('blocked')
+  })
+
+  it('90. classifies Pull and Bootstrap safety states as blocked', async () => {
+    const cloudStore = useCloudSessionStore()
+    setupAuthenticatedSession(cloudStore)
+
+    const syncPullStore = useSyncPullStore()
+    const syncBootstrapStore = useSyncBootstrapStore()
+    const syncActivityLogStore = useSyncActivityLogStore()
+    syncActivityLogStore.init({ activityLogService })
+
+    const wrapper = mount(CloudLoginView)
+    await flushPromises()
+
+    // Pull PRECONDITION_FAILED -> blocked
+    vi.spyOn(syncPullStore, 'pullNow').mockResolvedValueOnce({
+      ok: false,
+      code: 'PRECONDITION_FAILED',
+      message: 'Precondition failed',
+    })
+    await wrapper.find('#pull-now-btn').trigger('click')
+    await flushPromises()
+
+    let list = await activityLogService.listRecent()
+    expect(list[0].status).toBe('blocked')
+
+    // Bootstrap BOOTSTRAP_ALREADY_STAGED -> blocked
+    syncBootstrapStore.bootstrapState = null
+    vi.spyOn(syncBootstrapStore, 'bootstrapNow').mockResolvedValueOnce({
+      ok: false,
+      code: 'BOOTSTRAP_ALREADY_STAGED',
+      message: 'Bootstrap already staged',
+    })
+    await wrapper.find('#bootstrap-btn').trigger('click')
+    await flushPromises()
+
+    list = await activityLogService.listRecent()
+    expect(list[0].status).toBe('blocked')
+  })
+
+  it('91. renders strictly max 10 visible items in UI when store contains more than 10', async () => {
+    const cloudStore = useCloudSessionStore()
+    setupAuthenticatedSession(cloudStore)
+
+    const base = Date.now()
+    for (let i = 1; i <= 10; i++) {
+      const t = new Date(base + i * 1000).toISOString()
+      await activityLogService.record({
+        id: `act-ui-${i}`,
+        type: 'push',
+        action: 'PUSH_NOW',
+        status: 'success',
+        code: `PUSH_${i}`,
+        startedAt: t,
+        finishedAt: t,
+      })
+    }
+
+    const syncActivityLogStore = useSyncActivityLogStore()
+    syncActivityLogStore.init({ activityLogService })
+
+    const wrapper = mount(CloudLoginView)
+    await flushPromises()
+
+    let rows = wrapper.findAll('[id^="activity-entry-"]')
+    expect(rows).toHaveLength(10)
+    expect(rows[0].attributes('id')).toBe('activity-entry-act-ui-10')
+
+    // Record 11th entry through push
+    const syncPushStore = useSyncPushStore()
+    vi.spyOn(syncPushStore, 'pushNow').mockResolvedValueOnce({
+      ok: true,
+      code: 'SYNC_PUSH_SUCCESS',
+      removedQueueIds: ['q-11'],
+      remaining: 0,
+      blocked: [],
+    })
+
+    await wrapper.find('#sync-now-btn').trigger('click')
+    await flushPromises()
+
+    rows = wrapper.findAll('[id^="activity-entry-"]')
+    expect(rows).toHaveLength(10) // UI strictly caps at 10
+
+    // Stored entries still has 11
+    const allStored = await activityLogService.listRecent({ limit: 50 })
+    expect(allStored).toHaveLength(11)
+  })
+
+  it('92. clears store error on subsequent successful record', async () => {
+    const syncActivityLogStore = useSyncActivityLogStore()
+    syncActivityLogStore.init({ activityLogService })
+
+    syncActivityLogStore.error = 'Temporary disk error'
+
+    const t = new Date().toISOString()
+    const result = await syncActivityLogStore.record({
+      type: 'push',
+      action: 'PUSH_NOW',
+      status: 'success',
+      code: 'SYNC_PUSH_SUCCESS',
+      startedAt: t,
+      finishedAt: t,
+    })
+
+    expect(result.ok).toBe(true)
+    expect(syncActivityLogStore.error).toBeNull()
   })
 })
