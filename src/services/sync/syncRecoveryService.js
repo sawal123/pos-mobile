@@ -55,6 +55,7 @@ export function createSyncRecoveryService({
 
   /**
    * Generates a read-only recovery plan based on a health check result.
+   * Issue list is the sole authority for safe actions.
    *
    * @param {object} options
    * @param {object} options.healthResult Result from healthService.checkHealth()
@@ -70,15 +71,9 @@ export function createSyncRecoveryService({
     }
 
     const issues = Array.isArray(healthResult.issues) ? healthResult.issues : []
-    const hasBlocked =
-      healthResult.status === 'blocked' ||
-      issues.some((issue) => issue.severity === 'blocked') ||
-      healthResult.ok === false
 
-    const hasConflict =
-      (healthResult.summary?.openConflictCount ?? 0) > 0 ||
-      issues.some((issue) => issue.code === 'SYNC_OPEN_CONFLICT')
-
+    // 1. Conflict check (Conflict beats blocked and ready)
+    const hasConflict = issues.some((issue) => issue.code === 'SYNC_OPEN_CONFLICT')
     if (hasConflict) {
       return {
         recommendedAction: null,
@@ -86,6 +81,21 @@ export function createSyncRecoveryService({
         message: 'Selesaikan konflik terlebih dahulu melalui panel Konflik Sinkronisasi.',
       }
     }
+
+    // 2. Blocked check (Blocked beats ready)
+    const hasBlocked =
+      healthResult.status === 'blocked' ||
+      healthResult.ok === false ||
+      issues.some((issue) => issue.severity === 'blocked') ||
+      issues.some((issue) =>
+        [
+          'SYNC_HEALTH_METADATA_INVALID',
+          'SYNC_PUSH_BINDING_MISMATCH',
+          'SYNC_PULL_BINDING_MISMATCH',
+          'SYNC_INFLIGHT_CONTEXT_MISMATCH',
+          'SYNC_BOOTSTRAP_CONTEXT_MISMATCH',
+        ].includes(issue.code),
+      )
 
     if (hasBlocked) {
       return {
@@ -95,6 +105,7 @@ export function createSyncRecoveryService({
       }
     }
 
+    // 3. Ready check (Only if no conflict and no blocked)
     if (healthResult.status === 'ready' || healthResult.code === 'SYNC_HEALTH_READY') {
       return {
         recommendedAction: null,
@@ -103,24 +114,21 @@ export function createSyncRecoveryService({
       }
     }
 
-    // Check attention conditions in priority order
-    const hasInflight =
-      healthResult.summary?.hasInflight === true ||
-      issues.some((issue) => issue.code === 'SYNC_PUSH_INFLIGHT')
+    // 4. Issue-authoritative attention evaluation in priority order
+    const hasInflight = issues.some(
+      (issue) => issue.code === 'SYNC_PUSH_INFLIGHT' && issue.severity === 'attention',
+    )
+    const hasBootstrapStaged = issues.some(
+      (issue) => issue.code === 'SYNC_BOOTSTRAP_STAGED' && issue.severity === 'attention',
+    )
+    const hasBootstrapNotPrepared = issues.some(
+      (issue) => issue.code === 'SYNC_BOOTSTRAP_NOT_PREPARED' && issue.severity === 'attention',
+    )
+    const hasPending = issues.some(
+      (issue) => issue.code === 'SYNC_PENDING_QUEUE' && issue.severity === 'attention',
+    )
 
-    const hasBootstrapStaged =
-      healthResult.summary?.bootstrapStatus === 'staged' ||
-      issues.some((issue) => issue.code === 'SYNC_BOOTSTRAP_STAGED')
-
-    const hasBootstrapNotPrepared =
-      healthResult.summary?.bootstrapStatus === 'not_prepared' ||
-      issues.some((issue) => issue.code === 'SYNC_BOOTSTRAP_NOT_PREPARED')
-
-    const hasPending =
-      (healthResult.summary?.pendingCount ?? 0) > 0 ||
-      issues.some((issue) => issue.code === 'SYNC_PENDING_QUEUE')
-
-    // 1. SYNC_PUSH_INFLIGHT -> RETRY_INFLIGHT
+    // Priority 1: In-flight push
     if (hasInflight) {
       return {
         recommendedAction: RECOVERY_ACTIONS.RETRY_INFLIGHT,
@@ -129,7 +137,7 @@ export function createSyncRecoveryService({
       }
     }
 
-    // 2. SYNC_BOOTSTRAP_STAGED + pending -> CONTINUE_BOOTSTRAP
+    // Priority 2: Staged bootstrap with pending queue
     if (hasBootstrapStaged && hasPending) {
       return {
         recommendedAction: RECOVERY_ACTIONS.CONTINUE_BOOTSTRAP,
@@ -138,7 +146,7 @@ export function createSyncRecoveryService({
       }
     }
 
-    // 3. SYNC_BOOTSTRAP_NOT_PREPARED -> PREPARE_BOOTSTRAP
+    // Priority 3: Bootstrap not prepared
     if (hasBootstrapNotPrepared) {
       return {
         recommendedAction: RECOVERY_ACTIONS.PREPARE_BOOTSTRAP,
@@ -147,7 +155,7 @@ export function createSyncRecoveryService({
       }
     }
 
-    // 4. normal SYNC_PENDING_QUEUE -> CONTINUE_PENDING
+    // Priority 4: Normal pending queue
     if (hasPending) {
       return {
         recommendedAction: RECOVERY_ACTIONS.CONTINUE_PENDING,
@@ -156,6 +164,7 @@ export function createSyncRecoveryService({
       }
     }
 
+    // Attention but no recognizable safe recovery action
     return {
       recommendedAction: null,
       availableActions: [],
@@ -224,24 +233,10 @@ export function createSyncRecoveryService({
         }
       }
 
-      // 4. Health READY -> No recovery needed
-      if (freshHealth.status === 'ready' || freshHealth.code === 'SYNC_HEALTH_READY') {
-        return {
-          ok: true,
-          code: 'SYNC_RECOVERY_NOT_REQUIRED',
-          action,
-          healthBefore: freshHealth,
-          message: 'Tidak diperlukan pemulihan sinkronisasi.',
-        }
-      }
-
       const issues = Array.isArray(freshHealth.issues) ? freshHealth.issues : []
 
-      // 5. Open conflict -> Require resolution via P15
-      const hasConflict =
-        (freshHealth.summary?.openConflictCount ?? 0) > 0 ||
-        issues.some((issue) => issue.code === 'SYNC_OPEN_CONFLICT')
-
+      // 4. Open conflict -> Conflict beats READY and blocked
+      const hasConflict = issues.some((issue) => issue.code === 'SYNC_OPEN_CONFLICT')
       if (hasConflict) {
         return {
           ok: false,
@@ -252,7 +247,7 @@ export function createSyncRecoveryService({
         }
       }
 
-      // 6. Blocked issues / metadata invalid / context mismatch -> FAIL CLOSED
+      // 5. Blocked issues / metadata invalid / context mismatch -> FAIL CLOSED (beats READY)
       const hasBlocked =
         freshHealth.status === 'blocked' ||
         issues.some((issue) => issue.severity === 'blocked') ||
@@ -276,34 +271,44 @@ export function createSyncRecoveryService({
         }
       }
 
-      // 7. Execute specific recovery actions
-      const hasInflight =
-        freshHealth.summary?.hasInflight === true ||
-        issues.some((issue) => issue.code === 'SYNC_PUSH_INFLIGHT')
-
-      const hasBootstrapStaged =
-        freshHealth.summary?.bootstrapStatus === 'staged' ||
-        issues.some((issue) => issue.code === 'SYNC_BOOTSTRAP_STAGED')
-
-      const hasBootstrapNotPrepared =
-        freshHealth.summary?.bootstrapStatus === 'not_prepared' ||
-        issues.some((issue) => issue.code === 'SYNC_BOOTSTRAP_NOT_PREPARED')
-
-      const hasPending =
-        (freshHealth.summary?.pendingCount ?? 0) > 0 ||
-        issues.some((issue) => issue.code === 'SYNC_PENDING_QUEUE')
-
-      if (action === RECOVERY_ACTIONS.RETRY_INFLIGHT) {
-        if (!hasInflight) {
-          return {
-            ok: false,
-            code: 'SYNC_RECOVERY_ACTION_NOT_APPLICABLE',
-            action: RECOVERY_ACTIONS.RETRY_INFLIGHT,
-            healthBefore: freshHealth,
-            message: 'Tidak ada push in-flight yang dapat dicoba ulang.',
-          }
+      // 6. Health READY -> No recovery needed
+      if (freshHealth.status === 'ready' || freshHealth.code === 'SYNC_HEALTH_READY') {
+        return {
+          ok: true,
+          code: 'SYNC_RECOVERY_NOT_REQUIRED',
+          action,
+          healthBefore: freshHealth,
+          message: 'Tidak diperlukan pemulihan sinkronisasi.',
         }
+      }
 
+      // 7. Derive recovery plan using issue authority
+      const plan = getRecoveryPlan({ healthResult: freshHealth })
+
+      // 8. If plan has no safe actions -> SYNC_RECOVERY_NO_SAFE_ACTION
+      if (!plan.availableActions || plan.availableActions.length === 0) {
+        return {
+          ok: false,
+          code: 'SYNC_RECOVERY_NO_SAFE_ACTION',
+          action,
+          healthBefore: freshHealth,
+          message: 'Tidak ditemukan tindakan pemulihan yang aman untuk kondisi saat ini.',
+        }
+      }
+
+      // 9. If requested action is not in available actions -> SYNC_RECOVERY_ACTION_NOT_APPLICABLE
+      if (!plan.availableActions.includes(action)) {
+        return {
+          ok: false,
+          code: 'SYNC_RECOVERY_ACTION_NOT_APPLICABLE',
+          action,
+          healthBefore: freshHealth,
+          message: `Action recovery '${action}' tidak dapat diterapkan pada kondisi saat ini.`,
+        }
+      }
+
+      // 10. Execute target service for authorized action
+      if (action === RECOVERY_ACTIONS.RETRY_INFLIGHT) {
         if (!pushService || typeof pushService.pushNow !== 'function') {
           return {
             ok: false,
@@ -326,16 +331,6 @@ export function createSyncRecoveryService({
       }
 
       if (action === RECOVERY_ACTIONS.CONTINUE_PENDING) {
-        if (!hasPending || hasInflight || hasBootstrapStaged) {
-          return {
-            ok: false,
-            code: 'SYNC_RECOVERY_ACTION_NOT_APPLICABLE',
-            action: RECOVERY_ACTIONS.CONTINUE_PENDING,
-            healthBefore: freshHealth,
-            message: 'Action CONTINUE_PENDING tidak dapat diterapkan pada kondisi saat ini.',
-          }
-        }
-
         if (!orchestratorService || typeof orchestratorService.syncAll !== 'function') {
           return {
             ok: false,
@@ -358,16 +353,6 @@ export function createSyncRecoveryService({
       }
 
       if (action === RECOVERY_ACTIONS.PREPARE_BOOTSTRAP) {
-        if (!hasBootstrapNotPrepared || hasInflight) {
-          return {
-            ok: false,
-            code: 'SYNC_RECOVERY_ACTION_NOT_APPLICABLE',
-            action: RECOVERY_ACTIONS.PREPARE_BOOTSTRAP,
-            healthBefore: freshHealth,
-            message: 'Action PREPARE_BOOTSTRAP tidak dapat diterapkan pada kondisi saat ini.',
-          }
-        }
-
         if (!bootstrapService || typeof bootstrapService.bootstrapNow !== 'function') {
           return {
             ok: false,
@@ -390,16 +375,6 @@ export function createSyncRecoveryService({
       }
 
       if (action === RECOVERY_ACTIONS.CONTINUE_BOOTSTRAP) {
-        if (!hasBootstrapStaged || !hasPending || hasInflight) {
-          return {
-            ok: false,
-            code: 'SYNC_RECOVERY_ACTION_NOT_APPLICABLE',
-            action: RECOVERY_ACTIONS.CONTINUE_BOOTSTRAP,
-            healthBefore: freshHealth,
-            message: 'Action CONTINUE_BOOTSTRAP tidak dapat diterapkan pada kondisi saat ini.',
-          }
-        }
-
         if (!orchestratorService || typeof orchestratorService.syncAll !== 'function') {
           return {
             ok: false,

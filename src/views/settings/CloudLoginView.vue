@@ -102,8 +102,7 @@ watch(
   ],
   () => {
     syncHealthStore.resetResult()
-    syncRecoveryStore.resetResult()
-    recoveryMessage.value = ''
+    resetRecoveryPresentation()
   },
 )
 
@@ -118,21 +117,40 @@ function getPlatform() {
   return null
 }
 
+function resetRecoveryPresentation() {
+  syncRecoveryStore.resetResult()
+  recoveryMessage.value = ''
+  recoverySuccess.value = false
+}
+
 async function handleCheckSyncHealth() {
   if (isAnySyncOperationBusy.value) return
+  resetRecoveryPresentation()
   await syncHealthStore.checkHealth()
 }
 
 async function handleRecovery(action) {
   if (isAnySyncOperationBusy.value) return
   syncHealthStore.resetResult()
-  recoveryMessage.value = ''
+  resetRecoveryPresentation()
+
   const result = await syncRecoveryStore.recover(action)
+
+  try {
+    await syncPushStore.refreshPendingCount()
+  } catch {
+    // Non-blocking best-effort refresh
+  }
+
+  try {
+    await syncConflictStore.loadConflicts()
+  } catch {
+    // Non-blocking best-effort refresh
+  }
+
   if (result.ok) {
     recoverySuccess.value = true
     recoveryMessage.value = result.message || 'Pemulihan sinkronisasi berhasil.'
-    await syncPushStore.refreshPendingCount()
-    await syncConflictStore.loadConflicts()
   } else {
     recoverySuccess.value = false
     recoveryMessage.value = result.message || result.error?.message || 'Pemulihan gagal.'
@@ -141,6 +159,7 @@ async function handleRecovery(action) {
 
 async function handleSyncAll() {
   if (isAnySyncOperationBusy.value) return
+  resetRecoveryPresentation()
   syncHealthStore.resetResult()
   syncAllMessage.value = ''
   const result = await syncOrchestratorStore.syncAll()
@@ -176,6 +195,7 @@ async function handleSyncAll() {
 
 async function handleSyncNow() {
   if (isAnySyncOperationBusy.value) return
+  resetRecoveryPresentation()
   syncHealthStore.resetResult()
   syncMessage.value = ''
   const result = await syncPushStore.pushNow()
@@ -197,6 +217,7 @@ async function handleSyncNow() {
 
 async function handlePullNow() {
   if (isAnySyncOperationBusy.value) return
+  resetRecoveryPresentation()
   syncHealthStore.resetResult()
   pullMessage.value = ''
   const result = await syncPullStore.pullNow()
@@ -217,6 +238,7 @@ async function handlePullNow() {
 
 async function handleBootstrapNow() {
   if (isAnySyncOperationBusy.value) return
+  resetRecoveryPresentation()
   syncHealthStore.resetResult()
   bootstrapMessage.value = ''
   const result = await syncBootstrapStore.bootstrapNow()
@@ -237,6 +259,7 @@ async function handleBootstrapNow() {
 
 async function handleUseServer(conflictId) {
   if (isAnySyncOperationBusy.value) return
+  resetRecoveryPresentation()
   syncHealthStore.resetResult()
   conflictMessage.value = ''
   const result = await syncConflictStore.useServer(conflictId)
@@ -252,6 +275,7 @@ async function handleUseServer(conflictId) {
 
 async function handleKeepLocal(conflictId) {
   if (isAnySyncOperationBusy.value) return
+  resetRecoveryPresentation()
   syncHealthStore.resetResult()
   conflictMessage.value = ''
   const result = await syncConflictStore.keepLocal(conflictId)
@@ -334,6 +358,7 @@ async function tryRegisterDevice() {
 
 async function handleLogout() {
   if (isAnySyncOperationBusy.value) return
+  resetRecoveryPresentation()
   syncHealthStore.resetResult()
   await cloudStore.logout()
   email.value = ''
@@ -345,8 +370,12 @@ async function handleLogout() {
 onMounted(async () => {
   if (cloudStore.isAuthenticated) {
     step.value = 'done'
-    await syncPushStore.refreshPendingCount()
-    await syncConflictStore.loadConflicts()
+    try {
+      await syncPushStore.refreshPendingCount()
+      await syncConflictStore.loadConflicts()
+    } catch {
+      // Non-blocking best-effort refresh
+    }
   }
 })
 </script>

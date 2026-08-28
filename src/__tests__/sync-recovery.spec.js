@@ -89,9 +89,8 @@ describe('P18: Manual Sync Recovery Center', () => {
     })
   })
 
-  // ── 51. Fresh health meski UI result stale ──────────────────────────────────
+  // ── 51. Fresh health check overrides stale UI health ─────────────────────────
   it('51. Fresh health check overrides stale UI health: does not push if fresh health is READY', async () => {
-    // Health service reports ready
     mockHealthService.checkHealth.mockResolvedValueOnce({
       ok: true,
       code: 'SYNC_HEALTH_READY',
@@ -417,7 +416,6 @@ describe('P18: Manual Sync Recovery Center', () => {
     recoveryStore.init({ recoveryService })
 
     mockHealthService.checkHealth.mockImplementation(async () => {
-      // Simulate context mutation in cloudStore while health check is pending
       cloudStore.selectedBusiness = { id: 20, name: 'Business B' }
       cloudStore.selectedOutlet = { id: 202, name: 'Outlet B' }
 
@@ -465,7 +463,6 @@ describe('P18: Manual Sync Recovery Center', () => {
     const firstPromise = recoveryStore.recover(RECOVERY_ACTIONS.CONTINUE_PENDING)
     expect(recoveryStore.loading).toBe(true)
 
-    // Second recovery call while first is in progress
     const secondResult = await recoveryStore.recover(RECOVERY_ACTIONS.CONTINUE_PENDING)
     expect(secondResult.ok).toBe(false)
     expect(secondResult.code).toBe('SYNC_RECOVERY_ALREADY_IN_PROGRESS')
@@ -539,7 +536,6 @@ describe('P18: Manual Sync Recovery Center', () => {
     setActivePinia(pinia)
 
     const cloudStore = useCloudSessionStore()
-    cloudStore.token = 'valid-token'
     cloudStore.user = { id: 1, email: 'test@example.com' }
     cloudStore.businesses = [{ id: 10, name: 'Biz 10', outlets: [{ id: 101, name: 'Outlet 1', status: 'active' }] }]
     cloudStore.selectedBusiness = { id: 10, name: 'Biz 10' }
@@ -592,7 +588,6 @@ describe('P18: Manual Sync Recovery Center', () => {
     setActivePinia(pinia)
 
     const cloudStore = useCloudSessionStore()
-    cloudStore.token = 'valid-token'
     cloudStore.user = { id: 1, email: 'test@example.com' }
     cloudStore.businesses = [{ id: 10, name: 'Biz 10', outlets: [{ id: 101, name: 'Outlet 1', status: 'active' }] }]
     cloudStore.selectedBusiness = { id: 10, name: 'Biz 10' }
@@ -641,7 +636,6 @@ describe('P18: Manual Sync Recovery Center', () => {
     setActivePinia(pinia)
 
     const cloudStore = useCloudSessionStore()
-    cloudStore.token = 'valid-token'
     cloudStore.user = { id: 1, email: 'test@example.com' }
     cloudStore.businesses = [{ id: 10, name: 'Biz 10', outlets: [{ id: 101, name: 'Outlet 1', status: 'active' }] }]
     cloudStore.selectedBusiness = { id: 10, name: 'Biz 10' }
@@ -687,7 +681,6 @@ describe('P18: Manual Sync Recovery Center', () => {
     setActivePinia(pinia)
 
     const cloudStore = useCloudSessionStore()
-    cloudStore.token = 'valid-token'
     cloudStore.user = { id: 1, email: 'test@example.com' }
     cloudStore.businesses = [{ id: 10, name: 'Biz 10', outlets: [{ id: 101, name: 'Outlet 1', status: 'active' }] }]
     cloudStore.selectedBusiness = { id: 10, name: 'Biz 10' }
@@ -740,6 +733,363 @@ describe('P18: Manual Sync Recovery Center', () => {
     expect(wrapper.find('#recovery-retry-inflight-btn').attributes('disabled')).toBeDefined()
   })
 
+  // ── 26. Test — Summary hasInflight alone cannot authorize RETRY_INFLIGHT ───────
+  it('26. Summary hasInflight alone cannot authorize RETRY_INFLIGHT when issues only have SYNC_PENDING_QUEUE', async () => {
+    mockHealthService.checkHealth.mockResolvedValueOnce({
+      ok: true,
+      status: 'attention',
+      summary: { pendingCount: 2, hasInflight: true },
+      issues: [{ code: 'SYNC_PENDING_QUEUE', severity: 'attention' }],
+    })
+
+    const result = await recoveryService.recover(RECOVERY_ACTIONS.RETRY_INFLIGHT, {
+      context: validContext,
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_RECOVERY_ACTION_NOT_APPLICABLE')
+    expect(mockPushService.pushNow).not.toHaveBeenCalled()
+  })
+
+  // ── 27. Test — Inflight issue authorizes RETRY_INFLIGHT even if summary.hasInflight is false ──
+  it('27. Issue is authority: RETRY_INFLIGHT applicable when SYNC_PUSH_INFLIGHT issue exists even if summary hasInflight is false', async () => {
+    mockHealthService.checkHealth.mockResolvedValueOnce({
+      ok: true,
+      status: 'attention',
+      summary: { hasInflight: false },
+      issues: [{ code: 'SYNC_PUSH_INFLIGHT', severity: 'attention' }],
+    })
+
+    const result = await recoveryService.recover(RECOVERY_ACTIONS.RETRY_INFLIGHT, {
+      context: validContext,
+    })
+
+    expect(result.ok).toBe(true)
+    expect(result.action).toBe('RETRY_INFLIGHT')
+    expect(mockPushService.pushNow).toHaveBeenCalledTimes(1)
+  })
+
+  // ── 28. Test — Bootstrap issue authority ─────────────────────────────────────
+  it('28. Bootstrap issue is authority: summary bootstrapStatus staged alone does not authorize CONTINUE_BOOTSTRAP', async () => {
+    mockHealthService.checkHealth.mockResolvedValueOnce({
+      ok: true,
+      status: 'attention',
+      summary: { bootstrapStatus: 'staged', pendingCount: 5 },
+      issues: [{ code: 'SYNC_PENDING_QUEUE', severity: 'attention' }],
+    })
+
+    const result = await recoveryService.recover(RECOVERY_ACTIONS.CONTINUE_BOOTSTRAP, {
+      context: validContext,
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_RECOVERY_ACTION_NOT_APPLICABLE')
+  })
+
+  // ── 29. Test — NO_SAFE_ACTION ────────────────────────────────────────────────
+  it('29. Attention state with UNKNOWN_ATTENTION issue returns SYNC_RECOVERY_NO_SAFE_ACTION with 0 mutation calls', async () => {
+    mockHealthService.checkHealth.mockResolvedValueOnce({
+      ok: true,
+      status: 'attention',
+      summary: { pendingCount: 0, openConflictCount: 0, hasInflight: false, bootstrapStatus: 'completed' },
+      issues: [{ code: 'UNKNOWN_ATTENTION', severity: 'attention' }],
+    })
+
+    const result = await recoveryService.recover(RECOVERY_ACTIONS.CONTINUE_PENDING, {
+      context: validContext,
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_RECOVERY_NO_SAFE_ACTION')
+    expect(mockPushService.pushNow).not.toHaveBeenCalled()
+    expect(mockBootstrapService.bootstrapNow).not.toHaveBeenCalled()
+    expect(mockOrchestratorService.syncAll).not.toHaveBeenCalled()
+  })
+
+  // ── 30. Test — WRONG_ACTION (ACTION_NOT_APPLICABLE) ───────────────────────────
+  it('30. When health has SYNC_PENDING_QUEUE, calling RETRY_INFLIGHT returns SYNC_RECOVERY_ACTION_NOT_APPLICABLE', async () => {
+    mockHealthService.checkHealth.mockResolvedValueOnce({
+      ok: true,
+      status: 'attention',
+      summary: { pendingCount: 2 },
+      issues: [{ code: 'SYNC_PENDING_QUEUE', severity: 'attention' }],
+    })
+
+    const result = await recoveryService.recover(RECOVERY_ACTIONS.RETRY_INFLIGHT, {
+      context: validContext,
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_RECOVERY_ACTION_NOT_APPLICABLE')
+    expect(mockPushService.pushNow).not.toHaveBeenCalled()
+  })
+
+  // ── 31. Test — BLOCKED OVERRIDES READY ───────────────────────────────────────
+  it('31. Blocked issue overrides READY status and returns SYNC_RECOVERY_MANUAL_INTERVENTION_REQUIRED with 0 mutations', async () => {
+    mockHealthService.checkHealth.mockResolvedValueOnce({
+      ok: true,
+      status: 'ready',
+      code: 'SYNC_HEALTH_READY',
+      issues: [{ code: 'SYNC_HEALTH_METADATA_INVALID', severity: 'blocked' }],
+    })
+
+    const result = await recoveryService.recover(RECOVERY_ACTIONS.CONTINUE_PENDING, {
+      context: validContext,
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_RECOVERY_MANUAL_INTERVENTION_REQUIRED')
+    expect(mockPushService.pushNow).not.toHaveBeenCalled()
+    expect(mockBootstrapService.bootstrapNow).not.toHaveBeenCalled()
+    expect(mockOrchestratorService.syncAll).not.toHaveBeenCalled()
+  })
+
+  // ── 32. Test — CONFLICT OVERRIDES READY ──────────────────────────────────────
+  it('32. Conflict issue overrides READY status and returns SYNC_RECOVERY_CONFLICT_ACTION_REQUIRED with 0 mutations', async () => {
+    mockHealthService.checkHealth.mockResolvedValueOnce({
+      ok: true,
+      status: 'ready',
+      code: 'SYNC_HEALTH_READY',
+      issues: [{ code: 'SYNC_OPEN_CONFLICT', severity: 'blocked' }],
+    })
+
+    const result = await recoveryService.recover(RECOVERY_ACTIONS.RETRY_INFLIGHT, {
+      context: validContext,
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_RECOVERY_CONFLICT_ACTION_REQUIRED')
+    expect(mockPushService.pushNow).not.toHaveBeenCalled()
+    expect(mockBootstrapService.bootstrapNow).not.toHaveBeenCalled()
+    expect(mockOrchestratorService.syncAll).not.toHaveBeenCalled()
+  })
+
+  // ── 33. Test — NEW HEALTH CLEARS OLD RECOVERY RESULT ─────────────────────────
+  it('33. Clicking "Periksa Status Sync" clears old recovery presentation and runs health check', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+
+    const cloudStore = useCloudSessionStore()
+    cloudStore.user = { id: 1, email: 'test@example.com' }
+    cloudStore.businesses = [{ id: 10, name: 'Biz 10', outlets: [{ id: 101, name: 'Outlet 1', status: 'active' }] }]
+    cloudStore.selectedBusiness = { id: 10, name: 'Biz 10' }
+    cloudStore.selectedOutlet = { id: 101, name: 'Outlet 1' }
+    cloudStore.cloudAccess = true
+    cloudStore.registeredDeviceId = 77
+    cloudStore.deviceIdentifier = 'dev-uuid-123'
+
+    const syncHealthStore = useSyncHealthStore()
+    syncHealthStore.init({ healthService: mockHealthService })
+
+    const syncRecoveryStore = useSyncRecoveryStore()
+    syncRecoveryStore.init({ recoveryService })
+    syncRecoveryStore.lastResult = { ok: true, message: 'Old recovery success' }
+
+    const wrapper = mount(CloudLoginView, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          BaseCard: { template: '<div class="base-card"><slot /></div>' },
+          BaseButton: {
+            props: ['id', 'variant', 'size', 'disabled', 'loading'],
+            template: '<button :id="id" :disabled="disabled"><slot /></button>',
+          },
+          BaseInput: { template: '<input />' },
+        },
+      },
+    })
+
+    await flushPromises()
+
+    // Trigger check health
+    await wrapper.find('#sync-health-btn').trigger('click')
+    await flushPromises()
+
+    expect(syncRecoveryStore.lastResult).toBeNull()
+    expect(mockHealthService.checkHealth).toHaveBeenCalled()
+  })
+
+  // ── 34. Test — NORMAL SYNC CLEARS OLD RECOVERY RESULT ────────────────────────
+  it('34. Normal sync (Sync Semua / Sync Sekarang) clears old recovery presentation before executing', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+
+    const cloudStore = useCloudSessionStore()
+    cloudStore.user = { id: 1, email: 'test@example.com' }
+    cloudStore.businesses = [{ id: 10, name: 'Biz 10', outlets: [{ id: 101, name: 'Outlet 1', status: 'active' }] }]
+    cloudStore.selectedBusiness = { id: 10, name: 'Biz 10' }
+    cloudStore.selectedOutlet = { id: 101, name: 'Outlet 1' }
+    cloudStore.cloudAccess = true
+    cloudStore.registeredDeviceId = 77
+    cloudStore.deviceIdentifier = 'dev-uuid-123'
+
+    const syncRecoveryStore = useSyncRecoveryStore()
+    syncRecoveryStore.init({ recoveryService })
+    syncRecoveryStore.lastResult = { ok: true, message: 'Old recovery message' }
+
+    const syncPushStore = useSyncPushStore()
+    syncPushStore.init({ pushService: mockPushService })
+
+    const syncOrchestratorStore = useSyncOrchestratorStore()
+    syncOrchestratorStore.init({ orchestratorService: mockOrchestratorService })
+
+    const wrapper = mount(CloudLoginView, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          BaseCard: { template: '<div class="base-card"><slot /></div>' },
+          BaseButton: {
+            props: ['id', 'variant', 'size', 'disabled', 'loading'],
+            template: '<button :id="id" :disabled="disabled"><slot /></button>',
+          },
+          BaseInput: { template: '<input />' },
+        },
+      },
+    })
+
+    await flushPromises()
+
+    await wrapper.find('#sync-all-btn').trigger('click')
+    await flushPromises()
+
+    expect(syncRecoveryStore.lastResult).toBeNull()
+  })
+
+  // ── 35. Test — FAILED RECOVERY STILL REFRESHES LOCAL UI ──────────────────────
+  it('35. Failed recovery still refreshes local pending count and conflicts via best-effort calls', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+
+    const cloudStore = useCloudSessionStore()
+    cloudStore.user = { id: 1, email: 'test@example.com' }
+    cloudStore.businesses = [{ id: 10, name: 'Biz 10', outlets: [{ id: 101, name: 'Outlet 1', status: 'active' }] }]
+    cloudStore.selectedBusiness = { id: 10, name: 'Biz 10' }
+    cloudStore.selectedOutlet = { id: 101, name: 'Outlet 1' }
+    cloudStore.cloudAccess = true
+    cloudStore.registeredDeviceId = 77
+    cloudStore.deviceIdentifier = 'dev-uuid-123'
+
+    const syncHealthStore = useSyncHealthStore()
+    syncHealthStore.lastResult = {
+      ok: true,
+      status: 'attention',
+      summary: { hasInflight: true },
+      issues: [{ code: 'SYNC_PUSH_INFLIGHT', severity: 'attention' }],
+    }
+
+    mockHealthService.checkHealth.mockResolvedValueOnce({
+      ok: true,
+      status: 'attention',
+      summary: { hasInflight: true },
+      issues: [{ code: 'SYNC_PUSH_INFLIGHT', severity: 'attention' }],
+    })
+
+    // Push fails with SYNC_CONFLICT
+    mockPushService.pushNow.mockResolvedValueOnce({
+      ok: false,
+      code: 'SYNC_CONFLICT',
+      message: 'Server detected conflict',
+    })
+
+    const syncPushStore = useSyncPushStore()
+    const refreshSpy = vi.spyOn(syncPushStore, 'refreshPendingCount').mockResolvedValue()
+
+    const syncConflictStore = useSyncConflictStore()
+    const loadConflictsSpy = vi.spyOn(syncConflictStore, 'loadConflicts').mockResolvedValue()
+
+    const syncRecoveryStore = useSyncRecoveryStore()
+    syncRecoveryStore.init({ recoveryService })
+
+    const wrapper = mount(CloudLoginView, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          BaseCard: { template: '<div class="base-card"><slot /></div>' },
+          BaseButton: {
+            props: ['id', 'variant', 'size', 'disabled', 'loading'],
+            template: '<button :id="id" :disabled="disabled"><slot /></button>',
+          },
+          BaseInput: { template: '<input />' },
+        },
+      },
+    })
+
+    await flushPromises()
+
+    await wrapper.find('#recovery-retry-inflight-btn').trigger('click')
+    await flushPromises()
+
+    expect(refreshSpy).toHaveBeenCalled()
+    expect(loadConflictsSpy).toHaveBeenCalled()
+    expect(wrapper.find('#recovery-result-message').text()).toContain('Server detected conflict')
+  })
+
+  // ── 36. Test — REFRESH FAILURE DOES NOT ALTER RECOVERY RESULT ─────────────────
+  it('36. Refresh failure does not crash handler or alter the recovery failure result', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+
+    const cloudStore = useCloudSessionStore()
+    cloudStore.user = { id: 1, email: 'test@example.com' }
+    cloudStore.businesses = [{ id: 10, name: 'Biz 10', outlets: [{ id: 101, name: 'Outlet 1', status: 'active' }] }]
+    cloudStore.selectedBusiness = { id: 10, name: 'Biz 10' }
+    cloudStore.selectedOutlet = { id: 101, name: 'Outlet 1' }
+    cloudStore.cloudAccess = true
+    cloudStore.registeredDeviceId = 77
+    cloudStore.deviceIdentifier = 'dev-uuid-123'
+
+    const syncHealthStore = useSyncHealthStore()
+    syncHealthStore.lastResult = {
+      ok: true,
+      status: 'attention',
+      summary: { hasInflight: true },
+      issues: [{ code: 'SYNC_PUSH_INFLIGHT', severity: 'attention' }],
+    }
+
+    mockHealthService.checkHealth.mockResolvedValueOnce({
+      ok: true,
+      status: 'attention',
+      summary: { hasInflight: true },
+      issues: [{ code: 'SYNC_PUSH_INFLIGHT', severity: 'attention' }],
+    })
+
+    mockPushService.pushNow.mockResolvedValueOnce({
+      ok: false,
+      code: 'SYNC_CONFLICT',
+      message: 'Conflict detected',
+    })
+
+    const syncPushStore = useSyncPushStore()
+    vi.spyOn(syncPushStore, 'refreshPendingCount').mockRejectedValue(new Error('Storage I/O error'))
+
+    const syncConflictStore = useSyncConflictStore()
+    vi.spyOn(syncConflictStore, 'loadConflicts').mockRejectedValue(new Error('Storage I/O error'))
+
+    const syncRecoveryStore = useSyncRecoveryStore()
+    syncRecoveryStore.init({ recoveryService })
+
+    const wrapper = mount(CloudLoginView, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          BaseCard: { template: '<div class="base-card"><slot /></div>' },
+          BaseButton: {
+            props: ['id', 'variant', 'size', 'disabled', 'loading'],
+            template: '<button :id="id" :disabled="disabled"><slot /></button>',
+          },
+          BaseInput: { template: '<input />' },
+        },
+      },
+    })
+
+    await flushPromises()
+
+    await wrapper.find('#recovery-retry-inflight-btn').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('#recovery-result-message').text()).toContain('Conflict detected')
+  })
+
   // ── Extra: Health Check Read Failure ─────────────────────────────────────────
   it('Health read failure or incomplete context returns SYNC_RECOVERY_HEALTH_CHECK_FAILED', async () => {
     mockHealthService.checkHealth.mockResolvedValueOnce({
@@ -772,83 +1122,6 @@ describe('P18: Manual Sync Recovery Center', () => {
     expect(result2.code).toBe('SYNC_RECOVERY_HEALTH_CHECK_FAILED')
   })
 
-  // ── Extra: Attention without safe action ─────────────────────────────────────
-  it('Attention state without recognizable safe condition returns SYNC_RECOVERY_NO_SAFE_ACTION', async () => {
-    mockHealthService.checkHealth.mockResolvedValueOnce({
-      ok: true,
-      status: 'attention',
-      summary: { pendingCount: 0, openConflictCount: 0, hasInflight: false, bootstrapStatus: 'completed' },
-      issues: [{ code: 'UNKNOWN_ATTENTION_ISSUE', severity: 'attention' }],
-    })
-
-    const result = await recoveryService.recover(RECOVERY_ACTIONS.CONTINUE_PENDING, {
-      context: validContext,
-    })
-
-    expect(result.ok).toBe(false)
-    expect(result.code).toBe('SYNC_RECOVERY_ACTION_NOT_APPLICABLE')
-  })
-
-  // ── Extra: UI clicking recovery button executes recover and resets health store ──
-  it('UI clicking recovery button triggers recover, resets health store, and displays result message', async () => {
-    const pinia = createPinia()
-    setActivePinia(pinia)
-
-    const cloudStore = useCloudSessionStore()
-    cloudStore.token = 'valid-token'
-    cloudStore.user = { id: 1, email: 'test@example.com' }
-    cloudStore.businesses = [{ id: 10, name: 'Biz 10', outlets: [{ id: 101, name: 'Outlet 1', status: 'active' }] }]
-    cloudStore.selectedBusiness = { id: 10, name: 'Biz 10' }
-    cloudStore.selectedOutlet = { id: 101, name: 'Outlet 1' }
-    cloudStore.cloudAccess = true
-    cloudStore.registeredDeviceId = 77
-    cloudStore.deviceIdentifier = 'dev-uuid-123'
-
-    const syncHealthStore = useSyncHealthStore()
-    syncHealthStore.lastResult = {
-      ok: true,
-      status: 'attention',
-      summary: { hasInflight: true },
-      issues: [{ code: 'SYNC_PUSH_INFLIGHT', severity: 'attention' }],
-    }
-
-    mockHealthService.checkHealth.mockResolvedValueOnce({
-      ok: true,
-      status: 'attention',
-      summary: { hasInflight: true },
-      issues: [{ code: 'SYNC_PUSH_INFLIGHT', severity: 'attention' }],
-    })
-
-    const syncRecoveryStore = useSyncRecoveryStore()
-    syncRecoveryStore.init({ recoveryService })
-
-    const wrapper = mount(CloudLoginView, {
-      global: {
-        plugins: [pinia],
-        stubs: {
-          BaseCard: { template: '<div class="base-card"><slot /></div>' },
-          BaseButton: {
-            props: ['id', 'variant', 'size', 'disabled', 'loading'],
-            template: '<button :id="id" :disabled="disabled"><slot /></button>',
-          },
-          BaseInput: { template: '<input />' },
-        },
-      },
-    })
-
-    await flushPromises()
-
-    const retryBtn = wrapper.find('#recovery-retry-inflight-btn')
-    expect(retryBtn.exists()).toBe(true)
-
-    await retryBtn.trigger('click')
-    await flushPromises()
-
-    expect(mockPushService.pushNow).toHaveBeenCalledTimes(1)
-    expect(syncHealthStore.lastResult).toBeNull()
-    expect(wrapper.find('#recovery-result-message').exists()).toBe(true)
-  })
-
   // ── Extra: Store init with adapter / services directly ───────────────────────
   it('Store init creates recovery service when healthService and subservices are passed', async () => {
     const pinia = createPinia()
@@ -871,4 +1144,3 @@ describe('P18: Manual Sync Recovery Center', () => {
     expect(syncRecoveryStore.lastError).toBeNull()
   })
 })
-
