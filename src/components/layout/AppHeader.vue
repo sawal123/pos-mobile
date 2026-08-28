@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 
 import { useBusinessStore } from '@/stores/businessStore'
+import SyncStatusBadge from '@/components/sync/SyncStatusBadge.vue'
 
 const route = useRoute()
 const businessStore = useBusinessStore()
@@ -24,7 +25,7 @@ const pageTitle = computed(() => {
     settings: 'Pengaturan',
   }
 
-  return titleMap[route.name] ?? 'POS Mobile'
+  return titleMap[route?.name] ?? 'POS Mobile'
 })
 </script>
 
@@ -38,11 +39,14 @@ const pageTitle = computed(() => {
         <h1 class="text-lg font-semibold text-ink-primary">{{ pageTitle }}</h1>
       </div>
 
-      <div class="rounded-2xl bg-surface px-3 py-2 text-right text-sm text-ink-secondary">
-        <p class="font-medium text-ink-primary">{{ businessStore.outlet }}</p>
-        <p class="text-xs uppercase tracking-[0.14em]">
-          {{ businessStore.mode === 'cloud' ? 'Cloud Mode' : 'Free Mode' }}
-        </p>
+      <div class="flex items-center gap-2.5">
+        <SyncStatusBadge />
+        <div class="rounded-2xl bg-surface px-3 py-2 text-right text-sm text-ink-secondary">
+          <p class="font-medium text-ink-primary">{{ businessStore.outlet }}</p>
+          <p class="text-xs uppercase tracking-[0.14em]">
+            {{ businessStore.mode === 'cloud' ? 'Cloud Mode' : 'Free Mode' }}
+          </p>
+        </div>
       </div>
     </div>
   </header>
