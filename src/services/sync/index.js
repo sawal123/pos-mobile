@@ -8,6 +8,12 @@ import { createSyncConflictService } from './syncConflictService'
 import { createSyncOrchestratorService } from './syncOrchestratorService'
 import { createSyncHealthService } from './syncHealthService'
 import { createSyncRecoveryService, RECOVERY_ACTIONS } from './syncRecoveryService'
+import {
+  createSyncActivityLogService,
+  SYNC_ACTIVITY_TYPES,
+  SYNC_ACTIVITY_STATUSES,
+  SYNC_ACTIVITY_ACTIONS,
+} from './syncActivityLogService'
 
 export { SYNC_ENTITY_TYPES, SYNC_OPERATIONS, SYNC_RESERVED_CATEGORY } from './syncConstants'
 export { createSyncChangeTracker } from './syncTracker'
@@ -23,9 +29,15 @@ export { createSyncConflictService } from './syncConflictService'
 export { createSyncOrchestratorService } from './syncOrchestratorService'
 export { createSyncHealthService } from './syncHealthService'
 export { createSyncRecoveryService, RECOVERY_ACTIONS } from './syncRecoveryService'
+export {
+  createSyncActivityLogService,
+  SYNC_ACTIVITY_TYPES,
+  SYNC_ACTIVITY_STATUSES,
+  SYNC_ACTIVITY_ACTIONS,
+} from './syncActivityLogService'
 
 /**
- * Initializes the P9-P18 sync foundation after SQLite persistence is ready.
+ * Initializes the P9-P19 sync foundation after SQLite persistence is ready.
  * The change tracker is attached only after hydration completes, so startup
  * hydration / first-run seeding never produce cloud outbox operations.
  *
@@ -70,6 +82,9 @@ export function initializeSyncFoundation({ pinia, adapter, scheduler }) {
     orchestratorService,
     conflictService,
   })
+  const activityLogService = createSyncActivityLogService({
+    adapter,
+  })
 
   return {
     queueService,
@@ -82,8 +97,10 @@ export function initializeSyncFoundation({ pinia, adapter, scheduler }) {
     orchestratorService,
     healthService,
     recoveryService,
+    activityLogService,
   }
 }
+
 
 
 

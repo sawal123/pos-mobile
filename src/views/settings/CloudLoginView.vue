@@ -13,6 +13,7 @@ import { useSyncConflictStore } from '@/stores/syncConflictStore'
 import { useSyncOrchestratorStore } from '@/stores/syncOrchestratorStore'
 import { useSyncHealthStore } from '@/stores/syncHealthStore'
 import { useSyncRecoveryStore } from '@/stores/syncRecoveryStore'
+import { useSyncActivityLogStore } from '@/stores/syncActivityLogStore'
 
 const cloudStore = useCloudSessionStore()
 const syncPushStore = useSyncPushStore()
@@ -22,6 +23,7 @@ const syncConflictStore = useSyncConflictStore()
 const syncOrchestratorStore = useSyncOrchestratorStore()
 const syncHealthStore = useSyncHealthStore()
 const syncRecoveryStore = useSyncRecoveryStore()
+const syncActivityLogStore = useSyncActivityLogStore()
 
 // ── Form state ──────────────────────────────────────────────────────────────
 const email = ref('')
@@ -39,6 +41,7 @@ const conflictMessage = ref('')
 const conflictSuccess = ref(false)
 const recoveryMessage = ref('')
 const recoverySuccess = ref(false)
+const showClearConfirm = ref(false)
 
 // ── Derived ─────────────────────────────────────────────────────────────────
 const isAnySyncOperationBusy = computed(
@@ -50,6 +53,7 @@ const isAnySyncOperationBusy = computed(
     syncConflictStore.loading ||
     syncHealthStore.loading ||
     syncRecoveryStore.loading ||
+    syncActivityLogStore.loading ||
     cloudStore.loading,
 )
 
@@ -103,6 +107,7 @@ watch(
   () => {
     syncHealthStore.resetResult()
     resetRecoveryPresentation()
+    showClearConfirm.value = false
   },
 )
 
@@ -123,18 +128,183 @@ function resetRecoveryPresentation() {
   recoverySuccess.value = false
 }
 
+function snapshotCloudContext() {
+  return {
+    businessId: cloudStore.selectedBusiness?.id != null ? Number(cloudStore.selectedBusiness.id) : null,
+    outletId: cloudStore.selectedOutlet?.id != null ? Number(cloudStore.selectedOutlet.id) : null,
+    deviceIdentifier: cloudStore.deviceIdentifier != null ? String(cloudStore.deviceIdentifier) : null,
+    registeredDeviceId: cloudStore.registeredDeviceId != null ? Number(cloudStore.registeredDeviceId) : null,
+  }
+}
+
+function formatActivityAction(action) {
+  const map = {
+    PUSH_NOW: 'Sync Sekarang',
+    PULL_NOW: 'Tarik Data Cloud',
+    BOOTSTRAP: 'Siapkan Data Lokal',
+    SYNC_ALL: 'Sinkronkan Semua',
+    USE_SERVER: 'Gunakan Cloud',
+    KEEP_LOCAL: 'Pertahankan Lokal',
+    CHECK_HEALTH: 'Periksa Status Sync',
+    RETRY_INFLIGHT: 'Coba Ulang Push',
+    CONTINUE_PENDING: 'Lanjutkan Sinkronisasi',
+    PREPARE_BOOTSTRAP: 'Siapkan Data Lokal',
+    CONTINUE_BOOTSTRAP: 'Lanjutkan Data Bootstrap',
+  }
+  return map[action] || action || 'Sinkronisasi'
+}
+
+function formatActivitySummary(entry) {
+  const s = entry.summary || {}
+  if (entry.type === 'push') {
+    return `${s.sent ?? 0} dikirim${s.remaining != null ? ` • ${s.remaining} sisa` : ''}${s.blocked ? ` • ${s.blocked} diblokir` : ''}`
+  }
+  if (entry.type === 'pull') {
+    return `${s.applied ?? 0} diterapkan • ${s.fetched ?? 0} ditarik${s.ignored ? ` • ${s.ignored} diabaikan` : ''}`
+  }
+  if (entry.type === 'full_sync') {
+    return `${s.pushed ?? 0} dikirim • ${s.pulled ?? 0} diterapkan`
+  }
+  if (entry.type === 'bootstrap') {
+    return `${s.stagedCount ?? 0} data disiapkan`
+  }
+  if (entry.type === 'health') {
+    return `Status: ${s.healthStatus || 'unknown'} • ${s.pending ?? 0} pending • ${s.conflicts ?? 0} konflik`
+  }
+  if (entry.type === 'recovery') {
+    return `Pemulihan: ${formatActivityAction(entry.action)}`
+  }
+  if (entry.type === 'conflict') {
+    return `Penyelesaian: ${formatActivityAction(entry.action)}`
+  }
+  return entry.code || ''
+}
+
+function formatActivityTime(dateStr) {
+  if (!dateStr) return '-'
+  try {
+    const d = new Date(dateStr)
+    return d.toLocaleString('id-ID', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  } catch {
+    return dateStr
+  }
+}
+
+async function handleRefreshActivityLog() {
+  if (isAnySyncOperationBusy.value) return
+  await syncActivityLogStore.refresh({ limit: 10 })
+}
+
+async function handleConfirmClearActivityLog() {
+  if (isAnySyncOperationBusy.value) return
+  await syncActivityLogStore.clearHistory()
+  showClearConfirm.value = false
+}
+
 async function handleCheckSyncHealth() {
   if (isAnySyncOperationBusy.value) return
   resetRecoveryPresentation()
-  await syncHealthStore.checkHealth()
+  const startedAt = new Date().toISOString()
+  const ctx = snapshotCloudContext()
+  let result
+  try {
+    result = await syncHealthStore.checkHealth()
+  } catch {
+    const finishedAt = new Date().toISOString()
+    void syncActivityLogStore.record({
+      type: 'health',
+      action: 'CHECK_HEALTH',
+      status: 'failed',
+      code: 'EXCEPTION',
+      startedAt,
+      finishedAt,
+      ...ctx,
+      summary: {},
+    })
+    return
+  }
+
+  const finishedAt = new Date().toISOString()
+  const status =
+    result.status === 'ready'
+      ? 'success'
+      : result.status === 'attention'
+        ? 'attention'
+        : result.status === 'blocked'
+          ? 'blocked'
+          : 'failed'
+
+  void syncActivityLogStore.record({
+    type: 'health',
+    action: 'CHECK_HEALTH',
+    status,
+    code: result.code || 'HEALTH_CHECK_COMPLETED',
+    startedAt,
+    finishedAt,
+    ...ctx,
+    summary: {
+      healthStatus: result.status,
+      pending: result.summary?.pendingCount ?? 0,
+      conflicts: result.summary?.openConflictCount ?? 0,
+      hasInflight: result.summary?.hasInflight ?? false,
+    },
+  })
 }
 
 async function handleRecovery(action) {
   if (isAnySyncOperationBusy.value) return
   syncHealthStore.resetResult()
   resetRecoveryPresentation()
+  const startedAt = new Date().toISOString()
+  const ctx = snapshotCloudContext()
+  let result
+  try {
+    result = await syncRecoveryStore.recover(action)
+  } catch (err) {
+    const finishedAt = new Date().toISOString()
+    void syncActivityLogStore.record({
+      type: 'recovery',
+      action,
+      status: 'failed',
+      code: 'EXCEPTION',
+      startedAt,
+      finishedAt,
+      ...ctx,
+      summary: {},
+    })
+    recoverySuccess.value = false
+    recoveryMessage.value = err.message || 'Pemulihan gagal.'
+    return
+  }
 
-  const result = await syncRecoveryStore.recover(action)
+  const finishedAt = new Date().toISOString()
+  const status = result.ok
+    ? 'success'
+    : ['SYNC_RECOVERY_CONFLICT_ACTION_REQUIRED', 'SYNC_RECOVERY_MANUAL_INTERVENTION_REQUIRED'].includes(
+          result.code,
+        )
+      ? 'blocked'
+      : 'failed'
+
+  void syncActivityLogStore.record({
+    type: 'recovery',
+    action,
+    status,
+    code: result.code || (result.ok ? 'RECOVERY_COMPLETED' : 'RECOVERY_FAILED'),
+    startedAt,
+    finishedAt,
+    ...ctx,
+    summary: {
+      action,
+      stage: result.stage || null,
+    },
+  })
 
   try {
     await syncPushStore.refreshPendingCount()
@@ -162,7 +332,50 @@ async function handleSyncAll() {
   resetRecoveryPresentation()
   syncHealthStore.resetResult()
   syncAllMessage.value = ''
-  const result = await syncOrchestratorStore.syncAll()
+  const startedAt = new Date().toISOString()
+  const ctx = snapshotCloudContext()
+  let result
+  try {
+    result = await syncOrchestratorStore.syncAll()
+  } catch (err) {
+    const finishedAt = new Date().toISOString()
+    void syncActivityLogStore.record({
+      type: 'full_sync',
+      action: 'SYNC_ALL',
+      status: 'failed',
+      code: 'EXCEPTION',
+      startedAt,
+      finishedAt,
+      ...ctx,
+      summary: {},
+    })
+    syncAllSuccess.value = false
+    syncAllMessage.value = err.message || 'Sinkronisasi gagal.'
+    return
+  }
+
+  const finishedAt = new Date().toISOString()
+  const status = result.ok
+    ? 'success'
+    : ['SYNC_CONFLICT_PENDING', 'SYNC_PUSH_BLOCKED_PENDING'].includes(result.code)
+      ? 'blocked'
+      : 'failed'
+
+  void syncActivityLogStore.record({
+    type: 'full_sync',
+    action: 'SYNC_ALL',
+    status,
+    code: result.code || (result.ok ? 'SYNC_ALL_COMPLETED' : 'SYNC_ALL_FAILED'),
+    startedAt,
+    finishedAt,
+    ...ctx,
+    summary: {
+      pushed: result.push?.removedQueueIds?.length ?? 0,
+      pulled: result.pull?.applied ?? 0,
+      stage: result.stage || null,
+    },
+  })
+
   await syncConflictStore.loadConflicts()
   await syncPushStore.refreshPendingCount()
 
@@ -198,7 +411,50 @@ async function handleSyncNow() {
   resetRecoveryPresentation()
   syncHealthStore.resetResult()
   syncMessage.value = ''
-  const result = await syncPushStore.pushNow()
+  const startedAt = new Date().toISOString()
+  const ctx = snapshotCloudContext()
+  let result
+  try {
+    result = await syncPushStore.pushNow()
+  } catch (err) {
+    const finishedAt = new Date().toISOString()
+    void syncActivityLogStore.record({
+      type: 'push',
+      action: 'PUSH_NOW',
+      status: 'failed',
+      code: 'EXCEPTION',
+      startedAt,
+      finishedAt,
+      ...ctx,
+      summary: {},
+    })
+    syncSuccess.value = false
+    syncMessage.value = err.message || 'Sinkronisasi gagal.'
+    return
+  }
+
+  const finishedAt = new Date().toISOString()
+  const status = result.ok
+    ? 'success'
+    : ['SYNC_CONFLICT', 'SYNC_CONFLICT_PENDING'].includes(result.code)
+      ? 'blocked'
+      : 'failed'
+
+  void syncActivityLogStore.record({
+    type: 'push',
+    action: 'PUSH_NOW',
+    status,
+    code: result.code || (result.ok ? 'SYNC_PUSH_SUCCESS' : 'SYNC_PUSH_FAILED'),
+    startedAt,
+    finishedAt,
+    ...ctx,
+    summary: {
+      sent: result.removedQueueIds?.length ?? 0,
+      remaining: result.remaining ?? null,
+      blocked: result.blocked?.length ?? 0,
+    },
+  })
+
   await syncConflictStore.loadConflicts()
   if (result.ok) {
     syncSuccess.value = true
@@ -220,7 +476,48 @@ async function handlePullNow() {
   resetRecoveryPresentation()
   syncHealthStore.resetResult()
   pullMessage.value = ''
-  const result = await syncPullStore.pullNow()
+  const startedAt = new Date().toISOString()
+  const ctx = snapshotCloudContext()
+  let result
+  try {
+    result = await syncPullStore.pullNow()
+  } catch (err) {
+    const finishedAt = new Date().toISOString()
+    void syncActivityLogStore.record({
+      type: 'pull',
+      action: 'PULL_NOW',
+      status: 'failed',
+      code: 'EXCEPTION',
+      startedAt,
+      finishedAt,
+      ...ctx,
+      summary: {},
+    })
+    pullSuccess.value = false
+    pullMessage.value = err.message || 'Gagal menarik data cloud.'
+    return
+  }
+
+  const finishedAt = new Date().toISOString()
+  const status = result.ok ? 'success' : result.code === 'SYNC_CONFLICT' ? 'blocked' : 'failed'
+
+  void syncActivityLogStore.record({
+    type: 'pull',
+    action: 'PULL_NOW',
+    status,
+    code: result.code || (result.ok ? 'SYNC_PULL_SUCCESS' : 'SYNC_PULL_FAILED'),
+    startedAt,
+    finishedAt,
+    ...ctx,
+    summary: {
+      fetched: result.fetched ?? 0,
+      applied: result.applied ?? 0,
+      ignored: result.ignored ?? 0,
+      cursorBefore: result.cursorBefore ?? null,
+      cursorAfter: result.cursorAfter ?? null,
+    },
+  })
+
   await syncConflictStore.loadConflicts()
   if (result.ok) {
     pullSuccess.value = true
@@ -241,7 +538,48 @@ async function handleBootstrapNow() {
   resetRecoveryPresentation()
   syncHealthStore.resetResult()
   bootstrapMessage.value = ''
-  const result = await syncBootstrapStore.bootstrapNow()
+  const startedAt = new Date().toISOString()
+  const ctx = snapshotCloudContext()
+  let result
+  try {
+    result = await syncBootstrapStore.bootstrapNow()
+  } catch (err) {
+    const finishedAt = new Date().toISOString()
+    void syncActivityLogStore.record({
+      type: 'bootstrap',
+      action: 'BOOTSTRAP',
+      status: 'failed',
+      code: 'EXCEPTION',
+      startedAt,
+      finishedAt,
+      ...ctx,
+      summary: {},
+    })
+    bootstrapSuccess.value = false
+    bootstrapMessage.value = err.message || 'Gagal menyiapkan data lokal.'
+    return
+  }
+
+  const finishedAt = new Date().toISOString()
+  const status = result.ok
+    ? 'success'
+    : result.code === 'BOOTSTRAP_PREFLIGHT_FAILED'
+      ? 'blocked'
+      : 'failed'
+
+  void syncActivityLogStore.record({
+    type: 'bootstrap',
+    action: 'BOOTSTRAP',
+    status,
+    code: result.code || (result.ok ? 'BOOTSTRAP_STAGED' : 'BOOTSTRAP_FAILED'),
+    startedAt,
+    finishedAt,
+    ...ctx,
+    summary: {
+      stagedCount: result.stagedCount ?? 0,
+    },
+  })
+
   if (result.ok) {
     bootstrapSuccess.value = true
     bootstrapMessage.value = 'Data lokal siap disinkronkan. Gunakan Sync Sekarang.'
@@ -262,7 +600,40 @@ async function handleUseServer(conflictId) {
   resetRecoveryPresentation()
   syncHealthStore.resetResult()
   conflictMessage.value = ''
-  const result = await syncConflictStore.useServer(conflictId)
+  const startedAt = new Date().toISOString()
+  const ctx = snapshotCloudContext()
+  let result
+  try {
+    result = await syncConflictStore.useServer(conflictId)
+  } catch (err) {
+    const finishedAt = new Date().toISOString()
+    void syncActivityLogStore.record({
+      type: 'conflict',
+      action: 'USE_SERVER',
+      status: 'failed',
+      code: 'EXCEPTION',
+      startedAt,
+      finishedAt,
+      ...ctx,
+      summary: {},
+    })
+    conflictSuccess.value = false
+    conflictMessage.value = err.message || 'Gagal menyelesaikan konflik.'
+    return
+  }
+
+  const finishedAt = new Date().toISOString()
+  void syncActivityLogStore.record({
+    type: 'conflict',
+    action: 'USE_SERVER',
+    status: result.ok ? 'success' : 'failed',
+    code: result.code || (result.ok ? 'CONFLICT_USE_SERVER_RESOLVED' : 'CONFLICT_RESOLUTION_FAILED'),
+    startedAt,
+    finishedAt,
+    ...ctx,
+    summary: {},
+  })
+
   if (result.ok) {
     conflictSuccess.value = true
     conflictMessage.value = 'Gunakan Tarik Data Cloud untuk mengambil data server.'
@@ -278,7 +649,40 @@ async function handleKeepLocal(conflictId) {
   resetRecoveryPresentation()
   syncHealthStore.resetResult()
   conflictMessage.value = ''
-  const result = await syncConflictStore.keepLocal(conflictId)
+  const startedAt = new Date().toISOString()
+  const ctx = snapshotCloudContext()
+  let result
+  try {
+    result = await syncConflictStore.keepLocal(conflictId)
+  } catch (err) {
+    const finishedAt = new Date().toISOString()
+    void syncActivityLogStore.record({
+      type: 'conflict',
+      action: 'KEEP_LOCAL',
+      status: 'failed',
+      code: 'EXCEPTION',
+      startedAt,
+      finishedAt,
+      ...ctx,
+      summary: {},
+    })
+    conflictSuccess.value = false
+    conflictMessage.value = err.message || 'Gagal menyelesaikan konflik.'
+    return
+  }
+
+  const finishedAt = new Date().toISOString()
+  void syncActivityLogStore.record({
+    type: 'conflict',
+    action: 'KEEP_LOCAL',
+    status: result.ok ? 'success' : 'failed',
+    code: result.code || (result.ok ? 'CONFLICT_KEEP_LOCAL_RESOLVED' : 'CONFLICT_RESOLUTION_FAILED'),
+    startedAt,
+    finishedAt,
+    ...ctx,
+    summary: {},
+  })
+
   if (result.ok) {
     conflictSuccess.value = true
     conflictMessage.value =
@@ -373,6 +777,7 @@ onMounted(async () => {
     try {
       await syncPushStore.refreshPendingCount()
       await syncConflictStore.loadConflicts()
+      await syncActivityLogStore.refresh({ limit: 10 })
     } catch {
       // Non-blocking best-effort refresh
     }
@@ -829,6 +1234,112 @@ onMounted(async () => {
         >
           {{ conflictMessage }}
         </p>
+      </div>
+
+      <!-- P19: Sync Activity Log Section -->
+      <div
+        v-if="canSync"
+        id="sync-activity-section"
+        class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
+      >
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-sm font-semibold text-ink-primary">Riwayat Sinkronisasi</p>
+            <p class="text-xs text-ink-secondary">
+              Aktivitas dan audit trail sinkronisasi lokal (10 operasi terbaru)
+            </p>
+          </div>
+          <div class="flex items-center gap-2">
+            <BaseButton
+              id="sync-activity-refresh-btn"
+              variant="secondary"
+              size="sm"
+              :disabled="isAnySyncOperationBusy"
+              :loading="syncActivityLogStore.loading"
+              @click="handleRefreshActivityLog"
+            >
+              Muat Ulang Riwayat
+            </BaseButton>
+            <BaseButton
+              v-if="syncActivityLogStore.entries.length > 0"
+              id="sync-activity-clear-btn"
+              variant="danger"
+              size="sm"
+              :disabled="isAnySyncOperationBusy"
+              :loading="syncActivityLogStore.loading"
+              @click="showClearConfirm = true"
+            >
+              Hapus Riwayat
+            </BaseButton>
+          </div>
+        </div>
+
+        <!-- Inline clear confirmation -->
+        <div
+          v-if="showClearConfirm"
+          id="sync-activity-clear-confirm"
+          class="rounded-xl border border-danger/20 bg-danger/5 p-3 space-y-2 text-xs"
+        >
+          <p class="font-medium text-danger">
+            Hanya riwayat aktivitas sinkronisasi yang dihapus. Data POS dan antrean sinkronisasi tidak terpengaruh.
+          </p>
+          <div class="flex items-center gap-2">
+            <BaseButton
+              id="sync-activity-confirm-clear-btn"
+              variant="danger"
+              size="sm"
+              :disabled="isAnySyncOperationBusy"
+              @click="handleConfirmClearActivityLog"
+            >
+              Ya, Hapus Riwayat
+            </BaseButton>
+            <BaseButton
+              id="sync-activity-cancel-clear-btn"
+              variant="secondary"
+              size="sm"
+              @click="showClearConfirm = false"
+            >
+              Batal
+            </BaseButton>
+          </div>
+        </div>
+
+        <!-- Activity list -->
+        <div v-if="syncActivityLogStore.entries.length === 0" class="text-xs text-ink-secondary italic py-2">
+          Belum ada riwayat aktivitas sinkronisasi.
+        </div>
+
+        <div v-else class="space-y-2">
+          <div
+            v-for="entry in syncActivityLogStore.entries"
+            :key="entry.id"
+            :id="`activity-entry-${entry.id}`"
+            class="flex flex-col gap-1 rounded-xl bg-surface p-3 text-xs sm:flex-row sm:items-center sm:justify-between"
+          >
+            <div class="space-y-0.5">
+              <div class="flex items-center gap-2">
+                <span class="font-semibold text-ink-primary">{{ formatActivityAction(entry.action) }}</span>
+                <span
+                  class="rounded px-1.5 py-0.5 font-mono text-[10px] uppercase font-semibold"
+                  :class="{
+                    'bg-emerald-50 text-emerald-700': entry.status === 'success',
+                    'bg-amber-50 text-amber-700': entry.status === 'attention',
+                    'bg-danger/10 text-danger': entry.status === 'blocked' || entry.status === 'failed',
+                  }"
+                >
+                  {{ entry.status }}
+                </span>
+                <span v-if="entry.code" class="text-[10px] text-ink-secondary font-mono">{{ entry.code }}</span>
+              </div>
+              <p class="text-[11px] text-ink-secondary">
+                {{ formatActivitySummary(entry) }}
+              </p>
+            </div>
+            <div class="text-[10px] text-ink-secondary whitespace-nowrap">
+              {{ formatActivityTime(entry.finishedAt || entry.startedAt) }}
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Cloud access warning -->

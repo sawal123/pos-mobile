@@ -298,6 +298,16 @@ export function createMemoryAdapter() {
     async clearSyncConflicts() {
       state.syncConflicts = null
     },
+    // P19: sync activity log (durable local audit trail, max 100 entries, survives logout)
+    async loadSyncActivityLog() {
+      return state.syncActivityLog ? cloneValue(state.syncActivityLog) : null
+    },
+    async saveSyncActivityLog(logState) {
+      state.syncActivityLog = cloneValue(logState)
+    },
+    async clearSyncActivityLog() {
+      state.syncActivityLog = null
+    },
     async persistSyncConflictsAndClearInflightAtomic({ expectedRequestId, conflictsState }) {
       if (!state.syncPushInflight) {
         return {

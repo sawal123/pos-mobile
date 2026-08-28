@@ -629,6 +629,17 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
       const db = await ensureConnection()
       await db.run("DELETE FROM app_meta WHERE key = 'sync_conflicts_v1'", [])
     },
+    // P19: sync activity log (durable local audit trail, max 100 entries, survives logout)
+    async loadSyncActivityLog() {
+      return readMetaValue('sync_activity_log_v1', null)
+    },
+    async saveSyncActivityLog(logState) {
+      await writeMetaValue('sync_activity_log_v1', logState)
+    },
+    async clearSyncActivityLog() {
+      const db = await ensureConnection()
+      await db.run("DELETE FROM app_meta WHERE key = 'sync_activity_log_v1'", [])
+    },
     async persistSyncConflictsAndClearInflightAtomic({ expectedRequestId, conflictsState }) {
       return await withTransaction(async (db) => {
         const { values = [] } = await db.query(
