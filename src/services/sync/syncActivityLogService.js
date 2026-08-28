@@ -146,6 +146,10 @@ export function isValidSummary(summary) {
       if (typeof val !== 'boolean') {
         return false
       }
+    } else if (k === 'trigger') {
+      if (typeof val !== 'string' || (val !== 'online' && val !== 'resume')) {
+        return false
+      }
     } else if (STRING_SUMMARY_KEYS.has(k)) {
       if (typeof val !== 'string' || !val.trim() || val.length > 128) {
         return false

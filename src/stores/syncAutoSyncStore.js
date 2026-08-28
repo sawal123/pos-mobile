@@ -10,6 +10,17 @@ import { useSyncHealthStore } from '@/stores/syncHealthStore'
 import { useSyncRecoveryStore } from '@/stores/syncRecoveryStore'
 import { useSyncActivityLogStore } from '@/stores/syncActivityLogStore'
 
+function createContextFingerprint(ctx) {
+  if (!ctx) return 'null'
+  const userId = ctx.user?.id ?? ''
+  const bizId = ctx.selectedBusiness?.id ?? ''
+  const outletId = ctx.selectedOutlet?.id ?? ''
+  const regId = ctx.registeredDeviceId ?? ''
+  const devId = ctx.deviceIdentifier ?? ''
+  const cloudAccess = ctx.cloudAccess === true ? 'true' : 'false'
+  return `${userId}:${bizId}:${outletId}:${regId}:${devId}:${cloudAccess}`
+}
+
 export const useSyncAutoSyncStore = defineStore('syncAutoSync', () => {
   const enabled = ref(false)
   const preferenceLoaded = ref(false)
@@ -24,6 +35,7 @@ export const useSyncAutoSyncStore = defineStore('syncAutoSync', () => {
   let _listenersAttached = false
   let _onOnlineHandler = null
   let _onVisibilityHandler = null
+  let _preferenceLoadSeq = 0
 
   function init({ autoSyncService = null } = {}) {
     if (autoSyncService) {
@@ -34,14 +46,19 @@ export const useSyncAutoSyncStore = defineStore('syncAutoSync', () => {
   function snapshotCloudContext() {
     const cloudStore = useCloudSessionStore()
     return {
-      user: cloudStore.user ? { id: cloudStore.user.id } : null,
+      user:
+        cloudStore.user &&
+        cloudStore.user.id != null &&
+        String(cloudStore.user.id).trim().length > 0
+          ? { id: cloudStore.user.id }
+          : null,
       selectedBusiness: cloudStore.selectedBusiness
         ? { id: cloudStore.selectedBusiness.id }
         : null,
       selectedOutlet: cloudStore.selectedOutlet
         ? { id: cloudStore.selectedOutlet.id }
         : null,
-      cloudAccess: Boolean(cloudStore.cloudAccess),
+      cloudAccess: cloudStore.cloudAccess === true,
       deviceIdentifier: cloudStore.deviceIdentifier || null,
       registeredDeviceId: cloudStore.registeredDeviceId || null,
     }
@@ -69,7 +86,8 @@ export const useSyncAutoSyncStore = defineStore('syncAutoSync', () => {
           cloudStore.loading,
       )
     } catch {
-      return false
+      // Fail closed
+      return true
     }
   }
 
@@ -80,10 +98,24 @@ export const useSyncAutoSyncStore = defineStore('syncAutoSync', () => {
       return { ok: false, code: 'SERVICE_NOT_INITIALIZED', enabled: false }
     }
 
+    const requestSeq = ++_preferenceLoadSeq
+    const ctx = snapshotCloudContext()
+    const fingerprint = createContextFingerprint(ctx)
+
     loadingPreference.value = true
     try {
-      const ctx = snapshotCloudContext()
       const res = await _autoSyncService.loadPreference({ context: ctx })
+
+      if (
+        requestSeq !== _preferenceLoadSeq ||
+        fingerprint !== createContextFingerprint(snapshotCloudContext())
+      ) {
+        return {
+          ...res,
+          stale: true,
+        }
+      }
+
       if (res.ok) {
         enabled.value = Boolean(res.enabled && res.contextMatches)
       } else {
@@ -92,6 +124,18 @@ export const useSyncAutoSyncStore = defineStore('syncAutoSync', () => {
       preferenceLoaded.value = true
       return res
     } catch (err) {
+      if (
+        requestSeq !== _preferenceLoadSeq ||
+        fingerprint !== createContextFingerprint(snapshotCloudContext())
+      ) {
+        return {
+          ok: false,
+          code: 'AUTO_SYNC_LOAD_FAILED',
+          stale: true,
+          enabled: false,
+        }
+      }
+
       enabled.value = false
       preferenceLoaded.value = true
       return {
@@ -101,7 +145,9 @@ export const useSyncAutoSyncStore = defineStore('syncAutoSync', () => {
         enabled: false,
       }
     } finally {
-      loadingPreference.value = false
+      if (requestSeq === _preferenceLoadSeq) {
+        loadingPreference.value = false
+      }
     }
   }
 
@@ -110,13 +156,29 @@ export const useSyncAutoSyncStore = defineStore('syncAutoSync', () => {
       return { ok: false, code: 'SERVICE_NOT_INITIALIZED' }
     }
 
+    const requestSeq = ++_preferenceLoadSeq
+    const ctx = snapshotCloudContext()
+    const fingerprint = createContextFingerprint(ctx)
+
     loadingPreference.value = true
     try {
-      const ctx = snapshotCloudContext()
       const res = await _autoSyncService.setEnabled({
         context: ctx,
         enabled: targetEnabled,
       })
+
+      if (
+        requestSeq !== _preferenceLoadSeq ||
+        fingerprint !== createContextFingerprint(snapshotCloudContext())
+      ) {
+        // Current context changed mid-flight; reload preference for current context
+        void loadPreference()
+        return {
+          ...res,
+          stale: true,
+        }
+      }
+
       if (res.ok) {
         enabled.value = targetEnabled
       }
@@ -129,7 +191,9 @@ export const useSyncAutoSyncStore = defineStore('syncAutoSync', () => {
         message: err.message || 'Gagal menyimpan preferensi auto sync.',
       }
     } finally {
-      loadingPreference.value = false
+      if (requestSeq === _preferenceLoadSeq) {
+        loadingPreference.value = false
+      }
     }
   }
 
@@ -150,9 +214,10 @@ export const useSyncAutoSyncStore = defineStore('syncAutoSync', () => {
     }
 
     const contextSnapshot = snapshotCloudContext()
-    const online = typeof navigator !== 'undefined' ? navigator.onLine : true
+    const online =
+      typeof navigator !== 'undefined' ? navigator.onLine === true : false
     const isForeground =
-      typeof document !== 'undefined' ? document.visibilityState === 'visible' : true
+      typeof document !== 'undefined' ? document.visibilityState === 'visible' : false
 
     running.value = true
     lastError.value = null

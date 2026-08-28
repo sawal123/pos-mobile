@@ -7,6 +7,20 @@ export const AUTO_SYNC_TRIGGERS = Object.freeze([
 
 export const AUTO_SYNC_COOLDOWN_MS = 30_000
 
+const KNOWN_UNSAFE_HEALTH_CODES = Object.freeze(
+  new Set([
+    'SYNC_OPEN_CONFLICT',
+    'SYNC_PUSH_INFLIGHT',
+    'SYNC_BOOTSTRAP_NOT_PREPARED',
+    'SYNC_BOOTSTRAP_STAGED',
+    'SYNC_PUSH_BINDING_MISMATCH',
+    'SYNC_PULL_BINDING_MISMATCH',
+    'SYNC_INFLIGHT_CONTEXT_MISMATCH',
+    'SYNC_BOOTSTRAP_CONTEXT_MISMATCH',
+    'SYNC_HEALTH_METADATA_INVALID',
+  ]),
+)
+
 function isPlainObject(val) {
   return val !== null && typeof val === 'object' && !Array.isArray(val)
 }
@@ -25,7 +39,15 @@ export function extractValidAutoSyncContext(context) {
   if (!isPlainObject(context)) return null
 
   if (context.cloudAccess !== true) return null
-  if (!context.user || context.user.id === undefined || context.user.id === null) return null
+  if (
+    !context.user ||
+    typeof context.user !== 'object' ||
+    Array.isArray(context.user) ||
+    context.user.id == null ||
+    !String(context.user.id).trim()
+  ) {
+    return null
+  }
 
   const businessId =
     context.businessId ??
@@ -116,8 +138,14 @@ function isValidStoredSettings(settings) {
   if (typeof settings.enabled !== 'boolean') return false
   if (!isValidDateString(settings.updatedAt)) return false
 
-  if (settings.context !== null && !isValidNormalizedContext(settings.context)) {
-    return false
+  if (settings.enabled === true) {
+    if (settings.context === null || !isValidNormalizedContext(settings.context)) {
+      return false
+    }
+  } else {
+    if (settings.context !== null && !isValidNormalizedContext(settings.context)) {
+      return false
+    }
   }
 
   return true
@@ -134,7 +162,7 @@ export function createSyncAutoSyncService({
   now = () => Date.now(),
 } = {}) {
   let isRunning = false
-  let lastAttemptAt = 0
+  let lastAttemptAt = null
 
   async function readDurableSettings() {
     if (adapter && typeof adapter.loadSyncAutoSettings === 'function') {
@@ -274,15 +302,15 @@ export function createSyncAutoSyncService({
    * @param {object} options
    * @param {object} options.context Current cloud context snapshot
    * @param {string} options.trigger Trigger type ('online' | 'resume')
-   * @param {boolean} [options.online=true] Whether connection is online
-   * @param {boolean} [options.isForeground=true] Whether app is currently visible/active in foreground
+   * @param {boolean} options.online Whether connection is online (strictly requires true)
+   * @param {boolean} options.isForeground Whether app is currently visible/active in foreground (strictly requires true)
    * @returns {Promise<object>}
    */
   async function runOnce({
     context,
     trigger,
-    online = true,
-    isForeground = true,
+    online,
+    isForeground,
   } = {}) {
     // 1. Validate trigger
     if (!AUTO_SYNC_TRIGGERS.includes(trigger)) {
@@ -293,8 +321,8 @@ export function createSyncAutoSyncService({
       }
     }
 
-    // 2. Foreground check
-    if (isForeground === false) {
+    // 2. Foreground check (must be explicitly true)
+    if (isForeground !== true) {
       return {
         ok: false,
         code: 'AUTO_SYNC_NOT_FOREGROUND',
@@ -302,7 +330,16 @@ export function createSyncAutoSyncService({
       }
     }
 
-    // 3. Validate Cloud Context
+    // 3. Online check (must be explicitly true)
+    if (online !== true) {
+      return {
+        ok: false,
+        code: 'AUTO_SYNC_OFFLINE',
+        message: 'Koneksi internet sedang offline.',
+      }
+    }
+
+    // 4. Validate Cloud Context
     const normalizedContext = extractValidAutoSyncContext(context)
     if (!normalizedContext) {
       return {
@@ -312,7 +349,7 @@ export function createSyncAutoSyncService({
       }
     }
 
-    // 4. Check durable preference
+    // 5. Check durable preference
     const prefRes = await loadPreference({ context })
     if (!prefRes.ok) {
       return {
@@ -338,15 +375,6 @@ export function createSyncAutoSyncService({
       }
     }
 
-    // 5. Check online
-    if (online !== true) {
-      return {
-        ok: false,
-        code: 'AUTO_SYNC_OFFLINE',
-        message: 'Koneksi internet sedang offline.',
-      }
-    }
-
     // 6. Check single-run lock
     if (isRunning) {
       return {
@@ -356,9 +384,12 @@ export function createSyncAutoSyncService({
       }
     }
 
-    // 7. Check cooldown
+    // 7. Check cooldown (safe with first run when lastAttemptAt is null, safe with clock regression)
     const currentTime = now()
-    if (currentTime - lastAttemptAt < AUTO_SYNC_COOLDOWN_MS) {
+    if (
+      lastAttemptAt !== null &&
+      (currentTime < lastAttemptAt || currentTime - lastAttemptAt < AUTO_SYNC_COOLDOWN_MS)
+    ) {
       return {
         ok: false,
         code: 'AUTO_SYNC_COOLDOWN',
@@ -392,27 +423,53 @@ export function createSyncAutoSyncService({
         }
       }
 
-      if (!healthRes || healthRes.ok === false) {
+      // Fail-closed validation on health response structure
+      if (!healthRes || healthRes.ok !== true || !Array.isArray(healthRes.issues)) {
         return {
           ok: false,
           code: 'AUTO_SYNC_HEALTH_CHECK_FAILED',
-          message: healthRes?.message || 'Pemeriksaan kesehatan sinkronisasi gagal.',
+          message: healthRes?.message || 'Pemeriksaan kesehatan sinkronisasi gagal atau bentuk respons tidak valid.',
         }
       }
 
-      // Safe health decision:
-      // Case A: status === 'ready'
-      // Case B: status === 'attention' with issues strictly containing ONLY 'SYNC_PENDING_QUEUE'
+      const issues = healthRes.issues
+
+      // 1. Any blocked severity issue always blocks
+      if (issues.some((issue) => issue && issue.severity === 'blocked')) {
+        return {
+          ok: false,
+          code: 'AUTO_SYNC_UNSAFE_HEALTH',
+          message: 'Kondisi sinkronisasi terblokir.',
+          health: healthRes,
+        }
+      }
+
+      // 2. Known unsafe issue codes always block regardless of health.status
+      if (issues.some((issue) => issue && KNOWN_UNSAFE_HEALTH_CODES.has(issue.code))) {
+        return {
+          ok: false,
+          code: 'AUTO_SYNC_UNSAFE_HEALTH',
+          message: 'Kondisi sinkronisasi tidak aman untuk auto sync.',
+          health: healthRes,
+        }
+      }
+
+      // 3. Status checks:
       let isSafeToSync = false
       if (healthRes.status === 'ready') {
-        isSafeToSync = true
+        // READY is strictly safe ONLY if issues is completely empty
+        if (issues.length === 0) {
+          isSafeToSync = true
+        }
       } else if (healthRes.status === 'attention') {
-        const issues = Array.isArray(healthRes.issues) ? healthRes.issues : []
+        // ATTENTION is strictly safe ONLY if issues is non-empty and EVERY issue is exactly SYNC_PENDING_QUEUE with severity 'attention'
         if (
           issues.length > 0 &&
           issues.every(
             (issue) =>
-              issue.code === 'SYNC_PENDING_QUEUE' && issue.severity === 'attention',
+              issue &&
+              issue.code === 'SYNC_PENDING_QUEUE' &&
+              issue.severity === 'attention',
           )
         ) {
           isSafeToSync = true

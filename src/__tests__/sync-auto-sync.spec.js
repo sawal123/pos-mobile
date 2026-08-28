@@ -8,7 +8,10 @@ import {
   AUTO_SYNC_TRIGGER_RESUME,
   AUTO_SYNC_COOLDOWN_MS,
 } from '@/services/sync/syncAutoSyncService'
-import { createSyncActivityLogService } from '@/services/sync/syncActivityLogService'
+import {
+  createSyncActivityLogService,
+  isValidSummary,
+} from '@/services/sync/syncActivityLogService'
 import { useSyncAutoSyncStore } from '@/stores/syncAutoSyncStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useSyncPushStore } from '@/stores/syncPushStore'
@@ -230,7 +233,7 @@ describe('P20: Safe Foreground Auto Sync Trigger', () => {
   })
 
   // 87. Test ready
-  it('87. runs syncAll exactly once when health is READY', async () => {
+  it('87. runs syncAll exactly once when health is READY and issues is empty', async () => {
     await autoSyncService.setEnabled({
       context: getValidContext(),
       enabled: true,
@@ -751,7 +754,6 @@ describe('P20: Safe Foreground Auto Sync Trigger', () => {
     syncAutoSyncStore.init({ autoSyncService })
     syncAutoSyncStore.startListeners()
 
-    // Mock visible document
     Object.defineProperty(document, 'visibilityState', {
       value: 'visible',
       configurable: true,
@@ -1102,5 +1104,406 @@ describe('P20: Safe Foreground Auto Sync Trigger', () => {
     })
 
     expect(spyRecover).not.toHaveBeenCalled()
+  })
+
+  // 127. Health READY with BLOCKED issue
+  it('127. rejects sync when health status is READY but issues contains a blocked severity issue', async () => {
+    await autoSyncService.setEnabled({
+      context: getValidContext(),
+      enabled: true,
+    })
+
+    healthService.checkHealth.mockResolvedValueOnce({
+      ok: true,
+      status: 'ready',
+      code: 'SYNC_HEALTH_READY',
+      issues: [{ code: 'SYNC_OPEN_CONFLICT', severity: 'blocked' }],
+    })
+
+    const res = await autoSyncService.runOnce({
+      context: getValidContext(),
+      trigger: AUTO_SYNC_TRIGGER_ONLINE,
+      online: true,
+      isForeground: true,
+    })
+
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('AUTO_SYNC_UNSAFE_HEALTH')
+    expect(orchestratorService.syncAll).not.toHaveBeenCalled()
+  })
+
+  // 128. Health READY with INFLIGHT issue
+  it('128. rejects sync when health status is READY but issues contains SYNC_PUSH_INFLIGHT', async () => {
+    await autoSyncService.setEnabled({
+      context: getValidContext(),
+      enabled: true,
+    })
+
+    healthService.checkHealth.mockResolvedValueOnce({
+      ok: true,
+      status: 'ready',
+      code: 'SYNC_HEALTH_READY',
+      issues: [{ code: 'SYNC_PUSH_INFLIGHT', severity: 'attention' }],
+    })
+
+    const res = await autoSyncService.runOnce({
+      context: getValidContext(),
+      trigger: AUTO_SYNC_TRIGGER_ONLINE,
+      online: true,
+      isForeground: true,
+    })
+
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('AUTO_SYNC_UNSAFE_HEALTH')
+    expect(orchestratorService.syncAll).not.toHaveBeenCalled()
+  })
+
+  // 129. Health READY with UNKNOWN issue
+  it('129. rejects sync when health status is READY but issues contains any unexpected issue', async () => {
+    await autoSyncService.setEnabled({
+      context: getValidContext(),
+      enabled: true,
+    })
+
+    healthService.checkHealth.mockResolvedValueOnce({
+      ok: true,
+      status: 'ready',
+      code: 'SYNC_HEALTH_READY',
+      issues: [{ code: 'UNKNOWN_ISSUE', severity: 'attention' }],
+    })
+
+    const res = await autoSyncService.runOnce({
+      context: getValidContext(),
+      trigger: AUTO_SYNC_TRIGGER_ONLINE,
+      online: true,
+      isForeground: true,
+    })
+
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('AUTO_SYNC_UNSAFE_HEALTH')
+    expect(orchestratorService.syncAll).not.toHaveBeenCalled()
+  })
+
+  // 130. Health response missing ok: true
+  it('130. returns AUTO_SYNC_HEALTH_CHECK_FAILED when health response lacks ok: true', async () => {
+    await autoSyncService.setEnabled({
+      context: getValidContext(),
+      enabled: true,
+    })
+
+    healthService.checkHealth.mockResolvedValueOnce({
+      status: 'ready',
+      issues: [],
+    })
+
+    const res = await autoSyncService.runOnce({
+      context: getValidContext(),
+      trigger: AUTO_SYNC_TRIGGER_ONLINE,
+      online: true,
+      isForeground: true,
+    })
+
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('AUTO_SYNC_HEALTH_CHECK_FAILED')
+    expect(orchestratorService.syncAll).not.toHaveBeenCalled()
+  })
+
+  // 131. Health issues not an array
+  it('131. returns AUTO_SYNC_HEALTH_CHECK_FAILED when health.issues is not an array', async () => {
+    await autoSyncService.setEnabled({
+      context: getValidContext(),
+      enabled: true,
+    })
+
+    healthService.checkHealth.mockResolvedValueOnce({
+      ok: true,
+      status: 'ready',
+      issues: null,
+    })
+
+    const res = await autoSyncService.runOnce({
+      context: getValidContext(),
+      trigger: AUTO_SYNC_TRIGGER_ONLINE,
+      online: true,
+      isForeground: true,
+    })
+
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('AUTO_SYNC_HEALTH_CHECK_FAILED')
+    expect(orchestratorService.syncAll).not.toHaveBeenCalled()
+  })
+
+  // 132. Direct service safety: missing online or isForeground
+  it('132. fails closed without executing health check when online or isForeground is omitted', async () => {
+    await autoSyncService.setEnabled({
+      context: getValidContext(),
+      enabled: true,
+    })
+
+    const resWithoutForeground = await autoSyncService.runOnce({
+      context: getValidContext(),
+      trigger: AUTO_SYNC_TRIGGER_ONLINE,
+      online: true,
+    })
+    expect(resWithoutForeground.ok).toBe(false)
+    expect(resWithoutForeground.code).toBe('AUTO_SYNC_NOT_FOREGROUND')
+
+    const resWithoutOnline = await autoSyncService.runOnce({
+      context: getValidContext(),
+      trigger: AUTO_SYNC_TRIGGER_ONLINE,
+      isForeground: true,
+    })
+    expect(resWithoutOnline.ok).toBe(false)
+    expect(resWithoutOnline.code).toBe('AUTO_SYNC_OFFLINE')
+
+    expect(healthService.checkHealth).not.toHaveBeenCalled()
+    expect(orchestratorService.syncAll).not.toHaveBeenCalled()
+  })
+
+  // 133. Corrupt enabled setting: enabled: true with context: null
+  it('133. treats enabled: true with null context as AUTO_SYNC_SETTINGS_INVALID', async () => {
+    await adapter.saveSyncAutoSettings({
+      version: 1,
+      enabled: true,
+      context: null,
+      updatedAt: new Date(currentTime).toISOString(),
+    })
+
+    const pref = await autoSyncService.loadPreference({ context: getValidContext() })
+    expect(pref.ok).toBe(false)
+    expect(pref.code).toBe('AUTO_SYNC_SETTINGS_INVALID')
+
+    const res = await autoSyncService.runOnce({
+      context: getValidContext(),
+      trigger: AUTO_SYNC_TRIGGER_ONLINE,
+      online: true,
+      isForeground: true,
+    })
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('AUTO_SYNC_SETTINGS_INVALID')
+    expect(healthService.checkHealth).not.toHaveBeenCalled()
+  })
+
+  // 134. Invalid user cannot enable
+  it('134. rejects setEnabled(true) when user.id is whitespace or empty', async () => {
+    const invalidCtx = {
+      ...getValidContext(),
+      user: { id: '   ' },
+    }
+
+    const setRes = await autoSyncService.setEnabled({
+      context: invalidCtx,
+      enabled: true,
+    })
+
+    expect(setRes.ok).toBe(false)
+    expect(setRes.code).toBe('AUTO_SYNC_CONTEXT_UNAVAILABLE')
+
+    const raw = await adapter.loadSyncAutoSettings()
+    expect(raw).toBeNull()
+  })
+
+  // 135. Malformed cloudAccess cannot enable
+  it('135. rejects setEnabled(true) when cloudAccess is string "false"', async () => {
+    const invalidCtx = {
+      ...getValidContext(),
+      cloudAccess: 'false',
+    }
+
+    const setRes = await autoSyncService.setEnabled({
+      context: invalidCtx,
+      enabled: true,
+    })
+
+    expect(setRes.ok).toBe(false)
+    expect(setRes.code).toBe('AUTO_SYNC_CONTEXT_UNAVAILABLE')
+  })
+
+  // 136. Device identifier change
+  it('136. reloads preference and switches toggle OFF when deviceIdentifier changes', async () => {
+    const cloudStore = useCloudSessionStore()
+    setupAuthenticatedSession(cloudStore)
+
+    await autoSyncService.setEnabled({
+      context: getValidContext(),
+      enabled: true,
+    })
+
+    const syncAutoSyncStore = useSyncAutoSyncStore()
+    syncAutoSyncStore.init({ autoSyncService })
+
+    const wrapper = mount(CloudLoginView)
+    await flushPromises()
+
+    expect(wrapper.find('#auto-sync-toggle').element.checked).toBe(true)
+
+    // Change deviceIdentifier
+    cloudStore.deviceIdentifier = 'dev-uuid-DIFFERENT'
+    await flushPromises()
+
+    expect(syncAutoSyncStore.enabled).toBe(false)
+    expect(wrapper.find('#auto-sync-toggle').element.checked).toBe(false)
+  })
+
+  // 137. Stale async loadPreference A -> B
+  it('137. ignores stale loadPreference response from previous context', async () => {
+    const cloudStore = useCloudSessionStore()
+    setupAuthenticatedSession(cloudStore)
+
+    const syncAutoSyncStore = useSyncAutoSyncStore()
+    syncAutoSyncStore.init({ autoSyncService })
+
+    let resolveLoadA
+    const origLoad = autoSyncService.loadPreference
+    vi.spyOn(autoSyncService, 'loadPreference').mockImplementation(({ context }) => {
+      if (context.selectedBusiness?.id === 10) {
+        return new Promise((resolve) => {
+          resolveLoadA = () => resolve({ ok: true, enabled: true, contextMatches: true })
+        })
+      }
+      return origLoad({ context })
+    })
+
+    // Start load for Context A (Business 10)
+    const pA = syncAutoSyncStore.loadPreference()
+
+    // Immediately switch to Context B (Business 99)
+    cloudStore.selectedBusiness = { id: 99 }
+    cloudStore.selectedOutlet = { id: 88 }
+
+    // Start and complete load for Context B (unconfigured -> enabled: false)
+    const pB = syncAutoSyncStore.loadPreference()
+    await pB
+
+    expect(syncAutoSyncStore.enabled).toBe(false)
+
+    // Now resolve delayed A
+    resolveLoadA()
+    await pA
+
+    // Context B must remain enabled: false (not overwritten by stale A)
+    expect(syncAutoSyncStore.enabled).toBe(false)
+  })
+
+  // 138. Stale async loadPreference B -> A
+  it('138. ignores stale loadPreference response from B when switching back to A', async () => {
+    const cloudStore = useCloudSessionStore()
+    setupAuthenticatedSession(cloudStore)
+
+    await autoSyncService.setEnabled({
+      context: getValidContext(),
+      enabled: true,
+    })
+
+    const syncAutoSyncStore = useSyncAutoSyncStore()
+    syncAutoSyncStore.init({ autoSyncService })
+
+    let resolveLoadB
+    const origLoad = autoSyncService.loadPreference
+    vi.spyOn(autoSyncService, 'loadPreference').mockImplementation(({ context }) => {
+      if (context.selectedBusiness?.id === 99) {
+        return new Promise((resolve) => {
+          resolveLoadB = () => resolve({ ok: true, enabled: false, contextMatches: false })
+        })
+      }
+      return origLoad({ context })
+    })
+
+    // Switch to B and start load
+    cloudStore.selectedBusiness = { id: 99 }
+    cloudStore.selectedOutlet = { id: 88 }
+    const pB = syncAutoSyncStore.loadPreference()
+
+    // Switch back to A and finish load
+    cloudStore.selectedBusiness = { id: 10 }
+    cloudStore.selectedOutlet = { id: 20 }
+    const pA = syncAutoSyncStore.loadPreference()
+    await pA
+
+    expect(syncAutoSyncStore.enabled).toBe(true)
+
+    // Resolve late B
+    resolveLoadB()
+    await pB
+
+    expect(syncAutoSyncStore.enabled).toBe(true)
+  })
+
+  // 139. Clock zero
+  it('139. allows first auto sync when system clock is zero', async () => {
+    currentTime = 0
+    await autoSyncService.setEnabled({
+      context: getValidContext(),
+      enabled: true,
+    })
+
+    const res = await autoSyncService.runOnce({
+      context: getValidContext(),
+      trigger: AUTO_SYNC_TRIGGER_ONLINE,
+      online: true,
+      isForeground: true,
+    })
+
+    expect(res.ok).toBe(true)
+    expect(orchestratorService.syncAll).toHaveBeenCalledTimes(1)
+  })
+
+  // 140. Clock regression prevents burst sync
+  it('140. blocks burst auto sync if system clock moves backwards', async () => {
+    currentTime = 100000
+    await autoSyncService.setEnabled({
+      context: getValidContext(),
+      enabled: true,
+    })
+
+    const res1 = await autoSyncService.runOnce({
+      context: getValidContext(),
+      trigger: AUTO_SYNC_TRIGGER_ONLINE,
+      online: true,
+      isForeground: true,
+    })
+    expect(res1.ok).toBe(true)
+
+    // Clock regresses to 50000 (< 100000)
+    currentTime = 50000
+
+    const res2 = await autoSyncService.runOnce({
+      context: getValidContext(),
+      trigger: AUTO_SYNC_TRIGGER_RESUME,
+      online: true,
+      isForeground: true,
+    })
+
+    expect(res2.ok).toBe(false)
+    expect(res2.code).toBe('AUTO_SYNC_COOLDOWN')
+    expect(orchestratorService.syncAll).toHaveBeenCalledTimes(1)
+  })
+
+  // 141. Invalid durable trigger validation in P19 activity log
+  it('141. rejects activity log entries with arbitrary trigger strings', () => {
+    expect(isValidSummary({ trigger: 'online' })).toBe(true)
+    expect(isValidSummary({ trigger: 'resume' })).toBe(true)
+    expect(isValidSummary({ trigger: 'custom_arbitrary_trigger' })).toBe(false)
+    expect(isValidSummary({ trigger: 'secret_leak_trigger' })).toBe(false)
+  })
+
+  // 142. Busy check fail closed on error
+  it('142. fails closed when accessing store busy state encounters an error', async () => {
+    const syncAutoSyncStore = useSyncAutoSyncStore()
+    syncAutoSyncStore.init({ autoSyncService })
+
+    // Simulate pushStore property getter throwing
+    const pushStore = useSyncPushStore()
+    Object.defineProperty(pushStore, 'loading', {
+      get() {
+        throw new Error('Store access failure')
+      },
+      configurable: true,
+    })
+
+    const res = await syncAutoSyncStore.trigger(AUTO_SYNC_TRIGGER_ONLINE)
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('AUTO_SYNC_OTHER_SYNC_BUSY')
+    expect(orchestratorService.syncAll).not.toHaveBeenCalled()
   })
 })

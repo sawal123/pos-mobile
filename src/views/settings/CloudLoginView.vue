@@ -856,6 +856,8 @@ async function handleLogout() {
   if (isAnySyncOperationBusy.value) return
   resetRecoveryPresentation()
   syncHealthStore.resetResult()
+  autoSyncMessage.value = ''
+  autoSyncSuccess.value = false
   await cloudStore.logout()
   email.value = ''
   password.value = ''
@@ -867,9 +869,12 @@ watch(
     () => cloudStore.selectedBusiness?.id,
     () => cloudStore.selectedOutlet?.id,
     () => cloudStore.registeredDeviceId,
+    () => cloudStore.deviceIdentifier,
     () => canSync.value,
   ],
   async () => {
+    autoSyncMessage.value = ''
+    autoSyncSuccess.value = false
     if (canSync.value) {
       await syncAutoSyncStore.loadPreference()
     } else {
