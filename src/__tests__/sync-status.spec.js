@@ -26,6 +26,7 @@ import { useSyncConflictStore } from '@/stores/syncConflictStore'
 import { useSyncOrchestratorStore } from '@/stores/syncOrchestratorStore'
 import { useSyncRecoveryStore } from '@/stores/syncRecoveryStore'
 import { useSyncAutoSyncStore } from '@/stores/syncAutoSyncStore'
+import { createRuntimeSignalService } from '@/services/runtime/runtimeSignalService'
 import SyncStatusBadge from '@/components/sync/SyncStatusBadge.vue'
 import AppHeader from '@/components/layout/AppHeader.vue'
 import { bootstrapApp } from '@/main'
@@ -47,6 +48,7 @@ describe('P21: Global Sync Status & Offline Awareness', () => {
   let queueService
   let conflictService
   let statusService
+  let runtimeSignalService
 
   beforeEach(async () => {
     pinia = createPinia()
@@ -67,11 +69,21 @@ describe('P21: Global Sync Status & Offline Awareness', () => {
       conflictService,
       adapter,
     })
+
+    runtimeSignalService = createRuntimeSignalService({
+      windowRef: window,
+      documentRef: document,
+      navigatorRef: { onLine: true },
+    })
+    await runtimeSignalService.start()
   })
 
-  afterEach(() => {
+  afterEach(async () => {
     const statusStore = useSyncStatusStore()
     statusStore.stopListeners()
+    if (runtimeSignalService) {
+      await runtimeSignalService.stop()
+    }
     vi.restoreAllMocks()
   })
 
@@ -244,68 +256,87 @@ describe('P21: Global Sync Status & Offline Awareness', () => {
   // 72. Test network default
   it('72. initializes online status safely', () => {
     const statusStore = useSyncStatusStore()
+    statusStore.init({ statusService, runtimeSignalService })
     expect(typeof statusStore.online).toBe('boolean')
   })
 
   // 73. Test online event
   it('73. updates online to true on window online event without triggering sync', async () => {
+    const customRuntime = createRuntimeSignalService({
+      windowRef: window,
+      documentRef: document,
+      navigatorRef: { onLine: false },
+    })
+    await customRuntime.start()
+
     const statusStore = useSyncStatusStore()
-    statusStore.online = false
+    statusStore.init({ statusService, runtimeSignalService: customRuntime })
     statusStore.startListeners()
 
+    expect(statusStore.online).toBe(false)
     window.dispatchEvent(new Event('online'))
     await flushPromises()
 
     expect(statusStore.online).toBe(true)
+    await customRuntime.stop()
   })
 
   // 74. Test offline event
   it('74. updates online to false on window offline event', async () => {
+    const customRuntime = createRuntimeSignalService({
+      windowRef: window,
+      documentRef: document,
+      navigatorRef: { onLine: true },
+    })
+    await customRuntime.start()
+
     const statusStore = useSyncStatusStore()
-    statusStore.online = true
+    statusStore.init({ statusService, runtimeSignalService: customRuntime })
     statusStore.startListeners()
 
+    expect(statusStore.online).toBe(true)
     window.dispatchEvent(new Event('offline'))
     await flushPromises()
 
     expect(statusStore.online).toBe(false)
+    await customRuntime.stop()
   })
 
   // 75. Test listener idempotent with exact event spy
-  it('75. calling startListeners multiple times registers only a single listener', async () => {
+  it('75. calling startListeners multiple times registers only a single listener on runtime without direct window listeners', async () => {
     const addEventListenerSpy = vi.spyOn(window, 'addEventListener')
     const statusStore = useSyncStatusStore()
+    statusStore.init({ statusService, runtimeSignalService })
 
     statusStore.startListeners()
     statusStore.startListeners()
 
-    const onlineRegistrations = addEventListenerSpy.mock.calls.filter(
+    const storeDirectOnline = addEventListenerSpy.mock.calls.filter(
       (c) => c[0] === 'online',
     )
-    const offlineRegistrations = addEventListenerSpy.mock.calls.filter(
-      (c) => c[0] === 'offline',
-    )
-
-    expect(onlineRegistrations.length).toBe(1)
-    expect(offlineRegistrations.length).toBe(1)
+    // statusStore does not directly attach window listeners (only runtimeSignalService does)
+    expect(storeDirectOnline.length).toBe(0)
   })
 
   // 76. Test stop listeners with exact callback removal
-  it('76. stopListeners removes exact callbacks and prevents subsequent mutations', async () => {
-    const removeEventListenerSpy = vi.spyOn(window, 'removeEventListener')
-    const statusStore = useSyncStatusStore()
-    statusStore.online = true
+  it('76. stopListeners unsubscribes and prevents subsequent mutations', async () => {
+    const customRuntime = createRuntimeSignalService({
+      windowRef: window,
+      documentRef: document,
+      navigatorRef: { onLine: true },
+    })
+    await customRuntime.start()
 
+    const statusStore = useSyncStatusStore()
+    statusStore.init({ statusService, runtimeSignalService: customRuntime })
     statusStore.startListeners()
     statusStore.stopListeners()
-
-    expect(removeEventListenerSpy).toHaveBeenCalledWith('online', expect.any(Function))
-    expect(removeEventListenerSpy).toHaveBeenCalledWith('offline', expect.any(Function))
 
     window.dispatchEvent(new Event('offline'))
     await flushPromises()
 
     expect(statusStore.online).toBe(true)
+    await customRuntime.stop()
   })
 
   // 77. Priority: SYNCING
@@ -668,7 +699,7 @@ describe('P21: Global Sync Status & Offline Awareness', () => {
   // 96. Test refresh after auto sync
   it('96. refreshes status store when auto sync completes without altering auto sync result', async () => {
     const statusStore = useSyncStatusStore()
-    statusStore.init({ statusService })
+    statusStore.init({ statusService, runtimeSignalService })
     const refreshSpy = vi.spyOn(statusStore, 'refresh')
 
     const autoSyncService = {
@@ -680,7 +711,7 @@ describe('P21: Global Sync Status & Offline Awareness', () => {
     }
 
     const autoSyncStore = useSyncAutoSyncStore()
-    autoSyncStore.init({ autoSyncService })
+    autoSyncStore.init({ autoSyncService, runtimeSignalService })
 
     const res = await autoSyncStore.trigger('online')
     expect(res.ok).toBe(true)

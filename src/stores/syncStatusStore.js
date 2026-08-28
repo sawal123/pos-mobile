@@ -2,9 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
 export const useSyncStatusStore = defineStore('syncStatus', () => {
-  const online = ref(
-    typeof navigator !== 'undefined' ? navigator.onLine === true : false,
-  )
+  const online = ref(false)
   const refreshing = ref(false)
   const pendingCount = ref(0)
   const openConflictCount = ref(0)
@@ -13,13 +11,18 @@ export const useSyncStatusStore = defineStore('syncStatus', () => {
   const lastError = ref(null)
 
   let _statusService = null
+  let _runtimeSignalService = null
   let _listenersAttached = false
-  let _onOnlineHandler = null
-  let _onOfflineHandler = null
+  let _unsubscribeRuntime = null
 
-  function init({ statusService = null } = {}) {
+  function init({ statusService = null, runtimeSignalService = null } = {}) {
     if (statusService) {
       _statusService = statusService
+    }
+    if (runtimeSignalService) {
+      _runtimeSignalService = runtimeSignalService
+      const snap = _runtimeSignalService.getSnapshot()
+      online.value = snap && snap.initialized ? snap.online === true : false
     }
   }
 
@@ -56,32 +59,23 @@ export const useSyncStatusStore = defineStore('syncStatus', () => {
 
   function startListeners() {
     if (_listenersAttached) return
-    if (typeof window === 'undefined') return
+    if (!_runtimeSignalService) return
 
-    _onOnlineHandler = () => {
-      online.value = true
-    }
-
-    _onOfflineHandler = () => {
-      online.value = false
-    }
-
-    window.addEventListener('online', _onOnlineHandler)
-    window.addEventListener('offline', _onOfflineHandler)
+    _unsubscribeRuntime = _runtimeSignalService.subscribe((event) => {
+      if (event && event.snapshot) {
+        online.value = event.snapshot.online === true
+      }
+    })
 
     _listenersAttached = true
   }
 
   function stopListeners() {
     if (!_listenersAttached) return
-    if (typeof window !== 'undefined' && _onOnlineHandler) {
-      window.removeEventListener('online', _onOnlineHandler)
+    if (_unsubscribeRuntime) {
+      _unsubscribeRuntime()
+      _unsubscribeRuntime = null
     }
-    if (typeof window !== 'undefined' && _onOfflineHandler) {
-      window.removeEventListener('offline', _onOfflineHandler)
-    }
-    _onOnlineHandler = null
-    _onOfflineHandler = null
     _listenersAttached = false
   }
 
@@ -98,5 +92,6 @@ export const useSyncStatusStore = defineStore('syncStatus', () => {
     startListeners,
     stopListeners,
     getStatusService: () => _statusService,
+    getRuntimeSignalService: () => _runtimeSignalService,
   }
 })
