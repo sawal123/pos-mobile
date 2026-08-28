@@ -43,6 +43,13 @@ export const useSyncAutoSyncStore = defineStore('syncAutoSync', () => {
     }
   }
 
+  function resetPresentation() {
+    lastResult.value = null
+    lastError.value = null
+    lastTriggeredAt.value = null
+    lastSkippedCode.value = null
+  }
+
   function snapshotCloudContext() {
     const cloudStore = useCloudSessionStore()
     return {
@@ -203,6 +210,11 @@ export const useSyncAutoSyncStore = defineStore('syncAutoSync', () => {
       return { ok: false, code: 'SERVICE_NOT_INITIALIZED' }
     }
 
+    if (loadingPreference.value) {
+      lastSkippedCode.value = 'AUTO_SYNC_PREFERENCE_BUSY'
+      return { ok: false, code: 'AUTO_SYNC_PREFERENCE_BUSY' }
+    }
+
     if (running.value) {
       lastSkippedCode.value = 'AUTO_SYNC_ALREADY_IN_PROGRESS'
       return { ok: false, code: 'AUTO_SYNC_ALREADY_IN_PROGRESS' }
@@ -305,6 +317,7 @@ export const useSyncAutoSyncStore = defineStore('syncAutoSync', () => {
     lastTriggeredAt,
     lastSkippedCode,
     init,
+    resetPresentation,
     loadPreference,
     setEnabled,
     trigger,

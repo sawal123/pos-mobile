@@ -858,6 +858,7 @@ async function handleLogout() {
   syncHealthStore.resetResult()
   autoSyncMessage.value = ''
   autoSyncSuccess.value = false
+  syncAutoSyncStore.resetPresentation()
   await cloudStore.logout()
   email.value = ''
   password.value = ''
@@ -866,6 +867,7 @@ async function handleLogout() {
 
 watch(
   [
+    () => cloudStore.user?.id,
     () => cloudStore.selectedBusiness?.id,
     () => cloudStore.selectedOutlet?.id,
     () => cloudStore.registeredDeviceId,
@@ -875,6 +877,7 @@ watch(
   async () => {
     autoSyncMessage.value = ''
     autoSyncSuccess.value = false
+    syncAutoSyncStore.resetPresentation()
     if (canSync.value) {
       await syncAutoSyncStore.loadPreference()
     } else {

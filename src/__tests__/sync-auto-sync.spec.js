@@ -1506,4 +1506,372 @@ describe('P20: Safe Foreground Auto Sync Trigger', () => {
     expect(res.code).toBe('AUTO_SYNC_OTHER_SYNC_BUSY')
     expect(orchestratorService.syncAll).not.toHaveBeenCalled()
   })
+
+  // 143. User disable race
+  it('143. returns AUTO_SYNC_PREFERENCE_BUSY when runOnce is invoked while setEnabled(false) is pending', async () => {
+    await autoSyncService.setEnabled({
+      context: getValidContext(),
+      enabled: true,
+    })
+
+    let resolveSave
+    const origSave = adapter.saveSyncAutoSettings
+    vi.spyOn(adapter, 'saveSyncAutoSettings').mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSave = resolve
+        }),
+    )
+
+    const setPromise = autoSyncService.setEnabled({
+      context: getValidContext(),
+      enabled: false,
+    })
+
+    // Trigger runOnce while setEnabled(false) is pending
+    const runRes = await autoSyncService.runOnce({
+      context: getValidContext(),
+      trigger: AUTO_SYNC_TRIGGER_ONLINE,
+      online: true,
+      isForeground: true,
+    })
+
+    expect(runRes.ok).toBe(false)
+    expect(runRes.code).toBe('AUTO_SYNC_PREFERENCE_BUSY')
+    expect(healthService.checkHealth).not.toHaveBeenCalled()
+    expect(orchestratorService.syncAll).not.toHaveBeenCalled()
+
+    resolveSave()
+    await setPromise
+  })
+
+  // 144. Store disable race
+  it('144. returns AUTO_SYNC_PREFERENCE_BUSY when store trigger is invoked while setEnabled(false) is pending', async () => {
+    const cloudStore = useCloudSessionStore()
+    setupAuthenticatedSession(cloudStore)
+
+    const syncAutoSyncStore = useSyncAutoSyncStore()
+    syncAutoSyncStore.init({ autoSyncService })
+
+    let resolveSave
+    vi.spyOn(adapter, 'saveSyncAutoSettings').mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSave = resolve
+        }),
+    )
+
+    const setPromise = syncAutoSyncStore.setEnabled(false)
+
+    // Store loadingPreference is now true
+    expect(syncAutoSyncStore.loadingPreference).toBe(true)
+
+    const triggerRes = await syncAutoSyncStore.trigger(AUTO_SYNC_TRIGGER_ONLINE)
+    expect(triggerRes.ok).toBe(false)
+    expect(triggerRes.code).toBe('AUTO_SYNC_PREFERENCE_BUSY')
+    expect(orchestratorService.syncAll).not.toHaveBeenCalled()
+
+    resolveSave()
+    await setPromise
+  })
+
+  // 145. Enable race
+  it('145. returns AUTO_SYNC_PREFERENCE_BUSY when runOnce is invoked while setEnabled(true) is pending', async () => {
+    let resolveSave
+    vi.spyOn(adapter, 'saveSyncAutoSettings').mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSave = resolve
+        }),
+    )
+
+    const setPromise = autoSyncService.setEnabled({
+      context: getValidContext(),
+      enabled: true,
+    })
+
+    const runRes = await autoSyncService.runOnce({
+      context: getValidContext(),
+      trigger: AUTO_SYNC_TRIGGER_ONLINE,
+      online: true,
+      isForeground: true,
+    })
+
+    expect(runRes.ok).toBe(false)
+    expect(runRes.code).toBe('AUTO_SYNC_PREFERENCE_BUSY')
+    expect(orchestratorService.syncAll).not.toHaveBeenCalled()
+
+    resolveSave()
+    await setPromise
+  })
+
+  // 146. Load preference race
+  it('146. returns AUTO_SYNC_PREFERENCE_BUSY when trigger is called while loadingPreference is true', async () => {
+    const syncAutoSyncStore = useSyncAutoSyncStore()
+    syncAutoSyncStore.init({ autoSyncService })
+
+    syncAutoSyncStore.loadingPreference = true
+
+    const triggerRes = await syncAutoSyncStore.trigger(AUTO_SYNC_TRIGGER_ONLINE)
+    expect(triggerRes.ok).toBe(false)
+    expect(triggerRes.code).toBe('AUTO_SYNC_PREFERENCE_BUSY')
+    expect(orchestratorService.syncAll).not.toHaveBeenCalled()
+  })
+
+  // 147. Safe execution context forwarding
+  it('147. strips token, password, authorization, credentials, and user.email before forwarding to health/orchestrator', async () => {
+    await autoSyncService.setEnabled({
+      context: getValidContext(),
+      enabled: true,
+    })
+
+    let capturedHealthCtx = null
+    let capturedOrchestratorCtx = null
+
+    healthService.checkHealth.mockImplementationOnce(async ({ context }) => {
+      capturedHealthCtx = context
+      return { ok: true, status: 'ready', code: 'SYNC_HEALTH_READY', issues: [] }
+    })
+
+    orchestratorService.syncAll.mockImplementationOnce(async ({ context }) => {
+      capturedOrchestratorCtx = context
+      return { ok: true, code: 'SYNC_ALL_COMPLETED' }
+    })
+
+    const rawContextWithCredentials = {
+      ...getValidContext(),
+      token: 'SUPER_SECRET_TOKEN',
+      password: 'SUPER_SECRET_PASSWORD',
+      authorization: 'Bearer SUPER_SECRET_BEARER',
+      credentials: { secret: 'SECRET_CRED' },
+      user: {
+        id: 1,
+        email: 'leaked@example.com',
+        role: 'admin',
+      },
+    }
+
+    const res = await autoSyncService.runOnce({
+      context: rawContextWithCredentials,
+      trigger: AUTO_SYNC_TRIGGER_ONLINE,
+      online: true,
+      isForeground: true,
+    })
+
+    expect(res.ok).toBe(true)
+
+    // Check health context
+    expect(capturedHealthCtx.token).toBeUndefined()
+    expect(capturedHealthCtx.password).toBeUndefined()
+    expect(capturedHealthCtx.authorization).toBeUndefined()
+    expect(capturedHealthCtx.credentials).toBeUndefined()
+    expect(capturedHealthCtx.user.email).toBeUndefined()
+    expect(capturedHealthCtx.user.id).toBe(1)
+    expect(capturedHealthCtx.selectedBusiness.id).toBe(10)
+    expect(capturedHealthCtx.selectedOutlet.id).toBe(20)
+    expect(capturedHealthCtx.cloudAccess).toBe(true)
+    expect(capturedHealthCtx.deviceIdentifier).toBe('dev-uuid-123')
+    expect(capturedHealthCtx.registeredDeviceId).toBe(77)
+
+    // Check orchestrator context
+    expect(capturedOrchestratorCtx.token).toBeUndefined()
+    expect(capturedOrchestratorCtx.password).toBeUndefined()
+    expect(capturedOrchestratorCtx.authorization).toBeUndefined()
+    expect(capturedOrchestratorCtx.credentials).toBeUndefined()
+    expect(capturedOrchestratorCtx.user.email).toBeUndefined()
+    expect(capturedOrchestratorCtx.user.id).toBe(1)
+    expect(capturedOrchestratorCtx.selectedBusiness.id).toBe(10)
+    expect(capturedOrchestratorCtx.selectedOutlet.id).toBe(20)
+  })
+
+  // 148. Inconsistent health code ↔ status combinations
+  it('148. rejects auto sync with AUTO_SYNC_HEALTH_CHECK_FAILED when health code contradicts status', async () => {
+    await autoSyncService.setEnabled({
+      context: getValidContext(),
+      enabled: true,
+    })
+
+    // Case 1: status ready + code SYNC_HEALTH_BLOCKED
+    healthService.checkHealth.mockResolvedValueOnce({
+      ok: true,
+      status: 'ready',
+      code: 'SYNC_HEALTH_BLOCKED',
+      issues: [],
+    })
+    let res = await autoSyncService.runOnce({
+      context: getValidContext(),
+      trigger: AUTO_SYNC_TRIGGER_ONLINE,
+      online: true,
+      isForeground: true,
+    })
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('AUTO_SYNC_HEALTH_CHECK_FAILED')
+
+    // Advance clock past cooldown
+    currentTime += AUTO_SYNC_COOLDOWN_MS + 1000
+
+    // Case 2: status ready + code SYNC_HEALTH_ATTENTION
+    healthService.checkHealth.mockResolvedValueOnce({
+      ok: true,
+      status: 'ready',
+      code: 'SYNC_HEALTH_ATTENTION',
+      issues: [],
+    })
+    res = await autoSyncService.runOnce({
+      context: getValidContext(),
+      trigger: AUTO_SYNC_TRIGGER_ONLINE,
+      online: true,
+      isForeground: true,
+    })
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('AUTO_SYNC_HEALTH_CHECK_FAILED')
+
+    // Advance clock past cooldown
+    currentTime += AUTO_SYNC_COOLDOWN_MS + 1000
+
+    // Case 3: status attention + code SYNC_HEALTH_READY
+    healthService.checkHealth.mockResolvedValueOnce({
+      ok: true,
+      status: 'attention',
+      code: 'SYNC_HEALTH_READY',
+      issues: [{ code: 'SYNC_PENDING_QUEUE', severity: 'attention' }],
+    })
+    res = await autoSyncService.runOnce({
+      context: getValidContext(),
+      trigger: AUTO_SYNC_TRIGGER_ONLINE,
+      online: true,
+      isForeground: true,
+    })
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('AUTO_SYNC_HEALTH_CHECK_FAILED')
+
+    // Advance clock past cooldown
+    currentTime += AUTO_SYNC_COOLDOWN_MS + 1000
+
+    // Case 4: unknown status
+    healthService.checkHealth.mockResolvedValueOnce({
+      ok: true,
+      status: 'unknown_status',
+      code: 'SYNC_HEALTH_READY',
+      issues: [],
+    })
+    res = await autoSyncService.runOnce({
+      context: getValidContext(),
+      trigger: AUTO_SYNC_TRIGGER_ONLINE,
+      online: true,
+      isForeground: true,
+    })
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('AUTO_SYNC_HEALTH_CHECK_FAILED')
+
+    expect(orchestratorService.syncAll).not.toHaveBeenCalled()
+  })
+
+  // 149. Exact READY test
+  it('149. executes syncAll when health is exact READY with SYNC_HEALTH_READY and empty issues', async () => {
+    await autoSyncService.setEnabled({
+      context: getValidContext(),
+      enabled: true,
+    })
+
+    healthService.checkHealth.mockResolvedValueOnce({
+      ok: true,
+      code: 'SYNC_HEALTH_READY',
+      status: 'ready',
+      issues: [],
+    })
+
+    const res = await autoSyncService.runOnce({
+      context: getValidContext(),
+      trigger: AUTO_SYNC_TRIGGER_ONLINE,
+      online: true,
+      isForeground: true,
+    })
+
+    expect(res.ok).toBe(true)
+    expect(orchestratorService.syncAll).toHaveBeenCalledTimes(1)
+  })
+
+  // 150. Exact ATTENTION test
+  it('150. executes syncAll when health is exact ATTENTION with SYNC_HEALTH_ATTENTION and pending-only queue', async () => {
+    await autoSyncService.setEnabled({
+      context: getValidContext(),
+      enabled: true,
+    })
+
+    healthService.checkHealth.mockResolvedValueOnce({
+      ok: true,
+      code: 'SYNC_HEALTH_ATTENTION',
+      status: 'attention',
+      issues: [{ code: 'SYNC_PENDING_QUEUE', severity: 'attention' }],
+    })
+
+    const res = await autoSyncService.runOnce({
+      context: getValidContext(),
+      trigger: AUTO_SYNC_TRIGGER_RESUME,
+      online: true,
+      isForeground: true,
+    })
+
+    expect(res.ok).toBe(true)
+    expect(orchestratorService.syncAll).toHaveBeenCalledTimes(1)
+  })
+
+  // 151. Context presentation reset
+  it('151. clears volatile lastResult and lastTriggeredAt on context switch', async () => {
+    const cloudStore = useCloudSessionStore()
+    setupAuthenticatedSession(cloudStore)
+
+    const syncAutoSyncStore = useSyncAutoSyncStore()
+    syncAutoSyncStore.init({ autoSyncService })
+    syncAutoSyncStore.lastResult = { code: 'SYNC_ALL_COMPLETED' }
+    syncAutoSyncStore.lastTriggeredAt = '2025-08-28T10:00:00.000Z'
+
+    const wrapper = mount(CloudLoginView)
+    await flushPromises()
+
+    expect(wrapper.find('#auto-sync-last-status').text()).toContain('Auto Sync terakhir:')
+
+    // Switch context to Business 99 / Outlet 88
+    cloudStore.selectedBusiness = { id: 99, name: 'Biz 99' }
+    cloudStore.selectedOutlet = { id: 88, name: 'Outlet 88' }
+    await flushPromises()
+
+    expect(syncAutoSyncStore.lastResult).toBeNull()
+    expect(syncAutoSyncStore.lastTriggeredAt).toBeNull()
+    expect(wrapper.find('#auto-sync-last-status').exists()).toBe(false)
+  })
+
+  // 152. Logout resets presentation without clearing durable preference
+  it('152. resets presentation state on logout while preserving durable sync auto settings', async () => {
+    const cloudStore = useCloudSessionStore()
+    setupAuthenticatedSession(cloudStore)
+
+    await autoSyncService.setEnabled({
+      context: getValidContext(),
+      enabled: true,
+    })
+
+    const syncAutoSyncStore = useSyncAutoSyncStore()
+    syncAutoSyncStore.init({ autoSyncService })
+    syncAutoSyncStore.lastResult = { code: 'SYNC_ALL_COMPLETED' }
+    syncAutoSyncStore.lastTriggeredAt = '2025-08-28T10:00:00.000Z'
+
+    const wrapper = mount(CloudLoginView)
+    await flushPromises()
+
+    // Trigger logout
+    await wrapper.find('#cloud-logout-btn').trigger('click')
+    await flushPromises()
+
+    expect(syncAutoSyncStore.lastResult).toBeNull()
+    expect(syncAutoSyncStore.lastTriggeredAt).toBeNull()
+
+    // Durable preference must remain in storage
+    const raw = await adapter.loadSyncAutoSettings()
+    expect(raw).not.toBeNull()
+    expect(raw.enabled).toBe(true)
+    expect(raw.context.businessId).toBe(10)
+  })
 })
+

@@ -95,6 +95,7 @@ export function extractValidAutoSyncContext(context) {
   }
 
   return {
+    userId: context.user.id,
     businessId,
     outletId,
     deviceIdentifier: deviceIdentifier.trim(),
@@ -162,6 +163,7 @@ export function createSyncAutoSyncService({
   now = () => Date.now(),
 } = {}) {
   let isRunning = false
+  let isPreferenceUpdating = false
   let lastAttemptAt = null
 
   async function readDurableSettings() {
@@ -258,6 +260,14 @@ export function createSyncAutoSyncService({
       }
     }
 
+    if (isPreferenceUpdating) {
+      return {
+        ok: false,
+        code: 'AUTO_SYNC_PREFERENCE_BUSY',
+        message: 'Pengaturan auto sync sedang diperbarui.',
+      }
+    }
+
     let normalized = null
     if (enabled) {
       normalized = extractValidAutoSyncContext(context)
@@ -272,13 +282,23 @@ export function createSyncAutoSyncService({
       normalized = context ? extractValidAutoSyncContext(context) : null
     }
 
+    const boundContext = normalized
+      ? {
+          businessId: normalized.businessId,
+          outletId: normalized.outletId,
+          deviceIdentifier: normalized.deviceIdentifier,
+          registeredDeviceId: normalized.registeredDeviceId,
+        }
+      : null
+
     const payload = {
       version: 1,
       enabled,
-      context: normalized,
+      context: boundContext,
       updatedAt: new Date(now()).toISOString(),
     }
 
+    isPreferenceUpdating = true
     try {
       await writeDurableSettings(payload)
       return {
@@ -293,6 +313,8 @@ export function createSyncAutoSyncService({
         code: 'AUTO_SYNC_PERSIST_FAILED',
         message: err.message || 'Gagal menyimpan pengaturan auto sync.',
       }
+    } finally {
+      isPreferenceUpdating = false
     }
   }
 
@@ -312,7 +334,16 @@ export function createSyncAutoSyncService({
     online,
     isForeground,
   } = {}) {
-    // 1. Validate trigger
+    // 1. Preference mutation lock check
+    if (isPreferenceUpdating) {
+      return {
+        ok: false,
+        code: 'AUTO_SYNC_PREFERENCE_BUSY',
+        message: 'Pengaturan auto sync sedang diperbarui.',
+      }
+    }
+
+    // 2. Validate trigger
     if (!AUTO_SYNC_TRIGGERS.includes(trigger)) {
       return {
         ok: false,
@@ -321,7 +352,7 @@ export function createSyncAutoSyncService({
       }
     }
 
-    // 2. Foreground check (must be explicitly true)
+    // 3. Foreground check (must be explicitly true)
     if (isForeground !== true) {
       return {
         ok: false,
@@ -330,7 +361,7 @@ export function createSyncAutoSyncService({
       }
     }
 
-    // 3. Online check (must be explicitly true)
+    // 4. Online check (must be explicitly true)
     if (online !== true) {
       return {
         ok: false,
@@ -339,7 +370,7 @@ export function createSyncAutoSyncService({
       }
     }
 
-    // 4. Validate Cloud Context
+    // 5. Validate Cloud Context
     const normalizedContext = extractValidAutoSyncContext(context)
     if (!normalizedContext) {
       return {
@@ -349,8 +380,24 @@ export function createSyncAutoSyncService({
       }
     }
 
-    // 5. Check durable preference
-    const prefRes = await loadPreference({ context })
+    // 6. Build strictly sanitized safe execution context (no tokens, credentials, or extra fields)
+    const safeContext = {
+      user: {
+        id: normalizedContext.userId,
+      },
+      selectedBusiness: {
+        id: normalizedContext.businessId,
+      },
+      selectedOutlet: {
+        id: normalizedContext.outletId,
+      },
+      cloudAccess: true,
+      deviceIdentifier: normalizedContext.deviceIdentifier,
+      registeredDeviceId: normalizedContext.registeredDeviceId,
+    }
+
+    // 7. Check durable preference
+    const prefRes = await loadPreference({ context: safeContext })
     if (!prefRes.ok) {
       return {
         ok: false,
@@ -375,7 +422,7 @@ export function createSyncAutoSyncService({
       }
     }
 
-    // 6. Check single-run lock
+    // 8. Check single-run lock
     if (isRunning) {
       return {
         ok: false,
@@ -384,7 +431,7 @@ export function createSyncAutoSyncService({
       }
     }
 
-    // 7. Check cooldown (safe with first run when lastAttemptAt is null, safe with clock regression)
+    // 9. Check cooldown (safe with first run when lastAttemptAt is null, safe with clock regression)
     const currentTime = now()
     if (
       lastAttemptAt !== null &&
@@ -397,13 +444,13 @@ export function createSyncAutoSyncService({
       }
     }
 
-    // 8. Start execution lock & cooldown
+    // 10. Start execution lock & cooldown
     lastAttemptAt = currentTime
     isRunning = true
     const startedAt = new Date(currentTime).toISOString()
 
     try {
-      // 9. Fresh P17 Health Check
+      // 11. Fresh P17 Health Check
       if (!healthService || typeof healthService.checkHealth !== 'function') {
         return {
           ok: false,
@@ -414,7 +461,7 @@ export function createSyncAutoSyncService({
 
       let healthRes
       try {
-        healthRes = await healthService.checkHealth({ context })
+        healthRes = await healthService.checkHealth({ context: safeContext })
       } catch (err) {
         return {
           ok: false,
@@ -454,15 +501,29 @@ export function createSyncAutoSyncService({
         }
       }
 
-      // 3. Status checks:
+      // 3. Exact Code ↔ Status Contract Checks:
       let isSafeToSync = false
       if (healthRes.status === 'ready') {
-        // READY is strictly safe ONLY if issues is completely empty
+        if (healthRes.code !== 'SYNC_HEALTH_READY') {
+          return {
+            ok: false,
+            code: 'AUTO_SYNC_HEALTH_CHECK_FAILED',
+            message: 'Respons health check tidak konsisten.',
+            health: healthRes,
+          }
+        }
         if (issues.length === 0) {
           isSafeToSync = true
         }
       } else if (healthRes.status === 'attention') {
-        // ATTENTION is strictly safe ONLY if issues is non-empty and EVERY issue is exactly SYNC_PENDING_QUEUE with severity 'attention'
+        if (healthRes.code !== 'SYNC_HEALTH_ATTENTION') {
+          return {
+            ok: false,
+            code: 'AUTO_SYNC_HEALTH_CHECK_FAILED',
+            message: 'Respons health check tidak konsisten.',
+            health: healthRes,
+          }
+        }
         if (
           issues.length > 0 &&
           issues.every(
@@ -473,6 +534,13 @@ export function createSyncAutoSyncService({
           )
         ) {
           isSafeToSync = true
+        }
+      } else {
+        return {
+          ok: false,
+          code: 'AUTO_SYNC_HEALTH_CHECK_FAILED',
+          message: 'Status health check tidak dikenali.',
+          health: healthRes,
         }
       }
 
@@ -485,7 +553,7 @@ export function createSyncAutoSyncService({
         }
       }
 
-      // 10. Execute P16 orchestratorService.syncAll exactly once
+      // 12. Execute P16 orchestratorService.syncAll exactly once with safeContext
       if (!orchestratorService || typeof orchestratorService.syncAll !== 'function') {
         return {
           ok: false,
@@ -496,7 +564,7 @@ export function createSyncAutoSyncService({
 
       let syncResult
       try {
-        syncResult = await orchestratorService.syncAll({ context })
+        syncResult = await orchestratorService.syncAll({ context: safeContext })
       } catch (err) {
         syncResult = {
           ok: false,
@@ -505,7 +573,7 @@ export function createSyncAutoSyncService({
         }
       }
 
-      // 11. Record P19 Activity Log (non-blocking)
+      // 13. Record P19 Activity Log (non-blocking)
       const finishedAt = new Date(now()).toISOString()
       if (activityLogService && typeof activityLogService.record === 'function') {
         let status = 'failed'
@@ -570,6 +638,7 @@ export function createSyncAutoSyncService({
     setEnabled,
     runOnce,
     getIsRunning: () => isRunning,
+    getIsPreferenceUpdating: () => isPreferenceUpdating,
     getLastAttemptAt: () => lastAttemptAt,
   }
 }
