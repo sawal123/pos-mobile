@@ -14,6 +14,13 @@ import {
   SYNC_ACTIVITY_STATUSES,
   SYNC_ACTIVITY_ACTIONS,
 } from './syncActivityLogService'
+import {
+  createSyncAutoSyncService,
+  AUTO_SYNC_TRIGGER_ONLINE,
+  AUTO_SYNC_TRIGGER_RESUME,
+  AUTO_SYNC_TRIGGERS,
+  AUTO_SYNC_COOLDOWN_MS,
+} from './syncAutoSyncService'
 
 export { SYNC_ENTITY_TYPES, SYNC_OPERATIONS, SYNC_RESERVED_CATEGORY } from './syncConstants'
 export { createSyncChangeTracker } from './syncTracker'
@@ -35,6 +42,13 @@ export {
   SYNC_ACTIVITY_STATUSES,
   SYNC_ACTIVITY_ACTIONS,
 } from './syncActivityLogService'
+export {
+  createSyncAutoSyncService,
+  AUTO_SYNC_TRIGGER_ONLINE,
+  AUTO_SYNC_TRIGGER_RESUME,
+  AUTO_SYNC_TRIGGERS,
+  AUTO_SYNC_COOLDOWN_MS,
+} from './syncAutoSyncService'
 
 /**
  * Initializes the P9-P19 sync foundation after SQLite persistence is ready.
@@ -86,6 +100,12 @@ export function initializeSyncFoundation({ pinia, adapter, scheduler }) {
     adapter,
     scheduler,
   })
+  const autoSyncService = createSyncAutoSyncService({
+    adapter,
+    healthService,
+    orchestratorService,
+    activityLogService,
+  })
 
   return {
     queueService,
@@ -99,9 +119,6 @@ export function initializeSyncFoundation({ pinia, adapter, scheduler }) {
     healthService,
     recoveryService,
     activityLogService,
+    autoSyncService,
   }
 }
-
-
-
-

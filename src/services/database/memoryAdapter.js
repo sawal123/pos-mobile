@@ -308,6 +308,16 @@ export function createMemoryAdapter() {
     async clearSyncActivityLog() {
       state.syncActivityLog = null
     },
+    // P20: sync auto settings (local device, context bound, default off)
+    async loadSyncAutoSettings() {
+      return state.syncAutoSettings ? cloneValue(state.syncAutoSettings) : null
+    },
+    async saveSyncAutoSettings(settings) {
+      state.syncAutoSettings = cloneValue(settings)
+    },
+    async clearSyncAutoSettings() {
+      state.syncAutoSettings = null
+    },
     async persistSyncConflictsAndClearInflightAtomic({ expectedRequestId, conflictsState }) {
       if (!state.syncPushInflight) {
         return {
