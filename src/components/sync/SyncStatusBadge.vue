@@ -22,16 +22,8 @@ import {
   SYNC_UI_CLEAR,
 } from '@/services/sync/syncStatusService'
 
-let router = null
-let route = null
-if (hasInjectionContext()) {
-  try {
-    router = useRouter()
-  } catch {}
-  try {
-    route = useRoute()
-  } catch {}
-}
+const router = useRouter()
+const route = useRoute()
 
 const statusStore = useSyncStatusStore()
 const cloudStore = useCloudSessionStore()

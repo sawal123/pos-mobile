@@ -53,6 +53,7 @@ export {
 export {
   createSyncStatusService,
   deriveSyncUiStatus,
+  isValidInflightEnvelope,
   SYNC_UI_LOCAL,
   SYNC_UI_SYNCING,
   SYNC_UI_CONFLICT,

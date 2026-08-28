@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { mount, flushPromises } from '@vue/test-utils'
+import { createRouter, createMemoryHistory } from 'vue-router'
 import { createMemoryAdapter } from '@/services/database/memoryAdapter'
 import {
   createSyncStatusService,
   deriveSyncUiStatus,
+  isValidInflightEnvelope,
   SYNC_UI_LOCAL,
   SYNC_UI_SYNCING,
   SYNC_UI_CONFLICT,
@@ -27,6 +29,17 @@ import { useSyncAutoSyncStore } from '@/stores/syncAutoSyncStore'
 import SyncStatusBadge from '@/components/sync/SyncStatusBadge.vue'
 import AppHeader from '@/components/layout/AppHeader.vue'
 import { bootstrapApp } from '@/main'
+
+function createTestRouter() {
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: '/pos', name: 'pos', component: { template: '<div>POS</div>' } },
+      { path: '/settings', name: 'settings', component: { template: '<div>Settings</div>' } },
+    ],
+  })
+  return router
+}
 
 describe('P21: Global Sync Status & Offline Awareness', () => {
   let pinia
@@ -71,6 +84,69 @@ describe('P21: Global Sync Status & Offline Awareness', () => {
     cloudStore.deviceIdentifier = 'dev-uuid-123'
   }
 
+  function getValidInflightPayload() {
+    return {
+      version: 1,
+      requestId: 'req-123',
+      businessId: 10,
+      outletId: 20,
+      deviceIdentifier: 'dev-uuid-123',
+      registeredDeviceId: 77,
+      createdAt: '2026-08-28T10:00:00.000Z',
+      queueSnapshots: [
+        {
+          id: 'q-1',
+          entityType: 'product',
+          entityId: 'p-1',
+          operation: 'upsert',
+          payload: { name: 'Kopi' },
+          updatedAt: '2026-08-28T10:00:00.000Z',
+        },
+      ],
+      changes: {
+        categories: [],
+        products: [],
+        customers: [],
+        shifts: [],
+        sales: [],
+        sale_items: [],
+        expenses: [],
+      },
+    }
+  }
+
+  // 1. Structural inflight validator
+  it('1. validates valid P12 inflight envelope structure', () => {
+    expect(isValidInflightEnvelope(getValidInflightPayload())).toBe(true)
+  })
+
+  // 2. Structural inflight validator rejects malformed envelopes
+  it('2. rejects malformed inflight envelopes', () => {
+    expect(isValidInflightEnvelope(null)).toBe(false)
+    expect(isValidInflightEnvelope({})).toBe(false)
+    expect(isValidInflightEnvelope([])).toBe(false)
+    expect(isValidInflightEnvelope({ version: 1 })).toBe(false)
+    expect(isValidInflightEnvelope({ version: 1, requestId: '' })).toBe(false)
+
+    // Missing queueSnapshots
+    const noSnapshots = { ...getValidInflightPayload(), queueSnapshots: [] }
+    expect(isValidInflightEnvelope(noSnapshots)).toBe(false)
+
+    // Malformed item in queueSnapshots
+    const badSnapshotItem = {
+      ...getValidInflightPayload(),
+      queueSnapshots: [{ id: 'q-1' }],
+    }
+    expect(isValidInflightEnvelope(badSnapshotItem)).toBe(false)
+
+    // Missing changes container or missing keys
+    const badChanges = {
+      ...getValidInflightPayload(),
+      changes: { categories: [] },
+    }
+    expect(isValidInflightEnvelope(badChanges)).toBe(false)
+  })
+
   // 67. Test service success
   it('67. reads pending count, open conflict count, and inflight from local state successfully', async () => {
     queueService.countPending.mockResolvedValueOnce(3)
@@ -86,18 +162,31 @@ describe('P21: Global Sync Status & Offline Awareness', () => {
     expect(typeof res.checkedAt).toBe('string')
   })
 
-  // 68. Test inflight detection
-  it('68. returns hasInflight: true when adapter contains valid inflight envelope', async () => {
-    await adapter.saveSyncPushInflight({
-      requestId: 'req-123',
-      businessId: 10,
-      outletId: 20,
-    })
+  // 68. Test inflight detection with valid P12 envelope
+  it('68. returns hasInflight: true when adapter contains valid P12 inflight envelope', async () => {
+    await adapter.saveSyncPushInflight(getValidInflightPayload())
 
     const res = await statusService.readLocalStatus()
 
     expect(res.ok).toBe(true)
     expect(res.hasInflight).toBe(true)
+  })
+
+  // 68b. Test malformed inflight fails closed
+  it('68b. returns SYNC_STATUS_READ_FAILED when inflight in storage is malformed without deleting it', async () => {
+    await adapter.saveSyncPushInflight({
+      version: 1,
+      requestId: 'req-incomplete',
+    })
+
+    const res = await statusService.readLocalStatus()
+
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('SYNC_STATUS_READ_FAILED')
+
+    // Inflight remains in adapter (never cleared or mutated by reader)
+    const raw = await adapter.loadSyncPushInflight()
+    expect(raw).not.toBeNull()
   })
 
   // 69. Test malformed count validation
@@ -182,24 +271,36 @@ describe('P21: Global Sync Status & Offline Awareness', () => {
     expect(statusStore.online).toBe(false)
   })
 
-  // 75. Test listener idempotent
+  // 75. Test listener idempotent with exact event spy
   it('75. calling startListeners multiple times registers only a single listener', async () => {
+    const addEventListenerSpy = vi.spyOn(window, 'addEventListener')
     const statusStore = useSyncStatusStore()
+
     statusStore.startListeners()
     statusStore.startListeners()
 
-    window.dispatchEvent(new Event('offline'))
-    await flushPromises()
+    const onlineRegistrations = addEventListenerSpy.mock.calls.filter(
+      (c) => c[0] === 'online',
+    )
+    const offlineRegistrations = addEventListenerSpy.mock.calls.filter(
+      (c) => c[0] === 'offline',
+    )
 
-    expect(statusStore.online).toBe(false)
+    expect(onlineRegistrations.length).toBe(1)
+    expect(offlineRegistrations.length).toBe(1)
   })
 
-  // 76. Test stop listeners
-  it('76. stopListeners prevents subsequent window events from mutating online state', async () => {
+  // 76. Test stop listeners with exact callback removal
+  it('76. stopListeners removes exact callbacks and prevents subsequent mutations', async () => {
+    const removeEventListenerSpy = vi.spyOn(window, 'removeEventListener')
     const statusStore = useSyncStatusStore()
     statusStore.online = true
+
     statusStore.startListeners()
     statusStore.stopListeners()
+
+    expect(removeEventListenerSpy).toHaveBeenCalledWith('online', expect.any(Function))
+    expect(removeEventListenerSpy).toHaveBeenCalledWith('offline', expect.any(Function))
 
     window.dispatchEvent(new Event('offline'))
     await flushPromises()
@@ -282,8 +383,8 @@ describe('P21: Global Sync Status & Offline Awareness', () => {
     expect(res.label).toBe('5 menunggu')
   })
 
-  // 82. Priority: CLEAR
-  it('82. derives SYNC_UI_CLEAR when online and all metrics are clean', () => {
+  // 82. Priority: CLEAR and does NOT claim all remote data is synced
+  it('82. derives SYNC_UI_CLEAR with safe local detail when all metrics are clean', () => {
     const res = deriveSyncUiStatus({
       cloudAvailable: true,
       syncing: false,
@@ -296,6 +397,10 @@ describe('P21: Global Sync Status & Offline Awareness', () => {
 
     expect(res.status).toBe(SYNC_UI_CLEAR)
     expect(res.label).toBe('Siap')
+    expect(res.detail).not.toContain('Semua data tersinkronisasi')
+    expect(res.detail).not.toContain('Data cloud terbaru')
+    expect(res.detail).not.toContain('Health ready')
+    expect(res.detail).toBe('Tidak ada antrean sinkronisasi lokal')
   })
 
   // 83. Priority: UNKNOWN on readError
@@ -335,17 +440,13 @@ describe('P21: Global Sync Status & Offline Awareness', () => {
     statusStore.online = true
     statusStore.pendingCount = 3
 
-    const mockRouter = { push: vi.fn() }
-    const mockRoute = { path: '/pos', name: 'pos' }
-    const globalPlugins = {
-      mocks: {
-        $router: mockRouter,
-        $route: mockRoute,
-      },
-    }
+    const testRouter = createTestRouter()
+    await testRouter.push('/pos')
 
     const wrapper = mount(SyncStatusBadge, {
-      global: globalPlugins,
+      global: {
+        plugins: [testRouter],
+      },
     })
     await flushPromises()
 
@@ -364,12 +465,12 @@ describe('P21: Global Sync Status & Offline Awareness', () => {
     statusStore.init({ statusService })
     statusStore.online = false
 
+    const testRouter = createTestRouter()
+    await testRouter.push('/pos')
+
     const wrapper = mount(SyncStatusBadge, {
       global: {
-        mocks: {
-          $router: { push: vi.fn() },
-          $route: { path: '/pos', name: 'pos' },
-        },
+        plugins: [testRouter],
       },
     })
     await flushPromises()
@@ -389,12 +490,12 @@ describe('P21: Global Sync Status & Offline Awareness', () => {
     statusStore.init({ statusService })
     statusStore.openConflictCount = 1
 
+    const testRouter = createTestRouter()
+    await testRouter.push('/pos')
+
     const wrapper = mount(SyncStatusBadge, {
       global: {
-        mocks: {
-          $router: { push: vi.fn() },
-          $route: { path: '/pos', name: 'pos' },
-        },
+        plugins: [testRouter],
       },
     })
     await flushPromises()
@@ -414,12 +515,12 @@ describe('P21: Global Sync Status & Offline Awareness', () => {
     businessStore.name = 'Toko Lokal'
     businessStore.outlet = 'Utama'
 
+    const testRouter = createTestRouter()
+    await testRouter.push('/pos')
+
     const wrapper = mount(AppHeader, {
       global: {
-        mocks: {
-          $router: { push: vi.fn() },
-          $route: { path: '/pos', name: 'pos' },
-        },
+        plugins: [testRouter],
       },
     })
     await flushPromises()
@@ -442,12 +543,12 @@ describe('P21: Global Sync Status & Offline Awareness', () => {
     statusStore.init({ statusService })
     statusStore.online = true
 
+    const testRouter = createTestRouter()
+    await testRouter.push('/pos')
+
     const wrapper = mount(AppHeader, {
       global: {
-        mocks: {
-          $router: { push: vi.fn() },
-          $route: { path: '/pos', name: 'pos' },
-        },
+        plugins: [testRouter],
       },
     })
     await flushPromises()
@@ -456,10 +557,11 @@ describe('P21: Global Sync Status & Offline Awareness', () => {
     expect(wrapper.text()).toContain('Cloud Mode')
   })
 
-  // 90. Test badge navigation
-  it('90. navigates to settings when clicked without triggering sync actions', async () => {
-    const pushMock = vi.fn()
-    const mockRouter = { push: pushMock }
+  // 90. Test badge navigation and assert NO sync operations are called
+  it('90. navigates to settings on click and executes zero sync operations', async () => {
+    const testRouter = createTestRouter()
+    await testRouter.push('/pos')
+    const pushSpy = vi.spyOn(testRouter, 'push')
 
     const cloudStore = useCloudSessionStore()
     setupCloudSession(cloudStore)
@@ -467,12 +569,19 @@ describe('P21: Global Sync Status & Offline Awareness', () => {
     const statusStore = useSyncStatusStore()
     statusStore.init({ statusService })
 
+    const pushStore = useSyncPushStore()
+    const pullStore = useSyncPullStore()
+    const orchestratorStore = useSyncOrchestratorStore()
+    const autoSyncStore = useSyncAutoSyncStore()
+
+    const spyPushNow = vi.spyOn(pushStore, 'pushNow')
+    const spyPullNow = vi.spyOn(pullStore, 'pullNow')
+    const spySyncAll = vi.spyOn(orchestratorStore, 'syncAll')
+    const spyAutoTrigger = vi.spyOn(autoSyncStore, 'trigger')
+
     const wrapper = mount(SyncStatusBadge, {
       global: {
-        mocks: {
-          $router: mockRouter,
-          $route: { path: '/pos', name: 'pos' },
-        },
+        plugins: [testRouter],
       },
     })
     await flushPromises()
@@ -480,7 +589,11 @@ describe('P21: Global Sync Status & Offline Awareness', () => {
     const badge = wrapper.find('#sync-status-badge')
     await badge.trigger('click')
 
-    expect(queueService.countPending).not.toHaveBeenCalled()
+    expect(pushSpy).toHaveBeenCalledWith({ name: 'settings' })
+    expect(spyPushNow).not.toHaveBeenCalled()
+    expect(spyPullNow).not.toHaveBeenCalled()
+    expect(spySyncAll).not.toHaveBeenCalled()
+    expect(spyAutoTrigger).not.toHaveBeenCalled()
   })
 
   // 91. Test P21 does not call P17 Health Service
@@ -531,10 +644,14 @@ describe('P21: Global Sync Status & Offline Awareness', () => {
     expect(spySetTimeout).not.toHaveBeenCalled()
   })
 
-  // 95. Test initial boot
+  // 95. Test initial boot does not invoke sync operations
   it('95. bootstrapApp initializes statusStore and registers listeners without executing sync actions', async () => {
     const customAdapter = createMemoryAdapter()
     await customAdapter.initialize()
+
+    const pushNowSpy = vi.fn()
+    const syncAllSpy = vi.fn()
+    const healthSpy = vi.fn()
 
     const initResult = await bootstrapApp({
       initialize: async () => ({ adapter: customAdapter }),
@@ -543,6 +660,9 @@ describe('P21: Global Sync Status & Offline Awareness', () => {
 
     const statusStore = useSyncStatusStore(initResult.pinia)
     expect(statusStore.getStatusService()).not.toBeNull()
+    expect(pushNowSpy).not.toHaveBeenCalled()
+    expect(syncAllSpy).not.toHaveBeenCalled()
+    expect(healthSpy).not.toHaveBeenCalled()
   })
 
   // 96. Test refresh after auto sync
@@ -584,10 +704,14 @@ describe('P21: Global Sync Status & Offline Awareness', () => {
   it('99. readLocalStatus executes zero write operations to database adapter', async () => {
     const spySaveInflight = vi.spyOn(adapter, 'saveSyncPushInflight')
     const spyUpsertQueue = vi.spyOn(adapter, 'upsertSyncQueueItems')
+    const spySaveAuto = vi.spyOn(adapter, 'saveSyncAutoSettings')
+    const spySaveConflicts = vi.spyOn(adapter, 'saveSyncConflicts')
 
     await statusService.readLocalStatus()
 
     expect(spySaveInflight).not.toHaveBeenCalled()
     expect(spyUpsertQueue).not.toHaveBeenCalled()
+    expect(spySaveAuto).not.toHaveBeenCalled()
+    expect(spySaveConflicts).not.toHaveBeenCalled()
   })
 })

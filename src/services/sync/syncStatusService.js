@@ -18,6 +18,116 @@ export const SYNC_UI_STATUSES = Object.freeze([
   SYNC_UI_CLEAR,
 ])
 
+const REQUIRED_CHANGE_KEYS = Object.freeze([
+  'categories',
+  'products',
+  'customers',
+  'shifts',
+  'sales',
+  'sale_items',
+  'expenses',
+])
+
+/**
+ * Pure structural validator for P12 inflight push envelopes.
+ *
+ * @param {*} value
+ * @returns {boolean}
+ */
+export function isValidInflightEnvelope(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+
+  if (value.version !== 1) {
+    return false
+  }
+
+  if (typeof value.requestId !== 'string' || value.requestId.trim().length === 0) {
+    return false
+  }
+
+  if (
+    typeof value.businessId !== 'number' ||
+    !Number.isInteger(value.businessId) ||
+    value.businessId <= 0
+  ) {
+    return false
+  }
+
+  if (
+    typeof value.outletId !== 'number' ||
+    !Number.isInteger(value.outletId) ||
+    value.outletId <= 0
+  ) {
+    return false
+  }
+
+  if (
+    typeof value.deviceIdentifier !== 'string' ||
+    value.deviceIdentifier.trim().length === 0
+  ) {
+    return false
+  }
+
+  if (
+    typeof value.registeredDeviceId !== 'number' ||
+    !Number.isInteger(value.registeredDeviceId) ||
+    value.registeredDeviceId <= 0
+  ) {
+    return false
+  }
+
+  if (typeof value.createdAt !== 'string' || value.createdAt.trim().length === 0) {
+    return false
+  }
+
+  if (!Array.isArray(value.queueSnapshots) || value.queueSnapshots.length === 0) {
+    return false
+  }
+
+  for (const item of value.queueSnapshots) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      return false
+    }
+    if (typeof item.id !== 'string' || item.id.trim().length === 0) {
+      return false
+    }
+    if (typeof item.entityType !== 'string' || item.entityType.trim().length === 0) {
+      return false
+    }
+    if (
+      item.entityId === null ||
+      item.entityId === undefined ||
+      String(item.entityId).trim().length === 0
+    ) {
+      return false
+    }
+    if (typeof item.operation !== 'string' || item.operation.trim().length === 0) {
+      return false
+    }
+    if (
+      item.updatedAt === null ||
+      item.updatedAt === undefined ||
+      String(item.updatedAt).trim().length === 0
+    ) {
+      return false
+    }
+  }
+
+  if (!value.changes || typeof value.changes !== 'object' || Array.isArray(value.changes)) {
+    return false
+  }
+
+  for (const key of REQUIRED_CHANGE_KEYS) {
+    if (!Array.isArray(value.changes[key])) {
+      return false
+    }
+  }
+
+  return true
+}
+
 /**
  * Pure deterministic derivation of UI presentation status from local sync state.
  * Priority:
@@ -33,7 +143,7 @@ export const SYNC_UI_STATUSES = Object.freeze([
 export function deriveSyncUiStatus({
   cloudAvailable = false,
   syncing = false,
-  online = true,
+  online = false,
   pendingCount = 0,
   openConflictCount = 0,
   hasInflight = false,
@@ -98,7 +208,7 @@ export function deriveSyncUiStatus({
   return {
     status: SYNC_UI_CLEAR,
     label: 'Siap',
-    detail: 'Semua data tersinkronisasi',
+    detail: 'Tidak ada antrean sinkronisasi lokal',
   }
 }
 
@@ -184,7 +294,7 @@ export function createSyncStatusService({
     let hasInflight = false
     if (rawInflight === null || rawInflight === undefined) {
       hasInflight = false
-    } else if (typeof rawInflight === 'object' && !Array.isArray(rawInflight)) {
+    } else if (isValidInflightEnvelope(rawInflight)) {
       hasInflight = true
     } else {
       return {
