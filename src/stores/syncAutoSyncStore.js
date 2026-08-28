@@ -9,6 +9,7 @@ import { useSyncOrchestratorStore } from '@/stores/syncOrchestratorStore'
 import { useSyncHealthStore } from '@/stores/syncHealthStore'
 import { useSyncRecoveryStore } from '@/stores/syncRecoveryStore'
 import { useSyncActivityLogStore } from '@/stores/syncActivityLogStore'
+import { useSyncStatusStore } from '@/stores/syncStatusStore'
 
 function createContextFingerprint(ctx) {
   if (!ctx) return 'null'
@@ -252,9 +253,11 @@ export const useSyncAutoSyncStore = defineStore('syncAutoSync', () => {
           const pushStore = useSyncPushStore()
           const conflictStore = useSyncConflictStore()
           const activityStore = useSyncActivityLogStore()
+          const statusStore = useSyncStatusStore()
           void pushStore.refreshPendingCount()
           void conflictStore.loadConflicts()
           void activityStore.refresh({ limit: 10 })
+          void statusStore.refresh()
         } catch {
           // Non-blocking
         }
