@@ -1077,4 +1077,346 @@ describe('P22: Native Network & App Lifecycle Integration', () => {
     expect(capturedEvent.snapshot.password).toBeUndefined()
     expect(capturedEvent.snapshot.user).toBeUndefined()
   })
+
+  // 115. TEST MISSED APP BACKGROUND RACE
+  it('115. reconciles missed app background race during initialization and overrides reader state without pause transition', async () => {
+    let resolveGetState
+    const getStatePromise = new Promise((resolve) => {
+      resolveGetState = resolve
+    })
+
+    const nativeDeps = createMockNativeDependencies({
+      connected: true,
+    })
+    nativeDeps.mockApp.getState = vi.fn().mockImplementation(() => getStatePromise)
+
+    const runtime = createRuntimeSignalService({
+      capacitor: nativeDeps.mockCapacitor,
+      network: nativeDeps.mockNetwork,
+      app: nativeDeps.mockApp,
+    })
+
+    const events = []
+    runtime.subscribe((e) => events.push(e))
+
+    const startPromise = runtime.start()
+    await flushPromises()
+
+    // During initialization while getState is still pending, app transitions to background
+    nativeDeps.emitAppState({ isActive: false })
+
+    // Stale reader eventually resolves with isActive: true
+    resolveGetState({ isActive: true })
+
+    const startRes = await startPromise
+    expect(startRes.ok).toBe(true)
+
+    // Reconciled snapshot reflects the latest buffered event: foreground false
+    const snap = runtime.getSnapshot()
+    expect(snap.foreground).toBe(false)
+    expect(snap.source).toBe('native')
+
+    // No pause transition during initialization, only initialized event
+    expect(events.length).toBe(1)
+    expect(events[0].type).toBe('initialized')
+    expect(events[0].transition).toBeNull()
+    expect(events[0].snapshot.foreground).toBe(false)
+  })
+
+  // 116. TEST MISSED NETWORK RACE
+  it('116. reconciles missed network race during initialization and overrides reader state without online transition', async () => {
+    let resolveGetStatus
+    const getStatusPromise = new Promise((resolve) => {
+      resolveGetStatus = resolve
+    })
+
+    const nativeDeps = createMockNativeDependencies({
+      isActive: true,
+    })
+    nativeDeps.mockNetwork.getStatus = vi.fn().mockImplementation(() => getStatusPromise)
+
+    const runtime = createRuntimeSignalService({
+      capacitor: nativeDeps.mockCapacitor,
+      network: nativeDeps.mockNetwork,
+      app: nativeDeps.mockApp,
+    })
+
+    const events = []
+    runtime.subscribe((e) => events.push(e))
+
+    const startPromise = runtime.start()
+    await flushPromises()
+
+    // During initialization, network transitions to online wifi
+    nativeDeps.emitNetworkStatus({ connected: true, connectionType: 'wifi' })
+
+    // Stale reader resolves offline none
+    resolveGetStatus({ connected: false, connectionType: 'none' })
+
+    const startRes = await startPromise
+    expect(startRes.ok).toBe(true)
+
+    const snap = runtime.getSnapshot()
+    expect(snap.online).toBe(true)
+    expect(snap.connectionType).toBe('wifi')
+
+    // No online transition during startup, only initialized event
+    expect(events.length).toBe(1)
+    expect(events[0].type).toBe('initialized')
+    expect(events[0].transition).toBeNull()
+    expect(events[0].snapshot.online).toBe(true)
+  })
+
+  // 117. TEST COMBINED RACE
+  it('117. reconciles combined network and app state race with 0 auto sync transitions during initialization', async () => {
+    let resolveStatus
+    let resolveState
+    const getStatusPromise = new Promise((resolve) => {
+      resolveStatus = resolve
+    })
+    const getStatePromise = new Promise((resolve) => {
+      resolveState = resolve
+    })
+
+    const nativeDeps = createMockNativeDependencies()
+    nativeDeps.mockNetwork.getStatus = vi.fn().mockImplementation(() => getStatusPromise)
+    nativeDeps.mockApp.getState = vi.fn().mockImplementation(() => getStatePromise)
+
+    const runtime = createRuntimeSignalService({
+      capacitor: nativeDeps.mockCapacitor,
+      network: nativeDeps.mockNetwork,
+      app: nativeDeps.mockApp,
+    })
+
+    const autoSyncService = {
+      runOnce: vi.fn().mockResolvedValue({ ok: true, autoSync: true }),
+    }
+    const autoSyncStore = useSyncAutoSyncStore()
+    autoSyncStore.init({ autoSyncService, runtimeSignalService: runtime })
+    autoSyncStore.startListeners()
+
+    const startPromise = runtime.start()
+    await flushPromises()
+
+    // Race events during initialization
+    nativeDeps.emitNetworkStatus({ connected: true, connectionType: 'wifi' })
+    nativeDeps.emitAppState({ isActive: false })
+
+    // Stale readers resolve opposite
+    resolveStatus({ connected: false, connectionType: 'none' })
+    resolveState({ isActive: true })
+
+    await startPromise
+    await flushPromises()
+
+    const snap = runtime.getSnapshot()
+    expect(snap.online).toBe(true)
+    expect(snap.foreground).toBe(false)
+    expect(autoSyncService.runOnce).not.toHaveBeenCalled()
+  })
+
+  // 118. TEST FAILURE -> RETRY SUCCESS
+  it('118. failed start leaves isStarted=false and allows subsequent explicit start to succeed cleanly', async () => {
+    const nativeDeps = createMockNativeDependencies({
+      getStatusRejects: true,
+    })
+
+    const runtime = createRuntimeSignalService({
+      capacitor: nativeDeps.mockCapacitor,
+      network: nativeDeps.mockNetwork,
+      app: nativeDeps.mockApp,
+    })
+
+    // First attempt fails
+    const failRes = await runtime.start()
+    expect(failRes.ok).toBe(false)
+    expect(failRes.code).toBe('RUNTIME_SIGNAL_INIT_FAILED')
+    expect(runtime.getIsStarted()).toBe(false)
+
+    // Fix dependency for second attempt
+    nativeDeps.mockNetwork.getStatus = vi.fn().mockResolvedValue({
+      connected: true,
+      connectionType: 'wifi',
+    })
+
+    // Second attempt succeeds
+    const successRes = await runtime.start()
+    expect(successRes.ok).toBe(true)
+    expect(successRes.code).toBe('RUNTIME_SIGNAL_INITIALIZED')
+    expect(runtime.getIsStarted()).toBe(true)
+
+    const snap = runtime.getSnapshot()
+    expect(snap.initialized).toBe(true)
+    expect(snap.online).toBe(true)
+    expect(snap.foreground).toBe(true)
+  })
+
+  // 119. TEST CLEANUP PARTIAL LISTENER
+  it('119. cleans up partial listener handles on listener registration failure and leaves isStarted=false', async () => {
+    const { mockCapacitor, mockNetwork, mockApp, netHandle } =
+      createMockNativeDependencies({
+        addListenerAppRejects: true,
+      })
+
+    const runtime = createRuntimeSignalService({
+      capacitor: mockCapacitor,
+      network: mockNetwork,
+      app: mockApp,
+    })
+
+    const res = await runtime.start()
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('RUNTIME_SIGNAL_INIT_FAILED')
+    expect(runtime.getIsStarted()).toBe(false)
+    expect(netHandle.remove).toHaveBeenCalledTimes(1)
+  })
+
+  // 120. TEST STOP WHILE START PENDING
+  it('120. stop() called while start() is pending cleans up all listener handles and leaves runtime uninitialized', async () => {
+    let resolveStatus
+    let resolveState
+    const getStatusPromise = new Promise((resolve) => {
+      resolveStatus = resolve
+    })
+    const getStatePromise = new Promise((resolve) => {
+      resolveState = resolve
+    })
+
+    const nativeDeps = createMockNativeDependencies()
+    nativeDeps.mockNetwork.getStatus = vi.fn().mockImplementation(() => getStatusPromise)
+    nativeDeps.mockApp.getState = vi.fn().mockImplementation(() => getStatePromise)
+
+    const runtime = createRuntimeSignalService({
+      capacitor: nativeDeps.mockCapacitor,
+      network: nativeDeps.mockNetwork,
+      app: nativeDeps.mockApp,
+    })
+
+    const sub = vi.fn()
+    runtime.subscribe(sub)
+
+    const startPromise = runtime.start()
+    const stopPromise = runtime.stop()
+
+    // Resolve deferred initialization
+    resolveStatus({ connected: true, connectionType: 'wifi' })
+    resolveState({ isActive: true })
+
+    const [startRes, stopRes] = await Promise.all([startPromise, stopPromise])
+
+    expect(stopRes.ok).toBe(true)
+    expect(runtime.getIsStarted()).toBe(false)
+
+    const snap = runtime.getSnapshot()
+    expect(snap.initialized).toBe(false)
+    expect(snap.source).toBe('unavailable')
+
+    expect(nativeDeps.netHandle.remove).toHaveBeenCalledTimes(1)
+    expect(nativeDeps.appHandle.remove).toHaveBeenCalledTimes(1)
+
+    // Events after stop do not mutate snapshot or notify subscriber
+    nativeDeps.emitNetworkStatus({ connected: true, connectionType: 'wifi' })
+    nativeDeps.emitAppState({ isActive: true })
+    await flushPromises()
+
+    expect(runtime.getSnapshot().initialized).toBe(false)
+    // sub should not have received any transition event
+    const transitionEvents = sub.mock.calls.filter((c) => c[0].transition !== null)
+    expect(transitionEvents.length).toBe(0)
+  })
+
+  // 121. TEST START -> STOP -> START
+  it('121. start -> stop -> start installs fresh listeners and activates service cleanly', async () => {
+    const nativeDeps = createMockNativeDependencies({
+      connected: true,
+      isActive: true,
+    })
+
+    const runtime = createRuntimeSignalService({
+      capacitor: nativeDeps.mockCapacitor,
+      network: nativeDeps.mockNetwork,
+      app: nativeDeps.mockApp,
+    })
+
+    await runtime.start()
+    expect(runtime.getIsStarted()).toBe(true)
+
+    await runtime.stop()
+    expect(runtime.getIsStarted()).toBe(false)
+    expect(runtime.getSnapshot().initialized).toBe(false)
+
+    const secondStart = await runtime.start()
+    expect(secondStart.ok).toBe(true)
+    expect(runtime.getIsStarted()).toBe(true)
+    expect(runtime.getSnapshot().initialized).toBe(true)
+    expect(runtime.getSnapshot().online).toBe(true)
+  })
+
+  // 122. TEST RECONCILED BACKGROUND STATE PREVENTS AUTO SYNC UNTIL SUBSEQUENT RESUME
+  it('122. reconciled background state correctly prevents auto sync until subsequent resume', async () => {
+    let resolveState
+    const getStatePromise = new Promise((resolve) => {
+      resolveState = resolve
+    })
+
+    const nativeDeps = createMockNativeDependencies({
+      connected: false,
+    })
+    nativeDeps.mockApp.getState = vi.fn().mockImplementation(() => getStatePromise)
+
+    const runtime = createRuntimeSignalService({
+      capacitor: nativeDeps.mockCapacitor,
+      network: nativeDeps.mockNetwork,
+      app: nativeDeps.mockApp,
+    })
+
+    const cloudStore = useCloudSessionStore()
+    setupAuthenticatedSession(cloudStore)
+
+    const runs = []
+    const autoSyncService = {
+      runOnce: vi.fn().mockImplementation(async (args) => {
+        runs.push(args)
+        if (!args.isForeground) {
+          return { ok: false, code: 'AUTO_SYNC_NOT_FOREGROUND' }
+        }
+        return { ok: true, autoSync: true }
+      }),
+    }
+
+    const autoSyncStore = useSyncAutoSyncStore()
+    autoSyncStore.init({ autoSyncService, runtimeSignalService: runtime })
+    autoSyncStore.startListeners()
+
+    const startPromise = runtime.start()
+    await flushPromises()
+
+    // Buffered event during init: app goes to background
+    nativeDeps.emitAppState({ isActive: false })
+
+    // Stale reader resolves active: true
+    resolveState({ isActive: true })
+
+    await startPromise
+    await flushPromises()
+
+    expect(runtime.getSnapshot().foreground).toBe(false)
+
+    // Now network comes online while in background
+    nativeDeps.emitNetworkStatus({ connected: true, connectionType: 'wifi' })
+    await flushPromises()
+
+    expect(runs.length).toBe(1)
+    expect(runs[0].online).toBe(true)
+    expect(runs[0].isForeground).toBe(false)
+
+    // Now app resumes to foreground
+    nativeDeps.emitAppState({ isActive: true })
+    await flushPromises()
+
+    expect(runs.length).toBe(2)
+    expect(runs[1].trigger).toBe('resume')
+    expect(runs[1].online).toBe(true)
+    expect(runs[1].isForeground).toBe(true)
+  })
 })

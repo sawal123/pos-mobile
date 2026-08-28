@@ -34,7 +34,11 @@ export function createRuntimeSignalService({
 } = {}) {
   let currentSnapshot = createUninitializedSnapshot()
   let isStarted = false
+  let isInitializing = false
+  let pendingNetworkStatus = null
+  let pendingAppState = null
   let startPromise = null
+  let currentEpoch = 0
   let nativeHandles = []
   let webCleaners = []
   const subscribers = new Set()
@@ -69,7 +73,12 @@ export function createRuntimeSignalService({
   }
 
   function handleNativeNetworkChange(status) {
+    if (isInitializing) {
+      pendingNetworkStatus = status
+      return
+    }
     if (!isStarted) return
+
     const newConnected = status?.connected === true
     const newConnectionType =
       typeof status?.connectionType === 'string' ? status.connectionType : 'unknown'
@@ -98,7 +107,12 @@ export function createRuntimeSignalService({
   }
 
   function handleNativeAppStateChange(state) {
+    if (isInitializing) {
+      pendingAppState = state
+      return
+    }
     if (!isStarted) return
+
     const newForeground = state?.isActive === true
     const prevForeground = currentSnapshot.foreground
 
@@ -154,7 +168,9 @@ export function createRuntimeSignalService({
   }
 
   async function cleanupNativeHandles() {
-    for (const h of nativeHandles) {
+    const handlesToClean = nativeHandles
+    nativeHandles = []
+    for (const h of handlesToClean) {
       try {
         if (h && typeof h.remove === 'function') {
           await h.remove()
@@ -163,18 +179,18 @@ export function createRuntimeSignalService({
         // Ignore removal error
       }
     }
-    nativeHandles = []
   }
 
   function cleanupWebCleaners() {
-    for (const clean of webCleaners) {
+    const cleanersToRun = webCleaners
+    webCleaners = []
+    for (const clean of cleanersToRun) {
       try {
         clean()
       } catch {
         // Ignore
       }
     }
-    webCleaners = []
   }
 
   async function start() {
@@ -189,6 +205,8 @@ export function createRuntimeSignalService({
     if (startPromise) {
       return startPromise
     }
+
+    const epoch = ++currentEpoch
 
     startPromise = (async () => {
       try {
@@ -208,7 +226,7 @@ export function createRuntimeSignalService({
             typeof app.addListener !== 'function'
           ) {
             currentSnapshot = createFailClosedSnapshot(true)
-            isStarted = true
+            isStarted = false
             return {
               ok: false,
               code: 'RUNTIME_SIGNAL_INIT_FAILED',
@@ -216,41 +234,9 @@ export function createRuntimeSignalService({
             }
           }
 
-          let networkStatus
-          let appState
-
-          try {
-            const [netRes, appRes] = await Promise.all([
-              network.getStatus(),
-              app.getState(),
-            ])
-            networkStatus = netRes
-            appState = appRes
-          } catch {
-            currentSnapshot = createFailClosedSnapshot(true)
-            isStarted = true
-            return {
-              ok: false,
-              code: 'RUNTIME_SIGNAL_INIT_FAILED',
-              snapshot: getSnapshot(),
-            }
-          }
-
-          const online = networkStatus?.connected === true
-          const connectionType =
-            typeof networkStatus?.connectionType === 'string'
-              ? networkStatus.connectionType
-              : 'unknown'
-          const foreground = appState?.isActive === true
-
-          currentSnapshot = {
-            initialized: true,
-            native: true,
-            online,
-            foreground,
-            connectionType,
-            source: 'native',
-          }
+          isInitializing = true
+          pendingNetworkStatus = null
+          pendingAppState = null
 
           const handles = []
           try {
@@ -270,6 +256,7 @@ export function createRuntimeSignalService({
             )
             handles.push(appHandle)
           } catch {
+            isInitializing = false
             for (const h of handles) {
               try {
                 if (h && typeof h.remove === 'function') {
@@ -279,8 +266,9 @@ export function createRuntimeSignalService({
                 // Ignore
               }
             }
+            nativeHandles = []
             currentSnapshot = createFailClosedSnapshot(true)
-            isStarted = true
+            isStarted = false
             return {
               ok: false,
               code: 'RUNTIME_SIGNAL_INIT_FAILED',
@@ -289,7 +277,80 @@ export function createRuntimeSignalService({
           }
 
           nativeHandles = handles
+
+          if (epoch !== currentEpoch) {
+            isInitializing = false
+            await cleanupNativeHandles()
+            return {
+              ok: false,
+              code: 'RUNTIME_SIGNAL_STOPPED',
+              snapshot: getSnapshot(),
+            }
+          }
+
+          let networkStatus
+          let appState
+
+          try {
+            const [netRes, appRes] = await Promise.all([
+              network.getStatus(),
+              app.getState(),
+            ])
+            networkStatus = netRes
+            appState = appRes
+          } catch {
+            isInitializing = false
+            await cleanupNativeHandles()
+            currentSnapshot = createFailClosedSnapshot(true)
+            isStarted = false
+            return {
+              ok: false,
+              code: 'RUNTIME_SIGNAL_INIT_FAILED',
+              snapshot: getSnapshot(),
+            }
+          }
+
+          if (epoch !== currentEpoch) {
+            isInitializing = false
+            await cleanupNativeHandles()
+            return {
+              ok: false,
+              code: 'RUNTIME_SIGNAL_STOPPED',
+              snapshot: getSnapshot(),
+            }
+          }
+
+          let online = networkStatus?.connected === true
+          let connectionType =
+            typeof networkStatus?.connectionType === 'string'
+              ? networkStatus.connectionType
+              : 'unknown'
+          let foreground = appState?.isActive === true
+
+          if (pendingNetworkStatus !== null) {
+            online = pendingNetworkStatus?.connected === true
+            if (typeof pendingNetworkStatus?.connectionType === 'string') {
+              connectionType = pendingNetworkStatus.connectionType
+            }
+          }
+
+          if (pendingAppState !== null) {
+            foreground = pendingAppState?.isActive === true
+          }
+
+          currentSnapshot = {
+            initialized: true,
+            native: true,
+            online,
+            foreground,
+            connectionType,
+            source: 'native',
+          }
+
+          isInitializing = false
           isStarted = true
+          pendingNetworkStatus = null
+          pendingAppState = null
 
           emit('initialized', null, currentSnapshot)
           return {
@@ -338,6 +399,16 @@ export function createRuntimeSignalService({
           }
 
           webCleaners = cleaners
+
+          if (epoch !== currentEpoch) {
+            cleanupWebCleaners()
+            return {
+              ok: false,
+              code: 'RUNTIME_SIGNAL_STOPPED',
+              snapshot: getSnapshot(),
+            }
+          }
+
           isStarted = true
 
           emit('initialized', null, currentSnapshot)
@@ -356,9 +427,21 @@ export function createRuntimeSignalService({
   }
 
   async function stop() {
+    currentEpoch++
+    const pendingStart = startPromise
+    if (pendingStart) {
+      try {
+        await pendingStart
+      } catch {
+        // Ignore
+      }
+    }
     await cleanupNativeHandles()
     cleanupWebCleaners()
     isStarted = false
+    isInitializing = false
+    pendingNetworkStatus = null
+    pendingAppState = null
     currentSnapshot = createUninitializedSnapshot()
     return {
       ok: true,
