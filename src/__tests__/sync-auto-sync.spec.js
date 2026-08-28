@@ -22,6 +22,7 @@ import { useSyncOrchestratorStore } from '@/stores/syncOrchestratorStore'
 import { useSyncHealthStore } from '@/stores/syncHealthStore'
 import { useSyncRecoveryStore } from '@/stores/syncRecoveryStore'
 import { useSyncActivityLogStore } from '@/stores/syncActivityLogStore'
+import { createRuntimeSignalService } from '@/services/runtime/runtimeSignalService'
 import CloudLoginView from '@/views/settings/CloudLoginView.vue'
 
 describe('P20: Safe Foreground Auto Sync Trigger', () => {
@@ -31,6 +32,7 @@ describe('P20: Safe Foreground Auto Sync Trigger', () => {
   let autoSyncService
   let healthService
   let orchestratorService
+  let runtimeSignalService
   let currentTime
 
   function setupAuthenticatedSession(cloudStore) {
@@ -107,11 +109,24 @@ describe('P20: Safe Foreground Auto Sync Trigger', () => {
       activityLogService,
       now: () => currentTime,
     })
+
+    runtimeSignalService = createRuntimeSignalService({
+      windowRef: window,
+      documentRef: document,
+      navigatorRef: { onLine: true },
+    })
+    await runtimeSignalService.start()
+
+    const syncAutoSyncStore = useSyncAutoSyncStore(pinia)
+    syncAutoSyncStore.init({ autoSyncService, runtimeSignalService })
   })
 
-  afterEach(() => {
+  afterEach(async () => {
     const autoSyncStore = useSyncAutoSyncStore()
     autoSyncStore.stopListeners()
+    if (runtimeSignalService) {
+      await runtimeSignalService.stop()
+    }
     vi.restoreAllMocks()
   })
 
@@ -703,6 +718,13 @@ describe('P20: Safe Foreground Auto Sync Trigger', () => {
 
   // 105. Test online event
   it('105. triggers auto sync on window online event', async () => {
+    const customRuntime = createRuntimeSignalService({
+      windowRef: window,
+      documentRef: document,
+      navigatorRef: { onLine: false },
+    })
+    await customRuntime.start()
+
     const cloudStore = useCloudSessionStore()
     setupAuthenticatedSession(cloudStore)
 
@@ -712,13 +734,14 @@ describe('P20: Safe Foreground Auto Sync Trigger', () => {
     })
 
     const syncAutoSyncStore = useSyncAutoSyncStore()
-    syncAutoSyncStore.init({ autoSyncService })
+    syncAutoSyncStore.init({ autoSyncService, runtimeSignalService: customRuntime })
     syncAutoSyncStore.startListeners()
 
     window.dispatchEvent(new Event('online'))
     await flushPromises()
 
     expect(orchestratorService.syncAll).toHaveBeenCalledTimes(1)
+    await customRuntime.stop()
   })
 
   // 106. Test hidden online
@@ -742,6 +765,22 @@ describe('P20: Safe Foreground Auto Sync Trigger', () => {
 
   // 107. Test resume visibilitychange
   it('107. triggers auto sync on visibilitychange to visible', async () => {
+    let currentVis = 'hidden'
+    const customDoc = {
+      get visibilityState() {
+        return currentVis
+      },
+      addEventListener: document.addEventListener.bind(document),
+      removeEventListener: document.removeEventListener.bind(document),
+    }
+
+    const customRuntime = createRuntimeSignalService({
+      windowRef: window,
+      documentRef: customDoc,
+      navigatorRef: { onLine: true },
+    })
+    await customRuntime.start()
+
     const cloudStore = useCloudSessionStore()
     setupAuthenticatedSession(cloudStore)
 
@@ -751,42 +790,59 @@ describe('P20: Safe Foreground Auto Sync Trigger', () => {
     })
 
     const syncAutoSyncStore = useSyncAutoSyncStore()
-    syncAutoSyncStore.init({ autoSyncService })
+    syncAutoSyncStore.init({ autoSyncService, runtimeSignalService: customRuntime })
     syncAutoSyncStore.startListeners()
 
-    Object.defineProperty(document, 'visibilityState', {
-      value: 'visible',
-      configurable: true,
-    })
-
+    currentVis = 'visible'
     document.dispatchEvent(new Event('visibilitychange'))
     await flushPromises()
 
     expect(orchestratorService.syncAll).toHaveBeenCalledTimes(1)
+    await customRuntime.stop()
   })
 
   // 108. Test hidden visibilitychange
   it('108. does not trigger auto sync on visibilitychange to hidden', async () => {
+    let currentVis = 'visible'
+    const customDoc = {
+      get visibilityState() {
+        return currentVis
+      },
+      addEventListener: document.addEventListener.bind(document),
+      removeEventListener: document.removeEventListener.bind(document),
+    }
+
+    const customRuntime = createRuntimeSignalService({
+      windowRef: window,
+      documentRef: customDoc,
+      navigatorRef: { onLine: true },
+    })
+    await customRuntime.start()
+
     const cloudStore = useCloudSessionStore()
     setupAuthenticatedSession(cloudStore)
 
     const syncAutoSyncStore = useSyncAutoSyncStore()
-    syncAutoSyncStore.init({ autoSyncService })
+    syncAutoSyncStore.init({ autoSyncService, runtimeSignalService: customRuntime })
     syncAutoSyncStore.startListeners()
 
-    Object.defineProperty(document, 'visibilityState', {
-      value: 'hidden',
-      configurable: true,
-    })
-
+    currentVis = 'hidden'
     document.dispatchEvent(new Event('visibilitychange'))
     await flushPromises()
 
     expect(orchestratorService.syncAll).not.toHaveBeenCalled()
+    await customRuntime.stop()
   })
 
   // 109. Test listener idempotent
   it('109. calling startListeners multiple times registers listeners only once', async () => {
+    const customRuntime = createRuntimeSignalService({
+      windowRef: window,
+      documentRef: document,
+      navigatorRef: { onLine: false },
+    })
+    await customRuntime.start()
+
     const cloudStore = useCloudSessionStore()
     setupAuthenticatedSession(cloudStore)
 
@@ -796,7 +852,7 @@ describe('P20: Safe Foreground Auto Sync Trigger', () => {
     })
 
     const syncAutoSyncStore = useSyncAutoSyncStore()
-    syncAutoSyncStore.init({ autoSyncService })
+    syncAutoSyncStore.init({ autoSyncService, runtimeSignalService: customRuntime })
 
     syncAutoSyncStore.startListeners()
     syncAutoSyncStore.startListeners()
@@ -805,12 +861,20 @@ describe('P20: Safe Foreground Auto Sync Trigger', () => {
     await flushPromises()
 
     expect(orchestratorService.syncAll).toHaveBeenCalledTimes(1)
+    await customRuntime.stop()
   })
 
   // 110. Test stop listeners
   it('110. stopListeners successfully unregisters all event listeners', async () => {
+    const customRuntime = createRuntimeSignalService({
+      windowRef: window,
+      documentRef: document,
+      navigatorRef: { onLine: false },
+    })
+    await customRuntime.start()
+
     const syncAutoSyncStore = useSyncAutoSyncStore()
-    syncAutoSyncStore.init({ autoSyncService })
+    syncAutoSyncStore.init({ autoSyncService, runtimeSignalService: customRuntime })
 
     syncAutoSyncStore.startListeners()
     syncAutoSyncStore.stopListeners()
@@ -819,6 +883,7 @@ describe('P20: Safe Foreground Auto Sync Trigger', () => {
     await flushPromises()
 
     expect(orchestratorService.syncAll).not.toHaveBeenCalled()
+    await customRuntime.stop()
   })
 
   // 112. Test auto activity log

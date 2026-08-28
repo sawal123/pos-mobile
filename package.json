@@ -17,7 +17,9 @@
     "@aparajita/capacitor-secure-storage": "^8.0.0",
     "@capacitor-community/sqlite": "^8.1.1",
     "@capacitor/android": "^8.5.0",
+    "@capacitor/app": "^8.1.1",
     "@capacitor/core": "^8.5.0",
+    "@capacitor/network": "^8.0.1",
     "pinia": "^4.0.2",
     "vue": "^3.5.40",
     "vue-router": "^5.2.0"

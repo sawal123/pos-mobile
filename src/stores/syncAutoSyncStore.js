@@ -33,14 +33,17 @@ export const useSyncAutoSyncStore = defineStore('syncAutoSync', () => {
   const lastSkippedCode = ref(null)
 
   let _autoSyncService = null
+  let _runtimeSignalService = null
   let _listenersAttached = false
-  let _onOnlineHandler = null
-  let _onVisibilityHandler = null
+  let _unsubscribeRuntime = null
   let _preferenceLoadSeq = 0
 
-  function init({ autoSyncService = null } = {}) {
+  function init({ autoSyncService = null, runtimeSignalService = null } = {}) {
     if (autoSyncService) {
       _autoSyncService = autoSyncService
+    }
+    if (runtimeSignalService) {
+      _runtimeSignalService = runtimeSignalService
     }
   }
 
@@ -211,6 +214,17 @@ export const useSyncAutoSyncStore = defineStore('syncAutoSync', () => {
       return { ok: false, code: 'SERVICE_NOT_INITIALIZED' }
     }
 
+    if (!_runtimeSignalService) {
+      lastSkippedCode.value = 'AUTO_SYNC_RUNTIME_UNAVAILABLE'
+      return { ok: false, code: 'AUTO_SYNC_RUNTIME_UNAVAILABLE' }
+    }
+
+    const runtime = _runtimeSignalService.getSnapshot()
+    if (!runtime || runtime.initialized !== true) {
+      lastSkippedCode.value = 'AUTO_SYNC_RUNTIME_UNAVAILABLE'
+      return { ok: false, code: 'AUTO_SYNC_RUNTIME_UNAVAILABLE' }
+    }
+
     if (loadingPreference.value) {
       lastSkippedCode.value = 'AUTO_SYNC_PREFERENCE_BUSY'
       return { ok: false, code: 'AUTO_SYNC_PREFERENCE_BUSY' }
@@ -227,10 +241,8 @@ export const useSyncAutoSyncStore = defineStore('syncAutoSync', () => {
     }
 
     const contextSnapshot = snapshotCloudContext()
-    const online =
-      typeof navigator !== 'undefined' ? navigator.onLine === true : false
-    const isForeground =
-      typeof document !== 'undefined' ? document.visibilityState === 'visible' : false
+    const online = runtime.online === true
+    const isForeground = runtime.foreground === true
 
     running.value = true
     lastError.value = null
@@ -277,36 +289,26 @@ export const useSyncAutoSyncStore = defineStore('syncAutoSync', () => {
 
   function startListeners() {
     if (_listenersAttached) return
-    if (typeof window === 'undefined') return
+    if (!_runtimeSignalService) return
 
-    _onOnlineHandler = () => {
-      void trigger('online')
-    }
-
-    _onVisibilityHandler = () => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+    _unsubscribeRuntime = _runtimeSignalService.subscribe((event) => {
+      if (!event) return
+      if (event.transition === 'online') {
+        void trigger('online')
+      } else if (event.transition === 'resume') {
         void trigger('resume')
       }
-    }
-
-    window.addEventListener('online', _onOnlineHandler)
-    if (typeof document !== 'undefined') {
-      document.addEventListener('visibilitychange', _onVisibilityHandler)
-    }
+    })
 
     _listenersAttached = true
   }
 
   function stopListeners() {
     if (!_listenersAttached) return
-    if (typeof window !== 'undefined' && _onOnlineHandler) {
-      window.removeEventListener('online', _onOnlineHandler)
+    if (_unsubscribeRuntime) {
+      _unsubscribeRuntime()
+      _unsubscribeRuntime = null
     }
-    if (typeof document !== 'undefined' && _onVisibilityHandler) {
-      document.removeEventListener('visibilitychange', _onVisibilityHandler)
-    }
-    _onOnlineHandler = null
-    _onVisibilityHandler = null
     _listenersAttached = false
   }
 
@@ -327,5 +329,6 @@ export const useSyncAutoSyncStore = defineStore('syncAutoSync', () => {
     startListeners,
     stopListeners,
     getAutoSyncService: () => _autoSyncService,
+    getRuntimeSignalService: () => _runtimeSignalService,
   }
 })

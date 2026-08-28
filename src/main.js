@@ -19,6 +19,7 @@ import { useSyncRecoveryStore } from './stores/syncRecoveryStore'
 import { useSyncActivityLogStore } from './stores/syncActivityLogStore'
 import { useSyncAutoSyncStore } from './stores/syncAutoSyncStore'
 import { useSyncStatusStore } from './stores/syncStatusStore'
+import { createRuntimeSignalService } from './services/runtime/runtimeSignalService'
 
 export async function bootstrapApp({
   appFactory = createApp,
@@ -26,6 +27,7 @@ export async function bootstrapApp({
   routerFactory = createAppRouter,
   initialize = initializePersistence,
   initializeSync = initializeSyncFoundation,
+  runtimeSignalFactory = createRuntimeSignalService,
   rootComponent = App,
   mountTarget = '#app',
 } = {}) {
@@ -46,6 +48,8 @@ export async function bootstrapApp({
   const router = routerFactory()
 
   app.use(router)
+
+  let runtimeSignalService = null
 
   // P10: hydrate cloud session and device identifier after persistence is ready.
   // Non-blocking – POS continues offline if cloud storage fails.
@@ -93,14 +97,29 @@ export async function bootstrapApp({
         const syncActivityLogStore = useSyncActivityLogStore(pinia)
         syncActivityLogStore.init({ activityLogService: syncFoundation.activityLogService, adapter })
       }
+
+      // P22: Single shared runtime signal bridge for native & browser events
+      runtimeSignalService = runtimeSignalFactory()
+      try {
+        await runtimeSignalService.start()
+      } catch {
+        // Startup failure does not block POS startup (fail-closed)
+      }
+
       if (syncFoundation?.autoSyncService) {
         const syncAutoSyncStore = useSyncAutoSyncStore(pinia)
-        syncAutoSyncStore.init({ autoSyncService: syncFoundation.autoSyncService })
+        syncAutoSyncStore.init({
+          autoSyncService: syncFoundation.autoSyncService,
+          runtimeSignalService,
+        })
         syncAutoSyncStore.startListeners()
       }
       if (syncFoundation?.statusService) {
         const syncStatusStore = useSyncStatusStore(pinia)
-        syncStatusStore.init({ statusService: syncFoundation.statusService })
+        syncStatusStore.init({
+          statusService: syncFoundation.statusService,
+          runtimeSignalService,
+        })
         syncStatusStore.startListeners()
         void syncStatusStore.refresh()
       }
@@ -117,6 +136,7 @@ export async function bootstrapApp({
     router,
     persistence,
     syncFoundation,
+    runtimeSignalService,
   }
 }
 
