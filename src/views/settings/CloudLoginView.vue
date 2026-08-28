@@ -12,6 +12,7 @@ import { useSyncBootstrapStore } from '@/stores/syncBootstrapStore'
 import { useSyncConflictStore } from '@/stores/syncConflictStore'
 import { useSyncOrchestratorStore } from '@/stores/syncOrchestratorStore'
 import { useSyncHealthStore } from '@/stores/syncHealthStore'
+import { useSyncRecoveryStore } from '@/stores/syncRecoveryStore'
 
 const cloudStore = useCloudSessionStore()
 const syncPushStore = useSyncPushStore()
@@ -20,6 +21,7 @@ const syncBootstrapStore = useSyncBootstrapStore()
 const syncConflictStore = useSyncConflictStore()
 const syncOrchestratorStore = useSyncOrchestratorStore()
 const syncHealthStore = useSyncHealthStore()
+const syncRecoveryStore = useSyncRecoveryStore()
 
 // ── Form state ──────────────────────────────────────────────────────────────
 const email = ref('')
@@ -35,6 +37,8 @@ const bootstrapMessage = ref('')
 const bootstrapSuccess = ref(false)
 const conflictMessage = ref('')
 const conflictSuccess = ref(false)
+const recoveryMessage = ref('')
+const recoverySuccess = ref(false)
 
 // ── Derived ─────────────────────────────────────────────────────────────────
 const isAnySyncOperationBusy = computed(
@@ -45,6 +49,7 @@ const isAnySyncOperationBusy = computed(
     syncBootstrapStore.loading ||
     syncConflictStore.loading ||
     syncHealthStore.loading ||
+    syncRecoveryStore.loading ||
     cloudStore.loading,
 )
 
@@ -74,13 +79,18 @@ const canSync = computed(
     cloudStore.isDeviceRegistered,
 )
 
+const recoveryPlan = computed(() => {
+  if (!syncHealthStore.lastResult) return null
+  return syncRecoveryStore.getRecoveryPlan(syncHealthStore.lastResult)
+})
+
 watch(canSync, async (isReady) => {
   if (isReady) {
     await syncPushStore.refreshPendingCount()
   }
 })
 
-// Invalidate health result when cloud context changes
+// Invalidate health and recovery result when cloud context changes
 watch(
   () => [
     cloudStore.user?.id,
@@ -92,6 +102,8 @@ watch(
   ],
   () => {
     syncHealthStore.resetResult()
+    syncRecoveryStore.resetResult()
+    recoveryMessage.value = ''
   },
 )
 
@@ -109,6 +121,22 @@ function getPlatform() {
 async function handleCheckSyncHealth() {
   if (isAnySyncOperationBusy.value) return
   await syncHealthStore.checkHealth()
+}
+
+async function handleRecovery(action) {
+  if (isAnySyncOperationBusy.value) return
+  syncHealthStore.resetResult()
+  recoveryMessage.value = ''
+  const result = await syncRecoveryStore.recover(action)
+  if (result.ok) {
+    recoverySuccess.value = true
+    recoveryMessage.value = result.message || 'Pemulihan sinkronisasi berhasil.'
+    await syncPushStore.refreshPendingCount()
+    await syncConflictStore.loadConflicts()
+  } else {
+    recoverySuccess.value = false
+    recoveryMessage.value = result.message || result.error?.message || 'Pemulihan gagal.'
+  }
 }
 
 async function handleSyncAll() {
@@ -531,6 +559,82 @@ onMounted(async () => {
             Terakhir diperiksa: {{ syncHealthStore.lastCheckedAt }}
           </p>
         </div>
+      </div>
+
+      <!-- P18: Manual Sync Recovery Center -->
+      <div
+        v-if="canSync && (syncHealthStore.lastResult || syncRecoveryStore.loading || recoveryMessage || syncRecoveryStore.lastResult)"
+        id="cloud-recovery-section"
+        class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
+      >
+        <div>
+          <p class="text-sm font-semibold text-ink-primary">Pemulihan Sinkronisasi</p>
+          <p id="recovery-plan-message" class="text-xs text-ink-secondary">
+            {{ recoveryPlan?.message || 'Pilih tindakan pemulihan yang sesuai berdasarkan status diagnostik.' }}
+          </p>
+        </div>
+
+        <div
+          v-if="recoveryPlan?.availableActions && recoveryPlan.availableActions.length > 0"
+          class="flex flex-wrap gap-2"
+        >
+          <BaseButton
+            v-if="recoveryPlan.availableActions.includes('RETRY_INFLIGHT')"
+            id="recovery-retry-inflight-btn"
+            variant="primary"
+            size="sm"
+            :disabled="isAnySyncOperationBusy"
+            :loading="syncRecoveryStore.loading && syncRecoveryStore.lastAction === 'RETRY_INFLIGHT'"
+            @click="handleRecovery('RETRY_INFLIGHT')"
+          >
+            Coba Ulang Push
+          </BaseButton>
+
+          <BaseButton
+            v-if="recoveryPlan.availableActions.includes('CONTINUE_PENDING')"
+            id="recovery-continue-pending-btn"
+            variant="primary"
+            size="sm"
+            :disabled="isAnySyncOperationBusy"
+            :loading="syncRecoveryStore.loading && syncRecoveryStore.lastAction === 'CONTINUE_PENDING'"
+            @click="handleRecovery('CONTINUE_PENDING')"
+          >
+            Lanjutkan Sinkronisasi
+          </BaseButton>
+
+          <BaseButton
+            v-if="recoveryPlan.availableActions.includes('PREPARE_BOOTSTRAP')"
+            id="recovery-prepare-bootstrap-btn"
+            variant="primary"
+            size="sm"
+            :disabled="isAnySyncOperationBusy"
+            :loading="syncRecoveryStore.loading && syncRecoveryStore.lastAction === 'PREPARE_BOOTSTRAP'"
+            @click="handleRecovery('PREPARE_BOOTSTRAP')"
+          >
+            Siapkan Data Lokal
+          </BaseButton>
+
+          <BaseButton
+            v-if="recoveryPlan.availableActions.includes('CONTINUE_BOOTSTRAP')"
+            id="recovery-continue-bootstrap-btn"
+            variant="primary"
+            size="sm"
+            :disabled="isAnySyncOperationBusy"
+            :loading="syncRecoveryStore.loading && syncRecoveryStore.lastAction === 'CONTINUE_BOOTSTRAP'"
+            @click="handleRecovery('CONTINUE_BOOTSTRAP')"
+          >
+            Lanjutkan Data Bootstrap
+          </BaseButton>
+        </div>
+
+        <p
+          v-if="recoveryMessage"
+          id="recovery-result-message"
+          class="rounded-xl px-3 py-2 text-xs font-medium"
+          :class="recoverySuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'"
+        >
+          {{ recoveryMessage }}
+        </p>
       </div>
 
       <!-- P16: Manual Full Sync Section -->
