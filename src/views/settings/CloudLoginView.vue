@@ -61,6 +61,12 @@ const canSync = computed(
 
 const isContextGuardBlocked = computed(() => canSync.value && syncContextGuardStore.status === 'blocked')
 
+const isContextGuardMutationBlocked = computed(() => {
+  if (!canSync.value) return false
+  if (syncContextGuardStore.loading) return true
+  return !['safe', 'unbound'].includes(syncContextGuardStore.status)
+})
+
 const isAnySyncOperationBusy = computed(
   () =>
     syncOrchestratorStore.loading ||
@@ -118,14 +124,14 @@ watch(
     resetRecoveryPresentation()
     showClearConfirm.value = false
     syncContextGuardStore.resetPresentation()
-    if (canSync.value && syncContextGuardStore.getContextGuardService()) {
+    if (canSync.value) {
       await syncContextGuardStore.check()
     }
   },
 )
 
 onMounted(async () => {
-  if (canSync.value && syncContextGuardStore.getContextGuardService()) {
+  if (canSync.value) {
     await syncContextGuardStore.check()
   } else {
     syncContextGuardStore.resetPresentation()
@@ -156,6 +162,37 @@ function snapshotCloudContext() {
     deviceIdentifier: cloudStore.deviceIdentifier != null ? String(cloudStore.deviceIdentifier) : null,
     registeredDeviceId: cloudStore.registeredDeviceId != null ? Number(cloudStore.registeredDeviceId) : null,
   }
+}
+
+function buildContextFingerprint() {
+  const userId = cloudStore.user?.id != null ? String(cloudStore.user.id) : ''
+  const bizId = cloudStore.selectedBusiness?.id != null ? String(cloudStore.selectedBusiness.id) : ''
+  const outletId = cloudStore.selectedOutlet?.id != null ? String(cloudStore.selectedOutlet.id) : ''
+  const cloudAccess = cloudStore.cloudAccess === true ? '1' : '0'
+  const devId = cloudStore.deviceIdentifier != null ? String(cloudStore.deviceIdentifier).trim() : ''
+  const regId = cloudStore.registeredDeviceId != null ? String(cloudStore.registeredDeviceId) : ''
+  return `${userId}:${bizId}:${outletId}:${cloudAccess}:${devId}:${regId}`
+}
+
+async function ensureContextGuardAllowsMutation() {
+  if (!canSync.value) return false
+  
+  const fingerprintBefore = buildContextFingerprint()
+  
+  const result = await syncContextGuardStore.check()
+  
+  const fingerprintAfter = buildContextFingerprint()
+  
+  if (fingerprintBefore !== fingerprintAfter) {
+    return false
+  }
+  
+  return (
+    result?.ok === true &&
+    (result.status === 'safe' || result.status === 'unbound') &&
+    !syncContextGuardStore.loading &&
+    ['safe', 'unbound'].includes(syncContextGuardStore.status)
+  )
 }
 
 function formatActivityAction(action) {
@@ -331,7 +368,7 @@ async function handleConfirmClearActivityLog() {
 }
 
 async function handleToggleAutoSync(event) {
-  if (isAnySyncOperationBusy.value || isContextGuardBlocked.value) return
+  if (isAnySyncOperationBusy.value || isContextGuardMutationBlocked.value) return
   const target = event.target.checked
   const res = await syncAutoSyncStore.setEnabled(target)
   if (res.ok) {
@@ -389,7 +426,7 @@ async function handleCheckSyncHealth() {
 }
 
 async function handleRecovery(action) {
-  if (isAnySyncOperationBusy.value || isContextGuardBlocked.value) return
+  if (isAnySyncOperationBusy.value || isContextGuardMutationBlocked.value) return
   syncHealthStore.resetResult()
   resetRecoveryPresentation()
   const startedAt = new Date().toISOString()
@@ -453,7 +490,7 @@ async function handleRecovery(action) {
 }
 
 async function handleSyncAll() {
-  if (isAnySyncOperationBusy.value || isContextGuardBlocked.value) return
+  if (isAnySyncOperationBusy.value || isContextGuardMutationBlocked.value) return
   resetRecoveryPresentation()
   syncHealthStore.resetResult()
   syncAllMessage.value = ''
@@ -528,7 +565,7 @@ async function handleSyncAll() {
 }
 
 async function handleSyncNow() {
-  if (isAnySyncOperationBusy.value || isContextGuardBlocked.value) return
+  if (isAnySyncOperationBusy.value || isContextGuardMutationBlocked.value) return
   resetRecoveryPresentation()
   syncHealthStore.resetResult()
   syncMessage.value = ''
@@ -589,7 +626,7 @@ async function handleSyncNow() {
 }
 
 async function handlePullNow() {
-  if (isAnySyncOperationBusy.value || isContextGuardBlocked.value) return
+  if (isAnySyncOperationBusy.value || isContextGuardMutationBlocked.value) return
   resetRecoveryPresentation()
   syncHealthStore.resetResult()
   pullMessage.value = ''
@@ -651,7 +688,7 @@ async function handlePullNow() {
 }
 
 async function handleBootstrapNow() {
-  if (isAnySyncOperationBusy.value || isContextGuardBlocked.value) return
+  if (isAnySyncOperationBusy.value || isContextGuardMutationBlocked.value) return
   resetRecoveryPresentation()
   syncHealthStore.resetResult()
   bootstrapMessage.value = ''
@@ -709,7 +746,10 @@ async function handleBootstrapNow() {
 }
 
 async function handleUseServer(conflictId) {
-  if (isAnySyncOperationBusy.value || isContextGuardBlocked.value) return
+  if (isAnySyncOperationBusy.value || isContextGuardMutationBlocked.value) return
+  const guardAllowed = await ensureContextGuardAllowsMutation()
+  if (!guardAllowed) return
+
   resetRecoveryPresentation()
   syncHealthStore.resetResult()
   conflictMessage.value = ''
@@ -758,7 +798,10 @@ async function handleUseServer(conflictId) {
 }
 
 async function handleKeepLocal(conflictId) {
-  if (isAnySyncOperationBusy.value || isContextGuardBlocked.value) return
+  if (isAnySyncOperationBusy.value || isContextGuardMutationBlocked.value) return
+  const guardAllowed = await ensureContextGuardAllowsMutation()
+  if (!guardAllowed) return
+
   resetRecoveryPresentation()
   syncHealthStore.resetResult()
   conflictMessage.value = ''
@@ -1033,7 +1076,7 @@ onMounted(async () => {
             id="bootstrap-btn"
             variant="primary"
             size="sm"
-            :disabled="isAnySyncOperationBusy || isContextGuardBlocked"
+            :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
             :loading="syncBootstrapStore.loading"
             @click="handleBootstrapNow"
           >
@@ -1184,7 +1227,7 @@ onMounted(async () => {
             id="recovery-retry-inflight-btn"
             variant="primary"
             size="sm"
-            :disabled="isAnySyncOperationBusy || isContextGuardBlocked"
+            :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
             :loading="syncRecoveryStore.loading && syncRecoveryStore.lastAction === 'RETRY_INFLIGHT'"
             @click="handleRecovery('RETRY_INFLIGHT')"
           >
@@ -1196,7 +1239,7 @@ onMounted(async () => {
             id="recovery-continue-pending-btn"
             variant="primary"
             size="sm"
-            :disabled="isAnySyncOperationBusy || isContextGuardBlocked"
+            :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
             :loading="syncRecoveryStore.loading && syncRecoveryStore.lastAction === 'CONTINUE_PENDING'"
             @click="handleRecovery('CONTINUE_PENDING')"
           >
@@ -1208,7 +1251,7 @@ onMounted(async () => {
             id="recovery-prepare-bootstrap-btn"
             variant="primary"
             size="sm"
-            :disabled="isAnySyncOperationBusy || isContextGuardBlocked"
+            :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
             :loading="syncRecoveryStore.loading && syncRecoveryStore.lastAction === 'PREPARE_BOOTSTRAP'"
             @click="handleRecovery('PREPARE_BOOTSTRAP')"
           >
@@ -1220,7 +1263,7 @@ onMounted(async () => {
             id="recovery-continue-bootstrap-btn"
             variant="primary"
             size="sm"
-            :disabled="isAnySyncOperationBusy || isContextGuardBlocked"
+            :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
             :loading="syncRecoveryStore.loading && syncRecoveryStore.lastAction === 'CONTINUE_BOOTSTRAP'"
             @click="handleRecovery('CONTINUE_BOOTSTRAP')"
           >
@@ -1255,7 +1298,7 @@ onMounted(async () => {
             id="sync-all-btn"
             variant="primary"
             size="sm"
-            :disabled="syncBootstrapStore.hasContextMismatch || isAnySyncOperationBusy || isContextGuardBlocked"
+            :disabled="syncBootstrapStore.hasContextMismatch || isAnySyncOperationBusy || isContextGuardMutationBlocked"
             :loading="syncOrchestratorStore.loading"
             @click="handleSyncAll"
           >
@@ -1290,7 +1333,7 @@ onMounted(async () => {
             id="sync-now-btn"
             variant="primary"
             size="sm"
-            :disabled="syncBootstrapStore.hasContextMismatch || isAnySyncOperationBusy || isContextGuardBlocked"
+            :disabled="syncBootstrapStore.hasContextMismatch || isAnySyncOperationBusy || isContextGuardMutationBlocked"
             :loading="syncPushStore.loading"
             @click="handleSyncNow"
           >
@@ -1325,7 +1368,7 @@ onMounted(async () => {
             id="pull-now-btn"
             variant="secondary"
             size="sm"
-            :disabled="isAnySyncOperationBusy || isContextGuardBlocked"
+            :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
             :loading="syncPullStore.loading"
             @click="handlePullNow"
           >
@@ -1373,7 +1416,7 @@ onMounted(async () => {
                 :id="`use-server-btn-${conflict.id}`"
                 variant="secondary"
                 size="sm"
-                :disabled="isAnySyncOperationBusy || isContextGuardBlocked"
+                :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
                 :loading="syncConflictStore.loading"
                 @click="handleUseServer(conflict.id)"
               >
@@ -1383,7 +1426,7 @@ onMounted(async () => {
                 :id="`keep-local-btn-${conflict.id}`"
                 variant="primary"
                 size="sm"
-                :disabled="isAnySyncOperationBusy || isContextGuardBlocked"
+                :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
                 :loading="syncConflictStore.loading"
                 @click="handleKeepLocal(conflict.id)"
               >
@@ -1422,7 +1465,7 @@ onMounted(async () => {
               type="checkbox"
               class="peer sr-only"
               :checked="syncAutoSyncStore.enabled"
-              :disabled="isAnySyncOperationBusy || syncAutoSyncStore.loadingPreference || isContextGuardBlocked"
+              :disabled="isAnySyncOperationBusy || syncAutoSyncStore.loadingPreference || isContextGuardMutationBlocked"
               @change="handleToggleAutoSync"
             />
             <div

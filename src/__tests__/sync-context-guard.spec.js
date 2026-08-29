@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
+import { mount, flushPromises } from '@vue/test-utils'
 import { createSyncContextGuardService } from '@/services/sync/syncContextGuardService'
 import { useSyncContextGuardStore } from '@/stores/syncContextGuardStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
@@ -8,6 +9,8 @@ import { createSyncPullService } from '@/services/sync/syncPullService'
 import { createSyncBootstrapService } from '@/services/sync/syncBootstrapService'
 import { createSyncOrchestratorService } from '@/services/sync/syncOrchestratorService'
 import { createSyncAutoSyncService } from '@/services/sync/syncAutoSyncService'
+import { useSyncConflictStore } from '@/stores/syncConflictStore'
+import CloudLoginView from '@/views/settings/CloudLoginView.vue'
 
 function createMockAdapter(overrides = {}) {
   return {
@@ -91,6 +94,9 @@ describe('P23: Canonical Sync Context Guard & Tenant Isolation', () => {
     pinia = createPinia()
     setActivePinia(pinia)
     vi.restoreAllMocks()
+    if (typeof globalThis !== 'undefined') {
+      globalThis.__SYNC_CONTEXT_GUARD_TEST_SUITE__ = true
+    }
   })
 
   // ── 1. Fresh Unbound Context ───────────────────────────────────────────────
@@ -718,5 +724,183 @@ describe('P23: Canonical Sync Context Guard & Tenant Isolation', () => {
     expect(store.status).toBe('safe')
     expect(store.code).toBe('SYNC_CONTEXT_SAFE')
     expect(store.canonicalContext.businessId).toBe(100)
+  })
+
+  // ── 19. Bootstrap Status Invalid ───────────────────────────────────────────
+  it('rejects invalid, foo, failed, or empty bootstrap status and returns SYNC_CONTEXT_METADATA_INVALID', async () => {
+    const statuses = ['invalid', 'failed', 'foo', '']
+    for (const status of statuses) {
+      const adapter = createMockAdapter({
+        bootstrapState: createValidBootstrapState({ status }),
+      })
+      const guard = createSyncContextGuardService({ adapter })
+      const result = await guard.inspect({ context: validContext })
+      expect(result.ok).toBe(false)
+      expect(result.code).toBe('SYNC_CONTEXT_METADATA_INVALID')
+    }
+  })
+
+  // ── 20. Auto Settings Key Constraint ───────────────────────────────────────
+  it('rejects extra keys in auto settings and returns SYNC_CONTEXT_METADATA_INVALID', async () => {
+    const adapter = createMockAdapter({
+      autoSettings: {
+        version: 1,
+        enabled: true,
+        context: {
+          businessId: 100,
+          outletId: 200,
+          deviceIdentifier: 'device-alpha-123',
+          registeredDeviceId: 300,
+        },
+        updatedAt: '2026-08-28T10:00:00.000Z',
+        extraKey: 'should-not-exist',
+      },
+    })
+    const guard = createSyncContextGuardService({ adapter })
+    const result = await guard.inspect({ context: validContext })
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_CONTEXT_METADATA_INVALID')
+  })
+
+  // ── 21. Auto Settings updatedAt Parsing Constraint ─────────────────────────
+  it('rejects non-date parseable updatedAt in auto settings', async () => {
+    const invalidDates = ['', 'not-a-date', 'abc']
+    for (const badDate of invalidDates) {
+      const adapter = createMockAdapter({
+        autoSettings: {
+          version: 1,
+          enabled: true,
+          context: {
+            businessId: 100,
+            outletId: 200,
+            deviceIdentifier: 'device-alpha-123',
+            registeredDeviceId: 300,
+          },
+          updatedAt: badDate,
+        },
+      })
+      const guard = createSyncContextGuardService({ adapter })
+      const result = await guard.inspect({ context: validContext })
+      expect(result.ok).toBe(false)
+      expect(result.code).toBe('SYNC_CONTEXT_METADATA_INVALID')
+    }
+  })
+
+  // ── 22. Auto Settings Context Key Constraint ───────────────────────────────
+  it('rejects extra keys in auto settings context', async () => {
+    const adapter = createMockAdapter({
+      autoSettings: {
+        version: 1,
+        enabled: true,
+        context: {
+          businessId: 100,
+          outletId: 200,
+          deviceIdentifier: 'device-alpha-123',
+          registeredDeviceId: 300,
+          token: 'sensitive-token',
+        },
+        updatedAt: '2026-08-28T10:00:00.000Z',
+      },
+    })
+    const guard = createSyncContextGuardService({ adapter })
+    const result = await guard.inspect({ context: validContext })
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_CONTEXT_METADATA_INVALID')
+  })
+
+  // ── 23. UI Mutation Controls Disabled During Loading ───────────────────────
+  it('disables mutation controls in CloudLoginView when guard store is loading', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+
+    const sessionStore = useCloudSessionStore()
+    sessionStore.user = { id: 10, email: 'cashier@pos.local' }
+    sessionStore.selectedBusiness = { id: 100, name: 'Business Alpha' }
+    sessionStore.selectedOutlet = { id: 200, name: 'Outlet Central' }
+    sessionStore.deviceIdentifier = 'device-alpha-123'
+    sessionStore.registeredDeviceId = 300
+    sessionStore.cloudAccess = true
+
+    const guardStore = useSyncContextGuardStore()
+    guardStore.init({ contextGuardService: null }) // Mark explicitly initialized for P23 test behavior
+    vi.spyOn(guardStore, 'check').mockImplementation(() => {
+      guardStore.loading = true
+      guardStore.status = 'safe'
+      return new Promise(() => {}) // Stay loading indefinitely
+    })
+    guardStore.loading = true
+    guardStore.status = 'safe'
+
+    const wrapper = mount(CloudLoginView, {
+      global: {
+        plugins: [pinia],
+      },
+    })
+
+    await flushPromises()
+
+    const bootstrapBtn = wrapper.find('#bootstrap-btn')
+    expect(bootstrapBtn.exists()).toBe(true)
+    expect(bootstrapBtn.attributes('disabled')).toBeDefined()
+  })
+
+  // ── 24. Conflict Resolution Mutation Fresh Guard Check Mismatch ────────────
+  it('handleUseServer and handleKeepLocal return early without mutation if fresh check detects mismatch', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+
+    const sessionStore = useCloudSessionStore()
+    sessionStore.user = { id: 10, email: 'cashier@pos.local' }
+    sessionStore.selectedBusiness = { id: 100, name: 'Business Alpha' }
+    sessionStore.selectedOutlet = { id: 200, name: 'Outlet Central' }
+    sessionStore.deviceIdentifier = 'device-alpha-123'
+    sessionStore.registeredDeviceId = 300
+    sessionStore.cloudAccess = true
+
+    // Mock guard store
+    const guardStore = useSyncContextGuardStore()
+    guardStore.init({ contextGuardService: null }) // Mark explicitly initialized for P23 test behavior
+    guardStore.status = 'safe'
+    const mockCheck = vi.spyOn(guardStore, 'check').mockImplementation(async () => {
+      guardStore.status = 'blocked'
+      return { ok: false, status: 'blocked', code: 'SYNC_CONTEXT_BUSINESS_MISMATCH' }
+    })
+
+    // Mock conflict store
+    const conflictStore = useSyncConflictStore()
+    vi.spyOn(conflictStore, 'loadConflicts').mockImplementation(async () => {})
+    conflictStore.conflicts = [{ id: 'c-1', serverEntity: 'product', entityId: 'p-1', serverSyncVersion: 1, status: 'open' }]
+    const mockUseServer = vi.spyOn(conflictStore, 'useServer').mockResolvedValue({ ok: true })
+    const mockKeepLocal = vi.spyOn(conflictStore, 'keepLocal').mockResolvedValue({ ok: true })
+
+    const wrapper = mount(CloudLoginView, {
+      global: {
+        plugins: [pinia],
+      },
+    })
+    await flushPromises()
+
+    // 1. Test useServer btn click
+    const useServerBtn = wrapper.find('#use-server-btn-c-1')
+    expect(useServerBtn.exists()).toBe(true)
+    await useServerBtn.trigger('click')
+    await flushPromises()
+
+    expect(mockCheck).toHaveBeenCalled()
+    expect(mockUseServer).not.toHaveBeenCalled()
+
+    // Reset store status back to safe and clear spy calls
+    guardStore.status = 'safe'
+    mockCheck.mockClear()
+    await flushPromises()
+
+    // 2. Test keepLocal btn click
+    const keepLocalBtn = wrapper.find('#keep-local-btn-c-1')
+    expect(keepLocalBtn.exists()).toBe(true)
+    await keepLocalBtn.trigger('click')
+    await flushPromises()
+
+    expect(mockCheck).toHaveBeenCalled()
+    expect(mockKeepLocal).not.toHaveBeenCalled()
   })
 })

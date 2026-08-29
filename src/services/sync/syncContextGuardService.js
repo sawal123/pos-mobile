@@ -43,6 +43,12 @@ function isValidNonEmptyString(val) {
   return typeof val === 'string' && val.trim().length > 0
 }
 
+function isValidDateString(val) {
+  if (typeof val !== 'string' || val.trim().length === 0) return false
+  const d = new Date(val)
+  return !isNaN(d.getTime())
+}
+
 function validateCurrentContext(context) {
   if (!isPlainObject(context)) return null
 
@@ -255,7 +261,7 @@ export function createSyncContextGuardService({ adapter } = {}) {
       const isValidBootstrapState =
         isPlainObject(bootstrapState) &&
         bootstrapState.version === 1 &&
-        ['staged', 'completed', 'invalid'].includes(bootstrapState.status) &&
+        ['staged', 'completed'].includes(bootstrapState.status) &&
         isValidStrictId(bootstrapState.businessId) &&
         isValidStrictId(bootstrapState.outletId) &&
         isValidDeviceIdentifier(bootstrapState.deviceIdentifier) &&
@@ -273,11 +279,30 @@ export function createSyncContextGuardService({ adapter } = {}) {
 
     // 5. Validate auto settings schema (Actual P20: version: 1, enabled: boolean, context: null | {...}, updatedAt)
     if (autoSettings !== null && autoSettings !== undefined) {
+      const autoKeys = Object.keys(autoSettings)
+      const hasExtraKeys = autoKeys.some(key => !['version', 'enabled', 'context', 'updatedAt'].includes(key))
+
       const isValidBaseShape =
         isPlainObject(autoSettings) &&
         autoSettings.version === 1 &&
         typeof autoSettings.enabled === 'boolean' &&
-        isValidNonEmptyString(autoSettings.updatedAt)
+        isValidDateString(autoSettings.updatedAt) &&
+        !hasExtraKeys
+
+      let isContextValid = true
+      if (isValidBaseShape) {
+        if (autoSettings.context !== null && autoSettings.context !== undefined) {
+          if (!isPlainObject(autoSettings.context)) {
+            isContextValid = false
+          } else {
+            const contextKeys = Object.keys(autoSettings.context)
+            const hasExtraContextKeys = contextKeys.some(key => !['businessId', 'outletId', 'deviceIdentifier', 'registeredDeviceId'].includes(key))
+            if (hasExtraContextKeys || !isValidFullContext(autoSettings.context)) {
+              isContextValid = false
+            }
+          }
+        }
+      }
 
       if (!isValidBaseShape) {
         schemaIssues.push({
@@ -285,13 +310,13 @@ export function createSyncContextGuardService({ adapter } = {}) {
           source: 'auto_sync',
         })
       } else if (autoSettings.enabled === true) {
-        if (!autoSettings.context || !isValidFullContext(autoSettings.context)) {
+        if (!autoSettings.context || !isContextValid) {
           schemaIssues.push({
             code: 'INVALID_METADATA_SCHEMA',
             source: 'auto_sync',
           })
         }
-      } else if (autoSettings.context !== null && !isValidFullContext(autoSettings.context)) {
+      } else if (autoSettings.context !== null && !isContextValid) {
         schemaIssues.push({
           code: 'INVALID_METADATA_SCHEMA',
           source: 'auto_sync',
