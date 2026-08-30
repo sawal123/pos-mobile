@@ -1,4 +1,4 @@
-﻿// src/__tests__/helpers/syncScenarioServer.js
+// src/__tests__/helpers/syncScenarioServer.js
 
 export function createFakeServer() {
   const db = {
@@ -31,9 +31,6 @@ export function createFakeServer() {
   }
 
   function handlePush(body) {
-    pushRequestCount++
-    if (simulateNetworkError) throw new Error('Simulated network error')
-
     const { request_id, business_id, device_identifier, changes } = body
 
     if (!request_id || typeof request_id !== 'string' || !request_id.trim()) {
@@ -48,8 +45,6 @@ export function createFakeServer() {
     if (!changes || typeof changes !== 'object' || Array.isArray(changes)) {
       return { ok: false, status: 400, data: { code: 'INVALID_REQUEST', message: 'Missing or invalid changes object' } }
     }
-
-    pushRequestLog.push({ request_id, body: { ...body } })
 
     if (processedRequests.has(request_id)) {
       return { ok: true, status: 200, data: { data: { request_id, duplicate: true } } }
@@ -158,6 +153,13 @@ export function createFakeServer() {
   return {
     db,
     handleRequest(path, options) {
+      if (path === '/api/sync/push') {
+        pushRequestCount++
+        if (options?.body?.request_id) {
+          pushRequestLog.push({ request_id: options.body.request_id, body: { ...options.body } })
+        }
+      }
+
       if (simulateNetworkError) {
         return { ok: false, status: 0, data: null, error: { status: 0, code: 'NETWORK_ERROR', message: 'Simulated network failure', data: null } }
       }

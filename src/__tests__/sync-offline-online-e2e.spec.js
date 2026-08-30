@@ -1,4 +1,4 @@
-﻿// src/__tests__/sync-offline-online-e2e.spec.js
+// src/__tests__/sync-offline-online-e2e.spec.js
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
@@ -34,14 +34,14 @@ vi.mock('@/services/cloud/apiClient', () => ({
 }))
 
 // Helper to derive P21 UI status given cloudStore + raw status result
-function deriveUiStatus(cloudStore, rawStatus) {
+function deriveUiStatus(cloudStore, rawStatus, online = true) {
   if (!rawStatus.ok) return null
   const cloudAvailable = cloudStore.cloudAccess === true &&
     cloudStore.user != null &&
     cloudStore.selectedBusiness != null
   return deriveSyncUiStatus({
     cloudAvailable,
-    online: false,
+    online,
     syncing: false,
     pendingCount: rawStatus.pendingCount,
     openConflictCount: rawStatus.openConflictCount,
@@ -341,37 +341,49 @@ describe('P24: End-to-End Offline to Online Sync Scenarios', () => {
     mockServerHandler.handle = scenario.fakeServer.handleRequest
     scenario.cloudStore.$patch(makeValidCloudContext())
     await saveToken('mock-bearer-token-123')
+    scenario.runtimeSignal.setOnline(true)
     const productStore = useProductStore(scenario.pinia)
     await productStore.createCategory('Minuman')
     const prod = await productStore.createProduct({ name: 'Kopi Hitam', category: 'Minuman', price: 10000, stock: 5 })
     expect(prod.success).toBe(true)
+    await scenario.scheduler.flush()
+
     await scenario.adapter.saveSyncPushBinding({ businessId: 10, boundAt: new Date().toISOString() })
     await scenario.adapter.saveSyncPullBinding({ businessId: 10, outletId: 101, deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000', registeredDeviceId: 55, boundAt: new Date().toISOString() })
     await scenario.adapter.saveSyncPullState({ version: 1, cursor: 0, serverSequence: 0 })
+
+    const pushStore = useSyncPushStore(scenario.pinia)
+    expect((await pushStore.pushNow()).ok).toBe(true)
+    expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
+
     const registry = scenario.foundation.registry
     await registry.ensureLoaded()
     const prodSyncId = await registry.resolveSyncId(SYNC_ENTITY_TYPES.PRODUCT, prod.product.id)
-    const catSyncId = await registry.resolveSyncId(SYNC_ENTITY_TYPES.CATEGORY, 'Minuman')
-    scenario.fakeServer.db.products.push({ sync_id: prodSyncId, name: 'Kopi Hitam', category_sync_id: catSyncId, price: 10000, business_id: 10, sync_version: 1, sync_sequence: 1 })
-    scenario.fakeServer.setServerSequence(1)
     await scenario.adapter.saveSyncServerVersions({ [`products:${prodSyncId}`]: 1 })
-    await productStore.updateProduct(prod.product.id, { name: 'Kopi Hitam', category: 'Minuman', price: 12000, stock: 5 })
-    await scenario.scheduler.flush()
+
     scenario.fakeServer.db.products[0].name = 'Kopi Hitam Super'
     scenario.fakeServer.db.products[0].sync_version = 2
     scenario.fakeServer.db.products[0].sync_sequence = 2
     scenario.fakeServer.setServerSequence(2)
-    scenario.runtimeSignal.setOnline(true)
-    const pushStore = useSyncPushStore(scenario.pinia)
-    await pushStore.pushNow()
+
+    await productStore.updateProduct(prod.product.id, { name: 'Kopi Hitam', category: 'Minuman', price: 12000, stock: 5 })
+    await scenario.scheduler.flush()
+    expect(await scenario.adapter.countSyncQueueItems()).toBe(1)
+
+    const conflictPushRes = await pushStore.pushNow()
+    expect(conflictPushRes.ok).toBe(false)
+    expect(conflictPushRes.code).toBe('SYNC_CONFLICT')
+
     const conflictStore = useSyncConflictStore(scenario.pinia)
     await conflictStore.loadConflicts()
+    expect(conflictStore.openConflicts).toHaveLength(1)
     expect((await conflictStore.keepLocal(conflictStore.conflicts[0].id)).ok).toBe(true)
     expect((await pushStore.pushNow()).ok).toBe(true)
     expect(scenario.fakeServer.db.products[0].price).toBe(12000)
     expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
     await conflictStore.loadConflicts()
-    expect(conflictStore.conflicts).toHaveLength(0)
+    expect(conflictStore.openConflicts).toHaveLength(0)
+    expect(conflictStore.conflicts[0].status).toBe('resolved')
     expect(await scenario.adapter.loadSyncPushInflight()).toBeNull()
     await scenario.cleanup()
   })
@@ -381,33 +393,46 @@ describe('P24: End-to-End Offline to Online Sync Scenarios', () => {
     mockServerHandler.handle = scenario.fakeServer.handleRequest
     scenario.cloudStore.$patch(makeValidCloudContext())
     await saveToken('mock-bearer-token-123')
+    scenario.runtimeSignal.setOnline(true)
     const productStore = useProductStore(scenario.pinia)
     await productStore.createCategory('Minuman')
     const prod = await productStore.createProduct({ name: 'Kopi Hitam', category: 'Minuman', price: 10000, stock: 5 })
     expect(prod.success).toBe(true)
+    await scenario.scheduler.flush()
+
     await scenario.adapter.saveSyncPushBinding({ businessId: 10, boundAt: new Date().toISOString() })
     await scenario.adapter.saveSyncPullBinding({ businessId: 10, outletId: 101, deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000', registeredDeviceId: 55, boundAt: new Date().toISOString() })
     await scenario.adapter.saveSyncPullState({ version: 1, cursor: 0, serverSequence: 0 })
+
+    const pushStore = useSyncPushStore(scenario.pinia)
+    expect((await pushStore.pushNow()).ok).toBe(true)
+    expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
+
     const registry = scenario.foundation.registry
     await registry.ensureLoaded()
     const prodSyncId = await registry.resolveSyncId(SYNC_ENTITY_TYPES.PRODUCT, prod.product.id)
-    const catSyncId = await registry.resolveSyncId(SYNC_ENTITY_TYPES.CATEGORY, 'Minuman')
-    scenario.fakeServer.db.products.push({ sync_id: prodSyncId, name: 'Kopi Hitam', category_sync_id: catSyncId, price: 10000, business_id: 10, sync_version: 1, sync_sequence: 1 })
-    scenario.fakeServer.setServerSequence(1)
     await scenario.adapter.saveSyncServerVersions({ [`products:${prodSyncId}`]: 1 })
-    await productStore.updateProduct(prod.product.id, { name: 'Kopi Hitam', category: 'Minuman', price: 12000, stock: 5 })
-    await scenario.scheduler.flush()
+
     scenario.fakeServer.db.products[0].name = 'Kopi Hitam Super'
     scenario.fakeServer.db.products[0].price = 14000
     scenario.fakeServer.db.products[0].sync_version = 2
     scenario.fakeServer.db.products[0].sync_sequence = 2
     scenario.fakeServer.setServerSequence(2)
-    scenario.runtimeSignal.setOnline(true)
-    const pushStore = useSyncPushStore(scenario.pinia)
-    await pushStore.pushNow()
+
+    await productStore.updateProduct(prod.product.id, { name: 'Kopi Hitam', category: 'Minuman', price: 12000, stock: 5 })
+    await scenario.scheduler.flush()
+    expect(await scenario.adapter.countSyncQueueItems()).toBe(1)
+
+    const conflictPushRes = await pushStore.pushNow()
+    expect(conflictPushRes.ok).toBe(false)
+    expect(conflictPushRes.code).toBe('SYNC_CONFLICT')
+
     const conflictStore = useSyncConflictStore(scenario.pinia)
     await conflictStore.loadConflicts()
+    expect(conflictStore.openConflicts).toHaveLength(1)
     expect((await conflictStore.useServer(conflictStore.conflicts[0].id)).ok).toBe(true)
+    expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
+
     const pullStore = useSyncPullStore(scenario.pinia)
     expect((await pullStore.pullNow()).ok).toBe(true)
     const localProd = productStore.getProductById(prod.product.id)
@@ -416,7 +441,8 @@ describe('P24: End-to-End Offline to Online Sync Scenarios', () => {
     expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
     expect(productStore.products).toHaveLength(1)
     await conflictStore.loadConflicts()
-    expect(conflictStore.conflicts).toHaveLength(0)
+    expect(conflictStore.openConflicts).toHaveLength(0)
+    expect(conflictStore.conflicts[0].status).toBe('resolved')
     await scenario.cleanup()
   })
 
@@ -488,7 +514,6 @@ describe('P24: End-to-End Offline to Online Sync Scenarios', () => {
   })
 
   it('17. Foreground offline->online Auto Sync: deterministic via autoSyncStore.trigger', async () => {
-    // Runtime starts offline so listener attach does not trigger premature sync
     const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud', initialOnline: false, initialForeground: true })
     mockServerHandler.handle = scenario.fakeServer.handleRequest
 
@@ -501,9 +526,6 @@ describe('P24: End-to-End Offline to Online Sync Scenarios', () => {
     const setRes = await autoSyncStore.setEnabled(true)
     expect(setRes.ok).toBe(true)
 
-    // Attach listeners — runtime is offline, no "online" transition fires here
-    autoSyncStore.startListeners()
-
     // Create pending item while offline (cloud mode => queue)
     const productStore = useProductStore(scenario.pinia)
     await productStore.createCategory('Minuman')
@@ -513,7 +535,8 @@ describe('P24: End-to-End Offline to Online Sync Scenarios', () => {
 
     // Transition online: trigger auto sync directly and await it deterministically
     scenario.runtimeSignal.setOnline(true)
-    await autoSyncStore.trigger('online')
+    const trigRes = await autoSyncStore.trigger('online')
+    expect(trigRes.ok).toBe(true)
 
     // Queue cleared and push happened
     expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
