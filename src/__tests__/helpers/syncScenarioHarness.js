@@ -1,4 +1,4 @@
-// src/__tests__/helpers/syncScenarioHarness.js
+﻿// src/__tests__/helpers/syncScenarioHarness.js
 
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryAdapter } from '@/services/database/memoryAdapter'
@@ -22,15 +22,23 @@ import { useCustomerStore } from '@/stores/customerStore'
 import { useExpenseStore } from '@/stores/expenseStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import { resolveDeviceIdentifier } from '@/services/cloud/deviceIdentifier'
+import { saveToken } from '@/services/cloud/tokenRepository'
 import { createFakeServer } from './syncScenarioServer'
 
-export function createFakeRuntimeSignalService() {
+/**
+ * Creates a fake runtime signal service for tests.
+ *
+ * @param {object} [opts]
+ * @param {boolean} [opts.online=false]    Initial online state.
+ * @param {boolean} [opts.foreground=true] Initial foreground state.
+ */
+export function createFakeRuntimeSignalService({ online = false, foreground = true } = {}) {
   const subscribers = new Set()
   let snapshot = {
     initialized: true,
     native: false,
-    online: false,
-    foreground: true,
+    online,
+    foreground,
     connectionType: 'unknown',
     source: 'web',
   }
@@ -54,39 +62,98 @@ export function createFakeRuntimeSignalService() {
     getIsStarted() {
       return true
     },
-    // Test helpers to trigger events
+    // Synchronous helpers (no await on subscriber results)
     setOnline(isOnline) {
       const prevOnline = snapshot.online
       snapshot.online = isOnline
-      const transition = isOnline ? 'online' : 'offline'
       if (prevOnline !== isOnline) {
+        const transition = isOnline ? 'online' : 'offline'
         for (const cb of subscribers) {
-          cb({
-            type: 'network',
-            transition,
-            snapshot: { ...snapshot }
-          })
+          cb({ type: 'network', transition, snapshot: { ...snapshot } })
         }
       }
     },
     setForeground(isForeground) {
       const prevForeground = snapshot.foreground
       snapshot.foreground = isForeground
-      const transition = isForeground ? 'resume' : 'pause'
       if (prevForeground !== isForeground) {
+        const transition = isForeground ? 'resume' : 'pause'
         for (const cb of subscribers) {
-          cb({
-            type: 'app-state',
-            transition,
-            snapshot: { ...snapshot }
-          })
+          cb({ type: 'app-state', transition, snapshot: { ...snapshot } })
         }
       }
-    }
+    },
+    /**
+     * Async version: updates snapshot, calls all subscribers, awaits
+     * Promise.allSettled on any promises they return. This allows the
+     * caller to deterministically observe all side-effects (e.g. Auto Sync).
+     * No fixed timers needed.
+     */
+    async setOnlineAsync(isOnline) {
+      const prevOnline = snapshot.online
+      snapshot.online = isOnline
+      if (prevOnline !== isOnline) {
+        const transition = isOnline ? 'online' : 'offline'
+        const promises = []
+        for (const cb of subscribers) {
+          const result = cb({ type: 'network', transition, snapshot: { ...snapshot } })
+          if (result && typeof result.then === 'function') {
+            promises.push(result)
+          }
+        }
+        if (promises.length > 0) {
+          await Promise.allSettled(promises)
+        }
+      }
+    },
+    async setForegroundAsync(isForeground) {
+      const prevForeground = snapshot.foreground
+      snapshot.foreground = isForeground
+      if (prevForeground !== isForeground) {
+        const transition = isForeground ? 'resume' : 'pause'
+        const promises = []
+        for (const cb of subscribers) {
+          const result = cb({ type: 'app-state', transition, snapshot: { ...snapshot } })
+          if (result && typeof result.then === 'function') {
+            promises.push(result)
+          }
+        }
+        if (promises.length > 0) {
+          await Promise.allSettled(promises)
+        }
+      }
+    },
   }
 }
 
-export async function createOfflineOnlineScenario() {
+/**
+ * Canonical cloud context used across tests.
+ */
+export function makeValidCloudContext(overrides = {}) {
+  return {
+    user: { id: 1, name: 'Owner User', email: 'owner@example.com' },
+    selectedBusiness: { id: 10, name: 'Kedai Kopi Utama' },
+    selectedOutlet: { id: 101, name: 'Outlet Pusat' },
+    cloudAccess: true,
+    deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
+    registeredDeviceId: 55,
+    ...overrides,
+  }
+}
+
+/**
+ * Creates a scenario with isolated Pinia + memory adapter + fake server.
+ *
+ * @param {object} [opts]
+ * @param {'free'|'cloud'} [opts.businessMode='free'] Starting business mode.
+ * @param {boolean} [opts.initialOnline=false]
+ * @param {boolean} [opts.initialForeground=true]
+ */
+export async function createOfflineOnlineScenario({
+  businessMode = 'free',
+  initialOnline = false,
+  initialForeground = true,
+} = {}) {
   const pinia = createPinia()
   setActivePinia(pinia)
 
@@ -98,17 +165,17 @@ export async function createOfflineOnlineScenario() {
   const cloudStore = useCloudSessionStore(pinia)
   cloudStore.deviceIdentifier = devId
 
-  // Initialize and bind all Pinia stores
+  // Set business mode as specified (default: free)
   const businessStore = useBusinessStore(pinia)
+  businessStore.setBusiness({ name: 'Kedai Kopi Utama', type: 'Cafe', mode: businessMode })
+
+  // Clear all domain store data
   const productStore = useProductStore(pinia)
   const customerStore = useCustomerStore(pinia)
   const expenseStore = useExpenseStore(pinia)
   const transactionStore = useTransactionStore(pinia)
-
-  businessStore.setBusiness({ name: 'Kedai Kopi Utama', type: 'Cafe', mode: 'cloud' })
-
   productStore.products = []
-  productStore.categories = ['Minuman']
+  productStore.categories = []
   customerStore.customers = []
   expenseStore.expenses = []
   transactionStore.items = []
@@ -116,16 +183,13 @@ export async function createOfflineOnlineScenario() {
   const foundation = initializeSyncFoundation({ pinia, adapter, scheduler })
 
   if (foundation.contextGuardService) {
-    const syncContextGuardStore = useSyncContextGuardStore(pinia)
-    syncContextGuardStore.init({ contextGuardService: foundation.contextGuardService })
+    useSyncContextGuardStore(pinia).init({ contextGuardService: foundation.contextGuardService })
   }
   if (foundation.pushService) {
-    const syncPushStore = useSyncPushStore(pinia)
-    syncPushStore.init({ pushService: foundation.pushService })
+    useSyncPushStore(pinia).init({ pushService: foundation.pushService })
   }
   if (foundation.pullService) {
-    const syncPullStore = useSyncPullStore(pinia)
-    syncPullStore.init({ pullService: foundation.pullService })
+    useSyncPullStore(pinia).init({ pullService: foundation.pullService })
   }
   if (foundation.bootstrapService) {
     const syncBootstrapStore = useSyncBootstrapStore(pinia)
@@ -138,31 +202,31 @@ export async function createOfflineOnlineScenario() {
     await syncConflictStore.loadConflicts()
   }
   if (foundation.orchestratorService) {
-    const syncOrchestratorStore = useSyncOrchestratorStore(pinia)
-    syncOrchestratorStore.init({ orchestratorService: foundation.orchestratorService })
+    useSyncOrchestratorStore(pinia).init({ orchestratorService: foundation.orchestratorService })
   }
   if (foundation.healthService) {
-    const syncHealthStore = useSyncHealthStore(pinia)
-    syncHealthStore.init({ healthService: foundation.healthService })
+    useSyncHealthStore(pinia).init({ healthService: foundation.healthService })
   }
   if (foundation.recoveryService) {
-    const syncRecoveryStore = useSyncRecoveryStore(pinia)
-    syncRecoveryStore.init({ recoveryService: foundation.recoveryService })
+    useSyncRecoveryStore(pinia).init({ recoveryService: foundation.recoveryService })
   }
   if (foundation.activityLogService) {
-    const syncActivityLogStore = useSyncActivityLogStore(pinia)
-    syncActivityLogStore.init({ activityLogService: foundation.activityLogService, adapter })
+    useSyncActivityLogStore(pinia).init({ activityLogService: foundation.activityLogService, adapter })
   }
 
-  const runtimeSignal = createFakeRuntimeSignalService()
+  // Create runtime with the INITIAL state pre-set in snapshot.
+  // Listeners are NOT started here â€” each test that needs Auto Sync calls
+  // autoSyncStore.startListeners() after the runtime is fully configured.
+  const runtimeSignal = createFakeRuntimeSignalService({
+    online: initialOnline,
+    foreground: initialForeground,
+  })
 
   if (foundation.autoSyncService) {
-    const syncAutoSyncStore = useSyncAutoSyncStore(pinia)
-    syncAutoSyncStore.init({
+    useSyncAutoSyncStore(pinia).init({
       autoSyncService: foundation.autoSyncService,
       runtimeSignalService: runtimeSignal,
     })
-    syncAutoSyncStore.startListeners()
   }
   if (foundation.statusService) {
     const syncStatusStore = useSyncStatusStore(pinia)
@@ -179,12 +243,8 @@ export async function createOfflineOnlineScenario() {
     if (foundation.tracker && typeof foundation.tracker.dispose === 'function') {
       foundation.tracker.dispose()
     }
-    const syncAutoSyncStore = useSyncAutoSyncStore(pinia)
-    syncAutoSyncStore.stopListeners()
-
-    const syncStatusStore = useSyncStatusStore(pinia)
-    syncStatusStore.stopListeners()
-
+    useSyncAutoSyncStore(pinia).stopListeners()
+    useSyncStatusStore(pinia).stopListeners()
     await scheduler.close()
   }
 
@@ -194,8 +254,107 @@ export async function createOfflineOnlineScenario() {
     scheduler,
     foundation,
     cloudStore,
+    businessStore,
     runtimeSignal,
     fakeServer,
     cleanup,
   }
 }
+
+/**
+ * Creates the canonical shared offline dataset inside a scenario.
+ * Does NOT require cloud mode â€” works in Free mode too.
+ *
+ * Creates: Category Makanan, Product Roti Bakar, Customer Andi,
+ * Expense Operasional, and one transaction. Flushes the scheduler.
+ *
+ * @param {object} scenario  Return value of createOfflineOnlineScenario.
+ * @returns {Promise<{prodResult, custResult, expResult, txResult}>}
+ */
+export async function createOfflineDataset(scenario) {
+  const productStore = useProductStore(scenario.pinia)
+  const customerStore = useCustomerStore(scenario.pinia)
+  const expenseStore = useExpenseStore(scenario.pinia)
+  const transactionStore = useTransactionStore(scenario.pinia)
+
+  await productStore.createCategory('Makanan')
+
+  const prodResult = await productStore.createProduct({
+    name: 'Roti Bakar',
+    category: 'Makanan',
+    price: 12000,
+    stock: 10,
+  })
+
+  const custResult = await customerStore.createCustomer({
+    name: 'Andi',
+    phone: '0811111',
+  })
+
+  const expResult = await expenseStore.createExpense({
+    title: 'Listrik',
+    category: 'Operasional',
+    amount: 15000,
+  })
+
+  const txResult = await transactionStore.createTransaction({
+    items: [{ id: prodResult.product.id, name: 'Roti Bakar', price: 12000, qty: 1 }],
+    subtotal: 12000,
+    tax: 0,
+    total: 12000,
+    customerId: custResult.customer.id,
+    paymentMethod: 'cash',
+  })
+
+  await scenario.scheduler.flush()
+
+  return { prodResult, custResult, expResult, txResult }
+}
+
+/**
+ * Applies valid cloud context + saves all sync bindings for Push/Pull/Health.
+ * Sets businessMode to 'cloud'.
+ *
+ * @param {object} scenario  Return value of createOfflineOnlineScenario.
+ * @param {object} [overrides] makeValidCloudContext overrides.
+ */
+export async function setupBoundCloudState(scenario, overrides = {}) {
+  const ctx = makeValidCloudContext(overrides)
+
+  scenario.cloudStore.$patch(ctx)
+  await saveToken('mock-bearer-token-123')
+
+  scenario.businessStore.setBusiness({
+    name: 'Kedai Kopi Utama',
+    type: 'Cafe',
+    mode: 'cloud',
+  })
+
+  await scenario.adapter.saveSyncPushBinding({
+    businessId: ctx.selectedBusiness.id,
+    boundAt: new Date().toISOString(),
+  })
+  await scenario.adapter.saveSyncPullBinding({
+    businessId: ctx.selectedBusiness.id,
+    outletId: ctx.selectedOutlet.id,
+    deviceIdentifier: ctx.deviceIdentifier,
+    registeredDeviceId: ctx.registeredDeviceId,
+    boundAt: new Date().toISOString(),
+  })
+  await scenario.adapter.saveSyncPullState({
+    version: 1,
+    cursor: 0,
+    serverSequence: 0,
+  })
+  await scenario.adapter.saveSyncBootstrapState({
+    version: 1,
+    businessId: ctx.selectedBusiness.id,
+    outletId: ctx.selectedOutlet.id,
+    deviceIdentifier: ctx.deviceIdentifier,
+    registeredDeviceId: ctx.registeredDeviceId,
+    status: 'completed',
+    stagedAt: new Date().toISOString(),
+    counts: { categories: 0, products: 0, customers: 0, expenses: 0, transactions: 0 },
+  })
+}
+

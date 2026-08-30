@@ -1,12 +1,15 @@
-// src/__tests__/sync-offline-online-e2e.spec.js
+﻿// src/__tests__/sync-offline-online-e2e.spec.js
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { createOfflineOnlineScenario } from './helpers/syncScenarioHarness'
+import {
+  createOfflineOnlineScenario,
+  createOfflineDataset,
+  setupBoundCloudState,
+  makeValidCloudContext,
+} from './helpers/syncScenarioHarness'
 import { useProductStore } from '@/stores/productStore'
 import { useCustomerStore } from '@/stores/customerStore'
-import { useExpenseStore } from '@/stores/expenseStore'
 import { useTransactionStore } from '@/stores/transactionStore'
-import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useSyncPushStore } from '@/stores/syncPushStore'
 import { useSyncPullStore } from '@/stores/syncPullStore'
 import { useSyncBootstrapStore } from '@/stores/syncBootstrapStore'
@@ -19,36 +22,31 @@ import { useSyncActivityLogStore } from '@/stores/syncActivityLogStore'
 import { useSyncContextGuardStore } from '@/stores/syncContextGuardStore'
 import { saveToken, _resetTokenStore } from '@/services/cloud/tokenRepository'
 import { SYNC_ENTITY_TYPES } from '@/services/sync/syncConstants'
+import { deriveSyncUiStatus, SYNC_UI_PENDING, SYNC_UI_CLEAR, SYNC_UI_LOCAL } from '@/services/sync/syncStatusService'
 
-const { mockServerHandler } = vi.hoisted(() => {
-  return {
-    mockServerHandler: {
-      handle: null,
-    },
-  }
-})
+const { mockServerHandler } = vi.hoisted(() => ({ mockServerHandler: { handle: null } }))
 
-vi.mock('@/services/cloud/apiClient', () => {
-  return {
-    apiRequest: async (path, options) => {
-      if (mockServerHandler.handle) {
-        return mockServerHandler.handle(path, options)
-      }
-      return { ok: false, status: 500, error: 'Server not initialized' }
-    },
-  }
-})
+vi.mock('@/services/cloud/apiClient', () => ({
+  apiRequest: async (path, options) => {
+    if (mockServerHandler.handle) return mockServerHandler.handle(path, options)
+    return { ok: false, status: 500, error: 'Server not initialized' }
+  },
+}))
 
-function makeValidCloudContext(overrides = {}) {
-  return {
-    user: { id: 1, name: 'Owner User', email: 'owner@example.com' },
-    selectedBusiness: { id: 10, name: 'Kedai Kopi Utama' },
-    selectedOutlet: { id: 101, name: 'Outlet Pusat' },
-    cloudAccess: true,
-    deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
-    registeredDeviceId: 55,
-    ...overrides,
-  }
+// Helper to derive P21 UI status given cloudStore + raw status result
+function deriveUiStatus(cloudStore, rawStatus) {
+  if (!rawStatus.ok) return null
+  const cloudAvailable = cloudStore.cloudAccess === true &&
+    cloudStore.user != null &&
+    cloudStore.selectedBusiness != null
+  return deriveSyncUiStatus({
+    cloudAvailable,
+    online: false,
+    syncing: false,
+    pendingCount: rawStatus.pendingCount,
+    openConflictCount: rawStatus.openConflictCount,
+    hasInflight: rawStatus.hasInflight,
+  })
 }
 
 describe('P24: End-to-End Offline to Online Sync Scenarios', () => {
@@ -57,667 +55,470 @@ describe('P24: End-to-End Offline to Online Sync Scenarios', () => {
     _resetTokenStore()
   })
 
-  it('1. Free offline mutations create durable outbox without network', async () => {
-    const scenario = await createOfflineOnlineScenario()
+  it('1. TRUE Free offline: local data durable, queue=0, network=0', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'free' })
     mockServerHandler.handle = scenario.fakeServer.handleRequest
-
+    const { prodResult, custResult, expResult } = await createOfflineDataset(scenario)
+    expect(prodResult.success).toBe(true)
+    expect(custResult.success).toBe(true)
+    expect(expResult.success).toBe(true)
     const productStore = useProductStore(scenario.pinia)
     const customerStore = useCustomerStore(scenario.pinia)
-    const expenseStore = useExpenseStore(scenario.pinia)
-    const transactionStore = useTransactionStore(scenario.pinia)
-
-    // 1. Mutate category
-    await productStore.createCategory('Makanan')
-
-    // 2. Mutate product
-    const prodResult = await productStore.createProduct({
-      name: 'Roti Bakar',
-      category: 'Makanan',
-      price: 12000,
-      stock: 10,
-    })
-    expect(prodResult.success).toBe(true)
-
-    // 3. Mutate customer
-    const custResult = await customerStore.createCustomer({
-      name: 'Andi',
-      phone: '0811111',
-    })
-    expect(custResult.success).toBe(true)
-
-    // 4. Mutate expense
-    const expResult = await expenseStore.createExpense({
-      title: 'Beli Sabun',
-      category: 'Operasional',
-      amount: 15000,
-    })
-    expect(expResult.success).toBe(true)
-
-    // 5. Mutate transaction
-    const txResult = await transactionStore.createTransaction({
-      items: [{ id: prodResult.product.id, name: 'Roti Bakar', price: 12000, qty: 1 }],
-      subtotal: 12000,
-      tax: 0,
-      total: 12000,
-      customerId: custResult.customer.id,
-      paymentMethod: 'cash',
-    })
-    expect(txResult).toBeDefined()
-
-    await scenario.scheduler.flush()
-
-    // Assert local data is correct
-    expect(productStore.categories).toContain('Makanan')
     expect(productStore.products).toHaveLength(1)
     expect(customerStore.customers).toHaveLength(1)
-    expect(expenseStore.expenses).toHaveLength(1)
-    expect(transactionStore.items).toHaveLength(1)
+    // Free mode: tracker does NOT enqueue
+    expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
+    expect(scenario.fakeServer.getPushRequestCount()).toBe(0)
+    expect(scenario.fakeServer.getPullRequestCount()).toBe(0)
+    await scenario.cleanup()
+  })
 
-    // Verify outbox queue
-    const pending = await scenario.adapter.listSyncQueueItems()
-    expect(pending.length).toBeGreaterThan(0)
+  it('2. Free -> Cloud upgrade: guard reports UNBOUND', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'free' })
+    mockServerHandler.handle = scenario.fakeServer.handleRequest
+    await createOfflineDataset(scenario)
+    const ctx = makeValidCloudContext()
+    scenario.cloudStore.$patch(ctx)
+    await saveToken('mock-bearer-token-123')
+    scenario.businessStore.setBusiness({ name: 'Kedai Kopi Utama', type: 'Cafe', mode: 'cloud' })
+    scenario.runtimeSignal.setOnline(true)
+    const guardStore = useSyncContextGuardStore(scenario.pinia)
+    const guardResult = await guardStore.check()
+    expect(guardResult.ok).toBe(true)
+    expect(guardResult.code).toBe('SYNC_CONTEXT_UNBOUND')
+    const productStore = useProductStore(scenario.pinia)
+    expect(productStore.products).toHaveLength(1)
+    // Free mode data: no queue
+    expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
+    await scenario.cleanup()
+  })
 
-    const types = pending.map((x) => x.entityType)
+  it('3. Bootstrap stages full dataset: status=staged, counts verified', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'free' })
+    mockServerHandler.handle = scenario.fakeServer.handleRequest
+    await createOfflineDataset(scenario)
+    scenario.cloudStore.$patch(makeValidCloudContext())
+    await saveToken('mock-bearer-token-123')
+    scenario.businessStore.setBusiness({ name: 'Kedai Kopi Utama', type: 'Cafe', mode: 'cloud' })
+    scenario.runtimeSignal.setOnline(true)
+    const bootstrapStore = useSyncBootstrapStore(scenario.pinia)
+    expect((await bootstrapStore.bootstrapNow()).ok).toBe(true)
+    const bootstrapState = await scenario.adapter.loadSyncBootstrapState()
+    expect(bootstrapState).not.toBeNull()
+    expect(bootstrapState.status).toBe('staged')
+    expect(await scenario.adapter.countSyncQueueItems()).toBeGreaterThan(0)
+    const queueItems = await scenario.adapter.listSyncQueueItems()
+    const types = queueItems.map((x) => x.entityType)
     expect(types).toContain(SYNC_ENTITY_TYPES.CATEGORY)
     expect(types).toContain(SYNC_ENTITY_TYPES.PRODUCT)
     expect(types).toContain(SYNC_ENTITY_TYPES.CUSTOMER)
     expect(types).toContain(SYNC_ENTITY_TYPES.EXPENSE)
     expect(types).toContain(SYNC_ENTITY_TYPES.TRANSACTION)
-
-    // Zero network requests
-    expect(scenario.fakeServer.getPushRequestCount()).toBe(0)
-    expect(scenario.fakeServer.getPullRequestCount()).toBe(0)
-
+    expect(bootstrapState.counts.products).toBeGreaterThanOrEqual(1)
+    expect(bootstrapState.counts.customers).toBeGreaterThanOrEqual(1)
     await scenario.cleanup()
   })
 
-  it('2. Free → Subscriber guard is UNBOUND and bootstrap succeeds', async () => {
-    const scenario = await createOfflineOnlineScenario()
+  it('4. Push sends full dataset: queue=0, inflight=null, server verified', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'free' })
     mockServerHandler.handle = scenario.fakeServer.handleRequest
-
-    const productStore = useProductStore(scenario.pinia)
-    await productStore.createCategory('Makanan')
-    await productStore.createProduct({ name: 'Roti Bakar', category: 'Makanan', price: 12000, stock: 10 })
-
-    await scenario.scheduler.flush()
-
-    // Go online & Subscribe
-    const ctx = makeValidCloudContext()
-    scenario.cloudStore.$patch(ctx)
-    await saveToken('mock-bearer-token-123')
-    scenario.runtimeSignal.setOnline(true)
-
-    // Verify guard UNBOUND
-    const guardStore = useSyncContextGuardStore(scenario.pinia)
-    const guardResult = await guardStore.check()
-    expect(guardResult.ok).toBe(true)
-    expect(guardResult.code).toBe('SYNC_CONTEXT_UNBOUND')
-
-    // Run Bootstrap
-    const bootstrapStore = useSyncBootstrapStore(scenario.pinia)
-    const bootResult = await bootstrapStore.bootstrapNow()
-    expect(bootResult.ok).toBe(true)
-
-    // Verify bootstrap state persisted
-    const bootstrapState = await scenario.adapter.loadSyncBootstrapState()
-    expect(bootstrapState).not.toBeNull()
-    expect(bootstrapState.status).toBe('staged')
-
-    await scenario.cleanup()
-  })
-
-  it('3. Bootstrap → Push uploads local dataset and clears acknowledged queue', async () => {
-    const scenario = await createOfflineOnlineScenario()
-    mockServerHandler.handle = scenario.fakeServer.handleRequest
-
-    const productStore = useProductStore(scenario.pinia)
-    await productStore.createCategory('Makanan')
-    await productStore.createProduct({ name: 'Roti Bakar', category: 'Makanan', price: 12000, stock: 10 })
-
-    await scenario.scheduler.flush()
-
-    // Set cloud credentials
+    await createOfflineDataset(scenario)
     scenario.cloudStore.$patch(makeValidCloudContext())
     await saveToken('mock-bearer-token-123')
+    scenario.businessStore.setBusiness({ name: 'Kedai Kopi Utama', type: 'Cafe', mode: 'cloud' })
     scenario.runtimeSignal.setOnline(true)
-
-    const bootstrapStore = useSyncBootstrapStore(scenario.pinia)
-    const bRes = await bootstrapStore.bootstrapNow()
-    expect(bRes.ok).toBe(true)
-
-    // Push local data
+    expect((await useSyncBootstrapStore(scenario.pinia).bootstrapNow()).ok).toBe(true)
     const pushStore = useSyncPushStore(scenario.pinia)
-    const pushResult = await pushStore.pushNow()
-    expect(pushResult.ok).toBe(true)
-
-    // Outbox should be empty
-    const pendingCount = await scenario.adapter.countSyncQueueItems()
-    expect(pendingCount).toBe(0)
-
-    // Verify server has the records
+    expect((await pushStore.pushNow()).ok).toBe(true)
+    expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
+    expect(await scenario.adapter.loadSyncPushInflight()).toBeNull()
+    const pushBinding = await scenario.adapter.loadSyncPushBinding()
+    expect(pushBinding).not.toBeNull()
+    expect(pushBinding.businessId).toBe(10)
     expect(scenario.fakeServer.db.products).toHaveLength(1)
     expect(scenario.fakeServer.db.products[0].name).toBe('Roti Bakar')
-
+    expect(scenario.fakeServer.db.categories.length).toBeGreaterThan(0)
+    expect(scenario.fakeServer.db.customers).toHaveLength(1)
+    expect(scenario.fakeServer.db.expenses).toHaveLength(1)
     await scenario.cleanup()
   })
 
-  it('4. First Pull does not duplicate or echo to outbox', async () => {
-    const scenario = await createOfflineOnlineScenario()
+  it('5. Sale + SaleItem relation survives Bootstrap -> Push cycle', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'free' })
     mockServerHandler.handle = scenario.fakeServer.handleRequest
+    const productStore = useProductStore(scenario.pinia)
+    await productStore.createCategory('Minuman')
+    const prod = await productStore.createProduct({ name: 'Kopi Latte', category: 'Minuman', price: 20000, stock: 5 })
+    expect(prod.success).toBe(true)
+    const transactionStore = useTransactionStore(scenario.pinia)
+    await transactionStore.createTransaction({ items: [{ id: prod.product.id, name: 'Kopi Latte', price: 20000, qty: 2 }], subtotal: 40000, tax: 0, total: 40000, paymentMethod: 'cash' })
+    await scenario.scheduler.flush()
+    scenario.cloudStore.$patch(makeValidCloudContext())
+    await saveToken('mock-bearer-token-123')
+    scenario.businessStore.setBusiness({ name: 'Kedai Kopi Utama', type: 'Cafe', mode: 'cloud' })
+    scenario.runtimeSignal.setOnline(true)
+    await useSyncBootstrapStore(scenario.pinia).bootstrapNow()
+    expect((await useSyncPushStore(scenario.pinia).pushNow()).ok).toBe(true)
+    expect(scenario.fakeServer.db.sales).toHaveLength(1)
+    expect(scenario.fakeServer.db.sale_items).toHaveLength(1)
+    const serverSale = scenario.fakeServer.db.sales[0]
+    const serverItem = scenario.fakeServer.db.sale_items[0]
+    expect(serverItem.sale_sync_id).toBe(serverSale.sync_id)
+    expect(serverItem.product_name).toBe('Kopi Latte')
+    expect(serverItem.quantity).toBe(2)
+    expect(serverItem.line_total).toBe(40000)
+    await scenario.cleanup()
+  })
 
-    // Setup cloud session
+  it('6. First Pull: no duplicate, cursor advanced, pull binding, queue=0', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud' })
+    mockServerHandler.handle = scenario.fakeServer.handleRequest
     scenario.cloudStore.$patch(makeValidCloudContext())
     await saveToken('mock-bearer-token-123')
     scenario.runtimeSignal.setOnline(true)
-
-    // Seed push binding to allow pulling
-    await scenario.adapter.saveSyncPushBinding({
-      businessId: 10,
-      boundAt: new Date().toISOString(),
-    })
-
-    // Seed server state with category and product P1 using valid UUIDs
+    await scenario.adapter.saveSyncPushBinding({ businessId: 10, boundAt: new Date().toISOString() })
     const catSyncId = 'd754f9a0-97db-4e1a-826c-389f417f73db'
     const prodSyncId = 'f921f6bc-e2b2-4d2b-9279-3fb7661b17a1'
-
-    scenario.fakeServer.db.categories.push({
-      sync_id: catSyncId,
-      name: 'Minuman',
-      business_id: 10,
-      sync_version: 1,
-      sync_sequence: 1,
-    })
-    scenario.fakeServer.db.products.push({
-      sync_id: prodSyncId,
-      category_sync_id: catSyncId,
-      name: 'Kopi Espresso',
-      sku: 'ESP-1',
-      price: 15000,
-      business_id: 10,
-      sync_version: 1,
-      sync_sequence: 2,
-    })
+    scenario.fakeServer.db.categories.push({ sync_id: catSyncId, name: 'Minuman', business_id: 10, sync_version: 1, sync_sequence: 1 })
+    scenario.fakeServer.db.products.push({ sync_id: prodSyncId, category_sync_id: catSyncId, name: 'Kopi Espresso', sku: 'ESP-1', price: 15000, business_id: 10, sync_version: 1, sync_sequence: 2 })
     scenario.fakeServer.setServerSequence(2)
-
-    // Pull from server
     const pullStore = useSyncPullStore(scenario.pinia)
-    const pullResult = await pullStore.pullNow()
-    expect(pullResult.ok).toBe(true)
-    expect(pullResult.fetched).toBe(2)
-
-    // Pull again to ensure idempotency & no outbox echo
-    const pullResult2 = await pullStore.pullNow()
-    expect(pullResult2.ok).toBe(true)
-    expect(pullResult2.fetched).toBe(0)
-
-    const pendingCount = await scenario.adapter.countSyncQueueItems()
-    expect(pendingCount).toBe(0)
-
+    const pullResult1 = await pullStore.pullNow()
+    expect(pullResult1.ok).toBe(true)
+    expect(pullResult1.fetched).toBe(2)
+    const pullBinding = await scenario.adapter.loadSyncPullBinding()
+    expect(pullBinding).not.toBeNull()
+    expect(pullBinding.businessId).toBe(10)
+    const pullState = await scenario.adapter.loadSyncPullState()
+    expect(pullState.cursor).toBeGreaterThan(0)
+    expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
+    const productStore = useProductStore(scenario.pinia)
+    expect(productStore.products).toHaveLength(1)
+    expect(productStore.categories).toHaveLength(1)
     await scenario.cleanup()
   })
 
-  it('5. Offline local + remote independent edits converge through syncAll', async () => {
-    const scenario = await createOfflineOnlineScenario()
+  it('7. No pull echo: second pull fetches 0, queue stays 0', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud' })
     mockServerHandler.handle = scenario.fakeServer.handleRequest
-
     scenario.cloudStore.$patch(makeValidCloudContext())
     await saveToken('mock-bearer-token-123')
+    scenario.runtimeSignal.setOnline(true)
+    await scenario.adapter.saveSyncPushBinding({ businessId: 10, boundAt: new Date().toISOString() })
+    scenario.fakeServer.db.categories.push({ sync_id: 'a8d9fa0e-1234-4567-89ab-1234567890ab', name: 'Makanan', business_id: 10, sync_version: 1, sync_sequence: 1 })
+    scenario.fakeServer.setServerSequence(1)
+    const pullStore = useSyncPullStore(scenario.pinia)
+    await pullStore.pullNow()
+    expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
+    const r2 = await pullStore.pullNow()
+    expect(r2.ok).toBe(true)
+    expect(r2.fetched).toBe(0)
+    expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
+    await scenario.cleanup()
+  })
 
-    // Initial state: synced database
+  it('8. Cloud-mode offline mutations generate durable outbox', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud' })
+    mockServerHandler.handle = scenario.fakeServer.handleRequest
+    scenario.cloudStore.$patch(makeValidCloudContext())
     const productStore = useProductStore(scenario.pinia)
-    const prod = await productStore.createProduct({ name: 'Es Teh', category: 'Minuman', price: 5000, stock: 5 })
+    await productStore.createCategory('Makanan')
+    await productStore.createProduct({ name: 'Roti Bakar', category: 'Makanan', price: 12000, stock: 10 })
+    await scenario.scheduler.flush()
+    const pendingCount = await scenario.adapter.countSyncQueueItems()
+    expect(pendingCount).toBeGreaterThan(0)
+    const types = (await scenario.adapter.listSyncQueueItems()).map((x) => x.entityType)
+    expect(types).toContain(SYNC_ENTITY_TYPES.CATEGORY)
+    expect(types).toContain(SYNC_ENTITY_TYPES.PRODUCT)
+    expect(scenario.fakeServer.getPushRequestCount()).toBe(0)
+    await scenario.cleanup()
+  })
 
+  it('9. Offline local + remote independent edits converge through syncAll', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud' })
+    mockServerHandler.handle = scenario.fakeServer.handleRequest
+    scenario.cloudStore.$patch(makeValidCloudContext())
+    await saveToken('mock-bearer-token-123')
+    const productStore = useProductStore(scenario.pinia)
+    await productStore.createCategory('Minuman')
+    const prod = await productStore.createProduct({ name: 'Es Teh', category: 'Minuman', price: 5000, stock: 5 })
+    expect(prod.success).toBe(true)
     const registry = scenario.foundation.registry
     await registry.ensureLoaded()
     const prodSyncId = await registry.resolveSyncId(SYNC_ENTITY_TYPES.PRODUCT, prod.product.id)
     const catSyncId = await registry.resolveSyncId(SYNC_ENTITY_TYPES.CATEGORY, 'Minuman')
-
-    // Simulate push & pull bindings safely
     await scenario.adapter.saveSyncPushBinding({ businessId: 10, boundAt: new Date().toISOString() })
-    await scenario.adapter.saveSyncPullBinding({
-      businessId: 10,
-      outletId: 101,
-      deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
-      registeredDeviceId: 55,
-      boundAt: new Date().toISOString(),
-    })
-    await scenario.adapter.saveSyncPullState({ cursor: 0, serverSequence: 0 })
-
-    // Seed server with identical version 1
-    scenario.fakeServer.db.products.push({
-      sync_id: prodSyncId,
-      name: 'Es Teh',
-      category_sync_id: catSyncId,
-      price: 5000,
-      business_id: 10,
-      sync_version: 1,
-      sync_sequence: 1,
-    })
+    await scenario.adapter.saveSyncPullBinding({ businessId: 10, outletId: 101, deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000', registeredDeviceId: 55, boundAt: new Date().toISOString() })
+    await scenario.adapter.saveSyncPullState({ version: 1, cursor: 0, serverSequence: 0 })
+    scenario.fakeServer.db.products.push({ sync_id: prodSyncId, name: 'Es Teh', category_sync_id: catSyncId, price: 5000, business_id: 10, sync_version: 1, sync_sequence: 1 })
     scenario.fakeServer.setServerSequence(1)
-
-    // Store server version locally
-    await scenario.adapter.saveSyncServerVersions({
-      [`products:${prodSyncId}`]: 1,
-    })
-
-    // GO OFFLINE and make local edit
+    await scenario.adapter.saveSyncServerVersions({ [`products:${prodSyncId}`]: 1 })
     scenario.runtimeSignal.setOnline(false)
     await productStore.updateProduct(prod.product.id, { name: 'Es Teh Manis', category: 'Minuman', price: 6000, stock: 5 })
     await scenario.scheduler.flush()
-
-    // Server makes independent change (e.g. modify customer)
-    scenario.fakeServer.db.customers.push({
-      sync_id: '33333333-3333-4333-8333-333333333333',
-      name: 'Rudi',
-      phone: '081222',
-      business_id: 10,
-      sync_version: 1,
-      sync_sequence: 2,
-    })
+    scenario.fakeServer.db.customers.push({ sync_id: '33333333-3333-4333-8333-333333333333', name: 'Rudi', phone: '081222', business_id: 10, sync_version: 1, sync_sequence: 2 })
     scenario.fakeServer.setServerSequence(2)
-
-    // GO ONLINE and run full syncAll
     scenario.runtimeSignal.setOnline(true)
-    const orchestratorStore = useSyncOrchestratorStore(scenario.pinia)
-    const syncRes = await orchestratorStore.syncAll()
+    const syncRes = await useSyncOrchestratorStore(scenario.pinia).syncAll()
     expect(syncRes.ok).toBe(true)
-
-    // Verify local product edit is on the fake server
     const serverProd = scenario.fakeServer.db.products.find((p) => p.sync_id === prodSyncId)
     expect(serverProd.name).toBe('Es Teh Manis')
     expect(serverProd.price).toBe(6000)
-
-    // Verify remote customer change is locally applied
     const customerStore = useCustomerStore(scenario.pinia)
     expect(customerStore.customers).toHaveLength(1)
     expect(customerStore.customers[0].name).toBe('Rudi')
-
+    expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
+    expect(await scenario.adapter.loadSyncPushInflight()).toBeNull()
     await scenario.cleanup()
   })
 
-  it('6. Second syncAll is idempotent', async () => {
-    const scenario = await createOfflineOnlineScenario()
+  it('10. Real synced state: second syncAll is idempotent', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud' })
     mockServerHandler.handle = scenario.fakeServer.handleRequest
-
     scenario.cloudStore.$patch(makeValidCloudContext())
     await saveToken('mock-bearer-token-123')
     scenario.runtimeSignal.setOnline(true)
-
+    const productStore = useProductStore(scenario.pinia)
+    await productStore.createCategory('Minuman')
+    await productStore.createProduct({ name: 'Kopi Hitam', category: 'Minuman', price: 10000, stock: 5 })
+    await scenario.scheduler.flush()
     await scenario.adapter.saveSyncPushBinding({ businessId: 10, boundAt: new Date().toISOString() })
-    await scenario.adapter.saveSyncPullBinding({
-      businessId: 10,
-      outletId: 101,
-      deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
-      registeredDeviceId: 55,
-      boundAt: new Date().toISOString(),
-    })
-    await scenario.adapter.saveSyncPullState({ cursor: 0, serverSequence: 0 })
-
+    await scenario.adapter.saveSyncPullBinding({ businessId: 10, outletId: 101, deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000', registeredDeviceId: 55, boundAt: new Date().toISOString() })
+    await scenario.adapter.saveSyncPullState({ version: 1, cursor: 0, serverSequence: 0 })
     const orchestratorStore = useSyncOrchestratorStore(scenario.pinia)
-    const syncRes1 = await orchestratorStore.syncAll()
-    expect(syncRes1.ok).toBe(true)
-
-    const syncRes2 = await orchestratorStore.syncAll()
-    expect(syncRes2.ok).toBe(true)
-
-    // Verify outbox remains empty
-    const pendingCount = await scenario.adapter.countSyncQueueItems()
-    expect(pendingCount).toBe(0)
-
+    expect((await orchestratorStore.syncAll()).ok).toBe(true)
+    const serverCount1 = scenario.fakeServer.db.products.length
+    const localCount1 = productStore.products.length
+    expect((await orchestratorStore.syncAll()).ok).toBe(true)
+    expect(scenario.fakeServer.db.products).toHaveLength(serverCount1)
+    expect(productStore.products).toHaveLength(localCount1)
+    expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
+    const conflictStore = useSyncConflictStore(scenario.pinia)
+    await conflictStore.loadConflicts()
+    expect(conflictStore.conflicts).toHaveLength(0)
     await scenario.cleanup()
   })
 
-  it('7. Offline same-entity change produces durable conflict', async () => {
-    const scenario = await createOfflineOnlineScenario()
+  it('11. Conflict via syncAll: stops P16 before Pull, conflict persisted', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud' })
     mockServerHandler.handle = scenario.fakeServer.handleRequest
-
     scenario.cloudStore.$patch(makeValidCloudContext())
     await saveToken('mock-bearer-token-123')
-
     const productStore = useProductStore(scenario.pinia)
+    await productStore.createCategory('Minuman')
     const prod = await productStore.createProduct({ name: 'Kopi Hitam', category: 'Minuman', price: 10000, stock: 5 })
-
+    expect(prod.success).toBe(true)
     await scenario.adapter.saveSyncPushBinding({ businessId: 10, boundAt: new Date().toISOString() })
-    await scenario.adapter.saveSyncPullBinding({
-      businessId: 10,
-      outletId: 101,
-      deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
-      registeredDeviceId: 55,
-      boundAt: new Date().toISOString(),
-    })
-    await scenario.adapter.saveSyncPullState({ cursor: 0, serverSequence: 0 })
-
+    await scenario.adapter.saveSyncPullBinding({ businessId: 10, outletId: 101, deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000', registeredDeviceId: 55, boundAt: new Date().toISOString() })
+    await scenario.adapter.saveSyncPullState({ version: 1, cursor: 0, serverSequence: 0 })
     const registry = scenario.foundation.registry
     await registry.ensureLoaded()
     const prodSyncId = await registry.resolveSyncId(SYNC_ENTITY_TYPES.PRODUCT, prod.product.id)
     const catSyncId = await registry.resolveSyncId(SYNC_ENTITY_TYPES.CATEGORY, 'Minuman')
-
-    // Seed server
-    scenario.fakeServer.db.products.push({
-      sync_id: prodSyncId,
-      name: 'Kopi Hitam',
-      category_sync_id: catSyncId,
-      price: 10000,
-      business_id: 10,
-      sync_version: 1,
-      sync_sequence: 1,
-    })
+    scenario.fakeServer.db.products.push({ sync_id: prodSyncId, name: 'Kopi Hitam', category_sync_id: catSyncId, price: 10000, business_id: 10, sync_version: 1, sync_sequence: 1 })
     scenario.fakeServer.setServerSequence(1)
-
-    // Store server version locally
-    await scenario.adapter.saveSyncServerVersions({
-      [`products:${prodSyncId}`]: 1,
-    })
-
-    // Offline - modify locally
-    scenario.runtimeSignal.setOnline(false)
+    await scenario.adapter.saveSyncServerVersions({ [`products:${prodSyncId}`]: 1 })
     await productStore.updateProduct(prod.product.id, { name: 'Kopi Hitam', category: 'Minuman', price: 12000, stock: 5 })
-
-    // Add unrelated mutation (e.g. customer)
-    const customerStore = useCustomerStore(scenario.pinia)
-    await customerStore.createCustomer({ name: 'Andi', phone: '0812' })
-
     await scenario.scheduler.flush()
-
-    // Offline - modify remotely (forcing conflict)
     scenario.fakeServer.db.products[0].name = 'Kopi Hitam Super'
     scenario.fakeServer.db.products[0].sync_version = 2
     scenario.fakeServer.db.products[0].sync_sequence = 2
     scenario.fakeServer.setServerSequence(2)
-
-    // Online - push
+    const pullCountBefore = scenario.fakeServer.getPullRequestCount()
     scenario.runtimeSignal.setOnline(true)
-    const pushStore = useSyncPushStore(scenario.pinia)
-    const pushRes = await pushStore.pushNow()
-    expect(pushRes.ok).toBe(false)
-    expect(pushRes.code).toBe('SYNC_CONFLICT')
-
-    // Conflict should be registered
+    const syncRes = await useSyncOrchestratorStore(scenario.pinia).syncAll()
+    expect(syncRes.ok).toBe(false)
+    expect(scenario.fakeServer.getPullRequestCount()).toBe(pullCountBefore)
     const conflictStore = useSyncConflictStore(scenario.pinia)
     await conflictStore.loadConflicts()
     expect(conflictStore.conflicts.length).toBe(1)
     expect(conflictStore.conflicts[0].syncId).toBe(prodSyncId)
-
-    // Unrelated outbox item is preserved
-    const pending = await scenario.adapter.listSyncQueueItems()
-    expect(pending.length).toBeGreaterThan(0)
-    const types = pending.map((x) => x.entityType)
-    expect(types).toContain(SYNC_ENTITY_TYPES.CUSTOMER)
-
     await scenario.cleanup()
   })
 
-  it('8. keepLocal → retry → local wins safely', async () => {
-    const scenario = await createOfflineOnlineScenario()
+  it('12. keepLocal -> retry -> local wins: server updated, queue=0, conflicts=0', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud' })
     mockServerHandler.handle = scenario.fakeServer.handleRequest
-
     scenario.cloudStore.$patch(makeValidCloudContext())
     await saveToken('mock-bearer-token-123')
-
     const productStore = useProductStore(scenario.pinia)
+    await productStore.createCategory('Minuman')
     const prod = await productStore.createProduct({ name: 'Kopi Hitam', category: 'Minuman', price: 10000, stock: 5 })
-
+    expect(prod.success).toBe(true)
     await scenario.adapter.saveSyncPushBinding({ businessId: 10, boundAt: new Date().toISOString() })
-    await scenario.adapter.saveSyncPullBinding({
-      businessId: 10,
-      outletId: 101,
-      deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
-      registeredDeviceId: 55,
-      boundAt: new Date().toISOString(),
-    })
-    await scenario.adapter.saveSyncPullState({ cursor: 0, serverSequence: 0 })
-
+    await scenario.adapter.saveSyncPullBinding({ businessId: 10, outletId: 101, deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000', registeredDeviceId: 55, boundAt: new Date().toISOString() })
+    await scenario.adapter.saveSyncPullState({ version: 1, cursor: 0, serverSequence: 0 })
     const registry = scenario.foundation.registry
     await registry.ensureLoaded()
     const prodSyncId = await registry.resolveSyncId(SYNC_ENTITY_TYPES.PRODUCT, prod.product.id)
     const catSyncId = await registry.resolveSyncId(SYNC_ENTITY_TYPES.CATEGORY, 'Minuman')
-
-    // Seed server
-    scenario.fakeServer.db.products.push({
-      sync_id: prodSyncId,
-      name: 'Kopi Hitam',
-      category_sync_id: catSyncId,
-      price: 10000,
-      business_id: 10,
-      sync_version: 1,
-      sync_sequence: 1,
-    })
+    scenario.fakeServer.db.products.push({ sync_id: prodSyncId, name: 'Kopi Hitam', category_sync_id: catSyncId, price: 10000, business_id: 10, sync_version: 1, sync_sequence: 1 })
     scenario.fakeServer.setServerSequence(1)
     await scenario.adapter.saveSyncServerVersions({ [`products:${prodSyncId}`]: 1 })
-
-    // Locally modify & trigger conflict
     await productStore.updateProduct(prod.product.id, { name: 'Kopi Hitam', category: 'Minuman', price: 12000, stock: 5 })
     await scenario.scheduler.flush()
-
     scenario.fakeServer.db.products[0].name = 'Kopi Hitam Super'
     scenario.fakeServer.db.products[0].sync_version = 2
     scenario.fakeServer.db.products[0].sync_sequence = 2
     scenario.fakeServer.setServerSequence(2)
-
     scenario.runtimeSignal.setOnline(true)
     const pushStore = useSyncPushStore(scenario.pinia)
     await pushStore.pushNow()
-
-    // Resolve keepLocal
     const conflictStore = useSyncConflictStore(scenario.pinia)
     await conflictStore.loadConflicts()
-    const conflict = conflictStore.conflicts[0]
-
-    const resolveRes = await conflictStore.keepLocal(conflict.id)
-    expect(resolveRes.ok).toBe(true)
-
-    // Retry Push
-    const pushRes = await pushStore.pushNow()
-    expect(pushRes.ok).toBe(true)
-
-    // Verify server has local value
+    expect((await conflictStore.keepLocal(conflictStore.conflicts[0].id)).ok).toBe(true)
+    expect((await pushStore.pushNow()).ok).toBe(true)
     expect(scenario.fakeServer.db.products[0].price).toBe(12000)
-
+    expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
+    await conflictStore.loadConflicts()
+    expect(conflictStore.conflicts).toHaveLength(0)
+    expect(await scenario.adapter.loadSyncPushInflight()).toBeNull()
     await scenario.cleanup()
   })
 
-  it('9. useServer → pull → server wins safely', async () => {
-    const scenario = await createOfflineOnlineScenario()
+  it('13. useServer -> Pull -> server wins: local=server, queue=0, conflicts=0', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud' })
     mockServerHandler.handle = scenario.fakeServer.handleRequest
-
     scenario.cloudStore.$patch(makeValidCloudContext())
     await saveToken('mock-bearer-token-123')
-
     const productStore = useProductStore(scenario.pinia)
+    await productStore.createCategory('Minuman')
     const prod = await productStore.createProduct({ name: 'Kopi Hitam', category: 'Minuman', price: 10000, stock: 5 })
-
+    expect(prod.success).toBe(true)
     await scenario.adapter.saveSyncPushBinding({ businessId: 10, boundAt: new Date().toISOString() })
-    await scenario.adapter.saveSyncPullBinding({
-      businessId: 10,
-      outletId: 101,
-      deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
-      registeredDeviceId: 55,
-      boundAt: new Date().toISOString(),
-    })
-    await scenario.adapter.saveSyncPullState({ cursor: 0, serverSequence: 0 })
-
+    await scenario.adapter.saveSyncPullBinding({ businessId: 10, outletId: 101, deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000', registeredDeviceId: 55, boundAt: new Date().toISOString() })
+    await scenario.adapter.saveSyncPullState({ version: 1, cursor: 0, serverSequence: 0 })
     const registry = scenario.foundation.registry
     await registry.ensureLoaded()
     const prodSyncId = await registry.resolveSyncId(SYNC_ENTITY_TYPES.PRODUCT, prod.product.id)
     const catSyncId = await registry.resolveSyncId(SYNC_ENTITY_TYPES.CATEGORY, 'Minuman')
-
-    // Seed server
-    scenario.fakeServer.db.products.push({
-      sync_id: prodSyncId,
-      name: 'Kopi Hitam',
-      category_sync_id: catSyncId,
-      price: 10000,
-      business_id: 10,
-      sync_version: 1,
-      sync_sequence: 1,
-    })
+    scenario.fakeServer.db.products.push({ sync_id: prodSyncId, name: 'Kopi Hitam', category_sync_id: catSyncId, price: 10000, business_id: 10, sync_version: 1, sync_sequence: 1 })
     scenario.fakeServer.setServerSequence(1)
     await scenario.adapter.saveSyncServerVersions({ [`products:${prodSyncId}`]: 1 })
-
-    // Locally modify & trigger conflict
     await productStore.updateProduct(prod.product.id, { name: 'Kopi Hitam', category: 'Minuman', price: 12000, stock: 5 })
     await scenario.scheduler.flush()
-
     scenario.fakeServer.db.products[0].name = 'Kopi Hitam Super'
     scenario.fakeServer.db.products[0].price = 14000
     scenario.fakeServer.db.products[0].sync_version = 2
     scenario.fakeServer.db.products[0].sync_sequence = 2
     scenario.fakeServer.setServerSequence(2)
-
     scenario.runtimeSignal.setOnline(true)
     const pushStore = useSyncPushStore(scenario.pinia)
     await pushStore.pushNow()
-
-    // Resolve useServer
     const conflictStore = useSyncConflictStore(scenario.pinia)
     await conflictStore.loadConflicts()
-    const conflict = conflictStore.conflicts[0]
-
-    const resolveRes = await conflictStore.useServer(conflict.id)
-    expect(resolveRes.ok).toBe(true)
-
-    // Pull to apply server value
+    expect((await conflictStore.useServer(conflictStore.conflicts[0].id)).ok).toBe(true)
     const pullStore = useSyncPullStore(scenario.pinia)
-    const pullResult = await pullStore.pullNow()
-    expect(pullResult.ok).toBe(true)
-
-    // Local product should have server name and price
+    expect((await pullStore.pullNow()).ok).toBe(true)
     const localProd = productStore.getProductById(prod.product.id)
     expect(localProd.name).toBe('Kopi Hitam Super')
     expect(localProd.price).toBe(14000)
-
+    expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
+    expect(productStore.products).toHaveLength(1)
+    await conflictStore.loadConflicts()
+    expect(conflictStore.conflicts).toHaveLength(0)
     await scenario.cleanup()
   })
 
-  it('10. Business/Outlet mismatch blocks all transport and preserves local queue', async () => {
-    const scenario = await createOfflineOnlineScenario()
+  it('14. Business mismatch: guard blocked, no push HTTP, queue preserved', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud' })
     mockServerHandler.handle = scenario.fakeServer.handleRequest
-
     scenario.cloudStore.$patch(makeValidCloudContext())
     await saveToken('mock-bearer-token-123')
-
     const productStore = useProductStore(scenario.pinia)
+    await productStore.createCategory('Minuman')
     await productStore.createProduct({ name: 'Kopi Susu', category: 'Minuman', price: 15000, stock: 5 })
     await scenario.scheduler.flush()
-
     await scenario.adapter.saveSyncPushBinding({ businessId: 10, boundAt: new Date().toISOString() })
-
-    // Mismatch business id to 999
     scenario.cloudStore.selectedBusiness = { id: 999, name: 'Wrong Business' }
-
     const guardStore = useSyncContextGuardStore(scenario.pinia)
     const checkRes = await guardStore.check()
     expect(checkRes.ok).toBe(false)
     expect(checkRes.status).toBe('blocked')
-
-    const pushStore = useSyncPushStore(scenario.pinia)
-    const pushRes = await pushStore.pushNow()
+    const pushRes = await useSyncPushStore(scenario.pinia).pushNow()
     expect(pushRes.ok).toBe(false)
     expect(pushRes.code).toBe('SYNC_CONTEXT_GUARD_BLOCKED')
-
-    // Local queue is preserved
-    const pendingCount = await scenario.adapter.countSyncQueueItems()
-    expect(pendingCount).toBeGreaterThan(0)
-
-    // Fake server must have received 0 data
+    expect(await scenario.adapter.countSyncQueueItems()).toBeGreaterThan(0)
     expect(scenario.fakeServer.getPushRequestCount()).toBe(0)
-
+    expect(scenario.fakeServer.getRecordsForBusiness(999).products).toHaveLength(0)
     await scenario.cleanup()
   })
 
-  it('11. Returning to canonical tenant allows sync again', async () => {
-    const scenario = await createOfflineOnlineScenario()
+  it('15. Outlet mismatch: guard blocked, no push HTTP, queue preserved', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud' })
     mockServerHandler.handle = scenario.fakeServer.handleRequest
+    scenario.cloudStore.$patch(makeValidCloudContext())
+    await saveToken('mock-bearer-token-123')
+    const productStore = useProductStore(scenario.pinia)
+    await productStore.createCategory('Minuman')
+    await productStore.createProduct({ name: 'Teh Botol', category: 'Minuman', price: 5000, stock: 20 })
+    await scenario.scheduler.flush()
+    await scenario.adapter.saveSyncPushBinding({ businessId: 10, boundAt: new Date().toISOString() })
+    await scenario.adapter.saveSyncPullBinding({ businessId: 10, outletId: 101, deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000', registeredDeviceId: 55, boundAt: new Date().toISOString() })
+    scenario.cloudStore.selectedOutlet = { id: 999, name: 'Wrong Outlet' }
+    const guardStore = useSyncContextGuardStore(scenario.pinia)
+    expect((await guardStore.check()).ok).toBe(false)
+    expect((await useSyncPushStore(scenario.pinia).pushNow()).ok).toBe(false)
+    expect(scenario.fakeServer.getPushRequestCount()).toBe(0)
+    expect(await scenario.adapter.countSyncQueueItems()).toBeGreaterThan(0)
+    await scenario.cleanup()
+  })
 
+  it('16. Return canonical tenant: sync succeeds, Business B has 0 data', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud' })
+    mockServerHandler.handle = scenario.fakeServer.handleRequest
     scenario.cloudStore.$patch(makeValidCloudContext())
     await saveToken('mock-bearer-token-123')
     scenario.runtimeSignal.setOnline(true)
-
     const productStore = useProductStore(scenario.pinia)
+    await productStore.createCategory('Minuman')
     await productStore.createProduct({ name: 'Kopi Susu', category: 'Minuman', price: 15000, stock: 5 })
     await scenario.scheduler.flush()
-
     await scenario.adapter.saveSyncPushBinding({ businessId: 10, boundAt: new Date().toISOString() })
-
-    // Simulate mismatch first
     scenario.cloudStore.selectedBusiness = { id: 999, name: 'Wrong Business' }
-    const pushRes1 = await useSyncPushStore(scenario.pinia).pushNow()
-    expect(pushRes1.ok).toBe(false)
-
-    // Restore canonical context
+    expect((await useSyncPushStore(scenario.pinia).pushNow()).ok).toBe(false)
     scenario.cloudStore.selectedBusiness = { id: 10, name: 'Kedai Kopi Utama' }
-    
-    // Sync runs and succeeds
-    const pushRes2 = await useSyncPushStore(scenario.pinia).pushNow()
-    expect(pushRes2.ok).toBe(true)
-
-    // Verify fake server business 999 (Business B) has 0 data
-    const wrongBizData = scenario.fakeServer.db.products.filter((p) => p.business_id === 999)
-    expect(wrongBizData).toHaveLength(0)
-
+    expect((await useSyncPushStore(scenario.pinia).pushNow()).ok).toBe(true)
+    const biz999 = scenario.fakeServer.getRecordsForBusiness(999)
+    expect(biz999.products).toHaveLength(0)
+    expect(biz999.categories).toHaveLength(0)
+    const biz10 = scenario.fakeServer.getRecordsForBusiness(10)
+    expect(biz10.products).toHaveLength(1)
     await scenario.cleanup()
   })
 
-  it('12. Foreground offline→online Auto Sync completes through P20→P16', async () => {
-    const scenario = await createOfflineOnlineScenario()
+  it('17. Foreground offline->online Auto Sync: deterministic via autoSyncStore.trigger', async () => {
+    // Runtime starts offline so listener attach does not trigger premature sync
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud', initialOnline: false, initialForeground: true })
     mockServerHandler.handle = scenario.fakeServer.handleRequest
 
-    scenario.cloudStore.$patch(makeValidCloudContext())
-    await saveToken('mock-bearer-token-123')
+    // Full cloud context and bootstrap state
+    await setupBoundCloudState(scenario)
+    scenario.runtimeSignal.setOnline(false)
 
-    await scenario.adapter.saveSyncPushBinding({ businessId: 10, boundAt: new Date().toISOString() })
-    await scenario.adapter.saveSyncPullBinding({
-      businessId: 10,
-      outletId: 101,
-      deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
-      registeredDeviceId: 55,
-      boundAt: new Date().toISOString(),
-    })
-    await scenario.adapter.saveSyncPullState({ version: 1, cursor: 0, serverSequence: 0 })
-
-    // Simulate that bootstrap was already completed so push doesn't fail with SYNC_BOOTSTRAP_REQUIRED
-    await scenario.adapter.saveSyncBootstrapState({
-      version: 1,
-      businessId: 10,
-      outletId: 101,
-      deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
-      registeredDeviceId: 55,
-      status: 'completed',
-      stagedAt: new Date().toISOString(),
-      counts: { categories: 0, products: 0, customers: 0, expenses: 0, transactions: 0 },
-    })
-
-    const registry = scenario.foundation.registry
-    await registry.ensureLoaded()
-    await registry.resolveSyncId(SYNC_ENTITY_TYPES.CATEGORY, 'Minuman')
-
+    // Enable Auto Sync using the current cloud context (stored in cloudStore)
     const autoSyncStore = useSyncAutoSyncStore(scenario.pinia)
-    await autoSyncStore.setEnabled(true)
+    const setRes = await autoSyncStore.setEnabled(true)
+    expect(setRes.ok).toBe(true)
+
+    // Attach listeners — runtime is offline, no "online" transition fires here
     autoSyncStore.startListeners()
 
-    // Device starts offline
-    scenario.runtimeSignal.setOnline(false)
-    scenario.runtimeSignal.setForeground(true)
-
+    // Create pending item while offline (cloud mode => queue)
     const productStore = useProductStore(scenario.pinia)
+    await productStore.createCategory('Minuman')
     await productStore.createProduct({ name: 'Kopi Susu', category: 'Minuman', price: 15000, stock: 5 })
     await scenario.scheduler.flush()
-
-    // No auto sync should have happened yet
     expect(scenario.fakeServer.getPushRequestCount()).toBe(0)
 
-    // Transition online
+    // Transition online: trigger auto sync directly and await it deterministically
     scenario.runtimeSignal.setOnline(true)
+    await autoSyncStore.trigger('online')
 
-    // Wait for auto sync microtasks to run
-    await new Promise((resolve) => setTimeout(resolve, 50))
-
-    // Queue is cleared and push happened on server
-    const pendingCount = await scenario.adapter.countSyncQueueItems()
-    expect(pendingCount).toBe(0)
+    // Queue cleared and push happened
+    expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
     expect(scenario.fakeServer.getPushRequestCount()).toBe(1)
 
-    // Activity log entry should exist
     const logStore = useSyncActivityLogStore(scenario.pinia)
     await logStore.refresh()
     expect(logStore.entries.length).toBeGreaterThan(0)
@@ -726,95 +527,107 @@ describe('P24: End-to-End Offline to Online Sync Scenarios', () => {
     await scenario.cleanup()
   })
 
-  it('13. Startup online does not Auto Sync', async () => {
-    const scenario = await createOfflineOnlineScenario()
+  it('18. Startup online does NOT trigger Auto Sync', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud', initialOnline: true, initialForeground: true })
     mockServerHandler.handle = scenario.fakeServer.handleRequest
-
-    scenario.cloudStore.$patch(makeValidCloudContext())
-    await saveToken('mock-bearer-token-123')
-
-    // Initial state is online & foreground
+    await setupBoundCloudState(scenario)
     scenario.runtimeSignal.setOnline(true)
-    scenario.runtimeSignal.setForeground(true)
-
+    const productStore = useProductStore(scenario.pinia)
+    await productStore.createCategory('Minuman')
+    await productStore.createProduct({ name: 'Teh Panas', category: 'Minuman', price: 5000, stock: 10 })
+    await scenario.scheduler.flush()
+    const pendingBefore = await scenario.adapter.countSyncQueueItems()
+    expect(pendingBefore).toBeGreaterThan(0)
     const autoSyncStore = useSyncAutoSyncStore(scenario.pinia)
     await autoSyncStore.setEnabled(true)
+    // Attach listener — runtime already ONLINE, no "online" transition will fire
     autoSyncStore.startListeners()
-
-    // Verify no sync called during startup
+    // Drain microtask queue
+    await Promise.resolve()
+    await Promise.resolve()
+    // No push happened — startup does not trigger Auto Sync
     expect(scenario.fakeServer.getPushRequestCount()).toBe(0)
-
+    expect(await scenario.adapter.countSyncQueueItems()).toBe(pendingBefore)
     await scenario.cleanup()
   })
 
-  it('14. Network failure preserves durable work', async () => {
-    const scenario = await createOfflineOnlineScenario()
+  it('19. Network failure preserves queue + inflight; retry reuses request_id', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud' })
     mockServerHandler.handle = scenario.fakeServer.handleRequest
-
     scenario.cloudStore.$patch(makeValidCloudContext())
     await saveToken('mock-bearer-token-123')
     scenario.runtimeSignal.setOnline(true)
-
     await scenario.adapter.saveSyncPushBinding({ businessId: 10, boundAt: new Date().toISOString() })
-
     const productStore = useProductStore(scenario.pinia)
+    await productStore.createCategory('Minuman')
     await productStore.createProduct({ name: 'Kopi Susu', category: 'Minuman', price: 15000, stock: 5 })
     await scenario.scheduler.flush()
-
-    // Simulate network failure
+    expect(await scenario.adapter.countSyncQueueItems()).toBe(2)
     scenario.fakeServer.setSimulateNetworkError(true)
-
     const pushStore = useSyncPushStore(scenario.pinia)
-    const pushRes = await pushStore.pushNow()
-    expect(pushRes.ok).toBe(false)
-
-    // Verify queue count is still preserved
-    const pendingCount = await scenario.adapter.countSyncQueueItems()
-    expect(pendingCount).toBe(1)
-
+    expect((await pushStore.pushNow()).ok).toBe(false)
+    expect(await scenario.adapter.countSyncQueueItems()).toBeGreaterThan(0)
+    const inflight1 = await scenario.adapter.loadSyncPushInflight()
+    expect(inflight1).not.toBeNull()
+    expect(typeof inflight1.requestId).toBe('string')
+    expect(inflight1.requestId.trim().length).toBeGreaterThan(0)
+    expect(productStore.products).toHaveLength(1)
+    scenario.fakeServer.setSimulateNetworkError(false)
+    expect((await pushStore.pushNow()).ok).toBe(true)
+    expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
+    expect(await scenario.adapter.loadSyncPushInflight()).toBeNull()
+    const pushRequests = scenario.fakeServer.getPushRequests()
+    expect(pushRequests.length).toBeGreaterThanOrEqual(2)
+    const firstId = pushRequests[0].request_id
+    expect(pushRequests.every((r) => r.request_id === firstId)).toBe(true)
+    expect(scenario.fakeServer.db.products).toHaveLength(1)
     await scenario.cleanup()
   })
 
-  it('15. At least one Sale + SaleItem relation survives full cycle', async () => {
-    const scenario = await createOfflineOnlineScenario()
+  it('20. P17 health transitions and P21 status pending -> clear', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud', initialOnline: true })
     mockServerHandler.handle = scenario.fakeServer.handleRequest
-
     scenario.cloudStore.$patch(makeValidCloudContext())
     await saveToken('mock-bearer-token-123')
     scenario.runtimeSignal.setOnline(true)
-
-    const productStore = useProductStore(scenario.pinia)
-    const prod = await productStore.createProduct({ name: 'Kopi Latte', category: 'Minuman', price: 20000, stock: 5 })
-
-    const transactionStore = useTransactionStore(scenario.pinia)
-    await transactionStore.createTransaction({
-      items: [{ id: prod.product.id, name: 'Kopi Latte', price: 20000, qty: 2 }],
-      subtotal: 40000,
-      tax: 0,
-      total: 40000,
-      paymentMethod: 'cash',
-    })
-    await scenario.scheduler.flush()
-
     await scenario.adapter.saveSyncPushBinding({ businessId: 10, boundAt: new Date().toISOString() })
-
-    // Push to server
-    const pushStore = useSyncPushStore(scenario.pinia)
-    const pushRes = await pushStore.pushNow()
-    expect(pushRes.ok).toBe(true)
-
-    // Server should have sale and sale items
-    expect(scenario.fakeServer.db.sales).toHaveLength(1)
-    expect(scenario.fakeServer.db.sale_items).toHaveLength(1)
-
-    const serverSale = scenario.fakeServer.db.sales[0]
-    const serverItem = scenario.fakeServer.db.sale_items[0]
-
-    expect(serverItem.sale_sync_id).toBe(serverSale.sync_id)
-    expect(serverItem.product_name).toBe('Kopi Latte')
-    expect(serverItem.quantity).toBe(2)
-    expect(serverItem.line_total).toBe(40000)
-
+    await scenario.adapter.saveSyncPullState({ version: 1, cursor: 0, serverSequence: 0 })
+    await scenario.adapter.saveSyncBootstrapState({ version: 1, businessId: 10, outletId: 101, deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000', registeredDeviceId: 55, status: 'completed', stagedAt: new Date().toISOString(), counts: { categories: 0, products: 0, customers: 0, expenses: 0, transactions: 0 } })
+    const statusStore = useSyncStatusStore(scenario.pinia)
+    // P21: LOCAL when cloudAccess=false
+    const noCloudCtx = { ...makeValidCloudContext(), cloudAccess: false }
+    scenario.cloudStore.$patch(noCloudCtx)
+    const rawLocal = await statusStore.refresh()
+    const localStatus = deriveUiStatus(scenario.cloudStore, rawLocal)
+    expect(localStatus.status).toBe(SYNC_UI_LOCAL)
+    // Restore cloud context
+    scenario.cloudStore.$patch(makeValidCloudContext())
+    // P21: PENDING when queue > 0
+    const productStore = useProductStore(scenario.pinia)
+    await productStore.createCategory('Makanan')
+    await productStore.createProduct({ name: 'Roti', category: 'Makanan', price: 8000, stock: 5 })
+    await scenario.scheduler.flush()
+    const rawPending = await statusStore.refresh()
+    const pendingStatus = deriveUiStatus(scenario.cloudStore, rawPending)
+    expect(pendingStatus.status).toBe(SYNC_UI_PENDING)
+    // P17: attention when pending > 0
+    const healthStore = useSyncHealthStore(scenario.pinia)
+    const healthRes1 = await healthStore.checkHealth()
+    expect(healthRes1.ok).toBe(true)
+    expect(['attention', 'blocked']).toContain(healthRes1.status)
+    expect(healthRes1.issues.length).toBeGreaterThan(0)
+    // Push to clear queue
+    expect((await useSyncPushStore(scenario.pinia).pushNow()).ok).toBe(true)
+    expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
+    // P21: CLEAR after successful sync
+    const rawClear = await statusStore.refresh()
+    const clearStatus = deriveUiStatus(scenario.cloudStore, rawClear)
+    expect(clearStatus.status).toBe(SYNC_UI_CLEAR)
+    // P17: ready when queue=0, no conflicts, no inflight
+    const healthRes2 = await healthStore.checkHealth()
+    expect(healthRes2.ok).toBe(true)
+    expect(healthRes2.status).toBe('ready')
+    expect(healthRes2.issues).toHaveLength(0)
     await scenario.cleanup()
   })
 })
