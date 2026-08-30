@@ -35,6 +35,7 @@ import { useCloudSessionStore } from '../stores/cloudSessionStore'
 import { useSyncPushStore } from '../stores/syncPushStore'
 import { useSyncPullStore } from '../stores/syncPullStore'
 import { useSyncBootstrapStore } from '../stores/syncBootstrapStore'
+import { useSyncContextGuardStore } from '../stores/syncContextGuardStore'
 import CloudLoginView from '../views/settings/CloudLoginView.vue'
 
 function makeValidCloudContext(overrides = {}) {
@@ -927,6 +928,17 @@ describe('P14: UI Integration in CloudLoginView', () => {
     setActivePinia(pinia)
     adapter = createMemoryAdapter()
     await adapter.initialize()
+
+    const guardStore = useSyncContextGuardStore()
+    guardStore.init({
+      contextGuardService: {
+        inspect: vi.fn().mockResolvedValue({
+          ok: true,
+          status: 'safe',
+          code: 'SYNC_CONTEXT_SAFE',
+        }),
+      },
+    })
   })
 
   it('renders "Siapkan Data Lokal ke Cloud" and triggers bootstrapNow on click', async () => {

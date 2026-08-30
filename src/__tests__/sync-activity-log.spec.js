@@ -18,6 +18,28 @@ import { useSyncOrchestratorStore } from '@/stores/syncOrchestratorStore'
 import { useSyncHealthStore } from '@/stores/syncHealthStore'
 import { useSyncRecoveryStore } from '@/stores/syncRecoveryStore'
 import CloudLoginView from '@/views/settings/CloudLoginView.vue'
+
+vi.mock('@/stores/syncContextGuardStore', () => {
+  return {
+    useSyncContextGuardStore: () => ({
+      status: 'safe',
+      loading: false,
+      code: 'SYNC_CONTEXT_SAFE',
+      currentContext: null,
+      canonicalContext: null,
+      issues: [],
+      init: vi.fn(),
+      check: vi.fn().mockResolvedValue({
+        ok: true,
+        status: 'safe',
+        code: 'SYNC_CONTEXT_SAFE',
+      }),
+      resetPresentation: vi.fn(),
+      reset: vi.fn(),
+    })
+  }
+})
+
 import { createBackupPayload } from '@/services/backupService'
 
 describe('P19: Sync Activity Log & Audit Trail', () => {

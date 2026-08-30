@@ -15,10 +15,8 @@ export const useSyncContextGuardStore = defineStore('syncContextGuard', () => {
 
   let _contextGuardService = null
   let _checkSeq = 0
-  let _initialized = false
 
   function init({ contextGuardService = null } = {}) {
-    _initialized = true
     if (contextGuardService) {
       _contextGuardService = contextGuardService
     }
@@ -74,22 +72,6 @@ export const useSyncContextGuardStore = defineStore('syncContextGuard', () => {
     const fingerprintBefore = buildContextFingerprint(effectiveContext)
 
     if (!_contextGuardService) {
-      const isTestEnv = typeof process !== 'undefined' && (process.env?.NODE_ENV === 'test' || process.env?.VITEST)
-      const isGuardTestSuite = typeof globalThis !== 'undefined' && globalThis.__SYNC_CONTEXT_GUARD_TEST_SUITE__ === true
-      if (isTestEnv && !_initialized && !isGuardTestSuite) {
-        loading.value = false
-        status.value = 'safe'
-        code.value = 'SYNC_CONTEXT_SAFE'
-        return {
-          ok: true,
-          code: 'SYNC_CONTEXT_SAFE',
-          status: 'safe',
-          currentContext: null,
-          canonicalContext: null,
-          issues: [],
-        }
-      }
-
       loading.value = false
       status.value = 'blocked'
       code.value = 'SYNC_CONTEXT_READ_FAILED'

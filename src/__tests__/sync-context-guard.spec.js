@@ -94,9 +94,6 @@ describe('P23: Canonical Sync Context Guard & Tenant Isolation', () => {
     pinia = createPinia()
     setActivePinia(pinia)
     vi.restoreAllMocks()
-    if (typeof globalThis !== 'undefined') {
-      globalThis.__SYNC_CONTEXT_GUARD_TEST_SUITE__ = true
-    }
   })
 
   // ── 1. Fresh Unbound Context ───────────────────────────────────────────────
@@ -294,6 +291,22 @@ describe('P23: Canonical Sync Context Guard & Tenant Isolation', () => {
     expect(result.code).toBe('SYNC_CONTEXT_METADATA_INVALID')
   })
 
+  it('blocks with SYNC_CONTEXT_METADATA_INVALID when auto settings is missing context property (enabled: false)', async () => {
+    const adapter = createMockAdapter({
+      autoSettings: {
+        version: 1,
+        enabled: false,
+        updatedAt: '2026-08-28T10:00:00.000Z',
+      },
+    })
+    const guard = createSyncContextGuardService({ adapter })
+
+    const result = await guard.inspect({ context: validContext })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_CONTEXT_METADATA_INVALID')
+  })
+
   it('accepts enabled: false with context: null as valid metadata and stays UNBOUND when no other anchors', async () => {
     const adapter = createMockAdapter({
       autoSettings: {
@@ -429,6 +442,14 @@ describe('P23: Canonical Sync Context Guard & Tenant Isolation', () => {
     expect(result.code).toBe('SYNC_CONTEXT_READ_FAILED')
     expect(store.status).toBe('blocked')
     expect(store.code).toBe('SYNC_CONTEXT_READ_FAILED')
+  })
+
+  it('TEST MISSING STORE SERVICE: returns ok false, status blocked, and code SYNC_CONTEXT_READ_FAILED when checked without service and without special test flag', async () => {
+    const store = useSyncContextGuardStore()
+    const result = await store.check()
+    expect(result.ok).toBe(false)
+    expect(result.status).toBe('blocked')
+    expect(result.code).toBe('SYNC_CONTEXT_READ_FAILED')
   })
 
   // ── 12. Pinia Store: Stale Async Check Protection (Sequence Counter) ───────

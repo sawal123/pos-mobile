@@ -8,6 +8,7 @@ import { useSyncPushStore } from '@/stores/syncPushStore'
 import { useSyncPullStore } from '@/stores/syncPullStore'
 import { useSyncBootstrapStore } from '@/stores/syncBootstrapStore'
 import { useSyncConflictStore } from '@/stores/syncConflictStore'
+import { useSyncContextGuardStore } from '@/stores/syncContextGuardStore'
 import CloudLoginView from '@/views/settings/CloudLoginView.vue'
 
 describe('P16: Manual Full Sync Orchestrator Service', () => {
@@ -568,6 +569,17 @@ describe('P16: UI Integration in CloudLoginView', () => {
     cloudStore.selectedOutlet = { id: 101, name: 'Outlet 1' }
     cloudStore.deviceIdentifier = 'dev-uuid-123'
     cloudStore.registeredDeviceId = 77
+
+    const guardStore = useSyncContextGuardStore()
+    guardStore.init({
+      contextGuardService: {
+        inspect: vi.fn().mockResolvedValue({
+          ok: true,
+          status: 'safe',
+          code: 'SYNC_CONTEXT_SAFE',
+        }),
+      },
+    })
   })
 
   it('renders "Sinkronkan Semua" button and maintains existing "Sync Sekarang" and "Tarik Data Cloud" buttons', async () => {

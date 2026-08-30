@@ -43,6 +43,7 @@ import { useShiftStore } from '../stores/shiftStore'
 import { useCloudSessionStore } from '../stores/cloudSessionStore'
 import { useSyncPushStore } from '../stores/syncPushStore'
 import { useSyncPullStore } from '../stores/syncPullStore'
+import { useSyncContextGuardStore } from '../stores/syncContextGuardStore'
 import CloudLoginView from '../views/settings/CloudLoginView.vue'
 
 function makeValidCloudContext(overrides = {}) {
@@ -1832,6 +1833,17 @@ describe('P13: UI Integration in CloudLoginView', () => {
       }),
     }
     syncPullStore.init({ pullService: mockPullService })
+
+    const guardStore = useSyncContextGuardStore(pinia)
+    guardStore.init({
+      contextGuardService: {
+        inspect: vi.fn().mockResolvedValue({
+          ok: true,
+          status: 'safe',
+          code: 'SYNC_CONTEXT_SAFE',
+        }),
+      },
+    })
 
     const wrapper = mount(CloudLoginView, {
       global: {

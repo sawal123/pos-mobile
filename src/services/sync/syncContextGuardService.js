@@ -279,6 +279,7 @@ export function createSyncContextGuardService({ adapter } = {}) {
 
     // 5. Validate auto settings schema (Actual P20: version: 1, enabled: boolean, context: null | {...}, updatedAt)
     if (autoSettings !== null && autoSettings !== undefined) {
+      const hasContextProp = Object.prototype.hasOwnProperty.call(autoSettings, 'context')
       const autoKeys = Object.keys(autoSettings)
       const hasExtraKeys = autoKeys.some(key => !['version', 'enabled', 'context', 'updatedAt'].includes(key))
 
@@ -287,11 +288,13 @@ export function createSyncContextGuardService({ adapter } = {}) {
         autoSettings.version === 1 &&
         typeof autoSettings.enabled === 'boolean' &&
         isValidDateString(autoSettings.updatedAt) &&
+        hasContextProp &&
+        autoSettings.context !== undefined &&
         !hasExtraKeys
 
       let isContextValid = true
       if (isValidBaseShape) {
-        if (autoSettings.context !== null && autoSettings.context !== undefined) {
+        if (autoSettings.context !== null) {
           if (!isPlainObject(autoSettings.context)) {
             isContextValid = false
           } else {
@@ -310,7 +313,7 @@ export function createSyncContextGuardService({ adapter } = {}) {
           source: 'auto_sync',
         })
       } else if (autoSettings.enabled === true) {
-        if (!autoSettings.context || !isContextValid) {
+        if (autoSettings.context === null || !isContextValid) {
           schemaIssues.push({
             code: 'INVALID_METADATA_SCHEMA',
             source: 'auto_sync',
