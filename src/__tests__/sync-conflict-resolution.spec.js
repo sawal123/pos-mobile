@@ -31,6 +31,7 @@ import { SYNC_ENTITY_TYPES } from '../services/sync/syncConstants'
 import { useCloudSessionStore } from '../stores/cloudSessionStore'
 import { useSyncPushStore } from '../stores/syncPushStore'
 import { useSyncConflictStore } from '../stores/syncConflictStore'
+import { useSyncContextGuardStore } from '../stores/syncContextGuardStore'
 import CloudLoginView from '../views/settings/CloudLoginView.vue'
 
 const { fakeDb } = vi.hoisted(() => {
@@ -723,6 +724,17 @@ describe('P15: UI Integration in CloudLoginView', () => {
     setActivePinia(pinia)
     adapter = createMemoryAdapter()
     await adapter.initialize()
+
+    const guardStore = useSyncContextGuardStore()
+    guardStore.init({
+      contextGuardService: {
+        inspect: vi.fn().mockResolvedValue({
+          ok: true,
+          status: 'safe',
+          code: 'SYNC_CONTEXT_SAFE',
+        }),
+      },
+    })
   })
 
   it('renders "Konflik Sinkronisasi" section when open conflicts exist and handles resolution clicks', async () => {

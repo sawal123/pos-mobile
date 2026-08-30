@@ -25,6 +25,27 @@ import { useSyncActivityLogStore } from '@/stores/syncActivityLogStore'
 import { createRuntimeSignalService } from '@/services/runtime/runtimeSignalService'
 import CloudLoginView from '@/views/settings/CloudLoginView.vue'
 
+vi.mock('@/stores/syncContextGuardStore', () => {
+  return {
+    useSyncContextGuardStore: () => ({
+      status: 'safe',
+      loading: false,
+      code: 'SYNC_CONTEXT_SAFE',
+      currentContext: null,
+      canonicalContext: null,
+      issues: [],
+      init: vi.fn(),
+      check: vi.fn().mockResolvedValue({
+        ok: true,
+        status: 'safe',
+        code: 'SYNC_CONTEXT_SAFE',
+      }),
+      resetPresentation: vi.fn(),
+      reset: vi.fn(),
+    })
+  }
+})
+
 describe('P20: Safe Foreground Auto Sync Trigger', () => {
   let pinia
   let adapter

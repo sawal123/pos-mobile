@@ -45,6 +45,7 @@ export function createSyncPullService({
   transport = pullSyncChanges,
   stores = null,
   pinia = null,
+  contextGuardService = null,
 } = {}) {
   const activeRegistry =
     registry ??
@@ -119,6 +120,32 @@ export function createSyncPullService({
           message:
             'Sync pull preconditions failed: missing authentication, cloud context, or device registration.',
         },
+      }
+    }
+
+    // ── 1.5. P23 Context Guard Inspection ────────────────────────────────────
+    const guardContext = {
+      user: user ? { id: user.id } : null,
+      selectedBusiness: selectedBusiness ? { id: selectedBusiness.id } : null,
+      selectedOutlet: selectedOutlet ? { id: selectedOutlet.id } : null,
+      cloudAccess: cloudAccess === true,
+      deviceIdentifier,
+      registeredDeviceId,
+    }
+
+    if (contextGuardService && typeof contextGuardService.inspect === 'function') {
+      const guard = await contextGuardService.inspect({ context: guardContext })
+      if (!guard.ok) {
+        return {
+          ok: false,
+          code: 'SYNC_CONTEXT_GUARD_BLOCKED',
+          contextGuardCode: guard.code,
+          message: 'Sync pull operation blocked by context guard.',
+          error: {
+            code: 'SYNC_CONTEXT_GUARD_BLOCKED',
+            contextGuardCode: guard.code,
+          },
+        }
       }
     }
 

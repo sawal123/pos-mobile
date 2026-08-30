@@ -9,6 +9,7 @@ import { useSyncPullStore } from '@/stores/syncPullStore'
 import { useSyncBootstrapStore } from '@/stores/syncBootstrapStore'
 import { useSyncConflictStore } from '@/stores/syncConflictStore'
 import { useSyncOrchestratorStore } from '@/stores/syncOrchestratorStore'
+import { useSyncContextGuardStore } from '@/stores/syncContextGuardStore'
 import CloudLoginView from '@/views/settings/CloudLoginView.vue'
 
 describe('P17: Sync Health & Diagnostics Service', () => {
@@ -824,6 +825,17 @@ describe('P17: UI Integration in CloudLoginView', () => {
     cloudStore.selectedOutlet = { id: 101, name: 'Outlet 1' }
     cloudStore.deviceIdentifier = 'dev-uuid-123'
     cloudStore.registeredDeviceId = 77
+
+    const guardStore = useSyncContextGuardStore()
+    guardStore.init({
+      contextGuardService: {
+        inspect: vi.fn().mockResolvedValue({
+          ok: true,
+          status: 'safe',
+          code: 'SYNC_CONTEXT_SAFE',
+        }),
+      },
+    })
   })
 
   it('renders "Periksa Status Sync" button and displays summary and status when clicked', async () => {

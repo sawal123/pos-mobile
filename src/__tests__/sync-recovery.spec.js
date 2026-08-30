@@ -12,6 +12,27 @@ import { useSyncConflictStore } from '@/stores/syncConflictStore'
 import { useSyncOrchestratorStore } from '@/stores/syncOrchestratorStore'
 import CloudLoginView from '@/views/settings/CloudLoginView.vue'
 
+vi.mock('@/stores/syncContextGuardStore', () => {
+  return {
+    useSyncContextGuardStore: () => ({
+      status: 'safe',
+      loading: false,
+      code: 'SYNC_CONTEXT_SAFE',
+      currentContext: null,
+      canonicalContext: null,
+      issues: [],
+      init: vi.fn(),
+      check: vi.fn().mockResolvedValue({
+        ok: true,
+        status: 'safe',
+        code: 'SYNC_CONTEXT_SAFE',
+      }),
+      resetPresentation: vi.fn(),
+      reset: vi.fn(),
+    })
+  }
+})
+
 describe('P18: Manual Sync Recovery Center', () => {
   let mockHealthService
   let mockPushService

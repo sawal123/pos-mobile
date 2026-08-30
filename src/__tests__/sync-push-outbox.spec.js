@@ -31,6 +31,7 @@ import { pushSyncRequest } from '../services/sync/syncPushTransport'
 import { SYNC_ENTITY_TYPES, SYNC_OPERATIONS } from '../services/sync/syncConstants'
 import { useCloudSessionStore } from '../stores/cloudSessionStore'
 import { useSyncPushStore } from '../stores/syncPushStore'
+import { useSyncContextGuardStore } from '../stores/syncContextGuardStore'
 import CloudLoginView from '../views/settings/CloudLoginView.vue'
 
 function makeValidCloudContext(overrides = {}) {
@@ -1146,6 +1147,17 @@ describe('P12: UI Integration in CloudLoginView', () => {
     setActivePinia(pinia)
     adapter = createMemoryAdapter()
     await adapter.initialize()
+
+    const guardStore = useSyncContextGuardStore()
+    guardStore.init({
+      contextGuardService: {
+        inspect: vi.fn().mockResolvedValue({
+          ok: true,
+          status: 'safe',
+          code: 'SYNC_CONTEXT_SAFE',
+        }),
+      },
+    })
   })
 
   it('displays Sync Sekarang button when authenticated with cloud access and registered device', async () => {

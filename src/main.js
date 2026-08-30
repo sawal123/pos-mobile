@@ -19,6 +19,7 @@ import { useSyncRecoveryStore } from './stores/syncRecoveryStore'
 import { useSyncActivityLogStore } from './stores/syncActivityLogStore'
 import { useSyncAutoSyncStore } from './stores/syncAutoSyncStore'
 import { useSyncStatusStore } from './stores/syncStatusStore'
+import { useSyncContextGuardStore } from './stores/syncContextGuardStore'
 import { createRuntimeSignalService } from './services/runtime/runtimeSignalService'
 
 export async function bootstrapApp({
@@ -63,6 +64,12 @@ export async function bootstrapApp({
       // Restore token + non-sensitive cloud context (no push/pull)
       await cloudStore.hydrateFromStorage(adapter)
 
+      if (syncFoundation?.contextGuardService) {
+        const syncContextGuardStore = useSyncContextGuardStore(pinia)
+        syncContextGuardStore.init({
+          contextGuardService: syncFoundation.contextGuardService,
+        })
+      }
       if (syncFoundation?.pushService) {
         const syncPushStore = useSyncPushStore(pinia)
         syncPushStore.init({ pushService: syncFoundation.pushService })

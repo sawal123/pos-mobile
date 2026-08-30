@@ -241,6 +241,7 @@ export function createSyncPushService({
   tokenFetcher = getToken,
   transport = pushSyncRequest,
   cloudStore = null,
+  contextGuardService = null,
 } = {}) {
   const activeQueueService = queueService ?? createSyncQueueService({ adapter, scheduler })
   const activeRegistry = registry ?? createSyncIdentityRegistry({ adapter, scheduler })
@@ -343,6 +344,39 @@ export function createSyncPushService({
           preservedQueueIds: [],
           blocked: [],
           warnings: [],
+        }
+      }
+
+      // ── 1.5. P23 Context Guard Inspection ──────────────────────────────────
+      const guardContext = {
+        user: user ? { id: user.id } : null,
+        selectedBusiness: selectedBusiness ? { id: selectedBusiness.id } : null,
+        selectedOutlet: selectedOutlet ? { id: selectedOutlet.id } : null,
+        cloudAccess: cloudAccess === true,
+        deviceIdentifier,
+        registeredDeviceId,
+      }
+
+      if (contextGuardService && typeof contextGuardService.inspect === 'function') {
+        const guard = await contextGuardService.inspect({ context: guardContext })
+        if (!guard.ok) {
+          const remaining = await activeQueueService.countPending()
+          return {
+            ok: false,
+            code: 'SYNC_CONTEXT_GUARD_BLOCKED',
+            contextGuardCode: guard.code,
+            message: 'Sync push operation blocked by context guard.',
+            error: {
+              code: 'SYNC_CONTEXT_GUARD_BLOCKED',
+              contextGuardCode: guard.code,
+            },
+            remaining,
+            sentQueueIds: [],
+            removedQueueIds: [],
+            preservedQueueIds: [],
+            blocked: [],
+            warnings: [],
+          }
         }
       }
 
