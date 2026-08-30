@@ -1,4 +1,4 @@
-﻿// src/__tests__/helpers/syncScenarioHarness.js
+// src/__tests__/helpers/syncScenarioHarness.js
 
 import { createPinia, setActivePinia } from 'pinia'
 import { createMemoryAdapter } from '@/services/database/memoryAdapter'
@@ -34,6 +34,7 @@ import { createFakeServer } from './syncScenarioServer'
  */
 export function createFakeRuntimeSignalService({ online = false, foreground = true } = {}) {
   const subscribers = new Set()
+  const asyncWaitHooks = []
   let snapshot = {
     initialized: true,
     native: false,
@@ -44,6 +45,9 @@ export function createFakeRuntimeSignalService({ online = false, foreground = tr
   }
 
   return {
+    registerAsyncWaitHook(fn) {
+      asyncWaitHooks.push(fn)
+    },
     async start() {
       return { ok: true }
     },
@@ -85,8 +89,8 @@ export function createFakeRuntimeSignalService({ online = false, foreground = tr
     },
     /**
      * Async version: updates snapshot, calls all subscribers, awaits
-     * Promise.allSettled on any promises they return. This allows the
-     * caller to deterministically observe all side-effects (e.g. Auto Sync).
+     * Promise.allSettled on any promises returned directly or registered via wait hooks.
+     * This allows caller to deterministically observe side-effects (e.g. Auto Sync).
      * No fixed timers needed.
      */
     async setOnlineAsync(isOnline) {
@@ -99,6 +103,12 @@ export function createFakeRuntimeSignalService({ online = false, foreground = tr
           const result = cb({ type: 'network', transition, snapshot: { ...snapshot } })
           if (result && typeof result.then === 'function') {
             promises.push(result)
+          }
+        }
+        for (const hook of asyncWaitHooks) {
+          const p = hook()
+          if (p && typeof p.then === 'function') {
+            promises.push(p)
           }
         }
         if (promises.length > 0) {
@@ -116,6 +126,12 @@ export function createFakeRuntimeSignalService({ online = false, foreground = tr
           const result = cb({ type: 'app-state', transition, snapshot: { ...snapshot } })
           if (result && typeof result.then === 'function') {
             promises.push(result)
+          }
+        }
+        for (const hook of asyncWaitHooks) {
+          const p = hook()
+          if (p && typeof p.then === 'function') {
+            promises.push(p)
           }
         }
         if (promises.length > 0) {
@@ -223,10 +239,26 @@ export async function createOfflineOnlineScenario({
   })
 
   if (foundation.autoSyncService) {
-    useSyncAutoSyncStore(pinia).init({
+    const autoSyncStore = useSyncAutoSyncStore(pinia)
+    autoSyncStore.init({
       autoSyncService: foundation.autoSyncService,
       runtimeSignalService: runtimeSignal,
     })
+
+    const originalRunOnce = foundation.autoSyncService.runOnce
+    let activeRunOncePromise = null
+
+    foundation.autoSyncService.runOnce = function (...args) {
+      const p = originalRunOnce.apply(this, args)
+      activeRunOncePromise = p
+      return p.finally(() => {
+        if (activeRunOncePromise === p) {
+          activeRunOncePromise = null
+        }
+      })
+    }
+
+    runtimeSignal.registerAsyncWaitHook(() => activeRunOncePromise)
   }
   if (foundation.statusService) {
     const syncStatusStore = useSyncStatusStore(pinia)

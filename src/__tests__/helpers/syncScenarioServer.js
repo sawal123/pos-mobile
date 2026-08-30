@@ -65,7 +65,9 @@ export function createFakeServer() {
       const serverList = getEntityList(type)
       for (const incoming of incomingList) {
         const syncId = incoming.sync_id
-        const existing = serverList.find((x) => x.sync_id === syncId)
+        const existing = serverList.find(
+          (x) => Number(x.business_id) === Number(business_id) && x.sync_id === syncId,
+        )
         if (existing) {
           const incomingBase = incoming.base_sync_version
           if (incomingBase !== undefined && existing.sync_version > incomingBase) {
@@ -73,7 +75,10 @@ export function createFakeServer() {
           }
         }
         const forceKey = `${type}:${syncId}`
-        if (forceConflicts.has(forceKey)) {
+        const forceKeyScoped = `${business_id}:${type}:${syncId}`
+        if (forceConflicts.has(forceKeyScoped)) {
+          conflicts.push({ entity: type, sync_id: syncId, server_sync_version: forceConflicts.get(forceKeyScoped) || 2 })
+        } else if (forceConflicts.has(forceKey)) {
           conflicts.push({ entity: type, sync_id: syncId, server_sync_version: forceConflicts.get(forceKey) || 2 })
         }
       }
@@ -88,7 +93,9 @@ export function createFakeServer() {
       const serverList = getEntityList(type)
       for (const incoming of incomingList) {
         const syncId = incoming.sync_id
-        const index = serverList.findIndex((x) => x.sync_id === syncId)
+        const index = serverList.findIndex(
+          (x) => Number(x.business_id) === Number(business_id) && x.sync_id === syncId,
+        )
         serverSequence++
         const nextVersion = incoming.base_sync_version !== undefined ? incoming.base_sync_version + 1 : 1
         const updatedRecord = { ...incoming, business_id, sync_version: nextVersion, sync_sequence: serverSequence }
@@ -183,8 +190,12 @@ export function createFakeServer() {
 
       return { ok: false, status: 404, data: null, error: { status: 404, code: 'NOT_FOUND', message: 'Unknown endpoint', data: null } }
     },
-    forceConflict(entityType, syncId, serverVersion) {
-      forceConflicts.set(`${entityType}:${syncId}`, serverVersion)
+    forceConflict(entityType, syncId, serverVersion, businessId = null) {
+      if (businessId) {
+        forceConflicts.set(`${businessId}:${entityType}:${syncId}`, serverVersion)
+      } else {
+        forceConflicts.set(`${entityType}:${syncId}`, serverVersion)
+      }
     },
     getPushRequestCount: () => pushRequestCount,
     getPullRequestCount: () => pullRequestCount,

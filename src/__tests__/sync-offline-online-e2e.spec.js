@@ -159,6 +159,8 @@ describe('P24: End-to-End Offline to Online Sync Scenarios', () => {
     scenario.runtimeSignal.setOnline(true)
     await useSyncBootstrapStore(scenario.pinia).bootstrapNow()
     expect((await useSyncPushStore(scenario.pinia).pushNow()).ok).toBe(true)
+
+    // Assert server state after push
     expect(scenario.fakeServer.db.sales).toHaveLength(1)
     expect(scenario.fakeServer.db.sale_items).toHaveLength(1)
     const serverSale = scenario.fakeServer.db.sales[0]
@@ -167,6 +169,28 @@ describe('P24: End-to-End Offline to Online Sync Scenarios', () => {
     expect(serverItem.product_name).toBe('Kopi Latte')
     expect(serverItem.quantity).toBe(2)
     expect(serverItem.line_total).toBe(40000)
+
+    // Execute real P13 Pull cycle to test round-trip convergence
+    const pullStore = useSyncPullStore(scenario.pinia)
+    const pullRes1 = await pullStore.pullNow()
+    expect(pullRes1.ok).toBe(true)
+
+    // Expected final: no duplicate transaction, items preserved, queue 0
+    expect(transactionStore.items).toHaveLength(1)
+    expect(transactionStore.items[0].items).toHaveLength(1)
+    expect(transactionStore.items[0].items[0].name).toBe('Kopi Latte')
+    expect(transactionStore.items[0].items[0].qty).toBe(2)
+    expect(scenario.fakeServer.db.sales).toHaveLength(1)
+    expect(scenario.fakeServer.db.sale_items).toHaveLength(1)
+    expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
+
+    // Verify second pull produces no duplicate or echo
+    const pullRes2 = await pullStore.pullNow()
+    expect(pullRes2.ok).toBe(true)
+    expect(pullRes2.fetched).toBe(0)
+    expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
+    expect(transactionStore.items).toHaveLength(1)
+
     await scenario.cleanup()
   })
 
@@ -513,7 +537,7 @@ describe('P24: End-to-End Offline to Online Sync Scenarios', () => {
     await scenario.cleanup()
   })
 
-  it('17. Foreground offline->online Auto Sync: deterministic via autoSyncStore.trigger', async () => {
+  it('17. Foreground offline->online Auto Sync: event-driven via runtimeSignal.setOnlineAsync', async () => {
     const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud', initialOnline: false, initialForeground: true })
     mockServerHandler.handle = scenario.fakeServer.handleRequest
 
@@ -533,18 +557,20 @@ describe('P24: End-to-End Offline to Online Sync Scenarios', () => {
     await scenario.scheduler.flush()
     expect(scenario.fakeServer.getPushRequestCount()).toBe(0)
 
-    // Transition online: trigger auto sync directly and await it deterministically
-    scenario.runtimeSignal.setOnline(true)
-    const trigRes = await autoSyncStore.trigger('online')
-    expect(trigRes.ok).toBe(true)
+    // Attach listeners on offline runtime
+    autoSyncStore.startListeners()
+
+    // Transition online via runtime event and await completion deterministically
+    await scenario.runtimeSignal.setOnlineAsync(true)
 
     // Queue cleared and push happened
     expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
     expect(scenario.fakeServer.getPushRequestCount()).toBe(1)
+    expect(scenario.fakeServer.getPullRequestCount()).toBe(1)
 
     const logStore = useSyncActivityLogStore(scenario.pinia)
     await logStore.refresh()
-    expect(logStore.entries.length).toBeGreaterThan(0)
+    expect(logStore.entries.length).toBe(1)
     expect(logStore.entries[0].action).toBe('AUTO_SYNC')
 
     await scenario.cleanup()
@@ -637,8 +663,10 @@ describe('P24: End-to-End Offline to Online Sync Scenarios', () => {
     const healthStore = useSyncHealthStore(scenario.pinia)
     const healthRes1 = await healthStore.checkHealth()
     expect(healthRes1.ok).toBe(true)
-    expect(['attention', 'blocked']).toContain(healthRes1.status)
-    expect(healthRes1.issues.length).toBeGreaterThan(0)
+    expect(healthRes1.status).toBe('attention')
+    expect(healthRes1.code).toBe('SYNC_HEALTH_ATTENTION')
+    expect(healthRes1.issues).toHaveLength(1)
+    expect(healthRes1.issues[0].code).toBe('SYNC_PENDING_QUEUE')
     // Push to clear queue
     expect((await useSyncPushStore(scenario.pinia).pushNow()).ok).toBe(true)
     expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
@@ -650,7 +678,72 @@ describe('P24: End-to-End Offline to Online Sync Scenarios', () => {
     const healthRes2 = await healthStore.checkHealth()
     expect(healthRes2.ok).toBe(true)
     expect(healthRes2.status).toBe('ready')
+    expect(healthRes2.code).toBe('SYNC_HEALTH_READY')
     expect(healthRes2.issues).toHaveLength(0)
+    await scenario.cleanup()
+  })
+
+  it('21. Tenant collision regression: Business A pushing sync_id X does not overwrite Business B record with same sync_id', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud' })
+    mockServerHandler.handle = scenario.fakeServer.handleRequest
+    scenario.cloudStore.$patch(makeValidCloudContext())
+    await saveToken('mock-bearer-token-123')
+    scenario.runtimeSignal.setOnline(true)
+
+    // Pre-populate server with a product belonging to Business B (id: 20) with sync_id X
+    const collisionSyncId = '11111111-2222-4333-8444-555555555555'
+    scenario.fakeServer.db.products.push({
+      sync_id: collisionSyncId,
+      name: 'Product Tenant B',
+      price: 99000,
+      business_id: 20,
+      sync_version: 1,
+      sync_sequence: 1,
+    })
+    scenario.fakeServer.setServerSequence(1)
+
+    // Business A (id: 10) creates category and a product using the collision sync_id
+    const productStore = useProductStore(scenario.pinia)
+    await productStore.createCategory('Makanan')
+    const productData = {
+      id: collisionSyncId,
+      name: 'Product Tenant A',
+      category: 'Makanan',
+      price: 15000,
+      stock: 10,
+      isActive: true,
+    }
+    productStore.products.push(productData)
+    await scenario.foundation.queueService.enqueueUpsert(
+      SYNC_ENTITY_TYPES.PRODUCT,
+      collisionSyncId,
+      productData,
+    )
+    await scenario.scheduler.flush()
+
+    // Business A pushes its product
+    await scenario.adapter.saveSyncPushBinding({ businessId: 10, boundAt: new Date().toISOString() })
+    const pushRes = await useSyncPushStore(scenario.pinia).pushNow()
+    expect(pushRes.ok).toBe(true)
+
+    // Assert Business B's record is completely intact
+    const bizB = scenario.fakeServer.getRecordsForBusiness(20)
+    expect(bizB.products).toHaveLength(1)
+    expect(bizB.products[0].sync_id).toBe(collisionSyncId)
+    expect(bizB.products[0].name).toBe('Product Tenant B')
+    expect(bizB.products[0].price).toBe(99000)
+    expect(bizB.products[0].business_id).toBe(20)
+
+    // Assert Business A's record was created separately under business_id 10
+    const bizA = scenario.fakeServer.getRecordsForBusiness(10)
+    expect(bizA.products).toHaveLength(1)
+    expect(bizA.products[0].sync_id).toBe(collisionSyncId)
+    expect(bizA.products[0].name).toBe('Product Tenant A')
+    expect(bizA.products[0].price).toBe(15000)
+    expect(bizA.products[0].business_id).toBe(10)
+
+    // Total products on server is 2 (no overwriting across tenants)
+    expect(scenario.fakeServer.db.products).toHaveLength(2)
     await scenario.cleanup()
   })
 })
