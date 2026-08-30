@@ -18,6 +18,8 @@ export function createFakeServer() {
   let pushRequestCount = 0
   let pullRequestCount = 0
   let simulateNetworkError = false
+  let simulateCrashAfterCommit = false
+  let simulateInterruptedPull = false
 
   function getEntityList(entityType) {
     if (entityType === 'categories') return db.categories
@@ -173,6 +175,9 @@ export function createFakeServer() {
 
       if (path === '/api/sync/push') {
         const res = handlePush(options.body)
+        if (simulateCrashAfterCommit) {
+          return { ok: false, status: 0, data: null, error: { status: 0, code: 'NETWORK_ERROR', message: 'Simulated connection drop after commit', data: null } }
+        }
         if (!res.ok) {
           return { ok: false, status: res.status, data: null, error: { status: res.status, code: res.data?.code || 'PUSH_FAILED', message: res.data?.message || 'Push failed', data: res.data } }
         }
@@ -180,6 +185,9 @@ export function createFakeServer() {
       }
 
       if (path.startsWith('/api/sync/pull')) {
+        if (simulateInterruptedPull) {
+          return { ok: false, status: 0, data: null, error: { status: 0, code: 'NETWORK_ERROR', message: 'Simulated pull connection interruption', data: null } }
+        }
         const url = new URL(`http://localhost${path}`)
         const res = handlePull(url.searchParams)
         if (!res.ok) {
@@ -208,6 +216,8 @@ export function createFakeServer() {
       return result
     },
     setSimulateNetworkError(val) { simulateNetworkError = val },
+    setSimulateCrashAfterCommit(val) { simulateCrashAfterCommit = val },
+    setSimulateInterruptedPull(val) { simulateInterruptedPull = val },
     getServerSequence: () => serverSequence,
     setServerSequence(seq) { serverSequence = seq },
   }
