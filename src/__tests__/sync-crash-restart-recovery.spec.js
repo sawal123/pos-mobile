@@ -292,6 +292,13 @@ describe('P25: Crash, Restart, and Interrupted Sync Recovery Scenarios', () => {
       const inflight = await scenario.adapter.loadSyncPushInflight()
       expect(inflight).not.toBeNull()
 
+      // Capture durable request_id + server sequence after the unknown commit
+      const inflightRequestId = inflight.requestId
+      const sequenceAfterFirstCommit = scenario.fakeServer.getServerSequence()
+      const pushLogBeforeRestart = scenario.fakeServer.getPushRequests()
+      expect(pushLogBeforeRestart.length).toBeGreaterThanOrEqual(1)
+      expect(pushLogBeforeRestart[pushLogBeforeRestart.length - 1].request_id).toBe(inflightRequestId)
+
       // Restart app
       scenario = await restartAppScenario(scenario, { online: true })
       mockServerHandler.handle = scenario.fakeServer.handleRequest
@@ -300,6 +307,16 @@ describe('P25: Crash, Restart, and Interrupted Sync Recovery Scenarios', () => {
       scenario.fakeServer.setSimulateCrashAfterCommit(false)
       const recRes = await useSyncRecoveryStore(scenario.pinia).recover(RECOVERY_ACTIONS.RETRY_INFLIGHT)
       expect(recRes.ok).toBe(true)
+
+      // Retry MUST reuse the SAME request_id (no new UUID)
+      const pushLogAfterRetry = scenario.fakeServer.getPushRequests()
+      expect(pushLogAfterRetry.length).toBe(pushLogBeforeRestart.length + 1)
+      expect(pushLogAfterRetry[pushLogAfterRetry.length - 1].request_id).toBe(inflightRequestId)
+      // Both the first unknown-commit request and the retry share the same request_id
+      expect(pushLogAfterRetry[0].request_id).toBe(inflightRequestId)
+
+      // Duplicate retry must NOT reapply the mutation: server sequence unchanged
+      expect(scenario.fakeServer.getServerSequence()).toBe(sequenceAfterFirstCommit)
 
       // Server received duplicate success, no double product
       expect(scenario.fakeServer.db.products).toHaveLength(1)
@@ -325,6 +342,12 @@ describe('P25: Crash, Restart, and Interrupted Sync Recovery Scenarios', () => {
       scenario.fakeServer.setSimulateCrashAfterCommit(true)
       await useSyncPushStore(scenario.pinia).pushNow()
 
+      const inflightBefore = await scenario.adapter.loadSyncPushInflight()
+      expect(inflightBefore).not.toBeNull()
+      const oldInflightRequestId = inflightBefore.requestId
+      const pushLogBeforeRetry = scenario.fakeServer.getPushRequests()
+      expect(pushLogBeforeRetry.length).toBeGreaterThanOrEqual(1)
+
       // Restart app
       scenario = await restartAppScenario(scenario, { online: true })
       mockServerHandler.handle = scenario.fakeServer.handleRequest
@@ -349,6 +372,11 @@ describe('P25: Crash, Restart, and Interrupted Sync Recovery Scenarios', () => {
       const recRes = await useSyncRecoveryStore(scenario.pinia).recover(RECOVERY_ACTIONS.RETRY_INFLIGHT)
       expect(recRes.ok).toBe(true)
 
+      // Old unknown-commit retry MUST reuse the old inflight request_id
+      const pushLogAfterRetry = scenario.fakeServer.getPushRequests()
+      expect(pushLogAfterRetry.length).toBe(pushLogBeforeRetry.length + 1)
+      expect(pushLogAfterRetry[pushLogAfterRetry.length - 1].request_id).toBe(oldInflightRequestId)
+
       // Local is still V2
       expect(freshProdStore.products[0].name).toBe('Kopi V2')
       expect(freshProdStore.products[0].price).toBe(15000)
@@ -357,9 +385,11 @@ describe('P25: Crash, Restart, and Interrupted Sync Recovery Scenarios', () => {
       const queueAfterRetry = await scenario.adapter.listSyncQueueItems()
       expect(queueAfterRetry.some((q) => q.payload?.name === 'Kopi V2')).toBe(true)
 
-      // Next push sends V2 to server
+      // Next push sends V2 to server with a NEW request_id (different from old inflight)
       const pushRes2 = await useSyncPushStore(scenario.pinia).pushNow()
       expect(pushRes2.ok).toBe(true)
+      const pushLogAfterV2 = scenario.fakeServer.getPushRequests()
+      expect(pushLogAfterV2[pushLogAfterV2.length - 1].request_id).not.toBe(oldInflightRequestId)
 
       // Final: server updated to V2, queue 0
       const serverProds = scenario.fakeServer.db.products
@@ -484,12 +514,12 @@ describe('P25: Crash, Restart, and Interrupted Sync Recovery Scenarios', () => {
   })
 
   describe('Pull Interruption & Cursor Durability', () => {
-    it('11. Interrupted multi-page Pull resumes from durable cursor', async () => {
+    it('11. Interrupted multi-page Pull is atomic and resumes from durable cursor', async () => {
       let scenario = await createRestartableScenario({ businessMode: 'cloud', initialOnline: true })
       mockServerHandler.handle = scenario.fakeServer.handleRequest
       await setupBoundCloudState(scenario)
 
-      // Seed server with 4 categories
+      // Seed server with 4 categories across 4 sequences
       const catSyncIds = [
         '11111111-1111-4111-8111-111111111111',
         '22222222-2222-4222-8222-222222222222',
@@ -507,29 +537,49 @@ describe('P25: Crash, Restart, and Interrupted Sync Recovery Scenarios', () => {
       })
       scenario.fakeServer.setServerSequence(4)
 
-      // Save initial pull state with cursor 2 (page 1 applied)
-      await scenario.adapter.saveSyncPullState({
-        version: 1,
-        cursor: 2,
-        serverSequence: 4,
-      })
+      // Force 2 records per page and fail the 2nd pull HTTP request
+      scenario.fakeServer.setPullPageSize(2)
+      scenario.fakeServer.setInterruptPullOnRequest(2)
 
-      // Restart app
+      const productStore = useProductStore(scenario.pinia)
+      const pullRes = await useSyncPullStore(scenario.pinia).pullNow()
+      expect(pullRes.ok).toBe(false)
+      expect(pullRes.code).toBe('NETWORK_ERROR')
+
+      // Prove real multi-page flow: request #1 (page 1) succeeded, request #2 failed
+      expect(scenario.fakeServer.getPullRequestCount()).toBe(2)
+
+      // P13 fetches ALL pages before applying: page #2 failure must leave
+      // domain and durable cursor untouched (cursor stays 0, no categories applied)
+      expect(productStore.categories).not.toContain('Category 1')
+      expect(productStore.categories).not.toContain('Category 2')
+      const pullState = await scenario.adapter.loadSyncPullState()
+      expect(pullState.cursor).toBe(0)
+      expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
+
+      // Restart full app graph and re-run real Pull
       scenario = await restartAppScenario(scenario, { online: true })
       mockServerHandler.handle = scenario.fakeServer.handleRequest
+      scenario.fakeServer.setPullPageSize(2)
+      scenario.fakeServer.setInterruptPullOnRequest(null)
 
-      // Pull resumes from cursor 2 and fetches remaining page
-      const pullRes = await useSyncPullStore(scenario.pinia).pullNow()
-      expect(pullRes.ok).toBe(true)
-      expect(pullRes.cursorAfter).toBe(4)
+      const pullRes2 = await useSyncPullStore(scenario.pinia).pullNow()
+      expect(pullRes2.ok).toBe(true)
+      expect(pullRes2.cursorAfter).toBe(4)
+
+      const freshProdStore = useProductStore(scenario.pinia)
+      const applied = freshProdStore.categories.filter((c) => c.startsWith('Category '))
+      expect(applied).toHaveLength(4)
 
       const finalPullState = await scenario.adapter.loadSyncPullState()
       expect(finalPullState.cursor).toBe(4)
+      // No pull echo, no duplicates
+      expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
 
       await scenario.cleanup()
     })
 
-    it('12. Replayed remote Pull page does not duplicate records or create outbox echo', async () => {
+    it('12. Cursor persistence failure after domain apply is idempotent across restart', async () => {
       let scenario = await createRestartableScenario({ businessMode: 'cloud', initialOnline: true })
       mockServerHandler.handle = scenario.fakeServer.handleRequest
       await setupBoundCloudState(scenario)
@@ -544,27 +594,47 @@ describe('P25: Crash, Restart, and Interrupted Sync Recovery Scenarios', () => {
       })
       scenario.fakeServer.setServerSequence(1)
 
-      // First pull applies category
-      await useSyncPullStore(scenario.pinia).pullNow()
+      // Fail-once on the REAL cursor persistence boundary: first saveSyncPullState
+      // call throws, subsequent calls delegate to the original adapter method.
+      const originalSaveSyncPullState = scenario.adapter.saveSyncPullState.bind(scenario.adapter)
+      let cursorSaveAttempts = 0
+      scenario.adapter.saveSyncPullState = async (state) => {
+        cursorSaveAttempts += 1
+        if (cursorSaveAttempts === 1) {
+          throw new Error('simulated cursor persist failure')
+        }
+        return originalSaveSyncPullState(state)
+      }
+
+      const pullRes = await useSyncPullStore(scenario.pinia).pullNow()
+      expect(pullRes.ok).toBe(false)
+      expect(pullRes.code).toBe('SYNC_PULL_CURSOR_PERSIST_FAILED')
+
+      // Production order: domain apply -> flush -> registry/server versions -> cursor save LAST.
+      // Cursor failure leaves domain applied but durable cursor still 0.
       const prodStore = useProductStore(scenario.pinia)
       expect(prodStore.categories).toContain('Snack Unik')
+      const pullState = await scenario.adapter.loadSyncPullState()
+      expect(pullState.cursor).toBe(0)
 
-      // Reset cursor in storage to simulate crash before cursor save
-      await scenario.adapter.saveSyncPullState({ version: 1, cursor: 0, serverSequence: 1 })
-
-      // Restart app
+      // Restore normal cursor persistence and restart full app graph
+      scenario.adapter.saveSyncPullState = originalSaveSyncPullState
       scenario = await restartAppScenario(scenario, { online: true })
       mockServerHandler.handle = scenario.fakeServer.handleRequest
 
-      // Pull re-fetches the same category
+      // Category A survives from durable domain persistence
+      const freshProdStore = useProductStore(scenario.pinia)
+      expect(freshProdStore.categories).toContain('Snack Unik')
+
+      // Server re-sends Category A (cursor still 0) -> replay must be idempotent
       const pullRes2 = await useSyncPullStore(scenario.pinia).pullNow()
       expect(pullRes2.ok).toBe(true)
 
-      const freshProdStore = useProductStore(scenario.pinia)
       const countSnack = freshProdStore.categories.filter((c) => c === 'Snack Unik').length
       expect(countSnack).toBe(1) // No duplicate category
-
-      // No pull echo in queue
+      const finalPullState = await scenario.adapter.loadSyncPullState()
+      expect(finalPullState.cursor).toBe(1)
+      // No pull echo
       expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
 
       await scenario.cleanup()
@@ -861,7 +931,7 @@ describe('P25: Crash, Restart, and Interrupted Sync Recovery Scenarios', () => {
   })
 
   describe('Tenant Context Safety across Restart', () => {
-    it('17. Tenant mismatch after restart blocks transport and isolates data', async () => {
+    it('17. Tenant mismatch after restart blocks P12/P16/P18 and isolates data', async () => {
       let scenario = await createRestartableScenario({ businessMode: 'cloud', initialOnline: true })
       mockServerHandler.handle = scenario.fakeServer.handleRequest
       await setupBoundCloudState(scenario)
@@ -878,14 +948,32 @@ describe('P25: Crash, Restart, and Interrupted Sync Recovery Scenarios', () => {
       // Switch context to wrong business (999)
       scenario.cloudStore.selectedBusiness = { id: 999, name: 'Other Business' }
 
+      const pushCountBefore = scenario.fakeServer.getPushRequestCount()
+      const pullCountBefore = scenario.fakeServer.getPullRequestCount()
+      const queueBefore = await scenario.adapter.countSyncQueueItems()
+
+      // P12 Push blocked
       const pushRes = await useSyncPushStore(scenario.pinia).pushNow()
       expect(pushRes.ok).toBe(false)
       expect(['SYNC_CONTEXT_GUARD_BLOCKED', 'SYNC_BUSINESS_BINDING_MISMATCH', 'SYNC_CONTEXT_MISMATCH']).toContain(pushRes.code)
 
-      // Zero data sent to business 999
+      // P16 Full Sync blocked with zero additional HTTP
+      const syncRes = await useSyncOrchestratorStore(scenario.pinia).syncAll()
+      expect(syncRes.ok).toBe(false)
+      expect(scenario.fakeServer.getPushRequestCount()).toBe(pushCountBefore)
+      expect(scenario.fakeServer.getPullRequestCount()).toBe(pullCountBefore)
+
+      // P18 representative recovery blocked by mismatch contract
+      const recRes = await useSyncRecoveryStore(scenario.pinia).recover(RECOVERY_ACTIONS.CONTINUE_PENDING)
+      expect(recRes.ok).toBe(false)
+      expect(['SYNC_RECOVERY_MANUAL_INTERVENTION_REQUIRED', 'SYNC_RECOVERY_HEALTH_CHECK_FAILED']).toContain(recRes.code)
+      expect(scenario.fakeServer.getPushRequestCount()).toBe(pushCountBefore)
+      expect(scenario.fakeServer.getPullRequestCount()).toBe(pullCountBefore)
+
+      // Zero data sent to business 999, queue A remains intact
       const biz999 = scenario.fakeServer.getRecordsForBusiness(999)
       expect(biz999.products).toHaveLength(0)
-      expect(await scenario.adapter.countSyncQueueItems()).toBeGreaterThan(0)
+      expect(await scenario.adapter.countSyncQueueItems()).toBe(queueBefore)
 
       await scenario.cleanup()
     })
@@ -904,18 +992,27 @@ describe('P25: Crash, Restart, and Interrupted Sync Recovery Scenarios', () => {
       scenario = await restartAppScenario(scenario, { online: true })
       mockServerHandler.handle = scenario.fakeServer.handleRequest
 
-      // Switch to wrong business, verify blocked
+      // Switch to wrong business, verify P12 blocked
       scenario.cloudStore.selectedBusiness = { id: 999, name: 'Other Business' }
       expect((await useSyncPushStore(scenario.pinia).pushNow()).ok).toBe(false)
 
       // Return to canonical business 10
       scenario.cloudStore.selectedBusiness = { id: 10, name: 'Kedai Kopi Utama' }
-      const pushRes = await useSyncPushStore(scenario.pinia).pushNow()
-      expect(pushRes.ok).toBe(true)
+
+      // Guard check reports SAFE for canonical context
+      const guardRes = await useSyncContextGuardStore(scenario.pinia).check()
+      expect(guardRes.ok).toBe(true)
+      expect(guardRes.code).toBe('SYNC_CONTEXT_SAFE')
+
+      // P18 CONTINUE_PENDING recovery succeeds via P16 orchestrator
+      const recRes = await useSyncRecoveryStore(scenario.pinia).recover(RECOVERY_ACTIONS.CONTINUE_PENDING)
+      expect(recRes.ok).toBe(true)
 
       const biz10 = scenario.fakeServer.getRecordsForBusiness(10)
       expect(biz10.products).toHaveLength(1)
       expect(biz10.products[0].name).toBe('Kopi Asli')
+      // Business B (999) stays empty
+      expect(scenario.fakeServer.getRecordsForBusiness(999).products).toHaveLength(0)
       expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
 
       await scenario.cleanup()
@@ -1056,6 +1153,14 @@ describe('P25: Crash, Restart, and Interrupted Sync Recovery Scenarios', () => {
       expect(scenario.fakeServer.db.sales).toHaveLength(1)
       expect(scenario.fakeServer.db.sale_items).toHaveLength(1)
 
+      // Capture durable request_id + server sequence after the unknown commit
+      const inflight = await scenario.adapter.loadSyncPushInflight()
+      expect(inflight).not.toBeNull()
+      const inflightRequestId = inflight.requestId
+      const sequenceAfterFirstCommit = scenario.fakeServer.getServerSequence()
+      const pushLogBeforeRestart = scenario.fakeServer.getPushRequests()
+      expect(pushLogBeforeRestart[pushLogBeforeRestart.length - 1].request_id).toBe(inflightRequestId)
+
       // Restart app
       scenario = await restartAppScenario(scenario, { online: true })
       mockServerHandler.handle = scenario.fakeServer.handleRequest
@@ -1064,6 +1169,14 @@ describe('P25: Crash, Restart, and Interrupted Sync Recovery Scenarios', () => {
       scenario.fakeServer.setSimulateCrashAfterCommit(false)
       const recRes = await useSyncRecoveryStore(scenario.pinia).recover(RECOVERY_ACTIONS.RETRY_INFLIGHT)
       expect(recRes.ok).toBe(true)
+
+      // Sale/SaleItem retry MUST reuse the SAME request_id
+      const pushLogAfterRetry = scenario.fakeServer.getPushRequests()
+      expect(pushLogAfterRetry.length).toBe(pushLogBeforeRestart.length + 1)
+      expect(pushLogAfterRetry[pushLogAfterRetry.length - 1].request_id).toBe(inflightRequestId)
+
+      // Duplicate retry must NOT reapply: server sequence unchanged
+      expect(scenario.fakeServer.getServerSequence()).toBe(sequenceAfterFirstCommit)
 
       // Final server check: exactly 1 sale, 1 sale_item
       expect(scenario.fakeServer.db.sales).toHaveLength(1)
