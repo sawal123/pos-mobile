@@ -18,6 +18,10 @@ export function createFakeServer() {
   let pushRequestCount = 0
   let pullRequestCount = 0
   let simulateNetworkError = false
+  let simulateCrashAfterCommit = false
+  let simulateInterruptedPull = false
+  let pullPageSize = null
+  let interruptPullOnRequest = null
 
   function getEntityList(entityType) {
     if (entityType === 'categories') return db.categories
@@ -111,10 +115,13 @@ export function createFakeServer() {
   function handlePull(query) {
     pullRequestCount++
     if (simulateNetworkError) throw new Error('Simulated network error')
+    if (interruptPullOnRequest !== null && pullRequestCount === interruptPullOnRequest) {
+      return { ok: false, status: 0, data: { code: 'NETWORK_ERROR', message: 'Simulated pull request interruption' }, error: { status: 0, code: 'NETWORK_ERROR', message: 'Simulated pull request interruption', data: null } }
+    }
 
     const businessId = Number(query.get('business_id'))
     const after = Number(query.get('after') || 0)
-    const limit = Number(query.get('limit') || 200)
+    const requestedLimit = Number(query.get('limit') || 200)
 
     if (!businessId || !Number.isInteger(businessId) || businessId <= 0) {
       return { ok: false, status: 400, data: { code: 'INVALID_REQUEST', message: 'Missing or invalid business_id' } }
@@ -122,9 +129,12 @@ export function createFakeServer() {
     if (!Number.isFinite(after) || after < 0 || !Number.isInteger(after)) {
       return { ok: false, status: 400, data: { code: 'INVALID_REQUEST', message: 'Invalid after cursor' } }
     }
-    if (!Number.isFinite(limit) || limit <= 0 || !Number.isInteger(limit)) {
+    if (!Number.isFinite(requestedLimit) || requestedLimit <= 0 || !Number.isInteger(requestedLimit)) {
       return { ok: false, status: 400, data: { code: 'INVALID_REQUEST', message: 'Invalid limit' } }
     }
+
+    // Test-only: server may return a smaller page than the requested limit with has_more=true
+    const limit = pullPageSize !== null ? Math.min(pullPageSize, requestedLimit) : requestedLimit
 
     const allRecords = []
     const entityTypes = [
@@ -173,6 +183,9 @@ export function createFakeServer() {
 
       if (path === '/api/sync/push') {
         const res = handlePush(options.body)
+        if (simulateCrashAfterCommit) {
+          return { ok: false, status: 0, data: null, error: { status: 0, code: 'NETWORK_ERROR', message: 'Simulated connection drop after commit', data: null } }
+        }
         if (!res.ok) {
           return { ok: false, status: res.status, data: null, error: { status: res.status, code: res.data?.code || 'PUSH_FAILED', message: res.data?.message || 'Push failed', data: res.data } }
         }
@@ -180,6 +193,9 @@ export function createFakeServer() {
       }
 
       if (path.startsWith('/api/sync/pull')) {
+        if (simulateInterruptedPull) {
+          return { ok: false, status: 0, data: null, error: { status: 0, code: 'NETWORK_ERROR', message: 'Simulated pull connection interruption', data: null } }
+        }
         const url = new URL(`http://localhost${path}`)
         const res = handlePull(url.searchParams)
         if (!res.ok) {
@@ -208,6 +224,11 @@ export function createFakeServer() {
       return result
     },
     setSimulateNetworkError(val) { simulateNetworkError = val },
+    setSimulateCrashAfterCommit(val) { simulateCrashAfterCommit = val },
+    setSimulateInterruptedPull(val) { simulateInterruptedPull = val },
+    setPullPageSize(val) { pullPageSize = val },
+    setInterruptPullOnRequest(val) { interruptPullOnRequest = val },
+    getPullRequestCount: () => pullRequestCount,
     getServerSequence: () => serverSequence,
     setServerSequence(seq) { serverSequence = seq },
   }

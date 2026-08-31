@@ -461,7 +461,22 @@ describe('P19: Sync Activity Log & Audit Trail', () => {
     const cloudStore = useCloudSessionStore()
     setupAuthenticatedSession(cloudStore)
 
+    const syncHealthStore = useSyncHealthStore()
+    syncHealthStore.lastResult = {
+      status: 'attention',
+      code: 'SYNC_HEALTH_ATTENTION',
+      summary: { pendingCount: 1, hasInflight: false },
+      issues: [{ code: 'SYNC_PENDING_QUEUE', severity: 'attention' }],
+    }
+
     const syncRecoveryStore = useSyncRecoveryStore()
+    vi.spyOn(syncRecoveryStore, 'getRecoveryPlan').mockReturnValue({
+      canRecover: true,
+      action: 'CONTINUE_PENDING',
+      availableActions: ['CONTINUE_PENDING'],
+      actionLabel: 'Lanjutkan Sinkronisasi',
+      message: 'Terdapat data antrean sinkronisasi.',
+    })
     vi.spyOn(syncRecoveryStore, 'recover').mockResolvedValue({
       ok: true,
       code: 'SYNC_RECOVERY_SUCCESS',
@@ -474,7 +489,9 @@ describe('P19: Sync Activity Log & Audit Trail', () => {
     const wrapper = mount(CloudLoginView)
     await flushPromises()
 
-    await wrapper.vm.handleRecovery('CONTINUE_PENDING')
+    const recoveryBtn = wrapper.find('#recovery-continue-pending-btn')
+    expect(recoveryBtn.exists()).toBe(true)
+    await recoveryBtn.trigger('click')
     await flushPromises()
 
     const list = await activityLogService.listRecent()
