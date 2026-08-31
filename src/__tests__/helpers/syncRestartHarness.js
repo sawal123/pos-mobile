@@ -95,15 +95,27 @@ export async function createRestartableScenario({
   setActivePinia(pinia)
 
   const activeAdapter = adapter || createMemoryAdapter()
+
+  // Instantiate domain stores and clear built-in seed data BEFORE persistence
+  // initialize so first-run seeding writes an empty baseline (same as the P24
+  // harness). Without this, seed products/categories/transactions pollute the
+  // durable baseline and break bootstrap preflight + exact outbox counts.
+  const productStore = useProductStore(pinia)
+  const customerStore = useCustomerStore(pinia)
+  const expenseStore = useExpenseStore(pinia)
+  const transactionStore = useTransactionStore(pinia)
+  productStore.products = []
+  productStore.categories = []
+  customerStore.customers = []
+  expenseStore.expenses = []
+  transactionStore.items = []
+
   const scheduler = await initializePersistence(pinia, { adapter: activeAdapter })
 
   const businessStore = useBusinessStore(pinia)
   businessStore.setBusiness({
     name: 'Kedai Kopi Utama',
     type: 'Cafe',
-    owner: 'Owner User',
-    phone: '08123456789',
-    outlet: 'Outlet Pusat',
     mode: businessMode,
   })
   await scheduler.flush()

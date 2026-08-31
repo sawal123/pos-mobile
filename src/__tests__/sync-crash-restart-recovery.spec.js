@@ -74,7 +74,7 @@ describe('P25: Crash, Restart, and Interrupted Sync Recovery Scenarios', () => {
       expect(prod.success).toBe(true)
 
       const expenseStore = useExpenseStore(scenario.pinia)
-      await expenseStore.createExpense({ category: 'Operasional', amount: 5000, description: 'Beli Es Batu' })
+      await expenseStore.createExpense({ title: 'Beli Es Batu', category: 'Operasional', amount: 5000 })
 
       const transactionStore = useTransactionStore(scenario.pinia)
       await transactionStore.createTransaction({
@@ -103,7 +103,7 @@ describe('P25: Crash, Restart, and Interrupted Sync Recovery Scenarios', () => {
       expect(freshExpenseStore.expenses).toHaveLength(1)
       expect(freshTrxStore.items).toHaveLength(1)
 
-      // Durable queue items survive with exact matching IDs and operations
+      // Durable queue items survive with exact matching IDs, operations, and payload semantics
       const queueAfter = await scenario.adapter.listSyncQueueItems()
       expect(queueAfter).toHaveLength(queueBefore.length)
 
@@ -112,7 +112,13 @@ describe('P25: Crash, Restart, and Interrupted Sync Recovery Scenarios', () => {
         expect(queueAfter[i].entityType).toBe(queueBefore[i].entityType)
         expect(queueAfter[i].entityId).toBe(queueBefore[i].entityId)
         expect(queueAfter[i].operation).toBe(queueBefore[i].operation)
+        // Payload semantic fields must survive restart unchanged
+        expect(JSON.stringify(queueAfter[i].payload)).toBe(JSON.stringify(queueBefore[i].payload))
       }
+
+      const prodQueueItem = queueAfter.find((q) => q.entityType === 'product')
+      expect(prodQueueItem.payload.name).toBe('Kopi Tubruk')
+      expect(prodQueueItem.payload.price).toBe(10000)
 
       // No network calls made upon restart
       expect(scenario.fakeServer.getPushRequestCount()).toBe(0)
@@ -203,7 +209,15 @@ describe('P25: Crash, Restart, and Interrupted Sync Recovery Scenarios', () => {
       expect(inflightAfter).not.toBeNull()
       expect(inflightAfter.requestId).toBe(inflightBefore.requestId)
       expect(inflightAfter.queueSnapshots).toHaveLength(inflightBefore.queueSnapshots.length)
+      // Full P12 envelope schema survives restart unchanged
+      expect(inflightAfter.version).toBe(1)
       expect(inflightAfter.businessId).toBe(inflightBefore.businessId)
+      expect(inflightAfter.outletId).toBe(inflightBefore.outletId)
+      expect(inflightAfter.deviceIdentifier).toBe(inflightBefore.deviceIdentifier)
+      expect(inflightAfter.registeredDeviceId).toBe(inflightBefore.registeredDeviceId)
+      expect(inflightAfter.createdAt).toBe(inflightBefore.createdAt)
+      expect(JSON.stringify(inflightAfter.changes)).toBe(JSON.stringify(inflightBefore.changes))
+      expect(JSON.stringify(inflightAfter.queueSnapshots)).toBe(JSON.stringify(inflightBefore.queueSnapshots))
 
       const healthStore = useSyncHealthStore(scenario.pinia)
       const healthRes = await healthStore.checkHealth()
@@ -376,7 +390,7 @@ describe('P25: Crash, Restart, and Interrupted Sync Recovery Scenarios', () => {
       // Stage bootstrap
       const bRes = await useSyncBootstrapStore(scenario.pinia).bootstrapNow()
       expect(bRes.ok).toBe(true)
-      expect(bRes.status).toBe('staged')
+      expect(bRes.state.status).toBe('staged')
 
       const stagedCount = await scenario.adapter.countSyncQueueItems()
       expect(stagedCount).toBeGreaterThan(0)
@@ -386,7 +400,7 @@ describe('P25: Crash, Restart, and Interrupted Sync Recovery Scenarios', () => {
       mockServerHandler.handle = scenario.fakeServer.handleRequest
 
       const freshBootstrapStore = useSyncBootstrapStore(scenario.pinia)
-      expect(freshBootstrapStore.status).toBe('staged')
+      expect(freshBootstrapStore.bootstrapState.status).toBe('staged')
       expect(await scenario.adapter.countSyncQueueItems()).toBe(stagedCount)
       expect(scenario.fakeServer.getPushRequestCount()).toBe(0)
 
@@ -421,7 +435,8 @@ describe('P25: Crash, Restart, and Interrupted Sync Recovery Scenarios', () => {
       const recRes = await useSyncRecoveryStore(scenario.pinia).recover(RECOVERY_ACTIONS.CONTINUE_BOOTSTRAP)
       expect(recRes.ok).toBe(true)
 
-      // Dataset in server, queue 0, bootstrap completed
+      // Dataset in server, queue 0. Bootstrap state stays durable 'staged'
+      // (production P14 never auto-advances it; 'completed' is not a sync outcome).
       expect(scenario.fakeServer.db.products.length).toBeGreaterThan(0)
       expect(scenario.fakeServer.db.categories.length).toBeGreaterThan(0)
       expect(scenario.fakeServer.db.customers.length).toBeGreaterThan(0)
@@ -429,7 +444,7 @@ describe('P25: Crash, Restart, and Interrupted Sync Recovery Scenarios', () => {
       expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
 
       const bootState = await scenario.adapter.loadSyncBootstrapState()
-      expect(bootState.status).toBe('completed')
+      expect(bootState.status).toBe('staged')
 
       await scenario.cleanup()
     })
@@ -774,6 +789,75 @@ describe('P25: Crash, Restart, and Interrupted Sync Recovery Scenarios', () => {
 
       await scenario.cleanup()
     })
+
+    it('16B. Manual conflict resolution (useServer) after restart converges', async () => {
+      let scenario = await createRestartableScenario({ businessMode: 'cloud', initialOnline: true })
+      mockServerHandler.handle = scenario.fakeServer.handleRequest
+      await setupBoundCloudState(scenario)
+
+      const productStore = useProductStore(scenario.pinia)
+      await productStore.createCategory('Minuman')
+      const prod = await productStore.createProduct({ name: 'Kopi Hitam', category: 'Minuman', price: 10000, stock: 5 })
+      await scenario.scheduler.flush()
+
+      const registry = scenario.foundation.registry
+      await registry.ensureLoaded()
+      const prodSyncId = await registry.resolveSyncId(SYNC_ENTITY_TYPES.PRODUCT, prod.product.id)
+      const catSyncId = await registry.resolveSyncId(SYNC_ENTITY_TYPES.CATEGORY, 'Minuman')
+
+      scenario.fakeServer.db.products.push({
+        sync_id: prodSyncId,
+        name: 'Kopi Hitam Server',
+        category_sync_id: catSyncId,
+        price: 10000,
+        business_id: 10,
+        sync_version: 1,
+        sync_sequence: 1,
+      })
+      scenario.fakeServer.setServerSequence(1)
+      await scenario.adapter.saveSyncServerVersions({ [`products:${prodSyncId}`]: 1 })
+
+      await productStore.updateProduct(prod.product.id, { name: 'Kopi Hitam Local', category: 'Minuman', price: 12000, stock: 5 })
+      await scenario.scheduler.flush()
+
+      scenario.fakeServer.db.products[0].name = 'Kopi Hitam Server V2'
+      scenario.fakeServer.db.products[0].sync_version = 2
+      scenario.fakeServer.db.products[0].sync_sequence = 2
+      scenario.fakeServer.setServerSequence(2)
+
+      await useSyncOrchestratorStore(scenario.pinia).syncAll()
+
+      // Restart app
+      scenario = await restartAppScenario(scenario, { online: true })
+      mockServerHandler.handle = scenario.fakeServer.handleRequest
+
+      const conflictStore = useSyncConflictStore(scenario.pinia)
+      await conflictStore.loadConflicts()
+      expect(conflictStore.conflicts).toHaveLength(1)
+      const conf = conflictStore.conflicts[0]
+
+      // Resolve useServer
+      const resServer = await conflictStore.useServer(conf.id)
+      expect(resServer.ok).toBe(true)
+      expect(conflictStore.openConflicts).toHaveLength(0)
+
+      // Pull server version
+      const pullRes = await useSyncPullStore(scenario.pinia).pullNow()
+      expect(pullRes.ok).toBe(true)
+
+      const freshProdStore = useProductStore(scenario.pinia)
+      const localProd = freshProdStore.getProductById(prod.product.id)
+      expect(localProd).not.toBeNull()
+      expect(localProd.name).toBe('Kopi Hitam Server V2')
+
+      // Remaining non-conflict outbox (category) still pushes safely afterwards
+      const pushRes = await useSyncPushStore(scenario.pinia).pushNow()
+      expect(pushRes.ok).toBe(true)
+      expect(await scenario.adapter.countSyncQueueItems()).toBe(0)
+      expect(await scenario.adapter.loadSyncPushInflight()).toBeNull()
+
+      await scenario.cleanup()
+    })
   })
 
   describe('Tenant Context Safety across Restart', () => {
@@ -916,12 +1000,18 @@ describe('P25: Crash, Restart, and Interrupted Sync Recovery Scenarios', () => {
       expect(syncId1).toBeTruthy()
 
       // Restart app
+      const deviceIdBefore = await scenario.adapter.loadDeviceIdentifier()
       scenario = await restartAppScenario(scenario, { online: false })
       const freshRegistry = scenario.foundation.registry
       await freshRegistry.ensureLoaded()
 
       const syncId2 = await freshRegistry.resolveSyncId(SYNC_ENTITY_TYPES.CATEGORY, 'Kategori Unik')
       expect(syncId2).toBe(syncId1)
+
+      // Device identifier is stable across restart (P10/P11 contract)
+      const deviceIdAfter = await scenario.adapter.loadDeviceIdentifier()
+      expect(deviceIdAfter).toBe(deviceIdBefore)
+      expect(scenario.cloudStore.deviceIdentifier).toBe(deviceIdBefore)
 
       await scenario.cleanup()
     })
