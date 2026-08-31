@@ -952,10 +952,24 @@ describe('P25: Crash, Restart, and Interrupted Sync Recovery Scenarios', () => {
       const pullCountBefore = scenario.fakeServer.getPullRequestCount()
       const queueBefore = await scenario.adapter.countSyncQueueItems()
 
-      // P12 Push blocked
+      // P23 real guard: mismatch must be detected and blocked
+      const guardRes = await useSyncContextGuardStore(scenario.pinia).check()
+      expect(guardRes.ok).toBe(false)
+      expect(guardRes.status).toBe('blocked')
+      expect(guardRes.code).toBe('SYNC_CONTEXT_BUSINESS_MISMATCH')
+
+      // P12 Push blocked by context guard with exact guard code
       const pushRes = await useSyncPushStore(scenario.pinia).pushNow()
       expect(pushRes.ok).toBe(false)
-      expect(['SYNC_CONTEXT_GUARD_BLOCKED', 'SYNC_BUSINESS_BINDING_MISMATCH', 'SYNC_CONTEXT_MISMATCH']).toContain(pushRes.code)
+      expect(pushRes.code).toBe('SYNC_CONTEXT_GUARD_BLOCKED')
+      expect(pushRes.contextGuardCode).toBe('SYNC_CONTEXT_BUSINESS_MISMATCH')
+
+      // P17 fresh health detects the mismatch as blocked with exact issue
+      const healthRes = await useSyncHealthStore(scenario.pinia).checkHealth()
+      expect(healthRes.ok).toBe(true)
+      expect(healthRes.status).toBe('blocked')
+      expect(healthRes.code).toBe('SYNC_HEALTH_BLOCKED')
+      expect(healthRes.issues.some((i) => i.code === 'SYNC_PUSH_BINDING_MISMATCH')).toBe(true)
 
       // P16 Full Sync blocked with zero additional HTTP
       const syncRes = await useSyncOrchestratorStore(scenario.pinia).syncAll()
@@ -963,10 +977,10 @@ describe('P25: Crash, Restart, and Interrupted Sync Recovery Scenarios', () => {
       expect(scenario.fakeServer.getPushRequestCount()).toBe(pushCountBefore)
       expect(scenario.fakeServer.getPullRequestCount()).toBe(pullCountBefore)
 
-      // P18 representative recovery blocked by mismatch contract
+      // P18 representative recovery blocked by mismatch contract (exact)
       const recRes = await useSyncRecoveryStore(scenario.pinia).recover(RECOVERY_ACTIONS.CONTINUE_PENDING)
       expect(recRes.ok).toBe(false)
-      expect(['SYNC_RECOVERY_MANUAL_INTERVENTION_REQUIRED', 'SYNC_RECOVERY_HEALTH_CHECK_FAILED']).toContain(recRes.code)
+      expect(recRes.code).toBe('SYNC_RECOVERY_MANUAL_INTERVENTION_REQUIRED')
       expect(scenario.fakeServer.getPushRequestCount()).toBe(pushCountBefore)
       expect(scenario.fakeServer.getPullRequestCount()).toBe(pullCountBefore)
 
