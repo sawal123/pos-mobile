@@ -117,20 +117,20 @@ cloud connectivity transition not yet verified). A8–A21 remain NOT_RUN.
 | A5 | App reinstall update (`install -r`) | PASS | Xiaomi Redmi 15 Pro+ 5G, Android 16 |
 | A6 | Network native signal toggle | PARTIAL / PENDING CLOUD VERIFICATION | Free/Local mode works with internet OFF; internet OFF → ON causes no crash/freeze; offline/online visual status not shown because SYNC_UI_LOCAL hides the badge; native cloud connectivity transition not yet verified |
 | A7 | Background / resume | PASS | Resume 1 PASS; Resume 2 PASS; no return to Splash; no data loss/duplicates; no crash |
-| A8 | Force-stop while pending | NOT_RUN | no device |
-| A9 | Startup online safety | NOT_RUN | no device |
-| A10 | Cloud login | NOT_RUN | no device |
-| A11 | Secure token native | NOT_RUN | no device |
-| A12 | Free → Subscriber bootstrap | NOT_RUN | no device |
-| A13 | Manual sync | NOT_RUN | no device |
-| A14 | Restart after successful sync | NOT_RUN | no device |
-| A15 | Subscriber offline edit | NOT_RUN | no device |
-| A16 | Connectivity returns | NOT_RUN | no device |
-| A17 | Auto Sync | NOT_RUN | no device |
-| A18 | Background online transition | NOT_RUN | no device |
-| A19 | Tenant safety | NOT_RUN | no device |
-| A20 | Logout | NOT_RUN | no device |
-| A21 | Device reboot | NOT_RUN | no device |
+| A8 | Force-stop while pending | NOT_RUN — pending scenario execution |
+| A9 | Startup online safety | NOT_RUN — pending scenario execution |
+| A10 | Cloud login | NOT_RUN — pending scenario execution |
+| A11 | Secure token native | NOT_RUN — pending scenario execution |
+| A12 | Free → Subscriber bootstrap | NOT_RUN — pending scenario execution |
+| A13 | Manual sync | NOT_RUN — pending scenario execution |
+| A14 | Restart after successful sync | NOT_RUN — pending scenario execution |
+| A15 | Subscriber offline edit | NOT_RUN — pending scenario execution |
+| A16 | Connectivity returns | NOT_RUN — pending scenario execution |
+| A17 | Auto Sync | NOT_RUN — pending scenario execution |
+| A18 | Background online transition | NOT_RUN — pending scenario execution |
+| A19 | Tenant safety | NOT_RUN — pending scenario execution |
+| A20 | Logout | NOT_RUN — pending scenario execution |
+| A21 | Device reboot | NOT_RUN — pending scenario execution |
 
 ## 10. iOS environment
 
@@ -180,7 +180,7 @@ All scenarios I1–I16: **NOT_RUN** (no macOS/Xcode/iPhone environment).
 
 | Blocker | Description |
 |---------|-------------|
-| `REAL_ANDROID_DEVICE_REQUIRED` | A connected physical Android device is required for the A1–A21 matrix. A1–A5 and A7 passed on Xiaomi Redmi 15 Pro+ 5G (Android 16); A6 is PARTIAL / PENDING CLOUD VERIFICATION; A8–A21 remain NOT_RUN. |
+| `ANDROID_REAL_DEVICE_QA_INCOMPLETE` | Physical Android device is available and was used. QA is incomplete because A6 is still PARTIAL / PENDING CLOUD VERIFICATION and A8–A21 have not been executed yet. |
 | `MACOS_XCODE_IPHONE_REQUIRED` | Environment is Windows; iOS cannot be built or tested without macOS/Xcode/physical iPhone. |
 
 ## 16. Final P26 verdict
