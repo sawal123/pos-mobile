@@ -10,7 +10,8 @@
 
 ## 3. Date
 
-2026-08-31
+2026-09-01 (report updated with latest physical-device retest results; original
+QA build/test performed 2026-08-31)
 
 ## 4. Environment — Node / npm
 
@@ -61,9 +62,10 @@
 | Android version | Android 16 |
 | API level | 36 |
 
-Status: `REAL_ANDROID_DEVICE_AVAILABLE`. A1–A5 PASSED on this device (see
-§9). BUG-P26-01 was reproduced on the P26 build and is fixed in code pending
-device retest.
+Status: `REAL_ANDROID_DEVICE_AVAILABLE`. A1–A5 and A7 PASSED, A6 PARTIAL /
+PENDING CLOUD VERIFICATION on this device (see §9). BUG-P26-01 was reproduced
+on the P26 build, fixed in code, and re-verified on the physical device: cold
+start lands on POS, no Splash, no native crash.
 
 ## 8. Android build
 
@@ -101,8 +103,10 @@ Post-fix rebuild (BUG-P26-01):
 
 ## 9. Android QA matrix A1–A21
 
-Status legend: PASS / FAIL / NOT_RUN. A1–A5 ran on the connected physical
-device (Xiaomi Redmi 15 Pro+ 5G, Android 16). A6–A21 remain NOT_RUN.
+Status legend: PASS / FAIL / NOT_RUN / PARTIAL. A1–A5 and A7 ran and PASSED on
+the connected physical device (Xiaomi Redmi 15 Pro+ 5G, Android 16). A6 is
+PARTIAL / PENDING CLOUD VERIFICATION (offline/local behavior verified; native
+cloud connectivity transition not yet verified). A8–A21 remain NOT_RUN.
 
 | ID | Scenario | Status | Notes |
 |----|----------|--------|-------|
@@ -111,8 +115,8 @@ device (Xiaomi Redmi 15 Pro+ 5G, Android 16). A6–A21 remain NOT_RUN.
 | A3 | SQLite native persistence after force-stop | PASS | Xiaomi Redmi 15 Pro+ 5G, Android 16 |
 | A4 | Second force-stop relaunch | PASS | Xiaomi Redmi 15 Pro+ 5G, Android 16 |
 | A5 | App reinstall update (`install -r`) | PASS | Xiaomi Redmi 15 Pro+ 5G, Android 16 |
-| A6 | Network native signal toggle | NOT_RUN | no device |
-| A7 | Background / resume | NOT_RUN | no device |
+| A6 | Network native signal toggle | PARTIAL / PENDING CLOUD VERIFICATION | Free/Local mode works with internet OFF; internet OFF → ON causes no crash/freeze; offline/online visual status not shown because SYNC_UI_LOCAL hides the badge; native cloud connectivity transition not yet verified |
+| A7 | Background / resume | PASS | Resume 1 PASS; Resume 2 PASS; no return to Splash; no data loss/duplicates; no crash |
 | A8 | Force-stop while pending | NOT_RUN | no device |
 | A9 | Startup online safety | NOT_RUN | no device |
 | A10 | Cloud login | NOT_RUN | no device |
@@ -152,11 +156,11 @@ All scenarios I1–I16: **NOT_RUN** (no macOS/Xcode/iPhone environment).
 
 | ID | Scenario | Status | Notes |
 |----|----------|--------|-------|
-| BUG-P26-01 | Existing user always lands on SplashView at cold start | CONFIRMED | Physical Android (Xiaomi Redmi 15 Pro+ 5G, Android 16) ran A1–A5; SQLite persistence passed and no native crash occurred, but every cold start routed to the onboarding Splash page even after business + PIN setup was complete. Root cause: the `/` route had a static `redirect: '/splash'` and never consulted hydrated business/cashier/shift state. |
+| BUG-P26-01 | Existing user always lands on SplashView at cold start | FIXED_AND_DEVICE_VERIFIED | Reproduced on physical Android (Xiaomi Redmi 15 Pro+ 5G, Android 16), fixed in code, then re-verified on the same device: cold start 1 → POS, cold start 2 → POS, Splash did not reappear, no native crash. Root cause: the `/` route had a static `redirect: '/splash'` and never consulted hydrated business/cashier/shift state. |
 
 ## 14. Fixes performed
 
-- **BUG-P26-01 (FIXED_IN_CODE_PENDING_DEVICE_RETEST):**
+- **BUG-P26-01 (FIXED_AND_DEVICE_VERIFIED):**
   - Removed the static `/ → /splash` route redirect.
   - Added `resolveStartupRoute()` in `src/router/index.js` that decides the
     startup destination from the hydrated Pinia stores:
@@ -176,8 +180,7 @@ All scenarios I1–I16: **NOT_RUN** (no macOS/Xcode/iPhone environment).
 
 | Blocker | Description |
 |---------|-------------|
-| `BUG_P26_01_DEVICE_RETEST_PENDING` | BUG-P26-01 is fixed in code; the physical-device retest (cold start → Open Shift / POS for existing users) has not been performed yet. |
-| `REAL_ANDROID_DEVICE_REQUIRED` | A connected physical Android device is required for the A1–A21 matrix. A1–A5 passed on Xiaomi Redmi 15 Pro+ 5G (Android 16); A6–A21 remain NOT_RUN. |
+| `REAL_ANDROID_DEVICE_REQUIRED` | A connected physical Android device is required for the A1–A21 matrix. A1–A5 and A7 passed on Xiaomi Redmi 15 Pro+ 5G (Android 16); A6 is PARTIAL / PENDING CLOUD VERIFICATION; A8–A21 remain NOT_RUN. |
 | `MACOS_XCODE_IPHONE_REQUIRED` | Environment is Windows; iOS cannot be built or tested without macOS/Xcode/physical iPhone. |
 
 ## 16. Final P26 verdict
@@ -185,14 +188,14 @@ All scenarios I1–I16: **NOT_RUN** (no macOS/Xcode/iPhone environment).
 **BELUM SELESAI**
 
 - Android build: PASS (assembleDebug / assembleRelease / bundleRelease; post-fix assembleDebug rebuilt)
-- Android real-device QA: PARTIAL — A1–A5 PASS on Xiaomi Redmi 15 Pro+ 5G (Android 16); A6–A21 NOT_RUN; native crash not found
-- BUG-P26-01: FIXED_IN_CODE_PENDING_DEVICE_RETEST
+- Android real-device QA: PARTIAL — A1–A5 PASS, A6 PARTIAL / PENDING CLOUD VERIFICATION, A7 PASS, A8–A21 NOT_RUN on Xiaomi Redmi 15 Pro+ 5G (Android 16); native crash not found
+- BUG-P26-01: FIXED_AND_DEVICE_VERIFIED (cold start 1 → POS, cold start 2 → POS, no Splash, no native crash)
 - iOS build: NOT_RUN
-- iOS real-device QA: NOT_RUN
+- iOS real-device QA: NOT_RUN (macOS/Xcode/physical iPhone required)
 
-P26 can only be marked SELESAI when the BUG-P26-01 fix passes physical-device
-retest, the full A1–A21 matrix passes on a physical Android device, AND a
-physical iPhone has passed I1–I16 on a macOS/Xcode environment.
+P26 can only be marked SELESAI when the full A1–A21 matrix passes on a
+physical Android device (A6 cloud connectivity transition still pending) AND
+a physical iPhone has passed I1–I16 on a macOS/Xcode environment.
 
 ## Appendices
 
