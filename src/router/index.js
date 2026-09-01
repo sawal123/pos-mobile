@@ -28,10 +28,26 @@ import ReceiptView from '../views/transactions/ReceiptView.vue'
 import TransactionDetailView from '../views/transactions/TransactionDetailView.vue'
 import TransactionsView from '../views/transactions/TransactionsView.vue'
 
+export function resolveStartupRoute({ businessStore, cashierStore, shiftStore }) {
+  if (!businessStore.isSetup) {
+    return { name: 'splash' }
+  }
+
+  if (!cashierStore.activeCashier.pinConfigured) {
+    return { name: 'pin-setup' }
+  }
+
+  if (!shiftStore.isOpen) {
+    return { name: 'open-shift' }
+  }
+
+  return { name: 'pos' }
+}
+
 const routes = [
   {
     path: '/',
-    redirect: '/splash',
+    name: 'root',
   },
   {
     path: '/splash',
@@ -233,6 +249,10 @@ export function createAppRouter() {
     const shiftStore = useShiftStore()
     const cartStore = useCartStore()
     const transactionStore = useTransactionStore()
+
+    if (to.name === 'root') {
+      return resolveStartupRoute({ businessStore, cashierStore, shiftStore })
+    }
 
     if (!businessStore.isSetup && businessRequiredRoutes.has(to.name)) {
       return { name: 'business-setup' }

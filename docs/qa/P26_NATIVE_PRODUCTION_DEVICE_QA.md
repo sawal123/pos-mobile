@@ -53,19 +53,17 @@
 
 ## 7. Android device
 
-**NONE CONNECTED.**
-
-`adb devices -l` after `adb kill-server` / `adb start-server` returned an empty
-device list. A physical Android device is required for P26 runtime QA; the
-emulator is explicitly NOT a substitute for the final P26 verdict.
+**Xiaomi Redmi 15 Pro+ 5G** — Android 16, connected via adb.
 
 | Item | Value |
 |------|-------|
-| Manufacturer / model | NOT AVAILABLE |
-| Android version | NOT AVAILABLE |
-| API level | NOT AVAILABLE |
+| Manufacturer / model | Xiaomi / Redmi 15 Pro+ 5G |
+| Android version | Android 16 |
+| API level | 36 |
 
-Blocker: `REAL_ANDROID_DEVICE_REQUIRED`
+Status: `REAL_ANDROID_DEVICE_AVAILABLE`. A1–A5 PASSED on this device (see
+§9). BUG-P26-01 was reproduced on the P26 build and is fixed in code pending
+device retest.
 
 ## 8. Android build
 
@@ -92,18 +90,27 @@ validated." Production signing/store upload is deferred to P27.
 `npx cap sync android` produced **no tracked-file changes** (web assets are
 copied into `android/app/src/main/assets/public`, which is gitignored).
 
+Post-fix rebuild (BUG-P26-01):
+
+| Task | Result | Artifact |
+|------|--------|----------|
+| `npm run test:unit -- --run` | PASS | 27 files, 870/870 (860 baseline + 10 new startup-routing) |
+| `npm run build` | PASS | `✓ built in 816ms` |
+| `npx cap sync android` | PASS | web assets copied to `android/app/src/main/assets/public` |
+| `.\gradlew.bat assembleDebug` | BUILD SUCCESSFUL (16s) | `android/app/build/outputs/apk/debug/app-debug.apk` |
+
 ## 9. Android QA matrix A1–A21
 
-Status legend: PASS / FAIL / NOT_RUN. All runtime scenarios are NOT_RUN
-because no physical Android device is connected.
+Status legend: PASS / FAIL / NOT_RUN. A1–A5 ran on the connected physical
+device (Xiaomi Redmi 15 Pro+ 5G, Android 16). A6–A21 remain NOT_RUN.
 
 | ID | Scenario | Status | Notes |
 |----|----------|--------|-------|
-| A1 | Fresh install / cold launch | NOT_RUN | no device |
-| A2 | Free mode offline POS | NOT_RUN | no device |
-| A3 | SQLite native persistence after force-stop | NOT_RUN | no device |
-| A4 | Second force-stop relaunch | NOT_RUN | no device |
-| A5 | App reinstall update (`install -r`) | NOT_RUN | no device |
+| A1 | Fresh install / cold launch | PASS | Xiaomi Redmi 15 Pro+ 5G, Android 16 |
+| A2 | Free mode offline POS | PASS | Xiaomi Redmi 15 Pro+ 5G, Android 16 |
+| A3 | SQLite native persistence after force-stop | PASS | Xiaomi Redmi 15 Pro+ 5G, Android 16 |
+| A4 | Second force-stop relaunch | PASS | Xiaomi Redmi 15 Pro+ 5G, Android 16 |
+| A5 | App reinstall update (`install -r`) | PASS | Xiaomi Redmi 15 Pro+ 5G, Android 16 |
 | A6 | Network native signal toggle | NOT_RUN | no device |
 | A7 | Background / resume | NOT_RUN | no device |
 | A8 | Force-stop while pending | NOT_RUN | no device |
@@ -143,33 +150,49 @@ All scenarios I1–I16: **NOT_RUN** (no macOS/Xcode/iPhone environment).
 
 ## 13. Bugs found
 
-None in this phase. Build-time validation (web regression + Android Gradle
-builds) passed; no production bug was identified because no real-device
-runtime QA could be performed.
+| ID | Scenario | Status | Notes |
+|----|----------|--------|-------|
+| BUG-P26-01 | Existing user always lands on SplashView at cold start | CONFIRMED | Physical Android (Xiaomi Redmi 15 Pro+ 5G, Android 16) ran A1–A5; SQLite persistence passed and no native crash occurred, but every cold start routed to the onboarding Splash page even after business + PIN setup was complete. Root cause: the `/` route had a static `redirect: '/splash'` and never consulted hydrated business/cashier/shift state. |
 
 ## 14. Fixes performed
 
-None required. (Web regression 860/860 PASS on the merged P25 baseline.)
+- **BUG-P26-01 (FIXED_IN_CODE_PENDING_DEVICE_RETEST):**
+  - Removed the static `/ → /splash` route redirect.
+  - Added `resolveStartupRoute()` in `src/router/index.js` that decides the
+    startup destination from the hydrated Pinia stores:
+    - fresh / business not set up → `/splash`
+    - business set up but PIN not configured → `/setup/pin`
+    - business + PIN set up, shift closed → `/shift/open`
+    - business + PIN set up, shift open → `/pos`
+  - The root route now resolves inside `router.beforeEach` (startup router),
+    which runs after persistence hydration in the existing bootstrap order
+    (`initializePersistence` → `initializeSyncFoundation` → `createAppRouter`).
+  - SplashView is preserved; new-user onboarding UX is unchanged; no shift is
+    auto-opened; existing route guards are untouched and still run.
+  - Added regression tests in `src/__tests__/startup-routing.spec.js`
+    covering all startup states plus direct protected-route guards.
 
 ## 15. Remaining blockers
 
 | Blocker | Description |
 |---------|-------------|
-| `REAL_ANDROID_DEVICE_REQUIRED` | No physical Android device connected via adb. Emulator exists but is not a substitute for P26 final verdict. |
+| `BUG_P26_01_DEVICE_RETEST_PENDING` | BUG-P26-01 is fixed in code; the physical-device retest (cold start → Open Shift / POS for existing users) has not been performed yet. |
+| `REAL_ANDROID_DEVICE_REQUIRED` | A connected physical Android device is required for the A1–A21 matrix. A1–A5 passed on Xiaomi Redmi 15 Pro+ 5G (Android 16); A6–A21 remain NOT_RUN. |
 | `MACOS_XCODE_IPHONE_REQUIRED` | Environment is Windows; iOS cannot be built or tested without macOS/Xcode/physical iPhone. |
 
 ## 16. Final P26 verdict
 
 **BELUM SELESAI**
 
-- Android build: PASS (assembleDebug / assembleRelease / bundleRelease)
-- Android real-device QA: NOT_RUN
+- Android build: PASS (assembleDebug / assembleRelease / bundleRelease; post-fix assembleDebug rebuilt)
+- Android real-device QA: PARTIAL — A1–A5 PASS on Xiaomi Redmi 15 Pro+ 5G (Android 16); A6–A21 NOT_RUN; native crash not found
+- BUG-P26-01: FIXED_IN_CODE_PENDING_DEVICE_RETEST
 - iOS build: NOT_RUN
 - iOS real-device QA: NOT_RUN
 
-P26 can only be marked SELESAI when a physical Android device has passed the
-A1–A21 matrix AND a physical iPhone has passed I1–I16 on a macOS/Xcode
-environment.
+P26 can only be marked SELESAI when the BUG-P26-01 fix passes physical-device
+retest, the full A1–A21 matrix passes on a physical Android device, AND a
+physical iPhone has passed I1–I16 on a macOS/Xcode environment.
 
 ## Appendices
 
@@ -178,7 +201,7 @@ environment.
 | Check | Result |
 |-------|--------|
 | `npm ci` | OK (with `NODE_ENV=development`; see note in §4) |
-| `npm run test:unit -- --run` | 26 files, 860/860 PASS |
+| `npm run test:unit -- --run` | 27 files, 870/870 PASS (includes 10 new startup-routing regression tests) |
 | `npm run build` | PASS (`✓ built`) |
 
 ### Capacitor config validation
