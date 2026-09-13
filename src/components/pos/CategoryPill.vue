@@ -13,7 +13,7 @@ const props = defineProps({
 
 <template>
   <button
-    class="rounded-full border px-4 py-2.5 text-sm font-medium transition"
+    class="shrink-0 whitespace-nowrap rounded-full border px-4 py-2 text-sm font-medium transition sm:py-2.5"
     :class="
       props.active
         ? 'border-primary bg-primary text-white shadow-[0_10px_22px_rgba(73,69,214,0.22)]'

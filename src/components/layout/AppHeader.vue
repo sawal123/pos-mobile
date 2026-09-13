@@ -31,19 +31,19 @@ const pageTitle = computed(() => {
 
 <template>
   <header class="sticky top-0 z-30 border-b border-zinc-200/70 bg-white/90 backdrop-blur">
-    <div class="flex items-center justify-between px-4 py-4 md:px-6">
-      <div>
-        <p class="text-xs uppercase tracking-[0.2em] text-ink-secondary">
+    <div class="flex items-center justify-between gap-3 px-4 py-3.5 md:px-6 md:py-4">
+      <div class="min-w-0 flex-1">
+        <p class="truncate text-xs uppercase tracking-[0.2em] text-ink-secondary">
           {{ businessStore.name || 'POS Mobile' }}
         </p>
-        <h1 class="text-lg font-semibold text-ink-primary">{{ pageTitle }}</h1>
+        <h1 class="truncate text-lg font-semibold text-ink-primary">{{ pageTitle }}</h1>
       </div>
 
-      <div class="flex items-center gap-2.5">
+      <div class="flex shrink-0 items-center gap-2">
         <SyncStatusBadge />
-        <div class="rounded-2xl bg-surface px-3 py-2 text-right text-sm text-ink-secondary">
-          <p class="font-medium text-ink-primary">{{ businessStore.outlet }}</p>
-          <p class="text-xs uppercase tracking-[0.14em]">
+        <div class="rounded-2xl bg-surface px-2.5 py-1.5 text-right text-xs sm:px-3 sm:py-2 sm:text-sm text-ink-secondary">
+          <p class="max-w-[120px] truncate font-medium text-ink-primary sm:max-w-none">{{ businessStore.outlet }}</p>
+          <p class="text-[10px] uppercase tracking-[0.14em] sm:text-xs">
             {{ businessStore.mode === 'cloud' ? 'Cloud Mode' : 'Free Mode' }}
           </p>
         </div>

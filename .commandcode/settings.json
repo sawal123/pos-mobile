@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(cmd config get permissionMode 2>nul || cmd config get permissions.defaultMode 2>nul)",
+      "Shell(cmd:*)",
+      "Shell(type \"%USERPROFILE%\\.commandcode\\settings.json\" 2>nul && echo --- && type \"%USERPROFILE%\\.commandcode\\settings.local.json\" 2>nul)",
+      "Shell(dir /b \"%USERPROFILE%\\.commandcode\" 2>nul; echo ===; dir /b \".commandcode\" 2>nul)",
+      "Shell(type:*)",
+      "Shell(dir:*)"
+    ],
+    "deny": [],
+    "defaultMode": "default"
+  }
+}
