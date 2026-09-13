@@ -6,8 +6,10 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import { useBusinessStore } from '@/stores/businessStore'
+import { useProductStore } from '@/stores/productStore'
 
 const businessStore = useBusinessStore()
+const productStore = useProductStore()
 const router = useRouter()
 
 const form = reactive({
@@ -20,7 +22,14 @@ const form = reactive({
 })
 
 function saveBusinessProfile() {
+  const isInitialSetup = !businessStore.isSetup
+
   businessStore.setBusiness(form)
+
+  if (isInitialSetup) {
+    productStore.applyBusinessTemplate(form.type)
+  }
+
   router.push('/setup/pin')
 }
 

@@ -1,9 +1,8 @@
 import { defineStore } from 'pinia'
 
-import { products } from '@/data/products'
+import { getBusinessTemplate } from '@/data/businessTemplates'
 
 const DEFAULT_FILTER_CATEGORY = 'Semua'
-const DEFAULT_CATEGORIES = ['Minuman', 'Makanan', 'Snack', 'Dessert', 'Lainnya']
 const DEFAULT_FILTER_CATEGORY_KEY = DEFAULT_FILTER_CATEGORY.toLowerCase()
 
 function normalizeProduct(product) {
@@ -15,8 +14,18 @@ function normalizeProduct(product) {
   }
 }
 
-function buildInitialCategories(items) {
-  return [...new Set([...DEFAULT_CATEGORIES, ...items.map((product) => product.category).filter(Boolean)])]
+function buildInitialCategories(categories, items) {
+  return [...new Set([...categories, ...items.map((product) => product.category).filter(Boolean)])]
+}
+
+function buildTemplateState(type) {
+  const template = getBusinessTemplate(type)
+  const normalizedProducts = template.products.map(normalizeProduct)
+
+  return {
+    products: normalizedProducts,
+    categories: buildInitialCategories(template.categories, normalizedProducts),
+  }
 }
 
 function normalizeName(value) {
@@ -125,12 +134,16 @@ function validateCategoryName(name, categories, currentName = null) {
 }
 
 export const useProductStore = defineStore('product', {
-  state: () => ({
-    products: products.map(normalizeProduct),
-    categories: buildInitialCategories(products.map(normalizeProduct)),
-    selectedCategory: DEFAULT_FILTER_CATEGORY,
-    searchQuery: '',
-  }),
+  state: () => {
+    const initialCatalog = buildTemplateState('Cafe')
+
+    return {
+      products: initialCatalog.products,
+      categories: initialCatalog.categories,
+      selectedCategory: DEFAULT_FILTER_CATEGORY,
+      searchQuery: '',
+    }
+  },
   getters: {
     filterCategories(state) {
       return [DEFAULT_FILTER_CATEGORY, ...state.categories]
@@ -155,6 +168,13 @@ export const useProductStore = defineStore('product', {
       this.selectedCategory = this.filterCategories.includes(category)
         ? category
         : DEFAULT_FILTER_CATEGORY
+    },
+    applyBusinessTemplate(type) {
+      const nextCatalog = buildTemplateState(type)
+
+      this.products = nextCatalog.products
+      this.categories = nextCatalog.categories
+      this.selectedCategory = DEFAULT_FILTER_CATEGORY
     },
     setSearchQuery(query) {
       this.searchQuery = query
