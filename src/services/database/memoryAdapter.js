@@ -16,11 +16,13 @@ export function createMemoryAdapter() {
     business: null,
     products: [],
     categories: [],
+    stockMovements: [],
     customers: [],
     expenses: [],
     transactions: [],
     cashierState: null,
     shiftState: null,
+    cashState: null,
     syncQueue: [],
     deviceIdentifier: null,
     cloudContext: null,
@@ -69,13 +71,17 @@ export function createMemoryAdapter() {
       return {
         products: cloneValue(state.products),
         categories: cloneValue(state.categories),
+        stockMovements: cloneValue(state.stockMovements),
       }
     },
-    async saveProducts(products, categories) {
+    async saveProducts(products, categories, stockMovements) {
       state.products = cloneValue(products)
       state.categories = cloneValue(
         categories.filter((category) => String(category) !== RESERVED_CATEGORY),
       )
+      if (stockMovements !== undefined) {
+        state.stockMovements = cloneValue(stockMovements)
+      }
     },
     async loadCustomers() {
       return cloneValue(state.customers)
@@ -100,6 +106,12 @@ export function createMemoryAdapter() {
     },
     async saveCashierState(value) {
       state.cashierState = cloneValue(value)
+    },
+    async loadCashState() {
+      return cloneValue(state.cashState)
+    },
+    async saveCashState(value) {
+      state.cashState = cloneValue(value)
     },
     async loadShiftState() {
       return cloneValue(state.shiftState)

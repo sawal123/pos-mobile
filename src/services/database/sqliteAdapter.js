@@ -255,7 +255,9 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
       const [{ values: categoryRows = [] }, { values: productRows = [] }] = await Promise.all([
         db.query('SELECT name FROM categories ORDER BY name ASC'),
         db.query(
-          'SELECT id, name, category, price, stock, is_active FROM products ORDER BY rowid ASC',
+          `SELECT id, name, category, sku, cost, price, stock, unit, min_stock,
+             kind, pricing_unit, min_quantity, estimated_duration, is_active
+           FROM products ORDER BY rowid ASC`,
         ),
       ])
 
@@ -265,13 +267,22 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
           id: row.id,
           name: row.name,
           category: row.category,
+          sku: row.sku ?? '',
+          cost: Number(row.cost ?? 0),
           price: Number(row.price),
           stock: Number(row.stock),
+          unit: row.unit ?? 'pcs',
+          minStock: Number(row.min_stock ?? 0),
+          kind: row.kind ?? 'product',
+          pricingUnit: row.pricing_unit ?? 'pcs',
+          minQuantity: Number(row.min_quantity ?? 0),
+          estimatedDuration: row.estimated_duration ?? '',
           isActive: Boolean(row.is_active),
         })),
+        stockMovements: await readAppState(APP_STATE_KEYS.stockMovements, []),
       }
     },
-    async saveProducts(products, categories) {
+    async saveProducts(products, categories, stockMovements) {
       await withTransaction(async (db) => {
         await db.run('DELETE FROM products', [], false)
         await db.run('DELETE FROM categories', [], false)
@@ -286,15 +297,34 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
 
         for (const product of products) {
           await db.run(
-            'INSERT INTO products (id, name, category, price, stock, is_active) VALUES (?, ?, ?, ?, ?, ?)',
+            `INSERT INTO products
+              (id, name, category, sku, cost, price, stock, unit, min_stock,
+               kind, pricing_unit, min_quantity, estimated_duration, is_active)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               String(product.id),
               product.name,
               product.category,
+              product.sku ?? '',
+              Number(product.cost ?? 0),
               Number(product.price),
               Number(product.stock),
+              product.unit ?? 'pcs',
+              Number(product.minStock ?? 0),
+              product.kind ?? 'product',
+              product.pricingUnit ?? 'pcs',
+              Number(product.minQuantity ?? 0),
+              product.estimatedDuration ?? '',
               product.isActive ? 1 : 0,
             ],
+            false,
+          )
+        }
+
+        if (stockMovements !== undefined) {
+          await db.run(
+            'INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)',
+            [APP_STATE_KEYS.stockMovements, JSON.stringify(stockMovements)],
             false,
           )
         }
@@ -391,6 +421,12 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
     },
     async saveCashierState(state) {
       await writeAppState(APP_STATE_KEYS.cashier, state)
+    },
+    async loadCashState() {
+      return readAppState(APP_STATE_KEYS.cash, null)
+    },
+    async saveCashState(state) {
+      await writeAppState(APP_STATE_KEYS.cash, state)
     },
     async loadShiftState() {
       return readAppState(APP_STATE_KEYS.shift, null)

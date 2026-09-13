@@ -5,7 +5,9 @@ import { describe, expect, it } from 'vitest'
 import { createAppRouter } from '@/router'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCartStore } from '@/stores/cartStore'
+import { useCashStore } from '@/stores/cashStore'
 import { useCashierStore } from '@/stores/cashierStore'
+import { useProductStore } from '@/stores/productStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import { formatCurrency } from '@/utils/formatters'
@@ -365,5 +367,48 @@ describe('P3 cash payment', () => {
     await flushPromises()
 
     expect(cartStore.items).toHaveLength(1)
+  })
+
+  it('deleted product di stale cart gagal checkout tanpa transaksi/kas/stock movement', async () => {
+    const context = createContext()
+
+    makeBusinessReady(context.businessStore)
+    context.cashierStore.setPinConfigured(true)
+    context.shiftStore.openShift(100000)
+
+    const productStore = useProductStore(context.pinia)
+    const cashStore = useCashStore(context.pinia)
+    const created = productStore.createProduct({
+      name: 'Produk Stale',
+      category: 'Minuman',
+      price: 22000,
+      stock: 5,
+      isActive: true,
+    })
+    context.cartStore.addItem(created.product)
+    productStore.deleteProduct(created.product.id)
+
+    await context.router.push('/payment')
+    await flushPromises()
+
+    const wrapper = mount(PaymentView, {
+      global: {
+        plugins: [context.pinia, context.router],
+      },
+    })
+
+    const initialTransactionCount = context.transactionStore.items.length
+    const initialCashCount = cashStore.entries.length
+
+    await getButtonByText(wrapper, 'QRIS').trigger('click')
+    await flushPromises()
+    await getButtonByText(wrapper, 'Selesaikan Pembayaran').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('tidak ditemukan')
+    expect(context.transactionStore.items).toHaveLength(initialTransactionCount)
+    expect(cashStore.entries).toHaveLength(initialCashCount)
+    expect(productStore.stockMovements).toHaveLength(0)
+    expect(context.cartStore.items).toHaveLength(1)
   })
 })

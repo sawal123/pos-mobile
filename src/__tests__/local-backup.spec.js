@@ -14,6 +14,7 @@ import {
 } from '@/services/backupService'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCartStore } from '@/stores/cartStore'
+import { useCashStore } from '@/stores/cashStore'
 import { useCashierStore } from '@/stores/cashierStore'
 import { useCustomerStore } from '@/stores/customerStore'
 import { useExpenseStore } from '@/stores/expenseStore'
@@ -31,6 +32,7 @@ function createContext() {
     router: createAppRouter(),
     businessStore: useBusinessStore(),
     cartStore: useCartStore(),
+    cashStore: useCashStore(),
     cashierStore: useCashierStore(),
     customerStore: useCustomerStore(),
     expenseStore: useExpenseStore(),
@@ -61,8 +63,36 @@ function seedStores(context) {
       { id: 'p-2', name: 'Croissant Butter', category: 'Makanan', price: 25000, stock: 9, isActive: false },
     ],
     categories: ['Minuman', 'Makanan'],
+    stockMovements: [
+      {
+        id: 'sm-1',
+        productId: 'p-1',
+        productName: 'Es Kopi Susu',
+        type: 'adjustment',
+        quantityChange: 5,
+        stockBefore: 13,
+        stockAfter: 18,
+        referenceId: null,
+        category: 'Adjustment Manual',
+        note: 'Restock',
+        createdAt: '2026-08-21T06:00:00.000Z',
+      },
+    ],
     selectedCategory: 'Minuman',
     searchQuery: 'kopi',
+  })
+  context.cashStore.$patch({
+    entries: [
+      {
+        id: 'cash-1',
+        type: 'in',
+        amount: 100000,
+        category: 'Modal',
+        note: 'Saldo awal kas',
+        referenceId: null,
+        createdAt: '2026-08-21T06:30:00.000Z',
+      },
+    ],
   })
   context.customerStore.$patch({
     customers: [
@@ -100,6 +130,7 @@ function seedStores(context) {
           phone: '08123456789',
         },
         status: 'paid',
+        orderStatus: 'Masuk',
         items: [
           { id: 'p-1', name: 'Es Kopi Susu', price: 22000, qty: 1 },
         ],
@@ -107,6 +138,7 @@ function seedStores(context) {
         subtotal: 22000,
         tax: 2420,
         total: 24420,
+        grossProfit: 22000,
         paymentMethod: 'cash',
         cashReceived: 50000,
         changeAmount: 25580,
@@ -144,6 +176,32 @@ function makeValidBackup(overrides = {}) {
         ],
         categories: ['Minuman'],
       },
+      stockMovements: [
+        {
+          id: 'sm-backup',
+          productId: 'p-backup',
+          productName: 'Latte',
+          type: 'adjustment',
+          quantityChange: 10,
+          stockBefore: 0,
+          stockAfter: 10,
+          referenceId: null,
+          category: 'Adjustment Manual',
+          note: 'Initial stock',
+          createdAt: '2026-08-21T07:30:00.000Z',
+        },
+      ],
+      cash: [
+        {
+          id: 'cash-backup',
+          type: 'in',
+          amount: 250000,
+          category: 'Modal',
+          note: 'Saldo awal',
+          referenceId: null,
+          createdAt: '2026-08-21T07:45:00.000Z',
+        },
+      ],
       customers: [
         { id: 'c-backup', name: 'Nadia', phone: '081222222222', email: 'nadia@email.com' },
       ],
@@ -175,6 +233,7 @@ function makeValidBackup(overrides = {}) {
             phone: '081111111111',
           },
           status: 'paid',
+          orderStatus: 'Masuk',
           items: [
             { id: 'p-backup', name: 'Latte', price: 28000, qty: 2 },
           ],
@@ -182,6 +241,7 @@ function makeValidBackup(overrides = {}) {
           subtotal: 56000,
           tax: 6160,
           total: 62160,
+          grossProfit: 56000,
           paymentMethod: 'qris',
           cashReceived: null,
           changeAmount: null,
@@ -210,12 +270,14 @@ function snapshotState(context) {
     },
     products: context.productStore.products,
     categories: context.productStore.categories,
+    stockMovements: context.productStore.stockMovements,
     selectedCategory: context.productStore.selectedCategory,
     searchQuery: context.productStore.searchQuery,
     customers: context.customerStore.customers,
     expenses: context.expenseStore.expenses,
     transactions: context.transactionStore.items,
     lastTransaction: context.transactionStore.lastTransaction,
+    cash: context.cashStore.entries,
     cart: context.cartStore.items,
     shift: {
       isOpen: context.shiftStore.isOpen,
@@ -272,11 +334,12 @@ describe('P7 local backup & restore JSON', () => {
     expect(createBackupPayload(context).schema).toBe(BACKUP_SCHEMA)
   })
 
-  it('backup menghasilkan version 1', () => {
+  it('backup menghasilkan version terkini', () => {
     const context = createContext()
     seedStores(context)
 
-    expect(createBackupPayload(context).version).toBe(1)
+    expect(createBackupPayload(context).version).toBe(BACKUP_VERSION)
+    expect(BACKUP_VERSION).toBe(2)
   })
 
   it('exportedAt valid ISO date', () => {
@@ -294,7 +357,7 @@ describe('P7 local backup & restore JSON', () => {
 
     expect(createBackupPayload(context).data.business).toEqual({
       name: 'Toko ABC',
-      type: 'Cafe',
+      type: 'Cafe / UMKM',
       owner: 'Budi',
       phone: '08123456789',
       outlet: 'Outlet Utama',
@@ -797,5 +860,154 @@ describe('P7 local backup & restore JSON', () => {
     const input = wrapper.find('input[type="file"]')
 
     expect(input.attributes('accept')).toBe('.json,application/json')
+  })
+})
+
+describe('P0 backup/restore offline business core', () => {
+  function snapshotCore(context) {
+    return JSON.stringify({
+      products: context.productStore.products,
+      categories: context.productStore.categories,
+      stockMovements: context.productStore.stockMovements,
+      cash: context.cashStore.entries,
+      transactions: context.transactionStore.items,
+    })
+  }
+
+  it('backup menyertakan cash ledger dan stock movements', () => {
+    const context = createContext()
+    seedStores(context)
+
+    const payload = createBackupPayload(context)
+
+    expect(payload.data.cash).toHaveLength(1)
+    expect(payload.data.cash[0]).toMatchObject({ id: 'cash-1', type: 'in', amount: 100000 })
+    expect(payload.data.stockMovements).toHaveLength(1)
+    expect(payload.data.stockMovements[0]).toMatchObject({ id: 'sm-1', productId: 'p-1', quantityChange: 5 })
+  })
+
+  it('backup transaksi menyertakan orderStatus dan gross profit', () => {
+    const context = createContext()
+    seedStores(context)
+
+    const transaction = createBackupPayload(context).data.transactions[0]
+
+    expect(transaction.orderStatus).toBe('Masuk')
+    expect(transaction.grossProfit).toBe(22000)
+    expect(transaction.items[0]).toEqual({ id: 'p-1', name: 'Es Kopi Susu', price: 22000, qty: 1 })
+  })
+
+  it('restore memulihkan cash ledger', () => {
+    const context = createContext()
+    seedStores(context)
+    context.cashStore.$patch({ entries: [] })
+
+    restoreBackupPayload(makeValidBackup(), context)
+
+    expect(context.cashStore.entries).toEqual([
+      {
+        id: 'cash-backup',
+        type: 'in',
+        amount: 250000,
+        category: 'Modal',
+        note: 'Saldo awal',
+        referenceId: null,
+        createdAt: '2026-08-21T07:45:00.000Z',
+      },
+    ])
+  })
+
+  it('restore memulihkan stock movements', () => {
+    const context = createContext()
+    seedStores(context)
+    context.productStore.$patch({ stockMovements: [] })
+
+    restoreBackupPayload(makeValidBackup(), context)
+
+    expect(context.productStore.stockMovements).toHaveLength(1)
+    expect(context.productStore.stockMovements[0].id).toBe('sm-backup')
+  })
+
+  it('restore memulihkan Laundry orderStatus', () => {
+    const context = createContext()
+    seedStores(context)
+
+    restoreBackupPayload(makeValidBackup(), context)
+
+    expect(context.transactionStore.items[0].orderStatus).toBe('Masuk')
+  })
+
+  it('restore backup lama (v1) tanpa cash/stockMovements tetap berhasil', () => {
+    const context = createContext()
+    seedStores(context)
+    const legacy = makeValidBackup()
+    legacy.version = 1
+    delete legacy.data.cash
+    delete legacy.data.stockMovements
+    legacy.data.transactions.forEach((transaction) => {
+      delete transaction.orderStatus
+      delete transaction.grossProfit
+    })
+
+    const validation = validateBackupPayload(legacy)
+
+    expect(validation.valid).toBe(true)
+    expect(validation.data.cash).toEqual([])
+    expect(validation.data.stockMovements).toEqual([])
+
+    const result = restoreBackupPayload(legacy, context)
+
+    expect(result.success).toBe(true)
+    expect(context.cashStore.entries).toEqual([])
+    expect(context.productStore.stockMovements).toEqual([])
+    expect(context.transactionStore.items[0].orderStatus).toBeNull()
+  })
+
+  it('backup versi lebih baru tetap ditolak', () => {
+    expect(validateBackupPayload(makeValidBackup({ version: BACKUP_VERSION + 1 }))).toEqual({
+      valid: false,
+      error: 'Versi backup tidak didukung.',
+    })
+  })
+
+  it('regression: export, reset, restore mengembalikan seluruh state', () => {
+    const context = createContext()
+    makeBusinessReady(context.businessStore)
+    context.productStore.$patch({ products: [], categories: ['Minuman'], stockMovements: [] })
+    context.transactionStore.$patch({ items: [], lastTransaction: null })
+
+    const created = context.productStore.createProduct({
+      name: 'Beras 5kg',
+      category: 'Minuman',
+      cost: 55000,
+      price: 65000,
+      stock: 10,
+      isActive: true,
+    })
+    context.productStore.adjustStock(created.product.id, { quantityChange: 5, note: 'Restock' })
+    context.cashStore.recordEntry({ type: 'in', amount: 500000, category: 'Modal', note: 'Saldo awal' })
+    context.transactionStore.createTransaction({
+      items: [{ id: created.product.id, name: 'Beras 5kg', price: 65000, qty: 2, hppSnapshot: 55000 }],
+      subtotal: 130000,
+      tax: 0,
+      total: 130000,
+      paymentMethod: 'cash',
+      orderStatus: 'Masuk',
+    })
+
+    const backup = createBackupPayload(context)
+    const before = snapshotCore(context)
+
+    context.productStore.$patch({ products: [], categories: [], stockMovements: [] })
+    context.cashStore.$patch({ entries: [] })
+    context.transactionStore.$patch({ items: [], lastTransaction: null })
+
+    const result = restoreBackupPayload(backup, context)
+
+    expect(result.success).toBe(true)
+    expect(snapshotCore(context)).toBe(before)
+    expect(context.transactionStore.items[0].orderStatus).toBe('Masuk')
+    expect(context.transactionStore.items[0].grossProfit).toBe(20000)
+    expect(context.transactionStore.items[0].items[0].hppSnapshot).toBe(55000)
   })
 })

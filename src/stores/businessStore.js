@@ -1,5 +1,7 @@
 import { defineStore } from 'pinia'
 
+import { normalizeBusinessType } from '@/data/businessTemplates'
+
 export const useBusinessStore = defineStore('business', {
   state: () => ({
     name: '',
@@ -11,13 +13,14 @@ export const useBusinessStore = defineStore('business', {
   }),
   getters: {
     isSetup: (state) => Boolean(state.name) && Boolean(state.type),
+    normalizedType: (state) => normalizeBusinessType(state.type),
   },
   actions: {
     setBusiness(data) {
-      this.name = data.name
-      this.type = data.type
-      this.owner = data.owner
-      this.phone = data.phone
+      this.name = data.name ?? this.name
+      this.type = normalizeBusinessType(data.type)
+      this.owner = data.owner ?? this.owner
+      this.phone = data.phone ?? this.phone
       this.outlet = data.outlet ?? this.outlet
       this.mode = data.mode ?? this.mode
     },

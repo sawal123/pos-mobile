@@ -9,6 +9,7 @@ import { createSQLiteAdapter, deserializeTransactionRows } from '@/services/data
 import { DB_VERSION } from '@/services/database/schema'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCartStore } from '@/stores/cartStore'
+import { useCashStore } from '@/stores/cashStore'
 import { useCashierStore } from '@/stores/cashierStore'
 import { useCustomerStore } from '@/stores/customerStore'
 import { useExpenseStore } from '@/stores/expenseStore'
@@ -71,6 +72,7 @@ function createRuntime(adapter = createMemoryAdapter()) {
     service: createPersistenceService({ adapter, pinia }),
     businessStore: useBusinessStore(),
     cartStore: useCartStore(),
+    cashStore: useCashStore(),
     cashierStore: useCashierStore(),
     customerStore: useCustomerStore(),
     expenseStore: useExpenseStore(),
@@ -327,6 +329,30 @@ describe('P8 sqlite persistence foundation', () => {
     expect(hydrated.shiftStore.isOpen).toBe(true)
     expect(hydrated.shiftStore.openingBalance).toBe(100000)
     expect(hydrated.shiftStore.openedAt).toBe('2026-08-21T08:00:00.000Z')
+  })
+
+  it('cash ledger persist', async () => {
+    const adapter = createMemoryAdapter()
+    const runtime = await initializeRuntime(adapter)
+
+    runtime.cashStore.recordEntry({
+      type: 'in',
+      amount: 100000,
+      category: 'Modal',
+      note: 'Modal awal',
+    })
+    runtime.cashStore.recordEntry({
+      type: 'out',
+      amount: 25000,
+      category: 'Listrik',
+      note: 'Token listrik',
+    })
+    await runtime.service.flush()
+
+    const hydrated = await restartRuntime(adapter)
+
+    expect(hydrated.cashStore.entries).toHaveLength(2)
+    expect(hydrated.cashStore.balance).toBe(75000)
   })
 
   it('cart, selectedCategory, searchQuery, dan lastTransaction tidak dipersist', async () => {

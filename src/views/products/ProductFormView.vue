@@ -6,8 +6,10 @@ import { useRoute, useRouter } from 'vue-router'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import { useBusinessStore } from '@/stores/businessStore'
 import { useProductStore } from '@/stores/productStore'
 
+const businessStore = useBusinessStore()
 const productStore = useProductStore()
 const route = useRoute()
 const router = useRouter()
@@ -17,8 +19,15 @@ const { categories } = storeToRefs(productStore)
 const form = reactive({
   name: '',
   category: '',
+  sku: '',
+  cost: 0,
   price: 0,
   stock: 0,
+  unit: 'pcs',
+  minStock: 0,
+  pricingUnit: 'kg',
+  minQuantity: '',
+  estimatedDuration: '',
   isActive: true,
 })
 
@@ -26,12 +35,25 @@ const errors = ref({})
 const formError = ref('')
 
 const isEditMode = computed(() => Boolean(route.params.id))
+const isLaundry = computed(() => businessStore.normalizedType === 'Laundry')
+const itemKind = computed(() => (isLaundry.value ? 'service' : 'product'))
+const pageTitle = computed(() => {
+  if (isLaundry.value) return isEditMode.value ? 'Edit Layanan' : 'Tambah Layanan'
+  return isEditMode.value ? 'Edit Produk' : 'Tambah Produk'
+})
 
 function resetForm() {
   form.name = ''
   form.category = categories.value[0] ?? ''
+  form.sku = ''
+  form.cost = 0
   form.price = 0
   form.stock = 0
+  form.unit = isLaundry.value ? 'kg' : 'pcs'
+  form.minStock = 0
+  form.pricingUnit = 'kg'
+  form.minQuantity = ''
+  form.estimatedDuration = ''
   form.isActive = true
   errors.value = {}
   formError.value = ''
@@ -53,8 +75,15 @@ function loadProduct() {
 
   form.name = product.name
   form.category = product.category
+  form.sku = product.sku ?? ''
+  form.cost = product.cost ?? 0
   form.price = product.price
   form.stock = product.stock
+  form.unit = product.unit ?? 'pcs'
+  form.minStock = product.minStock ?? 0
+  form.pricingUnit = product.pricingUnit ?? 'kg'
+  form.minQuantity = product.minQuantity || ''
+  form.estimatedDuration = product.estimatedDuration ?? ''
   form.isActive = product.isActive
 }
 
@@ -62,10 +91,18 @@ async function handleSubmit() {
   formError.value = ''
 
   const payload = {
+    kind: itemKind.value,
     name: form.name,
     category: form.category,
+    sku: form.sku,
+    cost: form.cost,
     price: form.price,
     stock: form.stock,
+    unit: form.unit,
+    minStock: form.minStock,
+    pricingUnit: form.pricingUnit,
+    minQuantity: form.minQuantity,
+    estimatedDuration: form.estimatedDuration,
     isActive: form.isActive,
   }
 
@@ -97,10 +134,10 @@ watch(
     <section>
       <p class="text-sm font-medium uppercase tracking-[0.18em] text-primary">Product Management</p>
       <h1 class="mt-2 text-3xl font-semibold text-ink-primary">
-        {{ isEditMode ? 'Edit Produk' : 'Tambah Produk' }}
+        {{ pageTitle }}
       </h1>
       <p class="mt-2 text-sm text-ink-secondary">
-        {{ isEditMode ? 'Perbarui data produk yang sudah ada.' : 'Tambahkan produk baru ke katalog POS.' }}
+        {{ isLaundry ? 'Kelola layanan laundry dengan quantity kg atau pcs.' : 'Kelola produk, HPP, harga jual, dan stok.' }}
       </p>
     </section>
 
@@ -114,15 +151,15 @@ watch(
           <div class="space-y-2">
             <BaseInput
               :model-value="form.name"
-              label="Product Name"
-              placeholder="Masukkan nama produk"
+              :label="isLaundry ? 'Nama Layanan' : 'Nama Produk'"
+              :placeholder="isLaundry ? 'Contoh: Cuci Kering' : 'Masukkan nama produk'"
               @update:model-value="form.name = $event"
             />
             <p v-if="errors.name" class="text-sm text-danger">{{ errors.name }}</p>
           </div>
 
           <label class="flex flex-col gap-2">
-            <span class="text-sm font-medium text-ink-secondary">Category</span>
+            <span class="text-sm font-medium text-ink-secondary">Kategori</span>
             <select
               v-model="form.category"
               class="h-12 rounded-2xl border border-zinc-200 bg-white px-4 text-sm text-ink-primary outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/10"
@@ -135,10 +172,30 @@ watch(
             <p v-if="errors.category" class="text-sm text-danger">{{ errors.category }}</p>
           </label>
 
+          <div v-if="!isLaundry" class="space-y-2">
+            <BaseInput
+              :model-value="form.sku"
+              label="SKU / Barcode"
+              placeholder="Opsional"
+              @update:model-value="form.sku = $event"
+            />
+          </div>
+
+          <div class="space-y-2">
+            <BaseInput
+              :model-value="form.cost"
+              :label="isLaundry ? 'Estimasi HPP / Unit' : 'HPP'"
+              type="number"
+              placeholder="0"
+              @update:model-value="form.cost = $event"
+            />
+            <p v-if="errors.cost" class="text-sm text-danger">{{ errors.cost }}</p>
+          </div>
+
           <div class="space-y-2">
             <BaseInput
               :model-value="form.price"
-              label="Price"
+              :label="isLaundry ? 'Harga per Unit' : 'Harga Jual'"
               type="number"
               placeholder="0"
               @update:model-value="form.price = $event"
@@ -146,16 +203,75 @@ watch(
             <p v-if="errors.price" class="text-sm text-danger">{{ errors.price }}</p>
           </div>
 
-          <div class="space-y-2">
-            <BaseInput
-              :model-value="form.stock"
-              label="Stock"
-              type="number"
-              placeholder="0"
-              @update:model-value="form.stock = $event"
-            />
-            <p v-if="errors.stock" class="text-sm text-danger">{{ errors.stock }}</p>
-          </div>
+          <template v-if="isLaundry">
+            <label class="flex flex-col gap-2">
+              <span class="text-sm font-medium text-ink-secondary">Pricing Unit</span>
+              <select
+                v-model="form.pricingUnit"
+                class="h-12 rounded-2xl border border-zinc-200 bg-white px-4 text-sm text-ink-primary outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/10"
+              >
+                <option value="kg">kg</option>
+                <option value="pcs">pcs</option>
+              </select>
+              <p v-if="errors.pricingUnit" class="text-sm text-danger">{{ errors.pricingUnit }}</p>
+            </label>
+
+            <div class="space-y-2">
+              <BaseInput
+                :model-value="form.minQuantity"
+                label="Minimum Quantity"
+                type="number"
+                placeholder="Opsional"
+                @update:model-value="form.minQuantity = $event"
+              />
+              <p v-if="errors.minQuantity" class="text-sm text-danger">{{ errors.minQuantity }}</p>
+            </div>
+
+            <div class="space-y-2 md:col-span-2">
+              <BaseInput
+                :model-value="form.estimatedDuration"
+                label="Estimasi Pengerjaan"
+                placeholder="Contoh: 2 hari"
+                @update:model-value="form.estimatedDuration = $event"
+              />
+            </div>
+          </template>
+
+          <template v-else>
+            <div class="space-y-2">
+              <BaseInput
+                :model-value="form.stock"
+                label="Stok"
+                type="number"
+                placeholder="0"
+                :disabled="isEditMode"
+                :hint="isEditMode ? 'Stok tidak dapat diubah dari Edit Produk. Gunakan tombol Adjust Stok.' : ''"
+                @update:model-value="form.stock = $event"
+              />
+              <p v-if="errors.stock" class="text-sm text-danger">{{ errors.stock }}</p>
+            </div>
+
+            <div class="space-y-2">
+              <BaseInput
+                :model-value="form.unit"
+                label="Satuan"
+                placeholder="pcs, botol, pack"
+                @update:model-value="form.unit = $event"
+              />
+              <p v-if="errors.unit" class="text-sm text-danger">{{ errors.unit }}</p>
+            </div>
+
+            <div class="space-y-2">
+              <BaseInput
+                :model-value="form.minStock"
+                label="Stok Minimum"
+                type="number"
+                placeholder="0"
+                @update:model-value="form.minStock = $event"
+              />
+              <p v-if="errors.minStock" class="text-sm text-danger">{{ errors.minStock }}</p>
+            </div>
+          </template>
         </div>
 
         <label class="flex items-center gap-3 text-sm text-ink-primary">

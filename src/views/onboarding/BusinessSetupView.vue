@@ -5,6 +5,7 @@ import { useRouter } from 'vue-router'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import { BUSINESS_TYPES, normalizeBusinessType } from '@/data/businessTemplates'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useProductStore } from '@/stores/productStore'
 
@@ -14,7 +15,7 @@ const router = useRouter()
 
 const form = reactive({
   name: businessStore.name,
-  type: businessStore.type,
+  type: businessStore.type ? normalizeBusinessType(businessStore.type) : '',
   owner: businessStore.owner,
   phone: businessStore.phone,
   outlet: businessStore.outlet,
@@ -33,14 +34,7 @@ function saveBusinessProfile() {
   router.push('/setup/pin')
 }
 
-const businessTypes = [
-  'Cafe',
-  'Restoran',
-  'Retail',
-  'Laundry',
-  'Barbershop',
-  'Lainnya',
-]
+const businessTypes = BUSINESS_TYPES
 
 const businessModes = [
   { label: 'Free', value: 'free', description: 'Mode offline lokal untuk satu outlet.' },

@@ -1,5 +1,5 @@
 export const DB_NAME = 'pos_mobile'
-export const DB_VERSION = 2
+export const DB_VERSION = 3
 
 export const APP_META_KEYS = {
   initialized: 'data_initialized',
@@ -8,6 +8,8 @@ export const APP_META_KEYS = {
 export const APP_STATE_KEYS = {
   cashier: 'cashier_state',
   shift: 'shift_state',
+  cash: 'cash_state',
+  stockMovements: 'stock_movements_state',
 }
 
 export const RESERVED_CATEGORY = 'Semua'
@@ -98,4 +100,14 @@ export const SYNC_QUEUE_TABLE_STATEMENT = `
 // Fresh installs run v0 -> v1 -> v2; existing P8 (v1) databases run only v2.
 export const MIGRATIONS = {
   2: SYNC_QUEUE_TABLE_STATEMENT,
+  3: `
+  ALTER TABLE products ADD COLUMN sku TEXT NOT NULL DEFAULT '';
+  ALTER TABLE products ADD COLUMN cost REAL NOT NULL DEFAULT 0;
+  ALTER TABLE products ADD COLUMN unit TEXT NOT NULL DEFAULT 'pcs';
+  ALTER TABLE products ADD COLUMN min_stock REAL NOT NULL DEFAULT 0;
+  ALTER TABLE products ADD COLUMN kind TEXT NOT NULL DEFAULT 'product';
+  ALTER TABLE products ADD COLUMN pricing_unit TEXT NOT NULL DEFAULT 'pcs';
+  ALTER TABLE products ADD COLUMN min_quantity REAL NOT NULL DEFAULT 0;
+  ALTER TABLE products ADD COLUMN estimated_duration TEXT NOT NULL DEFAULT '';
+  `,
 }

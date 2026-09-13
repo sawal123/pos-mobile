@@ -200,7 +200,11 @@ describe('P1 POS flow', () => {
 
     expect(transactionStore.items).toHaveLength(initialTransactionCount + 1)
     expect(transactionStore.lastTransaction).toBeTruthy()
-    expect(transactionStore.lastTransaction.items).toEqual(cartSnapshot)
+    expect(transactionStore.lastTransaction.items).toMatchObject(cartSnapshot)
+    expect(transactionStore.lastTransaction.items[0]).toMatchObject({
+      hppSnapshot: 0,
+      lineSubtotal: 22000,
+    })
     expect(transactionStore.lastTransaction.subtotal).toBe(22000)
     expect(transactionStore.lastTransaction.tax).toBe(2420)
     expect(transactionStore.lastTransaction.total).toBe(24420)

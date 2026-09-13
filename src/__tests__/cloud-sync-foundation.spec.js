@@ -507,7 +507,7 @@ describe('P9 free vs cloud mode', () => {
     expect(business).toBeTruthy()
     expect(business.payload).toEqual({
       name: 'Toko Baru',
-      type: 'Cafe',
+      type: 'Cafe / UMKM',
       owner: 'Admin',
       phone: '08123456789',
       outlet: 'Outlet Utama',
