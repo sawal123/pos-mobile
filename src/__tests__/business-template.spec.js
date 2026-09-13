@@ -16,12 +16,9 @@ vi.mock('vue-router', () => ({
 }))
 
 const expectedCategories = {
-  Cafe: ['Minuman', 'Makanan', 'Snack', 'Dessert', 'Lainnya'],
-  Restoran: ['Makanan Utama', 'Minuman', 'Paket', 'Tambahan', 'Dessert', 'Lainnya'],
-  Retail: ['Produk', 'Kebutuhan Harian', 'Minuman', 'Snack', 'Lainnya'],
-  Laundry: ['Kiloan', 'Satuan', 'Express', 'Tambahan', 'Lainnya'],
-  Barbershop: ['Potong Rambut', 'Grooming', 'Treatment', 'Tambahan', 'Lainnya'],
-  Lainnya: ['Produk', 'Layanan', 'Lainnya'],
+  'Cafe / UMKM': ['Minuman', 'Makanan', 'Snack', 'Dessert', 'Lainnya'],
+  Laundry: ['Kiloan', 'Satuan', 'Express', 'Sprei & Bed Cover', 'Lainnya'],
+  'Grosir / Toko Kelontong': ['Produk', 'Kebutuhan Harian', 'Minuman', 'Snack', 'Lainnya'],
 }
 
 function createContext() {
@@ -93,10 +90,10 @@ describe('business template onboarding', () => {
     routerMock.push.mockClear()
   })
 
-  it('Cafe mapping benar', () => {
-    const template = getBusinessTemplate('Cafe')
+  it('Cafe / UMKM mapping benar', () => {
+    const template = getBusinessTemplate('Cafe / UMKM')
 
-    expect(template.categories).toEqual(expectedCategories.Cafe)
+    expect(template.categories).toEqual(expectedCategories['Cafe / UMKM'])
     expect(template.products.map((product) => product.name)).toEqual([
       'Es Kopi Susu',
       'Americano',
@@ -105,12 +102,13 @@ describe('business template onboarding', () => {
     ])
   })
 
-  it('Restoran mapping benar', () => {
-    expect(getBusinessTemplate('Restoran').categories).toEqual(expectedCategories.Restoran)
+  it('legacy Restoran aman dibaca sebagai Cafe / UMKM', () => {
+    expect(getBusinessTemplate('Restoran').categories).toEqual(expectedCategories['Cafe / UMKM'])
+    expect(getBusinessTemplate('restaurant').categories).toEqual(expectedCategories['Cafe / UMKM'])
   })
 
-  it('Retail mapping benar', () => {
-    expect(getBusinessTemplate('Retail').categories).toEqual(expectedCategories.Retail)
+  it('Grosir / Toko Kelontong mapping benar', () => {
+    expect(getBusinessTemplate('Grosir / Toko Kelontong').categories).toEqual(expectedCategories['Grosir / Toko Kelontong'])
   })
 
   it('Laundry bukan katalog Cafe', () => {
@@ -120,33 +118,33 @@ describe('business template onboarding', () => {
     expectNoCafeProducts(template.products)
   })
 
-  it('Barbershop bukan katalog Cafe', () => {
-    const template = getBusinessTemplate('Barbershop')
-
-    expect(template.categories).toEqual(expectedCategories.Barbershop)
-    expectNoCafeProducts(template.products)
-  })
-
-  it('Lainnya generic', () => {
-    const template = getBusinessTemplate('Lainnya')
-
-    expect(template.categories).toEqual(expectedCategories.Lainnya)
-    expect(template.products).toEqual([])
-  })
-
-  it('fresh Barbershop setup menerapkan template', async () => {
+  it('fresh Laundry setup menerapkan template tanpa katalog Cafe', async () => {
     const { pinia, businessStore, productStore } = createContext()
     const wrapper = mountBusinessSetup(pinia)
 
-    await wrapper.find('input[aria-label="Nama Toko"]').setValue('Pangkas Rapi')
-    await chooseBusinessType(wrapper, 'Barbershop')
+    await wrapper.find('input[aria-label="Nama Toko"]').setValue('Laundry Rapi')
+    await chooseBusinessType(wrapper, 'Laundry')
     await saveBusinessSetup(wrapper)
 
-    expect(businessStore.type).toBe('Barbershop')
-    expect(productStore.categories).toEqual(expectedCategories.Barbershop)
+    expect(businessStore.type).toBe('Laundry')
+    expect(productStore.categories).toEqual(expectedCategories.Laundry)
     expect(productStore.products).toEqual([])
     expect(routerMock.push).toHaveBeenCalledWith('/setup/pin')
   })
+
+  it('selector onboarding hanya menampilkan tiga tipe bisnis core', () => {
+    const { pinia } = createContext()
+    const wrapper = mountBusinessSetup(pinia)
+    const text = wrapper.text()
+
+    expect(text).toContain('Cafe / UMKM')
+    expect(text).toContain('Laundry')
+    expect(text).toContain('Grosir / Toko Kelontong')
+    expect(text).not.toContain('Restoran')
+    expect(text).not.toContain('Barbershop')
+    expect(text).not.toContain('Retail')
+  })
+
 
   it('existing catalog tidak tertimpa saat profile type diubah', async () => {
     const { pinia, businessStore, productStore } = createContext()
@@ -176,10 +174,10 @@ describe('business template onboarding', () => {
     productStore.$patch(customCatalog)
 
     const wrapper = mountBusinessSetup(pinia)
-    await chooseBusinessType(wrapper, 'Retail')
+    await chooseBusinessType(wrapper, 'Grosir / Toko Kelontong')
     await saveBusinessSetup(wrapper)
 
-    expect(businessStore.type).toBe('Retail')
+    expect(businessStore.type).toBe('Grosir / Toko Kelontong')
     expect(productStore.categories).toEqual(customCatalog.categories)
     expect(productStore.products).toEqual(customCatalog.products)
     expect(productStore.selectedCategory).toBe(customCatalog.selectedCategory)
@@ -189,7 +187,7 @@ describe('business template onboarding', () => {
     const { productStore } = createContext()
 
     productStore.selectCategory('Minuman')
-    productStore.applyBusinessTemplate('Barbershop')
+    productStore.applyBusinessTemplate('Laundry')
 
     expect(productStore.selectedCategory).toBe('Semua')
   })
@@ -200,7 +198,7 @@ describe('business template onboarding', () => {
     template.categories[0] = 'Rusak'
     template.products[0].name = 'Rusak'
 
-    expect(getBusinessTemplate('Cafe').categories).toEqual(expectedCategories.Cafe)
-    expect(getBusinessTemplate('Cafe').products[0].name).toBe('Es Kopi Susu')
+    expect(getBusinessTemplate('Cafe / UMKM').categories).toEqual(expectedCategories['Cafe / UMKM'])
+    expect(getBusinessTemplate('Cafe / UMKM').products[0].name).toBe('Es Kopi Susu')
   })
 })

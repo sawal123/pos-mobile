@@ -2,6 +2,7 @@ import { nextTick, watch } from 'vue'
 
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCashierStore } from '@/stores/cashierStore'
+import { useCashStore } from '@/stores/cashStore'
 import { useCustomerStore } from '@/stores/customerStore'
 import { useExpenseStore } from '@/stores/expenseStore'
 import { useProductStore } from '@/stores/productStore'
@@ -25,6 +26,7 @@ function createPersistenceContexts(pinia) {
   const expenseStore = useExpenseStore(pinia)
   const transactionStore = useTransactionStore(pinia)
   const cashierStore = useCashierStore(pinia)
+  const cashStore = useCashStore(pinia)
   const shiftStore = useShiftStore(pinia)
 
   return [
@@ -57,13 +59,14 @@ function createPersistenceContexts(pinia) {
         return {
           products: cloneValue(productStore.products),
           categories: cloneValue(productStore.categories),
+          stockMovements: cloneValue(productStore.stockMovements),
         }
       },
       async load(adapter) {
         return adapter.loadProducts()
       },
       async save(adapter, snapshot) {
-        await adapter.saveProducts(snapshot.products, snapshot.categories)
+        await adapter.saveProducts(snapshot.products, snapshot.categories, snapshot.stockMovements)
       },
     },
     {
@@ -132,6 +135,22 @@ function createPersistenceContexts(pinia) {
       },
       async save(adapter, snapshot) {
         await adapter.saveCashierState(snapshot.activeCashier)
+      },
+    },
+    {
+      key: 'cash',
+      store: cashStore,
+      initialState: cloneValue(cashStore.$state),
+      read() {
+        return {
+          entries: cloneValue(cashStore.entries),
+        }
+      },
+      async load(adapter) {
+        return adapter.loadCashState()
+      },
+      async save(adapter, snapshot) {
+        await adapter.saveCashState(snapshot)
       },
     },
     {

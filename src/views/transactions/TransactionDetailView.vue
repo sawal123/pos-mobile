@@ -16,6 +16,8 @@ const transaction = computed(() =>
   transactionStore.items.find((item) => item.id === route.params.id),
 )
 
+const laundryStatuses = ['Masuk', 'Diproses', 'Siap Diambil', 'Selesai']
+
 function statusVariant(status) {
   if (status === 'paid') return 'success'
   if (status === 'refunded') return 'warning'
@@ -63,6 +65,21 @@ function statusVariant(status) {
         <p class="mt-2 text-3xl font-semibold text-ink-primary">
           {{ formatCurrency(transaction.total) }}
         </p>
+      </div>
+
+      <div v-if="transaction.orderStatus" class="rounded-2xl border border-zinc-200 p-4">
+        <p class="text-sm text-ink-secondary">Status Order Laundry</p>
+        <div class="mt-3 flex flex-wrap gap-2">
+          <BaseButton
+            v-for="status in laundryStatuses"
+            :key="status"
+            size="sm"
+            :variant="transaction.orderStatus === status ? 'primary' : 'secondary'"
+            @click="transactionStore.updateOrderStatus(transaction.id, status)"
+          >
+            {{ status }}
+          </BaseButton>
+        </div>
       </div>
     </BaseCard>
 

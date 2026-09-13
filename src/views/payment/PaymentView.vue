@@ -10,7 +10,9 @@ import PaymentMethodCard from '@/components/payment/PaymentMethodCard.vue'
 import CartSummary from '@/components/pos/CartSummary.vue'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCartStore } from '@/stores/cartStore'
+import { useCashStore } from '@/stores/cashStore'
 import { useCustomerStore } from '@/stores/customerStore'
+import { useProductStore } from '@/stores/productStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import { formatCurrency } from '@/utils/formatters'
 
@@ -18,7 +20,9 @@ const QUICK_CASH_AMOUNTS = [20000, 50000, 100000, 200000, 500000]
 
 const businessStore = useBusinessStore()
 const cartStore = useCartStore()
+const cashStore = useCashStore()
 const customerStore = useCustomerStore()
+const productStore = useProductStore()
 const transactionStore = useTransactionStore()
 const router = useRouter()
 
@@ -29,6 +33,7 @@ const selectedCustomerId = ref('')
 const cashReceived = ref('')
 const isProcessing = ref(false)
 const hasAttemptedSubmit = ref(false)
+const paymentError = ref('')
 
 const paymentMethods = [
   { id: 'cash', label: 'Cash', description: 'Pembayaran tunai di kasir' },
@@ -140,6 +145,8 @@ function selectQuickCashAmount(amount) {
 }
 
 async function completePayment() {
+  paymentError.value = ''
+
   if (!cartStore.items.length) {
     await router.push('/pos')
     return
@@ -157,7 +164,15 @@ async function completePayment() {
 
   isProcessing.value = true
 
-  transactionStore.createTransaction({
+  const stockValidation = productStore.canFulfillSale(cartStore.items)
+
+  if (!stockValidation.success) {
+    paymentError.value = stockValidation.error
+    isProcessing.value = false
+    return
+  }
+
+  const transaction = transactionStore.createTransaction({
     items: cartStore.items,
     subtotal: cartStore.subtotal,
     tax: cartStore.tax,
@@ -173,8 +188,11 @@ async function completePayment() {
     paymentMethod: selectedMethod.value,
     cashReceived: isCashMethod.value ? parsedCashReceived.value : null,
     changeAmount: isCashMethod.value ? changeAmount.value : null,
+    orderStatus: businessStore.normalizedType === 'Laundry' ? 'Masuk' : null,
   })
 
+  productStore.recordSaleStock(transaction.items, transaction.id)
+  cashStore.recordSalePayment(transaction)
   cartStore.clearCart()
   await router.push('/payment/success')
 }
@@ -280,6 +298,10 @@ async function completePayment() {
       <BaseButton block size="lg" :disabled="isSubmitDisabled" @click="completePayment">
         Selesaikan Pembayaran
       </BaseButton>
+
+      <p v-if="paymentError" class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger">
+        {{ paymentError }}
+      </p>
     </section>
   </div>
 </template>

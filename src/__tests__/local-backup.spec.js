@@ -294,7 +294,7 @@ describe('P7 local backup & restore JSON', () => {
 
     expect(createBackupPayload(context).data.business).toEqual({
       name: 'Toko ABC',
-      type: 'Cafe',
+      type: 'Cafe / UMKM',
       owner: 'Budi',
       phone: '08123456789',
       outlet: 'Outlet Utama',

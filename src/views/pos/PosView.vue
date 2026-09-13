@@ -1,4 +1,5 @@
 <script setup>
+import { computed } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 
@@ -8,16 +9,59 @@ import CartItem from '@/components/pos/CartItem.vue'
 import CartSummary from '@/components/pos/CartSummary.vue'
 import CategoryPill from '@/components/pos/CategoryPill.vue'
 import ProductCard from '@/components/pos/ProductCard.vue'
+import { useBusinessStore } from '@/stores/businessStore'
 import { useCartStore } from '@/stores/cartStore'
+import { useCashStore } from '@/stores/cashStore'
 import { useProductStore } from '@/stores/productStore'
+import { useTransactionStore } from '@/stores/transactionStore'
 import { formatCurrency } from '@/utils/formatters'
 
+const businessStore = useBusinessStore()
 const productStore = useProductStore()
 const cartStore = useCartStore()
+const cashStore = useCashStore()
+const transactionStore = useTransactionStore()
 const router = useRouter()
 
-const { filterCategories, filteredProducts, searchQuery, selectedCategory } = storeToRefs(productStore)
+const { filterCategories, filteredProducts, lowStockProducts, searchQuery, selectedCategory } = storeToRefs(productStore)
 const { items, subtotal, tax, total } = storeToRefs(cartStore)
+
+function isToday(dateString) {
+  const date = new Date(dateString)
+  const today = new Date()
+
+  return date.getFullYear() === today.getFullYear()
+    && date.getMonth() === today.getMonth()
+    && date.getDate() === today.getDate()
+}
+
+const todayTransactions = computed(() => transactionStore.items.filter((transaction) => (
+  transaction.status === 'paid' && isToday(transaction.createdAt)
+)))
+
+const todayRevenue = computed(() => todayTransactions.value.reduce((sum, transaction) => sum + Number(transaction.total || 0), 0))
+const todayGrossProfit = computed(() => todayTransactions.value.reduce((sum, transaction) => {
+  if (Number.isFinite(transaction.grossProfit)) {
+    return sum + transaction.grossProfit
+  }
+
+  const itemProfit = Array.isArray(transaction.items)
+    ? transaction.items.reduce((itemSum, item) => itemSum + (
+      (Number(item.price || 0) - Number(item.hppSnapshot || item.costSnapshot || 0)) * Number(item.qty || 0)
+    ), 0)
+    : 0
+
+  return sum + itemProfit
+}, 0))
+
+const laundryStatusSummary = computed(() => {
+  const statuses = ['Masuk', 'Diproses', 'Siap Diambil', 'Selesai']
+
+  return statuses.map((status) => ({
+    status,
+    count: transactionStore.items.filter((transaction) => transaction.orderStatus === status).length,
+  }))
+})
 
 function handleCheckout() {
   if (!items.value.length) {
@@ -57,6 +101,46 @@ function handleCheckout() {
           </div>
         </div>
       </div>
+    </section>
+
+    <section class="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+      <BaseCard class="space-y-1">
+        <p class="text-xs uppercase tracking-[0.16em] text-ink-secondary">Omzet Hari Ini</p>
+        <p class="text-xl font-semibold text-ink-primary">{{ formatCurrency(todayRevenue) }}</p>
+      </BaseCard>
+      <BaseCard class="space-y-1">
+        <p class="text-xs uppercase tracking-[0.16em] text-ink-secondary">Estimasi Laba Kotor</p>
+        <p class="text-xl font-semibold text-ink-primary">{{ formatCurrency(todayGrossProfit) }}</p>
+      </BaseCard>
+      <BaseCard class="space-y-1">
+        <p class="text-xs uppercase tracking-[0.16em] text-ink-secondary">Kas Masuk</p>
+        <p class="text-xl font-semibold text-success">{{ formatCurrency(cashStore.todayCashIn) }}</p>
+      </BaseCard>
+      <BaseCard class="space-y-1">
+        <p class="text-xs uppercase tracking-[0.16em] text-ink-secondary">Kas Keluar</p>
+        <p class="text-xl font-semibold text-danger">{{ formatCurrency(cashStore.todayCashOut) }}</p>
+      </BaseCard>
+      <BaseCard class="space-y-1">
+        <p class="text-xs uppercase tracking-[0.16em] text-ink-secondary">Saldo Kas</p>
+        <p class="text-xl font-semibold text-ink-primary">{{ formatCurrency(cashStore.balance) }}</p>
+      </BaseCard>
+      <BaseCard class="space-y-1">
+        <p class="text-xs uppercase tracking-[0.16em] text-ink-secondary">Stok Minimum</p>
+        <p class="text-xl font-semibold" :class="lowStockProducts.length ? 'text-warning' : 'text-ink-primary'">
+          {{ lowStockProducts.length }}
+        </p>
+      </BaseCard>
+    </section>
+
+    <section v-if="businessStore.normalizedType === 'Laundry'" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <BaseCard
+        v-for="item in laundryStatusSummary"
+        :key="item.status"
+        class="space-y-1"
+      >
+        <p class="text-xs uppercase tracking-[0.16em] text-ink-secondary">{{ item.status }}</p>
+        <p class="text-2xl font-semibold text-ink-primary">{{ item.count }}</p>
+      </BaseCard>
     </section>
 
     <div class="grid gap-6 xl:grid-cols-[1.3fr_0.7fr]">
@@ -134,6 +218,7 @@ function handleCheckout() {
               :item="item"
               @increase="cartStore.increaseQty"
               @decrease="cartStore.decreaseQty"
+              @update-qty="cartStore.updateQty"
               @remove="cartStore.removeItem"
             />
           </div>

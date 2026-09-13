@@ -5,11 +5,28 @@ import { getBusinessTemplate } from '@/data/businessTemplates'
 const DEFAULT_FILTER_CATEGORY = 'Semua'
 const DEFAULT_FILTER_CATEGORY_KEY = DEFAULT_FILTER_CATEGORY.toLowerCase()
 
+function normalizeNumber(value, fallback = 0) {
+  const number = Number(value)
+  return Number.isFinite(number) ? number : fallback
+}
+
 function normalizeProduct(product) {
+  const kind = product.kind ?? (product.pricingUnit ? 'service' : 'product')
+  const price = normalizeNumber(product.price ?? product.unitPrice)
+
   return {
     ...product,
-    price: Number(product.price) || 0,
-    stock: Number(product.stock) || 0,
+    kind,
+    sku: product.sku ?? product.barcode ?? '',
+    cost: normalizeNumber(product.cost ?? product.hpp ?? product.estimatedCost),
+    price,
+    unitPrice: price,
+    stock: normalizeNumber(product.stock),
+    unit: product.unit ?? (kind === 'service' ? (product.pricingUnit ?? 'kg') : 'pcs'),
+    minStock: normalizeNumber(product.minStock ?? product.minimumStock),
+    pricingUnit: product.pricingUnit ?? (kind === 'service' ? 'kg' : 'pcs'),
+    minQuantity: normalizeNumber(product.minQuantity),
+    estimatedDuration: product.estimatedDuration ?? '',
     isActive: product.isActive ?? true,
   }
 }
@@ -25,6 +42,22 @@ function buildTemplateState(type) {
   return {
     products: normalizedProducts,
     categories: buildInitialCategories(template.categories, normalizedProducts),
+  }
+}
+
+function normalizeStockMovement(movement) {
+  return {
+    id: movement.id ?? generateProductId(),
+    productId: movement.productId,
+    productName: movement.productName ?? '',
+    type: movement.type ?? 'adjustment',
+    quantityChange: normalizeNumber(movement.quantityChange),
+    stockBefore: normalizeNumber(movement.stockBefore),
+    stockAfter: normalizeNumber(movement.stockAfter),
+    referenceId: movement.referenceId ?? null,
+    category: movement.category ?? 'Adjustment',
+    note: movement.note ?? '',
+    createdAt: movement.createdAt ?? new Date().toISOString(),
   }
 }
 
@@ -50,10 +83,22 @@ function generateProductId() {
 
 function validateProductInput(payload, categories) {
   const errors = {}
+  const kind = payload.kind === 'service' ? 'service' : 'product'
   const name = normalizeName(payload.name ?? '')
   const category = normalizeName(payload.category ?? '')
-  const price = isBlankValue(payload.price) ? Number.NaN : Number(payload.price)
-  const stock = isBlankValue(payload.stock) ? Number.NaN : Number(payload.stock)
+  const price = isBlankValue(payload.price ?? payload.unitPrice)
+    ? Number.NaN
+    : Number(payload.price ?? payload.unitPrice)
+  const cost = isBlankValue(payload.cost ?? payload.hpp)
+    ? 0
+    : Number(payload.cost ?? payload.hpp)
+  const stock = kind === 'service'
+    ? 0
+    : (isBlankValue(payload.stock) ? Number.NaN : Number(payload.stock))
+  const minStock = isBlankValue(payload.minStock) ? 0 : Number(payload.minStock)
+  const minQuantity = isBlankValue(payload.minQuantity) ? 0 : Number(payload.minQuantity)
+  const unit = normalizeName(payload.unit ?? 'pcs')
+  const pricingUnit = normalizeName(payload.pricingUnit ?? 'kg')
 
   if (!name) {
     errors.name = 'Nama produk wajib diisi.'
@@ -68,21 +113,54 @@ function validateProductInput(payload, categories) {
   }
 
   if (Number.isNaN(price) || price < 0) {
-    errors.price = 'Harga harus berupa angka dan minimal 0.'
+    errors.price = kind === 'service'
+      ? 'Harga per unit harus berupa angka dan minimal 0.'
+      : 'Harga jual harus berupa angka dan minimal 0.'
+  }
+
+  if (Number.isNaN(cost) || cost < 0) {
+    errors.cost = kind === 'service'
+      ? 'Estimasi HPP/unit harus berupa angka dan minimal 0.'
+      : 'HPP harus berupa angka dan minimal 0.'
   }
 
   if (Number.isNaN(stock) || stock < 0) {
     errors.stock = 'Stok harus berupa angka dan minimal 0.'
   }
 
+  if (Number.isNaN(minStock) || minStock < 0) {
+    errors.minStock = 'Stok minimum harus berupa angka dan minimal 0.'
+  }
+
+  if (!unit) {
+    errors.unit = 'Satuan wajib diisi.'
+  }
+
+  if (kind === 'service' && !['kg', 'pcs'].includes(pricingUnit)) {
+    errors.pricingUnit = 'Pricing unit harus kg atau pcs.'
+  }
+
+  if (kind === 'service' && (Number.isNaN(minQuantity) || minQuantity < 0)) {
+    errors.minQuantity = 'Minimum quantity harus berupa angka dan minimal 0.'
+  }
+
   return {
     errors,
     isValid: Object.keys(errors).length === 0,
     values: {
+      kind,
       name,
       category,
+      sku: normalizeName(payload.sku ?? payload.barcode ?? ''),
+      cost: Number.isNaN(cost) ? 0 : cost,
       price: Number.isNaN(price) ? 0 : price,
+      unitPrice: Number.isNaN(price) ? 0 : price,
       stock: Number.isNaN(stock) ? 0 : stock,
+      unit,
+      minStock: Number.isNaN(minStock) ? 0 : minStock,
+      pricingUnit,
+      minQuantity: Number.isNaN(minQuantity) ? 0 : minQuantity,
+      estimatedDuration: normalizeName(payload.estimatedDuration ?? ''),
       isActive: payload.isActive ?? true,
     },
   }
@@ -135,11 +213,12 @@ function validateCategoryName(name, categories, currentName = null) {
 
 export const useProductStore = defineStore('product', {
   state: () => {
-    const initialCatalog = buildTemplateState('Cafe')
+    const initialCatalog = buildTemplateState('Cafe / UMKM')
 
     return {
       products: initialCatalog.products,
       categories: initialCatalog.categories,
+      stockMovements: [],
       selectedCategory: DEFAULT_FILTER_CATEGORY,
       searchQuery: '',
     }
@@ -162,6 +241,14 @@ export const useProductStore = defineStore('product', {
 
       return list
     },
+    lowStockProducts(state) {
+      return state.products.filter((product) => (
+        (product.kind ?? 'product') !== 'service'
+        && product.isActive
+        && Number(product.minStock ?? 0) > 0
+        && Number(product.stock ?? 0) <= Number(product.minStock ?? 0)
+      ))
+    },
   },
   actions: {
     selectCategory(category) {
@@ -174,6 +261,7 @@ export const useProductStore = defineStore('product', {
 
       this.products = nextCatalog.products
       this.categories = nextCatalog.categories
+      this.stockMovements = []
       this.selectedCategory = DEFAULT_FILTER_CATEGORY
     },
     setSearchQuery(query) {
@@ -228,8 +316,17 @@ export const useProductStore = defineStore('product', {
 
       existingProduct.name = values.name
       existingProduct.category = values.category
+      existingProduct.kind = values.kind
+      existingProduct.sku = values.sku
+      existingProduct.cost = values.cost
       existingProduct.price = values.price
+      existingProduct.unitPrice = values.unitPrice
       existingProduct.stock = values.stock
+      existingProduct.unit = values.unit
+      existingProduct.minStock = values.minStock
+      existingProduct.pricingUnit = values.pricingUnit
+      existingProduct.minQuantity = values.minQuantity
+      existingProduct.estimatedDuration = values.estimatedDuration
       existingProduct.isActive = values.isActive
 
       return {
@@ -253,6 +350,102 @@ export const useProductStore = defineStore('product', {
       this.products = this.products.filter((product) => String(product.id) !== String(id))
 
       return this.products.length !== currentLength
+    },
+    canFulfillSale(items) {
+      for (const item of items) {
+        const product = this.getProductById(item.id)
+
+        if (!product || (product.kind ?? 'product') === 'service') {
+          continue
+        }
+
+        const quantity = normalizeNumber(item.qty)
+
+        if (quantity > normalizeNumber(product.stock)) {
+          return {
+            success: false,
+            error: `Stok ${product.name} tidak mencukupi.`,
+            product,
+          }
+        }
+      }
+
+      return {
+        success: true,
+        error: '',
+      }
+    },
+    adjustStock(id, payload = {}) {
+      const product = this.getProductById(id)
+
+      if (!product) {
+        return {
+          success: false,
+          error: 'Produk tidak ditemukan.',
+        }
+      }
+
+      if ((product.kind ?? 'product') === 'service') {
+        return {
+          success: false,
+          error: 'Layanan tidak memakai stok.',
+        }
+      }
+
+      const quantityChange = Number(payload.quantityChange)
+
+      if (!Number.isFinite(quantityChange) || quantityChange === 0) {
+        return {
+          success: false,
+          error: 'Perubahan stok harus berupa angka selain 0.',
+        }
+      }
+
+      const stockBefore = normalizeNumber(product.stock)
+      const stockAfter = stockBefore + quantityChange
+
+      if (stockAfter < 0) {
+        return {
+          success: false,
+          error: 'Stok tidak boleh kurang dari 0.',
+        }
+      }
+
+      product.stock = stockAfter
+      this.stockMovements.unshift(normalizeStockMovement({
+        productId: product.id,
+        productName: product.name,
+        type: payload.type ?? 'adjustment',
+        quantityChange,
+        stockBefore,
+        stockAfter,
+        referenceId: payload.referenceId ?? null,
+        category: payload.category ?? 'Adjustment',
+        note: payload.note ?? '',
+        createdAt: payload.createdAt ?? new Date().toISOString(),
+      }))
+
+      return {
+        success: true,
+        product,
+      }
+    },
+    recordSaleStock(items, referenceId) {
+      for (const item of items) {
+        const product = this.getProductById(item.id)
+
+        if (!product || (product.kind ?? 'product') === 'service') {
+          continue
+        }
+
+        this.adjustStock(product.id, {
+          quantityChange: -normalizeNumber(item.qty),
+          type: 'sale',
+          referenceId,
+          category: 'Penjualan',
+          note: `Penjualan ${item.name}`,
+        })
+      }
     },
     createCategory(name) {
       const validation = validateCategoryName(name, this.categories)

@@ -11,6 +11,10 @@ defineProps({
 })
 
 defineEmits(['add'])
+
+function isOutOfStock(product) {
+  return (product.kind ?? 'product') !== 'service' && Number(product.stock ?? 0) <= 0
+}
 </script>
 
 <template>
@@ -20,8 +24,11 @@ defineEmits(['add'])
         <p class="rounded-full bg-white/80 px-3 py-1 text-xs font-medium uppercase tracking-[0.16em] text-ink-secondary shadow-soft">
           {{ product.category }}
         </p>
-        <span class="rounded-full bg-white/80 px-3 py-1 text-xs font-medium text-primary shadow-soft">
-          Stok {{ product.stock }}
+        <span
+          class="rounded-full bg-white/80 px-3 py-1 text-xs font-medium shadow-soft"
+          :class="isOutOfStock(product) ? 'text-danger' : 'text-primary'"
+        >
+          {{ product.kind === 'service' ? product.pricingUnit : `Stok ${product.stock}` }}
         </span>
       </div>
 
@@ -29,20 +36,26 @@ defineEmits(['add'])
         {{ product.name }}
       </h3>
       <p class="mt-1 text-sm text-ink-secondary">
-        Menu siap jual untuk transaksi cepat di kasir.
+        {{ product.kind === 'service' ? 'Layanan laundry siap masuk order.' : 'Produk siap jual untuk transaksi cepat di kasir.' }}
       </p>
     </div>
 
     <div class="mt-auto flex items-end justify-between gap-3">
       <div>
-        <p class="text-xs uppercase tracking-[0.16em] text-ink-secondary">Harga</p>
+        <p class="text-xs uppercase tracking-[0.16em] text-ink-secondary">
+          {{ product.kind === 'service' ? 'Harga / Unit' : 'Harga' }}
+        </p>
         <p class="mt-1 text-lg font-semibold text-ink-primary">
           {{ formatCurrency(product.price) }}
         </p>
-        <p class="mt-1 text-sm text-ink-secondary">{{ product.category }}</p>
+        <p class="mt-1 text-sm text-ink-secondary">
+          {{ product.kind === 'service' ? product.pricingUnit : product.unit || product.category }}
+        </p>
       </div>
 
-      <BaseButton size="sm" class="min-w-24" @click="$emit('add', product)">Tambah</BaseButton>
+      <BaseButton size="sm" class="min-w-24" :disabled="isOutOfStock(product)" @click="$emit('add', product)">
+        Tambah
+      </BaseButton>
     </div>
   </BaseCard>
 </template>

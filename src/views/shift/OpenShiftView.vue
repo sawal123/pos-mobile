@@ -5,14 +5,17 @@ import { useRouter } from 'vue-router'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import { useCashStore } from '@/stores/cashStore'
 import { useShiftStore } from '@/stores/shiftStore'
 
 const openingBalance = ref('100000')
 const router = useRouter()
+const cashStore = useCashStore()
 const shiftStore = useShiftStore()
 
 function handleOpenShift() {
   shiftStore.openShift(openingBalance.value)
+  cashStore.recordOpeningBalance(openingBalance.value, shiftStore.openedAt)
   router.push('/shift')
 }
 </script>
