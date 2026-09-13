@@ -66,6 +66,7 @@ function getStoreContext() {
     customerStore,
     expenseStore,
     transactionStore,
+    cashStore,
     cartStore,
     shiftStore,
   }

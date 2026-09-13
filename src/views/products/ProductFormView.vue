@@ -244,6 +244,8 @@ watch(
                 label="Stok"
                 type="number"
                 placeholder="0"
+                :disabled="isEditMode"
+                :hint="isEditMode ? 'Stok tidak dapat diubah dari Edit Produk. Gunakan tombol Adjust Stok.' : ''"
                 @update:model-value="form.stock = $event"
               />
               <p v-if="errors.stock" class="text-sm text-danger">{{ errors.stock }}</p>

@@ -1,8 +1,17 @@
 import { EXPENSE_CATEGORIES } from '@/stores/expenseStore'
 
 export const BACKUP_SCHEMA = 'pos-mobile-backup'
-export const BACKUP_VERSION = 1
+export const BACKUP_VERSION = 2
+export const SUPPORTED_BACKUP_VERSIONS = [1, BACKUP_VERSION]
 export const RESTORE_CONFIRMATION_MESSAGE = 'Restore backup akan mengganti data produk, kategori, pelanggan, pengeluaran, dan transaksi saat ini. Lanjutkan?'
+
+function computeItemGrossProfit(item) {
+  const quantity = Number(item.qty) || 0
+  const price = Number(item.price ?? item.unitPrice) || 0
+  const hppSnapshot = Number(item.hppSnapshot ?? item.costSnapshot ?? item.cost) || 0
+
+  return (price - hppSnapshot) * quantity
+}
 
 function jsonClone(value) {
   return JSON.parse(JSON.stringify(value))
@@ -41,6 +50,10 @@ function normalizeTransactionForBackup(transaction) {
       ? items.reduce((count, item) => count + (Number(item.qty) || 0), 0)
       : (Number.isFinite(transaction.items) ? transaction.items : 0))
 
+  const grossProfit = Number.isFinite(transaction.grossProfit)
+    ? transaction.grossProfit
+    : items.reduce((sum, item) => sum + computeItemGrossProfit(item), 0)
+
   return {
     id: transaction.id,
     invoiceNumber: typeof transaction.invoiceNumber === 'string' ? transaction.invoiceNumber : String(transaction.id ?? ''),
@@ -49,15 +62,33 @@ function normalizeTransactionForBackup(transaction) {
     customerSnapshot: transaction.customerSnapshot ? { ...transaction.customerSnapshot } : null,
     businessSnapshot: transaction.businessSnapshot ? { ...transaction.businessSnapshot } : null,
     status: typeof transaction.status === 'string' ? transaction.status : 'paid',
+    orderStatus: typeof transaction.orderStatus === 'string' ? transaction.orderStatus : null,
     items,
     itemCount,
     subtotal: Number.isFinite(transaction.subtotal) ? transaction.subtotal : 0,
     tax: Number.isFinite(transaction.tax) ? transaction.tax : 0,
     total: Number.isFinite(transaction.total) ? transaction.total : 0,
+    grossProfit,
     paymentMethod: typeof transaction.paymentMethod === 'string' ? transaction.paymentMethod : '',
     cashReceived: Number.isFinite(transaction.cashReceived) ? transaction.cashReceived : null,
     changeAmount: Number.isFinite(transaction.changeAmount) ? transaction.changeAmount : null,
     createdAt: isValidDateString(transaction.createdAt) ? transaction.createdAt : new Date().toISOString(),
+  }
+}
+
+function normalizeTransactionForRestore(transaction) {
+  const items = Array.isArray(transaction.items)
+    ? transaction.items.map((item) => ({ ...item }))
+    : []
+
+  const grossProfit = Number.isFinite(transaction.grossProfit)
+    ? transaction.grossProfit
+    : items.reduce((sum, item) => sum + computeItemGrossProfit(item), 0)
+
+  return {
+    ...transaction,
+    orderStatus: typeof transaction.orderStatus === 'string' ? transaction.orderStatus : null,
+    grossProfit,
   }
 }
 
@@ -249,6 +280,64 @@ function ensureDataSections(data) {
   return ''
 }
 
+function validateStockMovementsData(stockMovements) {
+  if (!Array.isArray(stockMovements)) {
+    return 'File backup tidak valid.'
+  }
+
+  for (const movement of stockMovements) {
+    if (!isObject(movement)
+      || !hasValue(movement.id)
+      || !hasValue(movement.productId)
+      || !isFiniteNumber(movement.quantityChange)
+      || !isFiniteNumber(movement.stockBefore, { min: 0 })
+      || !isFiniteNumber(movement.stockAfter, { min: 0 })
+      || !isValidDateString(movement.createdAt)) {
+      return 'File backup tidak valid.'
+    }
+  }
+
+  return ''
+}
+
+function validateCashEntriesData(cashEntries) {
+  if (!Array.isArray(cashEntries)) {
+    return 'File backup tidak valid.'
+  }
+
+  for (const entry of cashEntries) {
+    if (!isObject(entry)
+      || !hasValue(entry.id)
+      || !['in', 'out'].includes(entry.type)
+      || !isFiniteNumber(entry.amount, { greaterThan: 0 })
+      || !isValidDateString(entry.createdAt)) {
+      return 'File backup tidak valid.'
+    }
+  }
+
+  return ''
+}
+
+function normalizeBackupData(data) {
+  if (!isObject(data)) {
+    return data
+  }
+
+  const normalized = { ...data }
+
+  // Backward compatibility: older backup versions did not persist cash ledger
+  // or stock movement history yet default them to empty collections.
+  if (normalized.cash === undefined || normalized.cash === null) {
+    normalized.cash = []
+  }
+
+  if (normalized.stockMovements === undefined || normalized.stockMovements === null) {
+    normalized.stockMovements = []
+  }
+
+  return normalized
+}
+
 function formatTimestamp(date = new Date()) {
   const year = date.getFullYear()
   const month = `${date.getMonth() + 1}`.padStart(2, '0')
@@ -268,6 +357,8 @@ export function createBackupPayload(stores) {
     data: {
       business: buildBusinessData(stores.businessStore),
       products: buildProductData(stores.productStore),
+      stockMovements: (stores.productStore?.stockMovements ?? []).map((movement) => ({ ...movement })),
+      cash: (stores.cashStore?.entries ?? []).map((entry) => ({ ...entry })),
       customers: stores.customerStore.customers.map((customer) => ({ ...customer })),
       expenses: stores.expenseStore.expenses.map((expense) => ({ ...expense })),
       transactions: stores.transactionStore.items.map((transaction) => normalizeTransactionForBackup(transaction)),
@@ -285,19 +376,23 @@ export function validateBackupPayload(payload) {
     }
   }
 
-  if (payload.version !== BACKUP_VERSION) {
+  if (!SUPPORTED_BACKUP_VERSIONS.includes(payload.version)) {
     return {
       valid: false,
       error: 'Versi backup tidak didukung.',
     }
   }
 
-  const dataError = ensureDataSections(payload.data)
-    || validateBusinessData(payload.data.business)
-    || validateProductsData(payload.data.products)
-    || validateCustomersData(payload.data.customers)
-    || validateExpensesData(payload.data.expenses)
-    || validateTransactionsData(payload.data.transactions)
+  const data = normalizeBackupData(payload.data)
+
+  const dataError = ensureDataSections(data)
+    || validateBusinessData(data.business)
+    || validateProductsData(data.products)
+    || validateStockMovementsData(data.stockMovements)
+    || validateCashEntriesData(data.cash)
+    || validateCustomersData(data.customers)
+    || validateExpensesData(data.expenses)
+    || validateTransactionsData(data.transactions)
 
   if (dataError) {
     return {
@@ -309,7 +404,7 @@ export function validateBackupPayload(payload) {
   return {
     valid: true,
     error: '',
-    data: jsonClone(payload.data),
+    data: jsonClone(data),
   }
 }
 
@@ -343,9 +438,16 @@ export function restoreBackupPayload(payload, stores) {
   stores.productStore.$patch({
     products: data.products.products,
     categories: data.products.categories,
+    stockMovements: data.stockMovements,
     selectedCategory: 'Semua',
     searchQuery: '',
   })
+
+  if (stores.cashStore) {
+    stores.cashStore.$patch({
+      entries: data.cash,
+    })
+  }
 
   stores.customerStore.$patch({
     customers: data.customers,
@@ -356,7 +458,7 @@ export function restoreBackupPayload(payload, stores) {
   })
 
   stores.transactionStore.$patch({
-    items: data.transactions,
+    items: data.transactions.map((transaction) => normalizeTransactionForRestore(transaction)),
     lastTransaction: null,
   })
 

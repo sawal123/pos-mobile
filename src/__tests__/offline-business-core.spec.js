@@ -171,4 +171,149 @@ describe('offline business core', () => {
     expect(cashStore.entries).toHaveLength(1)
     expect(cashStore.balance).toBe(20000)
   })
+
+  it('edit produk dengan stok berbeda mencatat stock movement, bukan silent change', () => {
+    const { productStore } = createContext()
+    productStore.applyBusinessTemplate('Grosir / Toko Kelontong')
+    const product = createRetailProduct(productStore, { stock: 5 })
+
+    const result = productStore.updateProduct(product.id, {
+      ...productStore.getProductById(product.id),
+      stock: 8,
+    })
+
+    expect(result.success).toBe(true)
+    expect(productStore.getProductById(product.id).stock).toBe(8)
+    expect(productStore.stockMovements).toHaveLength(1)
+    expect(productStore.stockMovements[0]).toMatchObject({
+      productId: product.id,
+      quantityChange: 3,
+      stockBefore: 5,
+      stockAfter: 8,
+      type: 'adjustment',
+    })
+  })
+
+  it('edit produk tanpa perubahan stok tidak menambah stock movement', () => {
+    const { productStore } = createContext()
+    productStore.applyBusinessTemplate('Grosir / Toko Kelontong')
+    const product = createRetailProduct(productStore, { stock: 5 })
+
+    const result = productStore.updateProduct(product.id, {
+      ...productStore.getProductById(product.id),
+      price: 70000,
+    })
+
+    expect(result.success).toBe(true)
+    expect(productStore.stockMovements).toHaveLength(0)
+  })
+
+  it('deleted product di stale cart gagal checkout', () => {
+    const { productStore } = createContext()
+    productStore.applyBusinessTemplate('Grosir / Toko Kelontong')
+    const product = createRetailProduct(productStore, { stock: 5 })
+
+    productStore.deleteProduct(product.id)
+
+    const result = productStore.canFulfillSale([
+      { id: product.id, name: product.name, kind: 'product', price: product.price, qty: 1 },
+    ])
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('tidak ditemukan')
+  })
+
+  it('inactive product di stale cart gagal checkout', () => {
+    const { productStore } = createContext()
+    productStore.applyBusinessTemplate('Grosir / Toko Kelontong')
+    const product = createRetailProduct(productStore, { stock: 5 })
+
+    productStore.toggleProductActive(product.id)
+
+    const result = productStore.canFulfillSale([
+      { id: product.id, name: product.name, kind: 'product', price: product.price, qty: 1 },
+    ])
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('tidak aktif')
+  })
+
+  it('insufficient stock tetap gagal checkout', () => {
+    const { productStore } = createContext()
+    productStore.applyBusinessTemplate('Grosir / Toko Kelontong')
+    const product = createRetailProduct(productStore, { stock: 1 })
+
+    const result = productStore.canFulfillSale([
+      { id: product.id, name: product.name, kind: 'product', price: product.price, qty: 2 },
+    ])
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('tidak mencukupi')
+  })
+
+  it('deleted Laundry service di stale cart gagal checkout', () => {
+    const { productStore } = createContext()
+    productStore.applyBusinessTemplate('Laundry')
+    const service = productStore.createProduct({
+      kind: 'service',
+      name: 'Cuci Kering',
+      category: 'Kiloan',
+      pricingUnit: 'kg',
+      price: 10000,
+      cost: 4000,
+      isActive: true,
+    }).product
+
+    productStore.deleteProduct(service.id)
+
+    const result = productStore.canFulfillSale([
+      { id: service.id, name: service.name, kind: 'service', price: service.price, qty: 2 },
+    ])
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('tidak ditemukan')
+  })
+
+  it('inactive Laundry service di stale cart gagal checkout', () => {
+    const { productStore } = createContext()
+    productStore.applyBusinessTemplate('Laundry')
+    const service = productStore.createProduct({
+      kind: 'service',
+      name: 'Cuci Kering',
+      category: 'Kiloan',
+      pricingUnit: 'kg',
+      price: 10000,
+      cost: 4000,
+      isActive: true,
+    }).product
+
+    productStore.toggleProductActive(service.id)
+
+    const result = productStore.canFulfillSale([
+      { id: service.id, name: service.name, kind: 'service', price: service.price, qty: 2 },
+    ])
+
+    expect(result.success).toBe(false)
+    expect(result.error).toContain('tidak aktif')
+  })
+
+  it('valid Laundry service tetap lolos checkout', () => {
+    const { productStore } = createContext()
+    productStore.applyBusinessTemplate('Laundry')
+    const service = productStore.createProduct({
+      kind: 'service',
+      name: 'Cuci Kering',
+      category: 'Kiloan',
+      pricingUnit: 'kg',
+      price: 10000,
+      cost: 4000,
+      isActive: true,
+    }).product
+
+    const result = productStore.canFulfillSale([
+      { id: service.id, name: service.name, kind: 'service', price: service.price, qty: 2 },
+    ])
+
+    expect(result.success).toBe(true)
+  })
 })

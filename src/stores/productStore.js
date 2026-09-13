@@ -314,6 +314,8 @@ export const useProductStore = defineStore('product', {
         }
       }
 
+      const previousStock = normalizeNumber(existingProduct.stock)
+
       existingProduct.name = values.name
       existingProduct.category = values.category
       existingProduct.kind = values.kind
@@ -328,6 +330,22 @@ export const useProductStore = defineStore('product', {
       existingProduct.minQuantity = values.minQuantity
       existingProduct.estimatedDuration = values.estimatedDuration
       existingProduct.isActive = values.isActive
+
+      // Stock is authoritative: any stock change outside Adjust Stok still
+      // records a stock movement so history is never changed silently.
+      if (values.kind !== 'service' && values.stock !== previousStock) {
+        this.stockMovements.unshift(normalizeStockMovement({
+          productId: existingProduct.id,
+          productName: existingProduct.name,
+          type: 'adjustment',
+          quantityChange: values.stock - previousStock,
+          stockBefore: previousStock,
+          stockAfter: values.stock,
+          referenceId: null,
+          category: 'Adjustment',
+          note: 'Perubahan stok dari edit produk',
+        }))
+      }
 
       return {
         success: true,
@@ -355,7 +373,23 @@ export const useProductStore = defineStore('product', {
       for (const item of items) {
         const product = this.getProductById(item.id)
 
-        if (!product || (product.kind ?? 'product') === 'service') {
+        if (!product) {
+          return {
+            success: false,
+            error: `${item.name ?? 'Item'} tidak ditemukan atau sudah dihapus.`,
+            product: null,
+          }
+        }
+
+        if (product.isActive === false) {
+          return {
+            success: false,
+            error: `${product.name} sedang tidak aktif dan tidak dapat dijual.`,
+            product,
+          }
+        }
+
+        if ((product.kind ?? 'product') === 'service') {
           continue
         }
 
