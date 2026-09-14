@@ -8,7 +8,7 @@ import TabletNavRail from '@/components/layout/TabletNavRail.vue'
 
 <template>
   <div class="min-h-screen bg-surface text-ink-primary overflow-x-hidden">
-    <div class="mx-auto flex min-h-screen w-full max-w-7xl">
+    <div class="mx-auto flex min-h-screen w-full max-w-7xl items-start">
       <TabletNavRail />
 
       <div class="flex min-h-screen w-full min-w-0 flex-1 flex-col">
