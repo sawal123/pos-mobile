@@ -348,7 +348,7 @@ async function submitOrder() {
 </script>
 
 <template>
-  <div class="mx-auto max-w-2xl space-y-5 pb-24">
+  <div class="mx-auto max-w-2xl space-y-5 pb-36">
     <!-- Header -->
     <div class="flex items-center justify-between">
       <div>
@@ -692,24 +692,48 @@ async function submitOrder() {
       </div>
     </BaseCard>
 
-    <!-- Sticky Bottom Bar -->
-    <div class="fixed inset-x-0 bottom-0 z-20 border-t border-zinc-200/80 bg-white/95 px-4 py-3 shadow-[0_-8px_25px_rgba(0,0,0,0.06)] backdrop-blur-md">
-      <div class="mx-auto flex max-w-2xl items-center justify-between gap-4">
+    <!-- 6. In-flow Summary & Submit Card -->
+    <BaseCard class="space-y-4" data-testid="submit-order-card">
+      <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <p class="text-[11px] uppercase tracking-wider text-ink-secondary">Total Biaya</p>
-          <p class="text-xl font-bold text-ink-primary" data-testid="order-total-preview">
+          <p class="text-xs uppercase tracking-wider text-ink-secondary">Total Biaya Cucian</p>
+          <p class="text-2xl font-bold text-ink-primary" data-testid="order-total-preview">
             {{ formatCurrency(total) }}
+          </p>
+          <p class="text-xs text-ink-secondary mt-0.5">
+            {{ orderItems.length }} layanan &bull; {{ paymentChoice === 'now' ? 'Bayar Sekarang' : 'Bayar Nanti' }}
           </p>
         </div>
 
         <BaseButton
           :disabled="isSubmitting || hasItemErrors"
           data-testid="btn-submit-order"
-          class="px-6 py-3 font-semibold"
+          size="lg"
+          class="w-full sm:w-auto px-8 py-3.5 text-base font-semibold"
           @click="submitOrder"
         >
           {{ isSubmitting ? 'Menyimpan...' : 'Simpan Order' }}
         </BaseButton>
+      </div>
+    </BaseCard>
+
+    <!-- Floating Mobile Bar (positioned above BottomNavigation) -->
+    <div class="fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+4.75rem)] z-20 px-3 py-1.5 md:hidden">
+      <div class="mx-auto flex max-w-xl items-center justify-between gap-3 rounded-2xl bg-zinc-900/95 px-4 py-2.5 text-white shadow-2xl backdrop-blur-md">
+        <div class="min-w-0">
+          <p class="text-[10px] uppercase tracking-wider text-zinc-400">Total Biaya</p>
+          <p class="text-base font-bold text-white">{{ formatCurrency(total) }}</p>
+        </div>
+        <button
+          type="button"
+          :disabled="isSubmitting || hasItemErrors"
+          data-testid="btn-submit-order-floating"
+          class="flex shrink-0 items-center gap-1.5 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-white shadow-md transition active:scale-95 disabled:opacity-50"
+          @click="submitOrder"
+        >
+          <span>{{ isSubmitting ? 'Menyimpan...' : 'Simpan Order' }}</span>
+          <span aria-hidden="true">&rarr;</span>
+        </button>
       </div>
     </div>
   </div>
