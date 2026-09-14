@@ -12,6 +12,7 @@ import {
 } from '@/navigation/operationalMenu'
 import { createAppRouter } from '@/router'
 import { useBusinessStore } from '@/stores/businessStore'
+import { useCartStore } from '@/stores/cartStore'
 import { useCashStore } from '@/stores/cashStore'
 import { useCashierStore } from '@/stores/cashierStore'
 import { useProductStore } from '@/stores/productStore'
@@ -32,6 +33,7 @@ function createContext(type = 'Cafe / UMKM') {
   const shiftStore = useShiftStore()
   const productStore = useProductStore()
   const cashStore = useCashStore()
+  const cartStore = useCartStore()
 
   businessStore.setBusiness({
     name: 'Demo POS Store',
@@ -52,6 +54,7 @@ function createContext(type = 'Cafe / UMKM') {
     shiftStore,
     productStore,
     cashStore,
+    cartStore,
   }
 }
 
@@ -291,5 +294,24 @@ describe('POS layout sidebar toggle and drawer', () => {
     // Static sidebar exists
     expect(wrapper.find('aside').exists()).toBe(true)
   })
+
+  it('hides static sidebar and shows hamburger button on /payment', async () => {
+    const { default: AppLayout } = await import('@/layouts/AppLayout.vue')
+    const context = createContext()
+    context.cartStore.addItem({ id: 1, name: 'Es Kopi Susu', category: 'Minuman', price: 22000, stock: 10 })
+    await context.router.push('/payment')
+    await flushPromises()
+
+    const wrapper = mount(AppLayout, {
+      global: {
+        plugins: [context.pinia, context.router],
+      },
+    })
+    await flushPromises()
+
+    // Hamburger button should exist on /payment
+    expect(wrapper.find('#btn-sidebar-hamburger').exists()).toBe(true)
+  })
 })
+
 

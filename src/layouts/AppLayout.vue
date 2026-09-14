@@ -9,7 +9,16 @@ import TabletNavRail from '@/components/layout/TabletNavRail.vue'
 const route = useRoute()
 const isSidebarDrawerOpen = ref(false)
 
-const isPosPage = computed(() => route.path === '/pos' || route.name === 'pos')
+const isSidebarHiddenRoute = computed(() => {
+  const path = route.path
+  const name = route.name
+  return (
+    path === '/pos' ||
+    name === 'pos' ||
+    path === '/payment' ||
+    name === 'payment'
+  )
+})
 
 // Close drawer automatically on route navigation
 watch(
@@ -36,7 +45,7 @@ onUnmounted(() => {
 
 <template>
   <div class="min-h-screen bg-surface text-ink-primary overflow-x-clip md:h-screen md:overflow-hidden">
-    <!-- Overlay Drawer for Sidebar (used when on /pos or triggered via hamburger) -->
+    <!-- Overlay Drawer for Sidebar (used when on /pos or /payment or triggered via hamburger) -->
     <div
       v-if="isSidebarDrawerOpen"
       class="fixed inset-0 z-50 flex"
@@ -54,13 +63,13 @@ onUnmounted(() => {
     </div>
 
     <div class="mx-auto flex min-h-screen w-full max-w-7xl items-stretch md:min-h-0 md:h-screen md:overflow-hidden">
-      <!-- Static sidebar on desktop: Hidden when on /pos page -->
-      <TabletNavRail v-if="!isPosPage" />
+      <!-- Static sidebar on desktop: Hidden when on /pos or /payment -->
+      <TabletNavRail v-if="!isSidebarHiddenRoute" />
 
       <div class="flex min-h-screen w-full min-w-0 flex-1 flex-col md:min-h-0 md:h-screen md:overflow-hidden">
         <AppHeader
           class="shrink-0"
-          :show-hamburger="isPosPage"
+          :show-hamburger="isSidebarHiddenRoute"
           @toggle-sidebar="isSidebarDrawerOpen = !isSidebarDrawerOpen"
         />
 
