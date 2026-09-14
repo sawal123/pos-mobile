@@ -69,7 +69,7 @@ describe('P26 startup routing (BUG-P26-01)', () => {
     expect(router.currentRoute.value.fullPath).toBe('/shift/open')
   })
 
-  it('business, pin, and shift ready: root resolves to pos', async () => {
+  it('business, pin, and shift ready: root resolves to home', async () => {
     const { router, businessStore, cashierStore, shiftStore } = createContext()
 
     makeBusinessReady(businessStore)
@@ -77,8 +77,8 @@ describe('P26 startup routing (BUG-P26-01)', () => {
     shiftStore.openShift(100000)
     await router.push('/')
 
-    expect(router.currentRoute.value.name).toBe('pos')
-    expect(router.currentRoute.value.fullPath).toBe('/pos')
+    expect(router.currentRoute.value.name).toBe('home')
+    expect(router.currentRoute.value.fullPath).toBe('/home')
   })
 
   it('direct protected route guards still work after startup routing', async () => {
@@ -120,7 +120,7 @@ describe('resolveStartupRoute', () => {
     })
   })
 
-  it('returns pos when business, pin, and shift are ready', () => {
+  it('returns home when business, pin, and shift are ready', () => {
     const { businessStore, cashierStore, shiftStore } = createContext()
 
     makeBusinessReady(businessStore)
@@ -128,7 +128,7 @@ describe('resolveStartupRoute', () => {
     shiftStore.openShift(100000)
 
     expect(resolveStartupRoute({ businessStore, cashierStore, shiftStore })).toEqual({
-      name: 'pos',
+      name: 'home',
     })
   })
 })

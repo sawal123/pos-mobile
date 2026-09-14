@@ -14,15 +14,23 @@ const pageTitle = computed(() => {
     welcome: 'Welcome',
     'business-setup': 'Setup Bisnis',
     'pin-setup': 'Setup PIN',
+    home: 'Home',
     'open-shift': 'Buka Shift',
     shift: 'Shift Aktif',
     'close-shift': 'Tutup Shift',
     pos: 'POS',
+    products: 'Produk / Layanan',
+    stock: 'Stok',
+    customers: 'Pelanggan',
+    expenses: 'Pengeluaran',
+    cash: 'Kas',
     payment: 'Pembayaran',
     'payment-success': 'Pembayaran Berhasil',
     transactions: 'Transaksi',
     'transaction-detail': 'Detail Transaksi',
+    reports: 'Laporan',
     settings: 'Pengaturan',
+    cloud: 'Cloud Login',
   }
 
   return titleMap[route?.name] ?? 'POS Mobile'
