@@ -17,6 +17,14 @@ export const ORDER_STATUS_ACTIONS = {
   'Siap Diambil': 'Tandai Selesai',
 }
 
+export function isPaidTransaction(transaction) {
+  if (!transaction) return false
+  if (transaction.paymentStatus) {
+    return transaction.paymentStatus === 'paid'
+  }
+  return transaction.status === 'paid'
+}
+
 export function createLaundryOrderNumber(existingItems = [], date = new Date()) {
   const y = date.getFullYear()
   const m = String(date.getMonth() + 1).padStart(2, '0')

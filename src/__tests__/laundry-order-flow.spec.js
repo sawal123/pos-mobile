@@ -17,12 +17,15 @@ import { useShiftStore } from '@/stores/shiftStore'
 import {
   ORDER_LIFECYCLE,
   createLaundryOrderNumber,
+  isPaidTransaction,
   useTransactionStore,
 } from '@/stores/transactionStore'
+import { formatCurrency, toLocalDateString } from '@/utils/formatters'
 import HomeView from '@/views/home/HomeView.vue'
 import LaundryOrderCreateView from '@/views/laundry/LaundryOrderCreateView.vue'
 import LaundryOrderDetailView from '@/views/laundry/LaundryOrderDetailView.vue'
 import LaundryOrdersView from '@/views/laundry/LaundryOrdersView.vue'
+import ReportsView from '@/views/reports/ReportsView.vue'
 
 function setupTestContext(businessType = 'Laundry') {
   const pinia = createPinia()
@@ -973,6 +976,160 @@ describe('Laundry Transaction and Order Flow', () => {
 
       expect(cafeCtx.productStore.products[0].stock).toBe(initialStock - 2)
       expect(cafeCtx.cashStore.balance).toBe(initialCash + 30000)
+    })
+  })
+
+  describe('14. Financial reporting (Paid Only)', () => {
+    it('Laundry unpaid Rp100k tidak menambah omzet atau gross profit, bertambah setelah settlement paid', async () => {
+      ctx.shiftStore.openShift({ startingCash: 50000 })
+      const order = ctx.transactionStore.createLaundryOrder({
+        customer: 'Ratna',
+        customerId: 'c-ratna',
+        customerSnapshot: { id: 'c-ratna', name: 'Ratna', phone: '0811122233', email: '' },
+        items: [
+          { serviceId: 's1', name: 'Cuci Selimut', quantity: 2, unitPrice: 50000, costSnapshot: 30000, subtotal: 100000, kind: 'service' },
+        ],
+        subtotal: 100000,
+        total: 100000,
+        paymentStatus: 'unpaid',
+      })
+
+      expect(order.paymentStatus).toBe('unpaid')
+      expect(order.total).toBe(100000)
+      expect(order.grossProfit).toBe(40000)
+
+      await ctx.router.push('/home')
+      await flushPromises()
+      const homeWrapper = mount(HomeView, {
+        global: { plugins: [ctx.pinia, ctx.router] },
+      })
+      expect(homeWrapper.text()).toContain('Order Hari Ini')
+      expect(homeWrapper.text()).toContain(formatCurrency(0))
+      expect(homeWrapper.text()).not.toContain(formatCurrency(100000))
+
+      await ctx.router.push('/reports')
+      await flushPromises()
+      const reportsWrapper = mount(ReportsView, {
+        global: { plugins: [ctx.pinia, ctx.router] },
+      })
+      expect(reportsWrapper.text()).toContain(formatCurrency(0))
+      expect(reportsWrapper.text()).not.toContain(formatCurrency(100000))
+      expect(reportsWrapper.text()).not.toContain(formatCurrency(40000))
+
+      const settlement = ctx.transactionStore.settleLaundryOrderPayment({
+        orderId: order.id,
+        paymentMethod: 'cash',
+        cashReceived: 100000,
+        changeAmount: 0,
+        cashStore: ctx.cashStore,
+      })
+      expect(settlement.success).toBe(true)
+      expect(order.paymentStatus).toBe('paid')
+
+      const reportsWrapperAfter = mount(ReportsView, {
+        global: { plugins: [ctx.pinia, ctx.router] },
+      })
+      expect(reportsWrapperAfter.text()).toContain(formatCurrency(100000))
+      expect(reportsWrapperAfter.text()).toContain(formatCurrency(40000))
+
+      const homeWrapperAfter = mount(HomeView, {
+        global: { plugins: [ctx.pinia, ctx.router] },
+      })
+      expect(homeWrapperAfter.text()).toContain(formatCurrency(100000))
+    })
+
+    it('retail transaction lama tanpa paymentStatus tetapi status paid tetap dihitung di omzet dan gross profit', async () => {
+      ctx.transactionStore.items = [
+        {
+          id: 'legacy-retail-trx-1',
+          total: 75000,
+          grossProfit: 30000,
+          status: 'paid',
+          createdAt: new Date().toISOString(),
+        },
+      ]
+
+      await ctx.router.push('/reports')
+      await flushPromises()
+      const wrapper = mount(ReportsView, {
+        global: { plugins: [ctx.pinia, ctx.router] },
+      })
+
+      expect(wrapper.text()).toContain(formatCurrency(75000))
+      expect(wrapper.text()).toContain(formatCurrency(30000))
+
+      const homeWrapper = mount(HomeView, {
+        global: { plugins: [ctx.pinia, ctx.router] },
+      })
+      expect(homeWrapper.text()).toContain(formatCurrency(75000))
+    })
+  })
+
+  describe('15. Laundry service filter in LaundryOrderCreateView', () => {
+    it('active service tampil, inactive service tidak tampil, active retail product tidak tampil', async () => {
+      ctx.productStore.products = [
+        { id: 's1', name: 'Cuci Kiloan Reguler', kind: 'service', isActive: true, price: 10000, pricingUnit: 'kg' },
+        { id: 's2', name: 'Dry Clean Jas Inaktif', kind: 'service', isActive: false, price: 50000, pricingUnit: 'pcs' },
+        { id: 'p1', name: 'Sabun Cuci Retail', kind: 'product', isActive: true, price: 15000, pricingUnit: 'pcs' },
+        { id: 'legacy-srv', name: 'Service Legacy', pricingUnit: 'kg', isActive: true, price: 12000 },
+        { id: 'legacy-prod', name: 'Produk Retail Legacy', isActive: true, price: 20000 },
+      ]
+
+      await ctx.router.push('/laundry/orders/create')
+      await flushPromises()
+
+      const wrapper = mount(LaundryOrderCreateView, {
+        global: { plugins: [ctx.pinia, ctx.router] },
+      })
+
+      expect(wrapper.text()).toContain('Cuci Kiloan Reguler')
+      expect(wrapper.text()).toContain('Service Legacy')
+
+      expect(wrapper.text()).not.toContain('Dry Clean Jas Inaktif')
+
+      expect(wrapper.text()).not.toContain('Sabun Cuci Retail')
+      expect(wrapper.text()).not.toContain('Produk Retail Legacy')
+    })
+  })
+
+  describe('16. Local date input Android formatting', () => {
+    it('toLocalDateString helper menghasilkan YYYY-MM-DD menggunakan local time dan tidak bergeser satu hari', () => {
+      const testDate = new Date(2026, 8, 14, 1, 30, 0)
+      const localStr = toLocalDateString(testDate)
+      expect(localStr).toBe('2026-09-14')
+
+      const dateEndMonth = new Date(2026, 0, 5, 23, 45, 0)
+      expect(toLocalDateString(dateEndMonth)).toBe('2026-01-05')
+    })
+
+    it('LaundryOrderCreateView menginisialisasi input date dengan format lokal dan estimatedCompletedAt tetap ISO string', async () => {
+      ctx.productStore.products = [
+        { id: 'srv-date', name: 'Cuci Express Date', kind: 'service', isActive: true, price: 10000, pricingUnit: 'kg' },
+      ]
+
+      await ctx.router.push('/laundry/orders/create')
+      await flushPromises()
+
+      const wrapper = mount(LaundryOrderCreateView, {
+        global: { plugins: [ctx.pinia, ctx.router] },
+      })
+
+      const dateInput = wrapper.find('input[type="date"]')
+      expect(dateInput.exists()).toBe(true)
+      expect(dateInput.element.value).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+
+      await wrapper.find('[data-testid="input-customer-name"] input').setValue('Test Date User')
+      await wrapper.find('[data-testid="input-customer-phone"] input').setValue('081234567800')
+      await wrapper.find('[data-testid="service-card-srv-date"]').trigger('click')
+      await flushPromises()
+
+      await wrapper.find('[data-testid="btn-submit-order"]').trigger('click')
+      await flushPromises()
+
+      const created = ctx.transactionStore.items[0]
+      expect(created).toBeTruthy()
+      expect(created.estimatedCompletedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/)
+      expect(new Date(created.estimatedCompletedAt).toISOString()).toBe(created.estimatedCompletedAt)
     })
   })
 })

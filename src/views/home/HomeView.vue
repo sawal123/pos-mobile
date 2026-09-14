@@ -10,7 +10,7 @@ import { useBusinessStore } from '@/stores/businessStore'
 import { useCashStore } from '@/stores/cashStore'
 import { useProductStore } from '@/stores/productStore'
 import { useShiftStore } from '@/stores/shiftStore'
-import { useTransactionStore } from '@/stores/transactionStore'
+import { isPaidTransaction, useTransactionStore } from '@/stores/transactionStore'
 import { formatCurrency } from '@/utils/formatters'
 
 const businessStore = useBusinessStore()
@@ -29,7 +29,11 @@ function isToday(dateString) {
 }
 
 const todayTransactions = computed(() => transactionStore.items.filter((transaction) => isToday(transaction.createdAt)))
-const todayRevenue = computed(() => todayTransactions.value.reduce((sum, transaction) => sum + Number(transaction.total || 0), 0))
+const todayRevenue = computed(() =>
+  todayTransactions.value
+    .filter(isPaidTransaction)
+    .reduce((sum, transaction) => sum + Number(transaction.total || 0), 0),
+)
 const menuItems = computed(() => getOperationalMenuItems(businessStore.normalizedType))
 
 const isLaundry = computed(() => businessStore.normalizedType === 'Laundry')

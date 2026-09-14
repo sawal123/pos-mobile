@@ -12,7 +12,7 @@ import { useCashStore } from '@/stores/cashStore'
 import { useCustomerStore } from '@/stores/customerStore'
 import { useProductStore } from '@/stores/productStore'
 import { useTransactionStore } from '@/stores/transactionStore'
-import { formatCurrency } from '@/utils/formatters'
+import { formatCurrency, toLocalDateString } from '@/utils/formatters'
 
 const router = useRouter()
 const businessStore = useBusinessStore()
@@ -33,7 +33,7 @@ const orderItems = ref([])
 // Estimasi Selesai
 const now = new Date()
 const defaultDate = new Date(now.getTime() + 48 * 3600 * 1000)
-const estimatedDate = ref(defaultDate.toISOString().slice(0, 10))
+const estimatedDate = ref(toLocalDateString(defaultDate))
 const estimatedTime = ref('17:00')
 const hasManuallyChangedEstimate = ref(false)
 
@@ -55,7 +55,9 @@ const validationErrors = reactive({
 // Active services available
 const availableServices = computed(() => {
   return productStore.products.filter((p) => {
-    return p.isActive !== false && ((p.kind ?? 'service') === 'service' || p.pricingUnit != null || businessStore.normalizedType === 'Laundry')
+    const active = p.isActive !== false
+    const kind = p.kind ?? (p.pricingUnit ? 'service' : 'product')
+    return active && kind === 'service'
   })
 })
 
@@ -123,7 +125,7 @@ function updateSuggestedEstimate(durationStr) {
   }
 
   const targetDate = new Date(Date.now() + hours * 3600 * 1000)
-  estimatedDate.value = targetDate.toISOString().slice(0, 10)
+  estimatedDate.value = toLocalDateString(targetDate)
   const h = String(targetDate.getHours()).padStart(2, '0')
   const m = String(targetDate.getMinutes()).padStart(2, '0')
   estimatedTime.value = `${h}:${m}`

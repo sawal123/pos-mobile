@@ -3,14 +3,15 @@ import { computed } from 'vue'
 
 import BaseCard from '@/components/base/BaseCard.vue'
 import { useExpenseStore } from '@/stores/expenseStore'
-import { useTransactionStore } from '@/stores/transactionStore'
+import { isPaidTransaction, useTransactionStore } from '@/stores/transactionStore'
 import { formatCurrency } from '@/utils/formatters'
 
 const expenseStore = useExpenseStore()
 const transactionStore = useTransactionStore()
 
-const revenue = computed(() => transactionStore.items.reduce((sum, transaction) => sum + Number(transaction.total || 0), 0))
-const grossProfit = computed(() => transactionStore.items.reduce((sum, transaction) => sum + Number(transaction.grossProfit || 0), 0))
+const paidTransactions = computed(() => transactionStore.items.filter(isPaidTransaction))
+const revenue = computed(() => paidTransactions.value.reduce((sum, transaction) => sum + Number(transaction.total || 0), 0))
+const grossProfit = computed(() => paidTransactions.value.reduce((sum, transaction) => sum + Number(transaction.grossProfit || 0), 0))
 </script>
 
 <template>
