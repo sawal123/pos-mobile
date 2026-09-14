@@ -5,6 +5,15 @@ import { useRoute } from 'vue-router'
 import { useBusinessStore } from '@/stores/businessStore'
 import SyncStatusBadge from '@/components/sync/SyncStatusBadge.vue'
 
+const props = defineProps({
+  showHamburger: {
+    type: Boolean,
+    default: false,
+  },
+})
+
+const emit = defineEmits(['toggleSidebar'])
+
 const route = useRoute()
 const businessStore = useBusinessStore()
 
@@ -43,11 +52,30 @@ const pageTitle = computed(() => {
 <template>
   <header class="sticky top-0 z-30 border-b border-zinc-200/70 bg-white/90 backdrop-blur">
     <div class="flex items-center justify-between gap-3 px-4 py-3.5 md:px-6 md:py-4">
-      <div class="min-w-0 flex-1">
-        <p class="truncate text-xs uppercase tracking-[0.2em] text-ink-secondary">
-          {{ businessStore.name || 'POS Mobile' }}
-        </p>
-        <h1 class="truncate text-lg font-semibold text-ink-primary">{{ pageTitle }}</h1>
+      <div class="flex min-w-0 flex-1 items-center gap-3">
+        <!-- Hamburger Button to open sidebar -->
+        <button
+          v-if="showHamburger"
+          id="btn-sidebar-hamburger"
+          type="button"
+          @click="emit('toggleSidebar')"
+          class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-zinc-200/90 bg-white text-zinc-700 shadow-xs hover:border-primary/40 hover:bg-primary/5 hover:text-primary active:scale-95 transition-all cursor-pointer"
+          title="Buka Menu"
+          aria-label="Buka Menu"
+        >
+          <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="3" y1="12" x2="21" y2="12" />
+            <line x1="3" y1="6" x2="21" y2="6" />
+            <line x1="3" y1="18" x2="21" y2="18" />
+          </svg>
+        </button>
+
+        <div class="min-w-0 flex-1">
+          <p class="truncate text-xs uppercase tracking-[0.2em] text-ink-secondary">
+            {{ businessStore.name || 'POS Mobile' }}
+          </p>
+          <h1 class="truncate text-lg font-semibold text-ink-primary">{{ pageTitle }}</h1>
+        </div>
       </div>
 
       <div class="flex shrink-0 items-center gap-2">

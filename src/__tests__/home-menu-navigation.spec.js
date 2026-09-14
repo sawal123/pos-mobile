@@ -237,3 +237,59 @@ describe('POS compact transaction view', () => {
     expect(wrapper.find('[data-testid="pos-product-grid"]').classes()).toContain('grid-cols-2')
   })
 })
+
+describe('POS layout sidebar toggle and drawer', () => {
+  it('hides static sidebar and shows hamburger button on /pos', async () => {
+    const { default: AppLayout } = await import('@/layouts/AppLayout.vue')
+    const context = createContext()
+    await context.router.push('/pos')
+    await flushPromises()
+
+    const wrapper = mount(AppLayout, {
+      global: {
+        plugins: [context.pinia, context.router],
+      },
+    })
+    await flushPromises()
+
+    // Hamburger button should exist in header
+    const hamburgerBtn = wrapper.find('#btn-sidebar-hamburger')
+    expect(hamburgerBtn.exists()).toBe(true)
+
+    // Drawer is closed initially
+    expect(wrapper.find('.fixed.inset-0.z-50').exists()).toBe(false)
+
+    // Click hamburger button to open drawer
+    await hamburgerBtn.trigger('click')
+    expect(wrapper.find('.fixed.inset-0.z-50').exists()).toBe(true)
+
+    // Click close button inside drawer
+    const closeBtn = wrapper.find('button[title="Tutup Menu"]')
+    expect(closeBtn.exists()).toBe(true)
+    await closeBtn.trigger('click')
+
+    // Drawer is closed
+    expect(wrapper.find('.fixed.inset-0.z-50').exists()).toBe(false)
+  })
+
+  it('shows static sidebar and hides hamburger button on /home', async () => {
+    const { default: AppLayout } = await import('@/layouts/AppLayout.vue')
+    const context = createContext()
+    await context.router.push('/home')
+    await flushPromises()
+
+    const wrapper = mount(AppLayout, {
+      global: {
+        plugins: [context.pinia, context.router],
+      },
+    })
+    await flushPromises()
+
+    // Hamburger button should NOT exist on /home
+    expect(wrapper.find('#btn-sidebar-hamburger').exists()).toBe(false)
+
+    // Static sidebar exists
+    expect(wrapper.find('aside').exists()).toBe(true)
+  })
+})
+

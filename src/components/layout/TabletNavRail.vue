@@ -8,6 +8,15 @@ import { useBusinessStore } from '@/stores/businessStore'
 import { useCashierStore } from '@/stores/cashierStore'
 import { useShiftStore } from '@/stores/shiftStore'
 
+const props = defineProps({
+  isDrawer: {
+    type: Boolean,
+    default: false,
+  },
+})
+
+const emit = defineEmits(['close'])
+
 const route = useRoute()
 const businessStore = useBusinessStore()
 const cashierStore = useCashierStore()
@@ -31,28 +40,55 @@ const cashierInitial = computed(() => {
 function isActive(path) {
   return route.path === path || route.path.startsWith(`${path}/`)
 }
+
+function handleItemClick() {
+  if (props.isDrawer) {
+    emit('close')
+  }
+}
 </script>
 
 <template>
   <aside
-    class="hidden w-64 shrink-0 border-r border-zinc-200/80 bg-white md:sticky md:top-0 md:flex md:h-screen md:flex-col md:self-start shadow-[1px_0_12px_rgba(0,0,0,0.03)] z-20"
+    :class="[
+      isDrawer
+        ? 'flex h-full w-full flex-col bg-white'
+        : 'hidden w-64 shrink-0 border-r border-zinc-200/80 bg-white md:sticky md:top-0 md:flex md:h-screen md:flex-col md:self-start shadow-[1px_0_12px_rgba(0,0,0,0.03)] z-20',
+    ]"
   >
     <!-- Brand Header -->
     <div class="border-b border-zinc-100 bg-gradient-to-b from-zinc-50/80 to-white px-5 py-5">
-      <div class="flex items-center gap-3">
-        <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-tr from-primary to-indigo-500 text-white shadow-[0_4px_14px_rgba(73,69,214,0.32)]">
-          <span class="text-base font-black tracking-tight">
-            {{ businessInitial }}
-          </span>
+      <div class="flex items-center justify-between gap-3">
+        <div class="flex min-w-0 flex-1 items-center gap-3">
+          <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-tr from-primary to-indigo-500 text-white shadow-[0_4px_14px_rgba(73,69,214,0.32)]">
+            <span class="text-base font-black tracking-tight">
+              {{ businessInitial }}
+            </span>
+          </div>
+          <div class="min-w-0 flex-1">
+            <h2 class="truncate text-base font-bold tracking-tight text-ink-primary">
+              {{ businessStore.name || 'Demo POS Store' }}
+            </h2>
+            <p class="truncate text-xs text-ink-secondary">
+              {{ businessStore.outlet || 'Outlet Utama' }}
+            </p>
+          </div>
         </div>
-        <div class="min-w-0 flex-1">
-          <h2 class="truncate text-base font-bold tracking-tight text-ink-primary">
-            {{ businessStore.name || 'Demo POS Store' }}
-          </h2>
-          <p class="truncate text-xs text-ink-secondary">
-            {{ businessStore.outlet || 'Outlet Utama' }}
-          </p>
-        </div>
+
+        <!-- Close button if rendered in drawer mode -->
+        <button
+          v-if="isDrawer"
+          type="button"
+          @click="emit('close')"
+          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-zinc-200 bg-white text-zinc-500 hover:bg-zinc-100 hover:text-ink-primary active:scale-95 transition-all cursor-pointer"
+          title="Tutup Menu"
+          aria-label="Tutup Menu"
+        >
+          <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
       </div>
 
       <div class="mt-3 flex items-center justify-between rounded-xl bg-zinc-100/80 px-2.5 py-1.5 text-xs">
@@ -73,6 +109,7 @@ function isActive(path) {
         v-for="item in items"
         :key="item.to"
         :to="item.to"
+        @click="handleItemClick"
         class="group relative flex items-center gap-3 rounded-2xl px-3.5 py-2.5 text-sm font-semibold transition-all duration-200"
         :class="isActive(item.to)
           ? 'nav-item-active bg-gradient-to-r from-primary to-indigo-600 !text-white text-white shadow-[0_6px_18px_rgba(73,69,214,0.28)]'
