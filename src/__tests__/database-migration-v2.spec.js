@@ -8,7 +8,7 @@ import { createSQLiteAdapter } from '@/services/database/sqliteAdapter'
 const { fakeDb, fakeUserVersion, addUpgradeStatementMock } = vi.hoisted(() => {
   const state = {
     userVersion: 0,
-    targetVersion: 3,
+    targetVersion: 4,
     upgrades: [],
     executedUpgradeSql: [],
   }
@@ -119,7 +119,7 @@ function assertNoDrop(executed) {
 
 beforeEach(() => {
   fakeUserVersion.userVersion = 0
-  fakeUserVersion.targetVersion = 3
+    fakeUserVersion.targetVersion = 4
   fakeUserVersion.upgrades = []
   fakeUserVersion.executedUpgradeSql = []
   fakeDb.query.mockClear()
@@ -129,9 +129,9 @@ beforeEach(() => {
   addUpgradeStatementMock.mockClear()
 })
 
-describe('P9 database migration v2/v3', () => {
-  it('DB_VERSION sekarang 3', () => {
-    expect(DB_VERSION).toBe(3)
+describe('P9 database migration v2/v3/v4', () => {
+  it('DB_VERSION sekarang 4', () => {
+    expect(DB_VERSION).toBe(4)
   })
 
   it('migrasi v2 mendefinisikan sync_queue', () => {
@@ -158,40 +158,47 @@ describe('P9 database migration v2/v3', () => {
     expect(migration).toMatch(/ALTER TABLE products ADD COLUMN pricing_unit/)
   })
 
-  it('fresh memory DB menghasilkan schema v3', async () => {
+  it('migrasi v4 menambah image_data secara additive', () => {
+    const migration = MIGRATIONS[4]
+
+    expect(migration).toBeTruthy()
+    expect(migration).toMatch(/ALTER TABLE products ADD COLUMN image_data TEXT NOT NULL DEFAULT ''/)
+  })
+
+  it('fresh memory DB menghasilkan schema v4', async () => {
     const adapter = createMemoryAdapter()
 
     expect(await adapter.getSchemaVersion()).toBe(0)
 
     await adapter.initialize()
 
-    expect(await adapter.getSchemaVersion()).toBe(3)
+    expect(await adapter.getSchemaVersion()).toBe(4)
   })
 
-  it('existing v1 memory DB dapat upgrade ke v3', async () => {
+  it('existing v1 memory DB dapat upgrade ke v4', async () => {
     const adapter = createMemoryAdapter()
 
     await adapter.setSchemaVersion(1)
     await adapter.initialize()
 
-    expect(await adapter.getSchemaVersion()).toBe(3)
+    expect(await adapter.getSchemaVersion()).toBe(4)
   })
 
-  it('fresh SQLite DB menghasilkan schema v3', async () => {
+  it('fresh SQLite DB menghasilkan schema v4', async () => {
     const adapter = createSQLiteAdapter()
 
     await adapter.initialize()
 
-    expect(await adapter.getSchemaVersion()).toBe(3)
+    expect(await adapter.getSchemaVersion()).toBe(4)
   })
 
-  it('existing v1 SQLite DB dapat upgrade ke v3', async () => {
+  it('existing v1 SQLite DB dapat upgrade ke v4', async () => {
     fakeUserVersion.userVersion = 1
     const adapter = createSQLiteAdapter()
 
     await adapter.initialize()
 
-    expect(await adapter.getSchemaVersion()).toBe(3)
+    expect(await adapter.getSchemaVersion()).toBe(4)
   })
 
   it('migration v2 membuat sync_queue di SQLite', async () => {
@@ -234,13 +241,13 @@ describe('P9 database migration v2/v3', () => {
     )
   })
 
-  it('upgrade list memiliki toVersion 1, 2, dan 3', async () => {
+  it('upgrade list memiliki toVersion 1, 2, 3, dan 4', async () => {
     const adapter = createSQLiteAdapter()
 
     await adapter.initialize()
 
     const [, upgrade] = addUpgradeStatementMock.mock.calls[0]
-    expect(upgrade.map(({ toVersion }) => toVersion)).toEqual([1, 2, 3])
+    expect(upgrade.map(({ toVersion }) => toVersion)).toEqual([1, 2, 3, 4])
 
     const v1 = upgrade.find(({ toVersion }) => toVersion === 1)
     expect(v1.statements.join('\n')).toMatch(/CREATE TABLE IF NOT EXISTS business/)
@@ -251,15 +258,18 @@ describe('P9 database migration v2/v3', () => {
 
     const v3 = upgrade.find(({ toVersion }) => toVersion === 3)
     expect(v3.statements.join('\n')).toMatch(/ALTER TABLE products ADD COLUMN sku/)
+
+    const v4 = upgrade.find(({ toVersion }) => toVersion === 4)
+    expect(v4.statements.join('\n')).toMatch(/ALTER TABLE products ADD COLUMN image_data/)
   })
 
-  it('fresh native v0 menjalankan upgrade v1, v2, v3 hingga version 3', async () => {
+  it('fresh native v0 menjalankan upgrade v1, v2, v3, v4 hingga version 4', async () => {
     fakeUserVersion.userVersion = 0
     const adapter = createSQLiteAdapter()
 
     await adapter.initialize()
 
-    expect(await adapter.getSchemaVersion()).toBe(3)
+    expect(await adapter.getSchemaVersion()).toBe(4)
 
     const executed = fakeUserVersion.executedUpgradeSql
     const v1Index = executed.findIndex((sql) => sql.includes('CREATE TABLE IF NOT EXISTS business'))
@@ -267,26 +277,43 @@ describe('P9 database migration v2/v3', () => {
       sql.includes('CREATE TABLE IF NOT EXISTS sync_queue'),
     )
     const v3Index = executed.findIndex((sql) => sql.includes('ALTER TABLE products ADD COLUMN sku'))
+    const v4Index = executed.findIndex((sql) => sql.includes('ALTER TABLE products ADD COLUMN image_data'))
 
     expect(v1Index).toBeGreaterThanOrEqual(0)
     expect(v2Index).toBeGreaterThanOrEqual(0)
     expect(v3Index).toBeGreaterThanOrEqual(0)
+    expect(v4Index).toBeGreaterThanOrEqual(0)
     expect(v1Index).toBeLessThan(v2Index)
     expect(v2Index).toBeLessThan(v3Index)
+    expect(v3Index).toBeLessThan(v4Index)
   })
 
-  it('existing native v1 menjalankan upgrade v2 dan v3 (data P8 aman)', async () => {
+  it('existing native v1 menjalankan upgrade v2, v3, dan v4 (data P8 aman)', async () => {
     fakeUserVersion.userVersion = 1
     const adapter = createSQLiteAdapter()
 
     await adapter.initialize()
 
-    expect(await adapter.getSchemaVersion()).toBe(3)
+    expect(await adapter.getSchemaVersion()).toBe(4)
 
     const executed = fakeUserVersion.executedUpgradeSql
     expect(executed.some((sql) => sql.includes('CREATE TABLE IF NOT EXISTS sync_queue'))).toBe(true)
     expect(executed.some((sql) => sql.includes('ALTER TABLE products ADD COLUMN sku'))).toBe(true)
+    expect(executed.some((sql) => sql.includes('ALTER TABLE products ADD COLUMN image_data'))).toBe(true)
     expect(executed.some((sql) => sql.includes('CREATE TABLE IF NOT EXISTS business'))).toBe(false)
+    expect(executed.some((sql) => sql.includes('CREATE TABLE IF NOT EXISTS products'))).toBe(false)
+  })
+
+  it('existing native v3 menjalankan upgrade v4 tanpa membuat ulang products', async () => {
+    fakeUserVersion.userVersion = 3
+    const adapter = createSQLiteAdapter()
+
+    await adapter.initialize()
+
+    expect(await adapter.getSchemaVersion()).toBe(4)
+
+    const executed = fakeUserVersion.executedUpgradeSql
+    expect(executed.some((sql) => sql.includes('ALTER TABLE products ADD COLUMN image_data'))).toBe(true)
     expect(executed.some((sql) => sql.includes('CREATE TABLE IF NOT EXISTS products'))).toBe(false)
   })
 
@@ -310,13 +337,13 @@ describe('P9 database migration v2/v3', () => {
     }
   })
 
-  it('existing v3 reinitialize aman (native open tidak upgrade ulang)', async () => {
-    fakeUserVersion.userVersion = 3
+  it('existing v4 reinitialize aman (native open tidak upgrade ulang)', async () => {
+    fakeUserVersion.userVersion = 4
     const adapter = createSQLiteAdapter()
 
     await adapter.initialize()
 
-    expect(await adapter.getSchemaVersion()).toBe(3)
+    expect(await adapter.getSchemaVersion()).toBe(4)
     expect(fakeUserVersion.executedUpgradeSql).toEqual([])
   })
 
@@ -343,13 +370,13 @@ describe('P9 database migration v2/v3', () => {
     expect(joined).toMatch(/CREATE TABLE IF NOT EXISTS sync_queue/)
   })
 
-  it('reinitialize SQLite v3 aman (tidak rusak)', async () => {
+  it('reinitialize SQLite v4 aman (tidak rusak)', async () => {
     const adapter = createSQLiteAdapter()
 
     await adapter.initialize()
     await adapter.initialize()
 
-    expect(await adapter.getSchemaVersion()).toBe(3)
+    expect(await adapter.getSchemaVersion()).toBe(4)
   })
 
   it('memory sync_queue siap dipakai setelah migrasi v2', async () => {
@@ -374,7 +401,7 @@ describe('P9 database migration v2/v3', () => {
   it('migration v1->v2 tidak drop business', async () => {
     const dbLike = createFakeDbLike({ initialVersion: 1 })
 
-    await applyMigrations(dbLike, 3)
+    await applyMigrations(dbLike, 4)
 
     assertNoDrop(dbLike.executed)
     expect(dbLike.executed.some((sql) => /DROP TABLE\s+business/i.test(sql))).toBe(false)
@@ -383,7 +410,7 @@ describe('P9 database migration v2/v3', () => {
   it('migration v1->v2 tidak drop products', async () => {
     const dbLike = createFakeDbLike({ initialVersion: 1 })
 
-    await applyMigrations(dbLike, 3)
+    await applyMigrations(dbLike, 4)
 
     expect(dbLike.executed.some((sql) => /DROP TABLE\s+products/i.test(sql))).toBe(false)
   })
@@ -391,7 +418,7 @@ describe('P9 database migration v2/v3', () => {
   it('migration v1->v2 tidak drop customers', async () => {
     const dbLike = createFakeDbLike({ initialVersion: 1 })
 
-    await applyMigrations(dbLike, 3)
+    await applyMigrations(dbLike, 4)
 
     expect(dbLike.executed.some((sql) => /DROP TABLE\s+customers/i.test(sql))).toBe(false)
   })
@@ -399,7 +426,7 @@ describe('P9 database migration v2/v3', () => {
   it('migration v1->v2 tidak drop expenses', async () => {
     const dbLike = createFakeDbLike({ initialVersion: 1 })
 
-    await applyMigrations(dbLike, 3)
+    await applyMigrations(dbLike, 4)
 
     expect(dbLike.executed.some((sql) => /DROP TABLE\s+expenses/i.test(sql))).toBe(false)
   })
@@ -407,37 +434,38 @@ describe('P9 database migration v2/v3', () => {
   it('migration v1->v2 tidak drop transactions', async () => {
     const dbLike = createFakeDbLike({ initialVersion: 1 })
 
-    await applyMigrations(dbLike, 3)
+    await applyMigrations(dbLike, 4)
 
     expect(dbLike.executed.some((sql) => /DROP TABLE\s+transactions/i.test(sql))).toBe(false)
   })
 
-  it('version > 3 ditolak (tidak downgrade) pada memory', async () => {
+  it('version > 4 ditolak (tidak downgrade) pada memory', async () => {
     const adapter = createMemoryAdapter()
 
-    await adapter.setSchemaVersion(4)
+    await adapter.setSchemaVersion(5)
 
     await expect(adapter.initialize()).rejects.toThrow(/future/i)
-    expect(await adapter.getSchemaVersion()).toBe(4)
+    expect(await adapter.getSchemaVersion()).toBe(5)
   })
 
-  it('version > 3 ditolak (tidak downgrade) pada SQLite', async () => {
-    fakeUserVersion.userVersion = 4
+  it('version > 4 ditolak (tidak downgrade) pada SQLite', async () => {
+    fakeUserVersion.userVersion = 5
     const adapter = createSQLiteAdapter()
 
     await expect(adapter.initialize()).rejects.toThrow(/future/i)
   })
 
-  it('applyMigrations fresh install menerapkan migration hingga v3', async () => {
+  it('applyMigrations fresh install menerapkan migration hingga v4', async () => {
     const dbLike = createFakeDbLike({ initialVersion: 0 })
 
-    const result = await applyMigrations(dbLike, 3)
+    const result = await applyMigrations(dbLike, 4)
 
     expect(result.from).toBe(1)
-    expect(result.to).toBe(3)
-    expect(result.applied).toEqual([2, 3])
+    expect(result.to).toBe(4)
+    expect(result.applied).toEqual([2, 3, 4])
     expect(dbLike.executed.some((sql) => sql.includes('sync_queue'))).toBe(true)
     expect(dbLike.executed.some((sql) => sql.includes('ADD COLUMN sku'))).toBe(true)
+    expect(dbLike.executed.some((sql) => sql.includes('ADD COLUMN image_data'))).toBe(true)
   })
 
   it('migration tidak dijalankan destruktif dua kali', async () => {
@@ -458,7 +486,7 @@ describe('P9 database migration v2/v3', () => {
 
     await adapter.initialize()
 
-    expect(await adapter.getSchemaVersion()).toBe(3)
+    expect(await adapter.getSchemaVersion()).toBe(4)
     expect(await adapter.countSyncQueueItems()).toBe(1)
   })
 })

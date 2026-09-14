@@ -17,12 +17,16 @@ import CustomerFormView from '../views/customers/CustomerFormView.vue'
 import CustomersView from '../views/customers/CustomersView.vue'
 import ExpenseFormView from '../views/expenses/ExpenseFormView.vue'
 import ExpensesView from '../views/expenses/ExpensesView.vue'
+import CashView from '../views/cash/CashView.vue'
+import HomeView from '../views/home/HomeView.vue'
 import ProductFormView from '../views/products/ProductFormView.vue'
 import ProductsView from '../views/products/ProductsView.vue'
+import ReportsView from '../views/reports/ReportsView.vue'
 import CloseShiftView from '../views/shift/CloseShiftView.vue'
 import OpenShiftView from '../views/shift/OpenShiftView.vue'
 import ShiftView from '../views/shift/ShiftView.vue'
 import SettingsView from '../views/settings/SettingsView.vue'
+import StockView from '../views/stock/StockView.vue'
 import CloudLoginView from '../views/settings/CloudLoginView.vue'
 import ReceiptView from '../views/transactions/ReceiptView.vue'
 import TransactionDetailView from '../views/transactions/TransactionDetailView.vue'
@@ -41,7 +45,7 @@ export function resolveStartupRoute({ businessStore, cashierStore, shiftStore })
     return { name: 'open-shift' }
   }
 
-  return { name: 'pos' }
+  return { name: 'home' }
 }
 
 const routes = [
@@ -74,6 +78,11 @@ const routes = [
     component: AppLayout,
     children: [
       {
+        path: 'home',
+        name: 'home',
+        component: HomeView,
+      },
+      {
         path: 'shift/open',
         name: 'open-shift',
         component: OpenShiftView,
@@ -97,6 +106,11 @@ const routes = [
         path: 'products',
         name: 'products',
         component: ProductsView,
+      },
+      {
+        path: 'stock',
+        name: 'stock',
+        component: StockView,
       },
       {
         path: 'products/create',
@@ -144,6 +158,11 @@ const routes = [
         component: ExpenseFormView,
       },
       {
+        path: 'cash',
+        name: 'cash',
+        component: CashView,
+      },
+      {
         path: 'payment',
         name: 'payment',
         component: PaymentView,
@@ -169,6 +188,11 @@ const routes = [
         component: ReceiptView,
       },
       {
+        path: 'reports',
+        name: 'reports',
+        component: ReportsView,
+      },
+      {
         path: 'settings',
         name: 'settings',
         component: SettingsView,
@@ -184,11 +208,13 @@ const routes = [
 
 const businessRequiredRoutes = new Set([
   'pin-setup',
+  'home',
   'open-shift',
   'shift',
   'close-shift',
   'pos',
   'products',
+  'stock',
   'product-create',
   'product-edit',
   'categories',
@@ -198,20 +224,24 @@ const businessRequiredRoutes = new Set([
   'expenses',
   'expense-create',
   'expense-edit',
+  'cash',
   'payment',
   'payment-success',
   'transactions',
   'transaction-detail',
   'transaction-receipt',
+  'reports',
   'settings',
 ])
 
 const pinRequiredRoutes = new Set([
   'open-shift',
+  'home',
   'shift',
   'close-shift',
   'pos',
   'products',
+  'stock',
   'product-create',
   'product-edit',
   'categories',
@@ -221,18 +251,22 @@ const pinRequiredRoutes = new Set([
   'expenses',
   'expense-create',
   'expense-edit',
+  'cash',
   'payment',
   'payment-success',
   'transactions',
   'transaction-detail',
   'transaction-receipt',
+  'reports',
   'settings',
 ])
 
 const shiftRequiredRoutes = new Set([
+  'home',
   'shift',
   'close-shift',
   'pos',
+  'cash',
   'payment',
   'payment-success',
 ])

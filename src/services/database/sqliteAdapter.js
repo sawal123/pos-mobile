@@ -256,7 +256,7 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
         db.query('SELECT name FROM categories ORDER BY name ASC'),
         db.query(
           `SELECT id, name, category, sku, cost, price, stock, unit, min_stock,
-             kind, pricing_unit, min_quantity, estimated_duration, is_active
+             kind, pricing_unit, min_quantity, estimated_duration, image_data, is_active
            FROM products ORDER BY rowid ASC`,
         ),
       ])
@@ -277,6 +277,7 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
           pricingUnit: row.pricing_unit ?? 'pcs',
           minQuantity: Number(row.min_quantity ?? 0),
           estimatedDuration: row.estimated_duration ?? '',
+          imageData: row.image_data ?? '',
           isActive: Boolean(row.is_active),
         })),
         stockMovements: await readAppState(APP_STATE_KEYS.stockMovements, []),
@@ -299,8 +300,8 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
           await db.run(
             `INSERT INTO products
               (id, name, category, sku, cost, price, stock, unit, min_stock,
-               kind, pricing_unit, min_quantity, estimated_duration, is_active)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               kind, pricing_unit, min_quantity, estimated_duration, image_data, is_active)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               String(product.id),
               product.name,
@@ -315,6 +316,7 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
               product.pricingUnit ?? 'pcs',
               Number(product.minQuantity ?? 0),
               product.estimatedDuration ?? '',
+              product.imageData ?? '',
               product.isActive ? 1 : 0,
             ],
             false,

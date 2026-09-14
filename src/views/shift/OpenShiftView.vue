@@ -16,7 +16,7 @@ const shiftStore = useShiftStore()
 function handleOpenShift() {
   shiftStore.openShift(openingBalance.value)
   cashStore.recordOpeningBalance(openingBalance.value, shiftStore.openedAt)
-  router.push('/shift')
+  router.push('/home')
 }
 </script>
 

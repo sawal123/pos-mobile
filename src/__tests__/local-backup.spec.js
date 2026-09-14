@@ -59,7 +59,7 @@ function seedStores(context) {
   context.cashierStore.setPinConfigured(true)
   context.productStore.$patch({
     products: [
-      { id: 'p-1', name: 'Es Kopi Susu', category: 'Minuman', price: 22000, stock: 18, isActive: true },
+      { id: 'p-1', name: 'Es Kopi Susu', category: 'Minuman', price: 22000, stock: 18, imageData: 'data:image/webp;base64,seed', isActive: true },
       { id: 'p-2', name: 'Croissant Butter', category: 'Makanan', price: 25000, stock: 9, isActive: false },
     ],
     categories: ['Minuman', 'Makanan'],
@@ -172,7 +172,7 @@ function makeValidBackup(overrides = {}) {
       },
       products: {
         products: [
-          { id: 'p-backup', name: 'Latte', category: 'Minuman', price: 28000, stock: 10, isActive: true },
+          { id: 'p-backup', name: 'Latte', category: 'Minuman', price: 28000, stock: 10, imageData: 'data:image/webp;base64,backup', isActive: true },
         ],
         categories: ['Minuman'],
       },
@@ -376,6 +376,13 @@ describe('P7 local backup & restore JSON', () => {
     seedStores(context)
 
     expect(createBackupPayload(context).data.products.products).toHaveLength(2)
+  })
+
+  it('imageData product ikut backup v2', () => {
+    const context = createContext()
+    seedStores(context)
+
+    expect(createBackupPayload(context).data.products.products[0].imageData).toBe('data:image/webp;base64,seed')
   })
 
   it('categories masuk backup', () => {
@@ -588,8 +595,17 @@ describe('P7 local backup & restore JSON', () => {
     restoreBackupPayload(makeValidBackup(), context)
 
     expect(context.productStore.products).toEqual([
-      { id: 'p-backup', name: 'Latte', category: 'Minuman', price: 28000, stock: 10, isActive: true },
+      { id: 'p-backup', name: 'Latte', category: 'Minuman', price: 28000, stock: 10, imageData: 'data:image/webp;base64,backup', isActive: true },
     ])
+  })
+
+  it('restore memulihkan imageData product', () => {
+    const context = createContext()
+    seedStores(context)
+
+    restoreBackupPayload(makeValidBackup(), context)
+
+    expect(context.productStore.products[0].imageData).toBe('data:image/webp;base64,backup')
   })
 
   it('restore mengganti categories, bukan merge', () => {
@@ -944,6 +960,7 @@ describe('P0 backup/restore offline business core', () => {
     legacy.version = 1
     delete legacy.data.cash
     delete legacy.data.stockMovements
+    delete legacy.data.products.products[0].imageData
     legacy.data.transactions.forEach((transaction) => {
       delete transaction.orderStatus
       delete transaction.grossProfit
@@ -960,6 +977,7 @@ describe('P0 backup/restore offline business core', () => {
     expect(result.success).toBe(true)
     expect(context.cashStore.entries).toEqual([])
     expect(context.productStore.stockMovements).toEqual([])
+    expect(context.productStore.products[0].imageData).toBe('')
     expect(context.transactionStore.items[0].orderStatus).toBeNull()
   })
 

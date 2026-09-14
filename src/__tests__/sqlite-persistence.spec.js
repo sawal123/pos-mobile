@@ -617,6 +617,62 @@ describe('P8 sqlite adapter transaction flag', () => {
     }
   })
 
+  it('saveProducts menyimpan imageData ke SQLite', async () => {
+    const adapter = createSQLiteAdapter()
+
+    await adapter.saveProducts(
+      [
+        {
+          id: 'p1',
+          name: 'Kopi',
+          category: 'Minuman',
+          price: 20000,
+          stock: 5,
+          imageData: 'data:image/webp;base64,abc',
+          isActive: true,
+        },
+      ],
+      ['Minuman'],
+    )
+
+    const insertProductCall = fakeDb.run.mock.calls.find(([sql]) => sql.includes('INSERT INTO products'))
+
+    expect(insertProductCall[0]).toContain('image_data')
+    expect(insertProductCall[1]).toContain('data:image/webp;base64,abc')
+  })
+
+  it('loadProducts membaca imageData dari SQLite', async () => {
+    fakeDb.query
+      .mockImplementationOnce(async () => ({ values: [{ name: 'Minuman' }] }))
+      .mockImplementationOnce(async () => ({
+        values: [
+          {
+            id: 'p1',
+            name: 'Kopi',
+            category: 'Minuman',
+            sku: '',
+            cost: 0,
+            price: 20000,
+            stock: 5,
+            unit: 'pcs',
+            min_stock: 0,
+            kind: 'product',
+            pricing_unit: 'pcs',
+            min_quantity: 0,
+            estimated_duration: '',
+            image_data: 'data:image/webp;base64,abc',
+            is_active: 1,
+          },
+        ],
+      }))
+      .mockImplementationOnce(async () => ({ values: [] }))
+
+    const adapter = createSQLiteAdapter()
+    const loaded = await adapter.loadProducts()
+
+    expect(loaded.products[0].imageData).toBe('data:image/webp;base64,abc')
+  })
+
   it('saveCustomers menjalankan db.run dengan transaction flag false', async () => {
     const adapter = createSQLiteAdapter()
 
