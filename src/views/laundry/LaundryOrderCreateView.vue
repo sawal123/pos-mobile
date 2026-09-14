@@ -42,6 +42,7 @@ const paymentChoice = ref('later') // 'later' | 'now'
 const selectedMethod = ref('cash') // 'cash' | 'qris' | 'card'
 const cashReceived = ref('')
 const isSubmitting = ref(false)
+const createdOrderId = ref(null)
 const errorMessage = ref('')
 const validationErrors = reactive({
   customerName: '',
@@ -301,40 +302,57 @@ async function submitOrder() {
       }
     })
 
-    const isPaid = paymentChoice.value === 'now'
-    const paymentMethod = isPaid ? selectedMethod.value : ''
+    // 4. Create Order as unpaid first (avoid creating duplicate order on retry)
+    let order = createdOrderId.value ? transactionStore.items.find((i) => i.id === createdOrderId.value) : null
+    if (!order) {
+      order = transactionStore.createLaundryOrder({
+        customerId: customer.id,
+        customer: customer.name,
+        customerSnapshot: {
+          id: customer.id,
+          name: customer.name,
+          phone: customer.phone,
+          email: customer.email ?? '',
+        },
+        businessSnapshot: {
+          name: businessStore.name,
+          outlet: businessStore.outlet,
+          phone: businessStore.phone,
+          type: businessStore.type,
+        },
+        items: snapshotItems,
+        subtotal: subtotal.value,
+        tax: 0,
+        total: total.value,
+        orderStatus: 'Masuk',
+        paymentStatus: 'unpaid',
+        paymentMethod: '',
+        cashReceived: null,
+        changeAmount: null,
+        estimatedCompletedAt,
+        note: orderNote.value.trim(),
+      })
+      createdOrderId.value = order.id
+    }
 
-    // 4. Create Order
-    const order = transactionStore.createLaundryOrder({
-      customerId: customer.id,
-      customer: customer.name,
-      customerSnapshot: {
-        id: customer.id,
-        name: customer.name,
-        phone: customer.phone,
-      },
-      businessSnapshot: {
-        name: businessStore.name,
-        outlet: businessStore.outlet,
-        phone: businessStore.phone,
-        type: businessStore.type,
-      },
-      items: snapshotItems,
-      subtotal: subtotal.value,
-      tax: 0,
-      total: total.value,
-      orderStatus: 'Masuk',
-      paymentStatus: isPaid ? 'paid' : 'unpaid',
-      paymentMethod,
-      cashReceived: (isPaid && selectedMethod.value === 'cash') ? parsedCashReceived.value : null,
-      changeAmount: (isPaid && selectedMethod.value === 'cash') ? changeAmount.value : null,
-      estimatedCompletedAt,
-      note: orderNote.value.trim(),
+    // 5. If Bayar Nanti: selesai
+    if (paymentChoice.value === 'later') {
+      await router.push(`/laundry/orders/${order.id}`)
+      return
+    }
+
+    // 6. If Bayar Sekarang: panggil authoritative settlement flow
+    const settlement = transactionStore.settleLaundryOrderPayment({
+      orderId: order.id,
+      paymentMethod: selectedMethod.value,
+      cashReceived: selectedMethod.value === 'cash' ? parsedCashReceived.value : null,
+      changeAmount: selectedMethod.value === 'cash' ? changeAmount.value : null,
+      cashStore,
     })
 
-    // 5. If paid by CASH right now, record cash in cashStore
-    if (isPaid && selectedMethod.value === 'cash') {
-      cashStore.recordSalePayment(order)
+    if (!settlement.success) {
+      errorMessage.value = settlement.error || 'Pencatatan pembayaran kas gagal. Order disimpan sebagai Belum Bayar.'
+      return
     }
 
     await router.push(`/laundry/orders/${order.id}`)

@@ -1,6 +1,6 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import BottomNavigation from '@/components/layout/BottomNavigation.vue'
 import { getBottomNavItems, getOperationalMenuItems } from '@/navigation/operationalMenu'
@@ -382,7 +382,7 @@ describe('Laundry Transaction and Order Flow', () => {
       expect(order.id).toBeTruthy()
       expect(order.orderNumber).toMatch(/^LDR-\d{8}-\d{4}$/)
       expect(order.customerId).toBe('cust-123')
-      expect(order.customerSnapshot).toEqual({ id: 'cust-123', name: 'Dewi', phone: '081222333444' })
+      expect(order.customerSnapshot).toEqual({ id: 'cust-123', name: 'Dewi', phone: '081222333444', email: '' })
       expect(order.businessSnapshot).toEqual({ name: 'Berkah Laundry', outlet: 'Outlet 1' })
       expect(order.items.length).toBe(1)
       expect(order.subtotal).toBe(16000)
@@ -443,24 +443,58 @@ describe('Laundry Transaction and Order Flow', () => {
       expect(order.orderStatus).toBe('Selesai')
     })
 
-    it('status tidak boleh lompat mundur secara tidak sengaja', () => {
+    it('strict lifecycle: hanya menerima status sama (idempotent) atau step berikutnya (currentIndex + 1)', () => {
       const order = ctx.transactionStore.createLaundryOrder({
         customer: 'Kiki',
         items: [{ serviceId: 's1', name: 'Cuci', qty: 1, price: 10000 }],
       })
+      expect(order.orderStatus).toBe('Masuk')
+      const initialUpdatedAt = order.updatedAt
 
-      ctx.transactionStore.updateOrderStatus(order.id, 'Siap Diambil')
+      // Same status: allowed (idempotent / no-op), updatedAt tidak berubah
+      const sameStatus = ctx.transactionStore.updateOrderStatus(order.id, 'Masuk')
+      expect(sameStatus).toBe(true)
+      expect(order.orderStatus).toBe('Masuk')
+      expect(order.updatedAt).toBe(initialUpdatedAt)
+
+      // Ditolak: Masuk -> Siap Diambil (skip maju)
+      expect(ctx.transactionStore.updateOrderStatus(order.id, 'Siap Diambil')).toBe(false)
+      expect(order.orderStatus).toBe('Masuk')
+
+      // Ditolak: Masuk -> Selesai (skip maju)
+      expect(ctx.transactionStore.updateOrderStatus(order.id, 'Selesai')).toBe(false)
+      expect(order.orderStatus).toBe('Masuk')
+
+      // Sukses: Masuk -> Diproses
+      expect(ctx.transactionStore.updateOrderStatus(order.id, 'Diproses')).toBe(true)
+      expect(order.orderStatus).toBe('Diproses')
+
+      // Ditolak: Diproses -> Selesai (skip maju)
+      expect(ctx.transactionStore.updateOrderStatus(order.id, 'Selesai')).toBe(false)
+      expect(order.orderStatus).toBe('Diproses')
+
+      // Ditolak: backward Diproses -> Masuk
+      expect(ctx.transactionStore.updateOrderStatus(order.id, 'Masuk')).toBe(false)
+      expect(order.orderStatus).toBe('Diproses')
+
+      // Sukses: Diproses -> Siap Diambil
+      expect(ctx.transactionStore.updateOrderStatus(order.id, 'Siap Diambil')).toBe(true)
       expect(order.orderStatus).toBe('Siap Diambil')
 
-      // Attempt to move backward to Masuk
-      const movedBack = ctx.transactionStore.updateOrderStatus(order.id, 'Masuk')
-      expect(movedBack).toBe(false)
+      // Ditolak: backward Siap Diambil -> Masuk
+      expect(ctx.transactionStore.updateOrderStatus(order.id, 'Masuk')).toBe(false)
+
+      // Ditolak: backward Siap Diambil -> Diproses
+      expect(ctx.transactionStore.updateOrderStatus(order.id, 'Diproses')).toBe(false)
       expect(order.orderStatus).toBe('Siap Diambil')
 
-      // Attempt to move backward to Diproses
-      const movedDiproses = ctx.transactionStore.updateOrderStatus(order.id, 'Diproses')
-      expect(movedDiproses).toBe(false)
-      expect(order.orderStatus).toBe('Siap Diambil')
+      // Sukses: Siap Diambil -> Selesai
+      expect(ctx.transactionStore.updateOrderStatus(order.id, 'Selesai')).toBe(true)
+      expect(order.orderStatus).toBe('Selesai')
+
+      // Ditolak: backward Selesai -> Diproses
+      expect(ctx.transactionStore.updateOrderStatus(order.id, 'Diproses')).toBe(false)
+      expect(order.orderStatus).toBe('Selesai')
     })
   })
 
@@ -481,74 +515,157 @@ describe('Laundry Transaction and Order Flow', () => {
       expect(ctx.cashStore.entries.length).toBe(initialEntriesCount)
     })
 
-    it('Bayar Sekarang CASH mencatat Kas Masuk tepat satu kali', () => {
-      const initialBalance = ctx.cashStore.balance
-
+    it('settleLaundryOrderPayment: unpaid + cash success -> paid dan tepat 1 cash entry', () => {
       const order = ctx.transactionStore.createLaundryOrder({
         customer: 'Nina',
-        paymentStatus: 'paid',
-        paymentMethod: 'cash',
-        items: [{ serviceId: 's1', name: 'Cuci', qty: 1, price: 25000, cost: 5000 }],
-        total: 25000,
+        paymentStatus: 'unpaid',
+        items: [{ serviceId: 's1', name: 'Cuci', qty: 1, price: 50000, cost: 10000 }],
+        total: 50000,
       })
 
-      ctx.cashStore.recordSalePayment(order)
+      const initialEntriesCount = ctx.cashStore.entries.length
+      const initialBalance = ctx.cashStore.balance
 
-      expect(ctx.cashStore.balance).toBe(initialBalance + 25000)
+      const res = ctx.transactionStore.settleLaundryOrderPayment({
+        orderId: order.id,
+        paymentMethod: 'cash',
+        cashReceived: 60000,
+        changeAmount: 10000,
+        cashStore: ctx.cashStore,
+      })
+
+      expect(res.success).toBe(true)
+      expect(res.duplicated).toBe(false)
+      expect(order.paymentStatus).toBe('paid')
+      expect(order.status).toBe('paid')
+      expect(order.paymentMethod).toBe('cash')
+      expect(order.cashReceived).toBe(60000)
+      expect(order.changeAmount).toBe(10000)
+
+      expect(ctx.cashStore.entries.length).toBe(initialEntriesCount + 1)
+      expect(ctx.cashStore.balance).toBe(initialBalance + 50000)
       expect(ctx.cashStore.entries.filter((e) => e.referenceId === `sale-${order.id}`).length).toBe(1)
     })
 
-    it('Bayar Sekarang QRIS/non-cash tidak menambah cash balance', () => {
-      const initialBalance = ctx.cashStore.balance
-
+    it('settleLaundryOrderPayment: retry pada order yang sudah paid bersifat idempotent', () => {
       const order = ctx.transactionStore.createLaundryOrder({
-        customer: 'Oki',
-        paymentStatus: 'paid',
-        paymentMethod: 'qris',
-        items: [{ serviceId: 's1', name: 'Cuci', qty: 1, price: 30000, cost: 8000 }],
-        total: 30000,
-      })
-
-      const res = ctx.cashStore.recordSalePayment(order)
-      expect(res.skipped).toBe(true)
-      expect(ctx.cashStore.balance).toBe(initialBalance)
-    })
-
-    it('order unpaid dapat dibayar kemudian dan idempotent (pembayaran kedua tidak duplicate kas)', () => {
-      const order = ctx.transactionStore.createLaundryOrder({
-        customer: 'Putra',
+        customer: 'Rudi',
         paymentStatus: 'unpaid',
         items: [{ serviceId: 's1', name: 'Cuci', qty: 1, price: 35000, cost: 10000 }],
         total: 35000,
       })
 
-      expect(order.paymentStatus).toBe('unpaid')
       const initialBalance = ctx.cashStore.balance
 
-      // First payment
-      const payRes1 = ctx.transactionStore.payLaundryOrder(order.id, {
+      // First settlement
+      const res1 = ctx.transactionStore.settleLaundryOrderPayment({
+        orderId: order.id,
         paymentMethod: 'cash',
         cashReceived: 50000,
         changeAmount: 15000,
+        cashStore: ctx.cashStore,
       })
-      expect(payRes1.success).toBe(true)
+      expect(res1.success).toBe(true)
+      expect(res1.duplicated).toBe(false)
       expect(order.paymentStatus).toBe('paid')
-      ctx.cashStore.recordSalePayment(order)
-
       expect(ctx.cashStore.balance).toBe(initialBalance + 35000)
       expect(ctx.cashStore.entries.filter((e) => e.referenceId === `sale-${order.id}`).length).toBe(1)
 
-      // Second payment attempt (idempotent guard)
-      const payRes2 = ctx.transactionStore.payLaundryOrder(order.id, {
+      // Retry settlement
+      const res2 = ctx.transactionStore.settleLaundryOrderPayment({
+        orderId: order.id,
         paymentMethod: 'cash',
         cashReceived: 50000,
         changeAmount: 15000,
+        cashStore: ctx.cashStore,
       })
-      expect(payRes2.duplicated).toBe(true)
-
-      const cashRecord2 = ctx.cashStore.recordSalePayment(order)
-      expect(cashRecord2.duplicated).toBe(true)
+      expect(res2.success).toBe(true)
+      expect(res2.duplicated).toBe(true)
       expect(ctx.cashStore.balance).toBe(initialBalance + 35000)
+      expect(ctx.cashStore.entries.filter((e) => e.referenceId === `sale-${order.id}`).length).toBe(1)
+    })
+
+    it('settleLaundryOrderPayment: QRIS dan Card menjadi paid tanpa membuat cash entry', () => {
+      const orderQris = ctx.transactionStore.createLaundryOrder({
+        customer: 'Deni',
+        paymentStatus: 'unpaid',
+        items: [{ serviceId: 's1', name: 'Cuci', qty: 1, price: 25000 }],
+        total: 25000,
+      })
+
+      const orderCard = ctx.transactionStore.createLaundryOrder({
+        customer: 'Sari',
+        paymentStatus: 'unpaid',
+        items: [{ serviceId: 's1', name: 'Cuci', qty: 1, price: 40000 }],
+        total: 40000,
+      })
+
+      const initialCashEntries = ctx.cashStore.entries.length
+
+      // QRIS
+      const resQris = ctx.transactionStore.settleLaundryOrderPayment({
+        orderId: orderQris.id,
+        paymentMethod: 'qris',
+        cashStore: ctx.cashStore,
+      })
+      expect(resQris.success).toBe(true)
+      expect(orderQris.paymentStatus).toBe('paid')
+      expect(orderQris.paymentMethod).toBe('qris')
+      expect(ctx.cashStore.entries.length).toBe(initialCashEntries)
+
+      // Card
+      const resCard = ctx.transactionStore.settleLaundryOrderPayment({
+        orderId: orderCard.id,
+        paymentMethod: 'card',
+        cashStore: ctx.cashStore,
+      })
+      expect(resCard.success).toBe(true)
+      expect(orderCard.paymentStatus).toBe('paid')
+      expect(orderCard.paymentMethod).toBe('card')
+      expect(ctx.cashStore.entries.length).toBe(initialCashEntries)
+    })
+
+    it('settleLaundryOrderPayment: kegagalan cashStore mempertahankan status unpaid dan retry berhasil', () => {
+      const order = ctx.transactionStore.createLaundryOrder({
+        customer: 'Toni',
+        paymentStatus: 'unpaid',
+        items: [{ serviceId: 's1', name: 'Cuci', qty: 1, price: 30000 }],
+        total: 30000,
+      })
+
+      // Mock cashStore failure
+      const failingCashStore = {
+        recordSalePayment: vi.fn().mockReturnValue({
+          success: false,
+          error: 'simulated failure',
+        }),
+      }
+
+      const failRes = ctx.transactionStore.settleLaundryOrderPayment({
+        orderId: order.id,
+        paymentMethod: 'cash',
+        cashReceived: 50000,
+        cashStore: failingCashStore,
+      })
+
+      expect(failRes.success).toBe(false)
+      expect(failRes.error).toBe('simulated failure')
+      expect(order.paymentStatus).toBe('unpaid')
+      expect(order.status).toBe('unpaid')
+
+      // Retry with normal cashStore succeeds
+      const retryRes = ctx.transactionStore.settleLaundryOrderPayment({
+        orderId: order.id,
+        paymentMethod: 'cash',
+        cashReceived: 50000,
+        changeAmount: 20000,
+        cashStore: ctx.cashStore,
+      })
+
+      expect(retryRes.success).toBe(true)
+      expect(order.paymentStatus).toBe('paid')
+      expect(order.status).toBe('paid')
+      expect(order.paymentMethod).toBe('cash')
       expect(ctx.cashStore.entries.filter((e) => e.referenceId === `sale-${order.id}`).length).toBe(1)
     })
   })

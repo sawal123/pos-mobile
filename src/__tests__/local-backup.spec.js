@@ -1028,4 +1028,91 @@ describe('P0 backup/restore offline business core', () => {
     expect(context.transactionStore.items[0].grossProfit).toBe(20000)
     expect(context.transactionStore.items[0].items[0].hppSnapshot).toBe(55000)
   })
+
+  describe('Laundry customerSnapshot backup and restore compatibility', () => {
+    it('creates Laundry order without email, validates backup, restores with email === ""', () => {
+      const context = createContext()
+      makeBusinessReady(context.businessStore, { type: 'Laundry' })
+      context.transactionStore.$patch({ items: [], lastTransaction: null })
+      context.customerStore.$patch({ customers: [] })
+
+      // 1. Create customer without explicit email
+      const custResult = context.customerStore.createCustomer({
+        name: 'Siti Rahma',
+        phone: '081234567890',
+      })
+      expect(custResult.success).toBe(true)
+      const customer = custResult.customer
+
+      // 2. Create Laundry order using customer (no email explicit)
+      const order = context.transactionStore.createLaundryOrder({
+        customerId: customer.id,
+        customer: customer.name,
+        customerSnapshot: {
+          id: customer.id,
+          name: customer.name,
+          phone: customer.phone,
+        },
+        items: [{ serviceId: 's1', name: 'Cuci Kiloan', qty: 2, price: 10000, cost: 2000 }],
+        subtotal: 20000,
+        total: 20000,
+        paymentStatus: 'unpaid',
+      })
+
+      // 3. Initial customerSnapshot represents real Laundry flow
+      expect(order.customerSnapshot.id).toBe(customer.id)
+      expect(order.customerSnapshot.name).toBe(customer.name)
+      expect(order.customerSnapshot.phone).toBe(customer.phone)
+
+      // 4. createBackupPayload()
+      const backup = createBackupPayload(context)
+
+      // 5. validateBackupPayload() => valid
+      const validation = validateBackupPayload(backup)
+      expect(validation.valid).toBe(true)
+
+      // 6. Clear state
+      context.transactionStore.$patch({ items: [], lastTransaction: null })
+      context.customerStore.$patch({ customers: [] })
+
+      // 7. restoreBackupPayload()
+      const restoreResult = restoreBackupPayload(backup, context)
+      expect(restoreResult.success).toBe(true)
+
+      // 8. Restored customerSnapshot
+      expect(context.transactionStore.items).toHaveLength(1)
+      const restoredOrder = context.transactionStore.items[0]
+      expect(restoredOrder.customerSnapshot.id).toBe(customer.id)
+      expect(restoredOrder.customerSnapshot.name).toBe(customer.name)
+      expect(restoredOrder.customerSnapshot.phone).toBe(customer.phone)
+      expect(restoredOrder.customerSnapshot.email).toBe('')
+    })
+
+    it('regression: backup customer snapshot with email preserves email', () => {
+      const context = createContext()
+      makeBusinessReady(context.businessStore, { type: 'Laundry' })
+      context.transactionStore.$patch({ items: [], lastTransaction: null })
+
+      const order = context.transactionStore.createLaundryOrder({
+        customer: 'Budi Laundry',
+        customerSnapshot: {
+          id: 'cust-email-1',
+          name: 'Budi Laundry',
+          phone: '081299998888',
+          email: 'budi@example.com',
+        },
+        items: [{ serviceId: 's1', name: 'Dry Clean', qty: 1, price: 50000 }],
+        total: 50000,
+      })
+
+      const backup = createBackupPayload(context)
+      expect(validateBackupPayload(backup).valid).toBe(true)
+
+      context.transactionStore.$patch({ items: [], lastTransaction: null })
+      const restoreResult = restoreBackupPayload(backup, context)
+      expect(restoreResult.success).toBe(true)
+
+      expect(context.transactionStore.items[0].customerSnapshot.email).toBe('budi@example.com')
+    })
+  })
 })

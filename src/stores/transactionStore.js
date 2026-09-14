@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 
 import { transactions } from '@/data/transactions'
+import { useCashStore } from '@/stores/cashStore'
 
 export const ORDER_LIFECYCLE = ['Masuk', 'Diproses', 'Siap Diambil', 'Selesai']
 
@@ -83,6 +84,19 @@ function calculateGrossProfit(items) {
   return items.reduce((sum, item) => sum + ((item.price * item.qty) - (item.hppSnapshot * item.qty)), 0)
 }
 
+function normalizeCustomerSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') {
+    return null
+  }
+
+  return {
+    id: snapshot.id ?? null,
+    name: snapshot.name ?? '',
+    phone: snapshot.phone != null ? String(snapshot.phone) : '',
+    email: snapshot.email != null ? String(snapshot.email) : '',
+  }
+}
+
 export const useTransactionStore = defineStore('transaction', {
   state: () => ({
     items: transactions,
@@ -101,7 +115,7 @@ export const useTransactionStore = defineStore('transaction', {
         invoiceNumber: createInvoiceNumber(),
         customer: payload.customer ?? 'Walk-in Customer',
         customerId: payload.customerId ?? null,
-        customerSnapshot: payload.customerSnapshot ? { ...payload.customerSnapshot } : null,
+        customerSnapshot: normalizeCustomerSnapshot(payload.customerSnapshot),
         businessSnapshot: payload.businessSnapshot ? { ...payload.businessSnapshot } : null,
         status: 'paid',
         orderStatus: payload.orderStatus ?? null,
@@ -136,7 +150,7 @@ export const useTransactionStore = defineStore('transaction', {
         invoiceNumber: orderNumber,
         customer: payload.customer ?? payload.customerSnapshot?.name ?? 'Pelanggan Laundry',
         customerId: payload.customerId ?? null,
-        customerSnapshot: payload.customerSnapshot ? { ...payload.customerSnapshot } : null,
+        customerSnapshot: normalizeCustomerSnapshot(payload.customerSnapshot),
         businessSnapshot: payload.businessSnapshot ? { ...payload.businessSnapshot } : null,
         status: paymentStatus,
         orderStatus: payload.orderStatus ?? 'Masuk',
@@ -168,8 +182,17 @@ export const useTransactionStore = defineStore('transaction', {
       const currentIndex = ORDER_LIFECYCLE.indexOf(transaction.orderStatus)
       const targetIndex = ORDER_LIFECYCLE.indexOf(status)
 
-      // Prevent moving backwards in lifecycle
-      if (currentIndex !== -1 && targetIndex < currentIndex) {
+      if (currentIndex === -1 || targetIndex === -1) {
+        return false
+      }
+
+      // Same status: allowed (idempotent / no-op), do NOT touch updatedAt
+      if (currentIndex === targetIndex) {
+        return true
+      }
+
+      // Strictly allow ONLY the next immediate step (currentIndex + 1)
+      if (targetIndex !== currentIndex + 1) {
         return false
       }
 
@@ -195,28 +218,102 @@ export const useTransactionStore = defineStore('transaction', {
 
       return this.updateOrderStatus(id, nextStatus)
     },
-    payLaundryOrder(id, paymentPayload = {}) {
-      const transaction = this.items.find((item) => item.id === id)
-      if (!transaction) {
+    settleLaundryOrderPayment({
+      orderId,
+      paymentMethod = 'cash',
+      cashReceived = null,
+      changeAmount = null,
+      cashStore = null,
+    }) {
+      const order = this.items.find((item) => item.id === orderId)
+      if (!order) {
         return { success: false, error: 'Order tidak ditemukan' }
       }
 
-      if (transaction.paymentStatus === 'paid') {
-        return { success: true, transaction, duplicated: true }
+      // 2. Jika sudah paid: return success duplicated/idempotent, jangan buat cash entry lagi
+      if (order.paymentStatus === 'paid') {
+        return { success: true, order, transaction: order, duplicated: true }
       }
 
-      transaction.paymentStatus = 'paid'
-      transaction.status = 'paid'
-      transaction.paymentMethod = paymentPayload.paymentMethod ?? 'cash'
-      transaction.cashReceived = paymentPayload.cashReceived ?? null
-      transaction.changeAmount = paymentPayload.changeAmount ?? null
-      transaction.updatedAt = new Date().toISOString()
+      const method = (paymentMethod || 'cash').toLowerCase()
 
-      if (this.lastTransaction?.id === id) {
-        this.lastTransaction = transaction
+      if (method === 'cash') {
+        // 3. Validasi payment
+        const received = cashReceived != null ? Number(cashReceived) : order.total
+        if (Number.isNaN(received) || received < order.total) {
+          return { success: false, error: 'Uang diterima kurang dari total pembayaran.' }
+        }
+
+        const calculatedChange = changeAmount != null
+          ? Number(changeAmount)
+          : Math.max(0, received - order.total)
+
+        // 4 & 5. Pastikan cashStore.recordSalePayment berhasil
+        const activeCashStore = cashStore || useCashStore()
+        if (!activeCashStore || typeof activeCashStore.recordSalePayment !== 'function') {
+          return { success: false, error: 'Cash store tidak tersedia untuk mencatat pembayaran tunai.' }
+        }
+
+        const cashResult = activeCashStore.recordSalePayment({
+          id: order.id,
+          total: order.total,
+          paymentMethod: 'cash',
+          invoiceNumber: order.orderNumber || order.invoiceNumber || order.id,
+          createdAt: new Date().toISOString(),
+        })
+
+        if (!cashResult || cashResult.success === false) {
+          // Jika pencatatan cash gagal:
+          // - order WAJIB tetap unpaid
+          // - jangan ubah paymentStatus
+          // - jangan ubah paymentMethod menjadi cash final
+          // - return success false + error
+          return {
+            success: false,
+            error: cashResult?.error || 'Gagal mencatat kas masuk untuk pembayaran tunai.',
+          }
+        }
+
+        // 6. HANYA setelah cash entry berhasil:
+        order.paymentStatus = 'paid'
+        order.status = 'paid'
+        order.paymentMethod = 'cash'
+        order.cashReceived = received
+        order.changeAmount = calculatedChange
+        order.updatedAt = new Date().toISOString()
+
+        if (this.lastTransaction?.id === order.id) {
+          this.lastTransaction = order
+        }
+
+        return { success: true, order, transaction: order, duplicated: false }
       }
 
-      return { success: true, transaction, duplicated: false }
+      // NON-CASH (QRIS / Card)
+      // - tidak membuat cash entry
+      // - langsung mark paid setelah validation
+      // - tetap idempotent
+      order.paymentStatus = 'paid'
+      order.status = 'paid'
+      order.paymentMethod = method
+      order.cashReceived = null
+      order.changeAmount = null
+      order.updatedAt = new Date().toISOString()
+
+      if (this.lastTransaction?.id === order.id) {
+        this.lastTransaction = order
+      }
+
+      return { success: true, order, transaction: order, duplicated: false }
+    },
+    payLaundryOrder(id, paymentPayload = {}) {
+      return this.settleLaundryOrderPayment({
+        orderId: id,
+        paymentMethod: paymentPayload.paymentMethod ?? 'cash',
+        cashReceived: paymentPayload.cashReceived ?? null,
+        changeAmount: paymentPayload.changeAmount ?? null,
+        cashStore: paymentPayload.cashStore ?? null,
+      })
     },
     clearLastTransaction() {
       this.lastTransaction = null

@@ -124,14 +124,17 @@ function submitPayment() {
   isProcessingPayment.value = true
 
   try {
-    const result = transactionStore.payLaundryOrder(order.value.id, {
+    const result = transactionStore.settleLaundryOrderPayment({
+      orderId: order.value.id,
       paymentMethod: selectedPayMethod.value,
       cashReceived: selectedPayMethod.value === 'cash' ? parsedCashReceived.value : null,
       changeAmount: selectedPayMethod.value === 'cash' ? changeAmount.value : null,
+      cashStore,
     })
 
-    if (result.success && selectedPayMethod.value === 'cash') {
-      cashStore.recordSalePayment(order.value)
+    if (!result.success) {
+      paymentError.value = result.error || 'Gagal memproses pembayaran.'
+      return
     }
 
     showPaymentModal.value = false
