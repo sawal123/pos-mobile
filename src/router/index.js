@@ -31,6 +31,9 @@ import CloudLoginView from '../views/settings/CloudLoginView.vue'
 import ReceiptView from '../views/transactions/ReceiptView.vue'
 import TransactionDetailView from '../views/transactions/TransactionDetailView.vue'
 import TransactionsView from '../views/transactions/TransactionsView.vue'
+import LaundryOrdersView from '../views/laundry/LaundryOrdersView.vue'
+import LaundryOrderCreateView from '../views/laundry/LaundryOrderCreateView.vue'
+import LaundryOrderDetailView from '../views/laundry/LaundryOrderDetailView.vue'
 
 export function resolveStartupRoute({ businessStore, cashierStore, shiftStore }) {
   if (!businessStore.isSetup) {
@@ -202,6 +205,21 @@ const routes = [
         name: 'cloud',
         component: CloudLoginView,
       },
+      {
+        path: 'laundry/orders',
+        name: 'laundry-orders',
+        component: LaundryOrdersView,
+      },
+      {
+        path: 'laundry/orders/create',
+        name: 'laundry-order-create',
+        component: LaundryOrderCreateView,
+      },
+      {
+        path: 'laundry/orders/:id',
+        name: 'laundry-order-detail',
+        component: LaundryOrderDetailView,
+      },
     ],
   },
 ]
@@ -213,6 +231,9 @@ const businessRequiredRoutes = new Set([
   'shift',
   'close-shift',
   'pos',
+  'laundry-orders',
+  'laundry-order-create',
+  'laundry-order-detail',
   'products',
   'stock',
   'product-create',
@@ -240,6 +261,9 @@ const pinRequiredRoutes = new Set([
   'shift',
   'close-shift',
   'pos',
+  'laundry-orders',
+  'laundry-order-create',
+  'laundry-order-detail',
   'products',
   'stock',
   'product-create',
@@ -266,6 +290,9 @@ const shiftRequiredRoutes = new Set([
   'shift',
   'close-shift',
   'pos',
+  'laundry-orders',
+  'laundry-order-create',
+  'laundry-order-detail',
   'cash',
   'payment',
   'payment-success',
@@ -298,6 +325,17 @@ export function createAppRouter() {
 
     if (!shiftStore.isOpen && shiftRequiredRoutes.has(to.name)) {
       return { name: 'open-shift' }
+    }
+
+    if (to.name === 'pos' && businessStore.normalizedType === 'Laundry') {
+      return { name: 'laundry-orders' }
+    }
+
+    if (
+      ['laundry-orders', 'laundry-order-create', 'laundry-order-detail'].includes(to.name)
+      && businessStore.normalizedType !== 'Laundry'
+    ) {
+      return { name: 'pos' }
     }
 
     if (to.name === 'payment' && !cartStore.items.length) {

@@ -54,7 +54,7 @@ function normalizeTransactionForBackup(transaction) {
     ? transaction.grossProfit
     : items.reduce((sum, item) => sum + computeItemGrossProfit(item), 0)
 
-  return {
+  const normalized = {
     id: transaction.id,
     invoiceNumber: typeof transaction.invoiceNumber === 'string' ? transaction.invoiceNumber : String(transaction.id ?? ''),
     customer: typeof transaction.customer === 'string' ? transaction.customer : 'Walk-in Customer',
@@ -63,6 +63,7 @@ function normalizeTransactionForBackup(transaction) {
     businessSnapshot: transaction.businessSnapshot ? { ...transaction.businessSnapshot } : null,
     status: typeof transaction.status === 'string' ? transaction.status : 'paid',
     orderStatus: typeof transaction.orderStatus === 'string' ? transaction.orderStatus : null,
+    paymentStatus: typeof transaction.paymentStatus === 'string' ? transaction.paymentStatus : (transaction.status === 'paid' ? 'paid' : 'unpaid'),
     items,
     itemCount,
     subtotal: Number.isFinite(transaction.subtotal) ? transaction.subtotal : 0,
@@ -73,7 +74,20 @@ function normalizeTransactionForBackup(transaction) {
     cashReceived: Number.isFinite(transaction.cashReceived) ? transaction.cashReceived : null,
     changeAmount: Number.isFinite(transaction.changeAmount) ? transaction.changeAmount : null,
     createdAt: isValidDateString(transaction.createdAt) ? transaction.createdAt : new Date().toISOString(),
+    updatedAt: isValidDateString(transaction.updatedAt) ? transaction.updatedAt : (isValidDateString(transaction.createdAt) ? transaction.createdAt : new Date().toISOString()),
   }
+
+  if (transaction.orderNumber !== undefined) {
+    normalized.orderNumber = transaction.orderNumber
+  }
+  if (transaction.estimatedCompletedAt !== undefined) {
+    normalized.estimatedCompletedAt = transaction.estimatedCompletedAt
+  }
+  if (transaction.note !== undefined) {
+    normalized.note = transaction.note
+  }
+
+  return normalized
 }
 
 function normalizeTransactionForRestore(transaction) {
@@ -480,7 +494,7 @@ export function restoreBackupPayload(payload, stores) {
     lastTransaction: null,
   })
 
-  stores.cartStore.clearCart()
+  stores.cartStore?.clearCart?.()
 
   return {
     success: true,

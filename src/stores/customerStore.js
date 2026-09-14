@@ -41,6 +41,34 @@ export const useCustomerStore = defineStore('customer', {
     getCustomerById(id) {
       return this.customers.find((customer) => String(customer.id) === String(id)) ?? null
     },
+    findByPhone(phone) {
+      const cleanPhone = normalizeText(phone)
+      if (!cleanPhone) return null
+      return this.customers.find((customer) => normalizeText(customer.phone) === cleanPhone) ?? null
+    },
+    findOrCreateCustomer(payload) {
+      const phone = normalizeText(payload?.phone)
+      const name = normalizeText(payload?.name)
+      const existing = this.findByPhone(phone)
+
+      if (existing) {
+        if (name && !existing.name) {
+          existing.name = name
+        }
+        return {
+          success: true,
+          customer: existing,
+          isNew: false,
+          errors: {},
+        }
+      }
+
+      const result = this.createCustomer(payload)
+      return {
+        ...result,
+        isNew: Boolean(result.customer),
+      }
+    },
     createCustomer(payload) {
       const { isValid, errors, values } = validateCustomerInput(payload)
 

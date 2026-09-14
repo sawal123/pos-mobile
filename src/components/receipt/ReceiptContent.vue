@@ -47,12 +47,16 @@ const showCashSummary = computed(() => (
 
     <section class="space-y-2 border-b border-dashed border-zinc-300 pb-4">
       <div class="flex items-start justify-between gap-4">
-        <span class="text-ink-secondary">Invoice</span>
-        <span class="text-right font-medium">{{ transaction.invoiceNumber || transaction.id }}</span>
+        <span class="text-ink-secondary">{{ transaction.orderNumber ? 'No. Order' : 'Invoice' }}</span>
+        <span class="text-right font-medium">{{ transaction.orderNumber || transaction.invoiceNumber || transaction.id }}</span>
       </div>
       <div class="flex items-start justify-between gap-4">
         <span class="text-ink-secondary">Tanggal</span>
         <span class="text-right font-medium">{{ formatDateTime(transaction.createdAt) }}</span>
+      </div>
+      <div v-if="transaction.estimatedCompletedAt" class="flex items-start justify-between gap-4">
+        <span class="text-ink-secondary">Estimasi Selesai</span>
+        <span class="text-right font-medium">{{ formatDateTime(transaction.estimatedCompletedAt) }}</span>
       </div>
       <div class="flex items-start justify-between gap-4">
         <span class="text-ink-secondary">Customer</span>
