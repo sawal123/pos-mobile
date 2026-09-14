@@ -18,6 +18,7 @@ import { useProductStore } from '@/stores/productStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import CashView from '@/views/cash/CashView.vue'
 import HomeView from '@/views/home/HomeView.vue'
+import PosView from '@/views/pos/PosView.vue'
 import SettingsView from '@/views/settings/SettingsView.vue'
 import StockView from '@/views/stock/StockView.vue'
 
@@ -166,6 +167,28 @@ describe('home menu navigation', () => {
     expect(wrapper.findAll('svg')).toHaveLength(BOTTOM_NAV_LIMIT)
   })
 
+  it('active tab tidak memakai full bg-primary style lama', async () => {
+    const context = createContext()
+    const wrapper = await mountWithRouter(BottomNavigation, context)
+    const activeHome = wrapper.find('[href="/home"]')
+
+    expect(activeHome.classes()).not.toContain('bg-primary')
+    expect(activeHome.find('.bg-primary').exists()).toBe(true)
+  })
+
+  it('Lainnya tetap membuka sheet', async () => {
+    const context = createContext()
+    const wrapper = await mountWithRouter(BottomNavigation, context)
+
+    expect(wrapper.text()).not.toContain('Pengeluaran')
+
+    await wrapper.find('button[data-testid="bottom-nav-item"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Pengeluaran')
+    expect(wrapper.text()).toContain('Settings')
+  })
+
   it('navigation tetap aman ketika shift belum dibuka', async () => {
     const context = createContext()
     context.shiftStore.closeShift()
@@ -179,5 +202,38 @@ describe('home menu navigation', () => {
     await flushPromises()
 
     expect(context.router.currentRoute.value.fullPath).toBe('/shift/open')
+  })
+})
+
+describe('POS compact transaction view', () => {
+  it('POS tidak lagi render hero dan summary non-operasional', async () => {
+    const context = createContext()
+    const wrapper = await mountWithRouter(PosView, context)
+
+    expect(wrapper.text()).not.toContain('Point Of Sale')
+    expect(wrapper.text()).not.toContain('Produk Aktif')
+    expect(wrapper.text()).not.toContain('Omzet Hari Ini')
+    expect(wrapper.text()).not.toContain('Estimasi Laba Kotor')
+    expect(wrapper.text()).not.toContain('Kas Masuk')
+    expect(wrapper.text()).not.toContain('Kas Keluar')
+    expect(wrapper.text()).not.toContain('Saldo Kas')
+    expect(wrapper.text()).not.toContain('Stok Minimum')
+    expect(wrapper.text()).not.toContain('Product Browser')
+  })
+
+  it('search dan category chips langsung tersedia', async () => {
+    const context = createContext()
+    const wrapper = await mountWithRouter(PosView, context)
+
+    expect(wrapper.find('input[placeholder="Cari produk..."]').exists()).toBe(true)
+    expect(wrapper.findAll('button').map((button) => button.text())).toContain('Semua')
+    expect(wrapper.findAll('button').map((button) => button.text())).toContain('Minuman')
+  })
+
+  it('product grid mobile menggunakan 2 kolom', async () => {
+    const context = createContext()
+    const wrapper = await mountWithRouter(PosView, context)
+
+    expect(wrapper.find('[data-testid="pos-product-grid"]').classes()).toContain('grid-cols-2')
   })
 })

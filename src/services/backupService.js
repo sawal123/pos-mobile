@@ -94,7 +94,7 @@ function normalizeTransactionForRestore(transaction) {
 
 function buildProductData(productStore) {
   return {
-    products: productStore.products.map((product) => ({ ...product })),
+    products: productStore.products.map(normalizeProductForRestore),
     categories: [...productStore.categories],
   }
 }
@@ -154,9 +154,20 @@ function validateProductsData(productsSection) {
     if (!categorySet.has(product.category)) {
       return 'File backup tidak valid.'
     }
+
+    if (product.imageData !== undefined && typeof product.imageData !== 'string') {
+      return 'File backup tidak valid.'
+    }
   }
 
   return ''
+}
+
+function normalizeProductForRestore(product) {
+  return {
+    ...product,
+    imageData: typeof product.imageData === 'string' ? product.imageData : '',
+  }
 }
 
 function validateCustomersData(customers) {
@@ -333,6 +344,13 @@ function normalizeBackupData(data) {
 
   if (normalized.stockMovements === undefined || normalized.stockMovements === null) {
     normalized.stockMovements = []
+  }
+
+  if (isObject(normalized.products) && Array.isArray(normalized.products.products)) {
+    normalized.products = {
+      ...normalized.products,
+      products: normalized.products.products.map(normalizeProductForRestore),
+    }
   }
 
   return normalized

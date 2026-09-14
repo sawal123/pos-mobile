@@ -28,11 +28,13 @@ const form = reactive({
   pricingUnit: 'kg',
   minQuantity: '',
   estimatedDuration: '',
+  imageData: '',
   isActive: true,
 })
 
 const errors = ref({})
 const formError = ref('')
+const imageError = ref('')
 
 const isEditMode = computed(() => Boolean(route.params.id))
 const isLaundry = computed(() => businessStore.normalizedType === 'Laundry')
@@ -54,9 +56,11 @@ function resetForm() {
   form.pricingUnit = 'kg'
   form.minQuantity = ''
   form.estimatedDuration = ''
+  form.imageData = ''
   form.isActive = true
   errors.value = {}
   formError.value = ''
+  imageError.value = ''
 }
 
 function loadProduct() {
@@ -84,7 +88,76 @@ function loadProduct() {
   form.pricingUnit = product.pricingUnit ?? 'kg'
   form.minQuantity = product.minQuantity || ''
   form.estimatedDuration = product.estimatedDuration ?? ''
+  form.imageData = product.imageData ?? ''
   form.isActive = product.isActive
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result ?? ''))
+    reader.onerror = () => reject(new Error('Gagal membaca gambar.'))
+    reader.readAsDataURL(file)
+  })
+}
+
+function loadImage(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve(image)
+    image.onerror = () => reject(new Error('Gambar tidak dapat diproses.'))
+    image.src = dataUrl
+  })
+}
+
+async function resizeImageFile(file, maxDimension = 800) {
+  const dataUrl = await readFileAsDataUrl(file)
+  const image = await loadImage(dataUrl)
+  const scale = Math.min(1, maxDimension / Math.max(image.width, image.height))
+  const width = Math.max(1, Math.round(image.width * scale))
+  const height = Math.max(1, Math.round(image.height * scale))
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+
+  const context = canvas.getContext('2d')
+
+  if (!context) {
+    return dataUrl
+  }
+
+  context.drawImage(image, 0, 0, width, height)
+
+  return canvas.toDataURL('image/webp', 0.78)
+}
+
+async function handleImageChange(event) {
+  imageError.value = ''
+  const input = event.target
+  const [file] = input.files ?? []
+
+  if (!file) {
+    return
+  }
+
+  if (!file.type.startsWith('image/')) {
+    imageError.value = 'File harus berupa gambar.'
+    input.value = ''
+    return
+  }
+
+  try {
+    form.imageData = await resizeImageFile(file)
+  } catch {
+    imageError.value = 'Gambar tidak dapat diproses.'
+  } finally {
+    input.value = ''
+  }
+}
+
+function removeImage() {
+  form.imageData = ''
+  imageError.value = ''
 }
 
 async function handleSubmit() {
@@ -103,6 +176,7 @@ async function handleSubmit() {
     pricingUnit: form.pricingUnit,
     minQuantity: form.minQuantity,
     estimatedDuration: form.estimatedDuration,
+    imageData: form.imageData,
     isActive: form.isActive,
   }
 
@@ -148,6 +222,38 @@ watch(
         </p>
 
         <div class="grid gap-4 md:grid-cols-2">
+          <div class="space-y-3 md:col-span-2">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
+              <div class="aspect-[4/3] w-full overflow-hidden rounded-3xl bg-surface sm:w-44">
+                <img
+                  v-if="form.imageData"
+                  :src="form.imageData"
+                  :alt="form.name || 'Preview gambar'"
+                  class="h-full w-full object-cover"
+                  data-testid="product-image-preview"
+                />
+                <div v-else class="flex h-full w-full items-center justify-center text-sm text-ink-secondary">
+                  Preview gambar
+                </div>
+              </div>
+
+              <div class="space-y-2">
+                <p class="text-sm font-medium text-ink-primary">Gambar {{ isLaundry ? 'Layanan' : 'Produk' }}</p>
+                <p class="text-sm text-ink-secondary">Pilih dari galeri. Gambar otomatis diperkecil sebelum disimpan offline.</p>
+                <div class="flex flex-wrap gap-2">
+                  <label class="inline-flex h-11 cursor-pointer items-center justify-center rounded-2xl bg-white px-4 text-sm font-medium text-ink-primary ring-1 ring-zinc-200 transition hover:bg-zinc-50">
+                    <span>{{ form.imageData ? 'Ganti Gambar' : 'Pilih Gambar' }}</span>
+                    <input class="hidden" type="file" accept="image/*" data-testid="product-image-input" @change="handleImageChange" />
+                  </label>
+                  <BaseButton v-if="form.imageData" type="button" variant="ghost" @click="removeImage">
+                    Hapus Gambar
+                  </BaseButton>
+                </div>
+                <p v-if="imageError" class="text-sm text-danger">{{ imageError }}</p>
+              </div>
+            </div>
+          </div>
+
           <div class="space-y-2">
             <BaseInput
               :model-value="form.name"
@@ -281,7 +387,7 @@ watch(
 
         <div class="flex flex-wrap gap-3">
           <BaseButton type="submit">
-            {{ isEditMode ? 'Simpan Perubahan' : 'Simpan Produk' }}
+            {{ isEditMode ? 'Simpan Perubahan' : isLaundry ? 'Simpan Layanan' : 'Simpan Produk' }}
           </BaseButton>
           <BaseButton type="button" variant="secondary" @click="router.push({ name: 'products' })">
             Batal

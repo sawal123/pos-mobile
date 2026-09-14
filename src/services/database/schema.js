@@ -1,5 +1,5 @@
 export const DB_NAME = 'pos_mobile'
-export const DB_VERSION = 3
+export const DB_VERSION = 4
 
 export const APP_META_KEYS = {
   initialized: 'data_initialized',
@@ -109,5 +109,8 @@ export const MIGRATIONS = {
   ALTER TABLE products ADD COLUMN pricing_unit TEXT NOT NULL DEFAULT 'pcs';
   ALTER TABLE products ADD COLUMN min_quantity REAL NOT NULL DEFAULT 0;
   ALTER TABLE products ADD COLUMN estimated_duration TEXT NOT NULL DEFAULT '';
+  `,
+  4: `
+  ALTER TABLE products ADD COLUMN image_data TEXT NOT NULL DEFAULT '';
   `,
 }

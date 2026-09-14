@@ -27,6 +27,7 @@ function normalizeProduct(product) {
     pricingUnit: product.pricingUnit ?? (kind === 'service' ? 'kg' : 'pcs'),
     minQuantity: normalizeNumber(product.minQuantity),
     estimatedDuration: product.estimatedDuration ?? '',
+    imageData: typeof product.imageData === 'string' ? product.imageData : '',
     isActive: product.isActive ?? true,
   }
 }
@@ -161,6 +162,7 @@ function validateProductInput(payload, categories) {
       pricingUnit,
       minQuantity: Number.isNaN(minQuantity) ? 0 : minQuantity,
       estimatedDuration: normalizeName(payload.estimatedDuration ?? ''),
+      imageData: typeof payload.imageData === 'string' ? payload.imageData : '',
       isActive: payload.isActive ?? true,
     },
   }
@@ -329,6 +331,9 @@ export const useProductStore = defineStore('product', {
       existingProduct.pricingUnit = values.pricingUnit
       existingProduct.minQuantity = values.minQuantity
       existingProduct.estimatedDuration = values.estimatedDuration
+      existingProduct.imageData = payload.imageData === undefined
+        ? existingProduct.imageData
+        : values.imageData
       existingProduct.isActive = values.isActive
 
       // Stock is authoritative: any stock change outside Adjust Stok still
