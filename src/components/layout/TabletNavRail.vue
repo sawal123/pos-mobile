@@ -75,21 +75,28 @@ function isActive(path) {
         :to="item.to"
         class="group relative flex items-center gap-3 rounded-2xl px-3.5 py-2.5 text-sm font-semibold transition-all duration-200"
         :class="isActive(item.to)
-          ? 'bg-gradient-to-r from-primary to-indigo-600 text-white shadow-[0_6px_18px_rgba(73,69,214,0.28)]'
+          ? 'nav-item-active bg-gradient-to-r from-primary to-indigo-600 !text-white text-white shadow-[0_6px_18px_rgba(73,69,214,0.28)]'
           : 'text-zinc-600 hover:bg-zinc-100/90 hover:text-ink-primary hover:translate-x-1'"
+        :style="isActive(item.to) ? 'color: #ffffff !important;' : ''"
       >
         <span
           class="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition-colors"
           :class="isActive(item.to)
-            ? 'bg-white/20 text-white'
+            ? 'bg-white/20 !text-white text-white'
             : 'bg-zinc-100 text-zinc-500 group-hover:bg-primary/10 group-hover:text-primary'"
         >
-          <AppIcon :name="item.icon" />
+          <AppIcon :name="item.icon" class="h-4 w-4" />
         </span>
-        <span class="truncate">{{ item.title }}</span>
+        <span
+          class="truncate font-semibold"
+          :class="isActive(item.to) ? '!text-white text-white' : 'text-zinc-600 group-hover:text-ink-primary'"
+          :style="isActive(item.to) ? 'color: #ffffff !important;' : ''"
+        >
+          {{ item.title }}
+        </span>
         <span
           v-if="isActive(item.to)"
-          class="ml-auto h-1.5 w-1.5 rounded-full bg-white shadow-[0_0_8px_rgba(255,255,255,0.9)]"
+          class="ml-auto h-2 w-2 rounded-full bg-white shadow-[0_0_8px_rgba(255,255,255,0.9)]"
         />
       </RouterLink>
     </nav>
@@ -114,3 +121,13 @@ function isActive(path) {
     </div>
   </aside>
 </template>
+
+<style scoped>
+.nav-item-active,
+.nav-item-active span,
+.nav-item-active :deep(span),
+.nav-item-active :deep(svg) {
+  color: #ffffff !important;
+  fill: currentColor;
+}
+</style>
