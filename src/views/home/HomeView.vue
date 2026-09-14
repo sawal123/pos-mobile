@@ -20,6 +20,7 @@ const shiftStore = useShiftStore()
 const transactionStore = useTransactionStore()
 
 function isToday(dateString) {
+  if (!dateString) return false
   const date = new Date(dateString)
   const today = new Date()
 
@@ -30,8 +31,9 @@ function isToday(dateString) {
 
 const todayTransactions = computed(() => transactionStore.items.filter((transaction) => isToday(transaction.createdAt)))
 const todayRevenue = computed(() =>
-  todayTransactions.value
+  transactionStore.items
     .filter(isPaidTransaction)
+    .filter((transaction) => isToday(transaction.paidAt ?? transaction.createdAt))
     .reduce((sum, transaction) => sum + Number(transaction.total || 0), 0),
 )
 const menuItems = computed(() => getOperationalMenuItems(businessStore.normalizedType))

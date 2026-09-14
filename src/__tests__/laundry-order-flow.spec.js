@@ -1132,4 +1132,155 @@ describe('Laundry Transaction and Order Flow', () => {
       expect(new Date(created.estimatedCompletedAt).toISOString()).toBe(created.estimatedCompletedAt)
     })
   })
+
+  describe('17. Accounting timestamp paidAt and Home Omzet Hari Ini', () => {
+    it('unpaid yesterday tidak masuk omzet hari ini, setelah settle today masuk omzet hari ini dan paidAt tersimpan', async () => {
+      const yesterday = new Date(Date.now() - 24 * 3600 * 1000).toISOString()
+      const order = ctx.transactionStore.createLaundryOrder({
+        customer: 'Dewi Kemarin',
+        customerId: 'c-dewi',
+        customerSnapshot: { id: 'c-dewi', name: 'Dewi Kemarin', phone: '081234567891', email: '' },
+        items: [{ serviceId: 's1', name: 'Cuci Selimut', quantity: 1, unitPrice: 50000, subtotal: 50000 }],
+        subtotal: 50000,
+        total: 50000,
+        paymentStatus: 'unpaid',
+        createdAt: yesterday,
+      })
+
+      expect(order.paidAt).toBe(null)
+
+      await ctx.router.push('/home')
+      await flushPromises()
+      const homeWrapper = mount(HomeView, {
+        global: { plugins: [ctx.pinia, ctx.router] },
+      })
+      const orderHariIniSummary = homeWrapper.findAll('.min-h-\\[88px\\]').find((c) => c.text().includes('Order Hari Ini'))
+      expect(orderHariIniSummary.text()).toContain('0')
+
+      const omzetHariIniSummary = homeWrapper.findAll('.min-h-\\[88px\\]').find((c) => c.text().includes('Omzet Hari Ini'))
+      expect(omzetHariIniSummary.text()).toContain(formatCurrency(0))
+
+      const beforeSettle = Date.now()
+      const settlement = ctx.transactionStore.settleLaundryOrderPayment({
+        orderId: order.id,
+        paymentMethod: 'cash',
+        cashReceived: 50000,
+        cashStore: ctx.cashStore,
+      })
+      expect(settlement.success).toBe(true)
+      expect(order.paidAt).toBeTruthy()
+      expect(new Date(order.paidAt).getTime()).toBeGreaterThanOrEqual(beforeSettle - 2000)
+      const originalPaidAt = order.paidAt
+
+      const retryResult = ctx.transactionStore.settleLaundryOrderPayment({
+        orderId: order.id,
+        paymentMethod: 'cash',
+        cashReceived: 50000,
+        cashStore: ctx.cashStore,
+      })
+      expect(retryResult.duplicated).toBe(true)
+      expect(order.paidAt).toBe(originalPaidAt)
+
+      const homeWrapperAfter = mount(HomeView, {
+        global: { plugins: [ctx.pinia, ctx.router] },
+      })
+      const orderHariIniAfter = homeWrapperAfter.findAll('.min-h-\\[88px\\]').find((c) => c.text().includes('Order Hari Ini'))
+      expect(orderHariIniAfter.text()).toContain('0')
+
+      const omzetHariIniAfter = homeWrapperAfter.findAll('.min-h-\\[88px\\]').find((c) => c.text().includes('Omzet Hari Ini'))
+      expect(omzetHariIniAfter.text()).toContain(formatCurrency(50000))
+    })
+
+    it('legacy paid tanpa paidAt tetap dihitung berdasarkan createdAt', async () => {
+      ctx.transactionStore.items = [
+        {
+          id: 'legacy-retail-today',
+          total: 80000,
+          status: 'paid',
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: 'legacy-retail-yesterday',
+          total: 120000,
+          status: 'paid',
+          createdAt: new Date(Date.now() - 24 * 3600 * 1000).toISOString(),
+        },
+      ]
+
+      await ctx.router.push('/home')
+      await flushPromises()
+      const homeWrapper = mount(HomeView, {
+        global: { plugins: [ctx.pinia, ctx.router] },
+      })
+
+      const omzetSummary = homeWrapper.findAll('.min-h-\\[88px\\]').find((c) => c.text().includes('Omzet Hari Ini'))
+      expect(omzetSummary.text()).toContain(formatCurrency(80000))
+      expect(omzetSummary.text()).not.toContain(formatCurrency(200000))
+    })
+
+    it('backup dan restore mempertahankan paidAt dan menangani legacy fallback', () => {
+      const today = new Date().toISOString()
+      const specificPaidAt = '2026-09-14T14:30:00.000Z'
+
+      ctx.transactionStore.items = [
+        {
+          id: 'tx-paid-1',
+          total: 50000,
+          paymentStatus: 'paid',
+          paidAt: specificPaidAt,
+          createdAt: today,
+          items: [{ name: 'Jasa', price: 50000, qty: 1, subtotal: 50000 }],
+        },
+        {
+          id: 'tx-unpaid-1',
+          total: 30000,
+          paymentStatus: 'unpaid',
+          paidAt: null,
+          createdAt: today,
+          items: [{ name: 'Jasa 2', price: 30000, qty: 1, subtotal: 30000 }],
+        },
+        {
+          id: 'tx-legacy-paid',
+          total: 20000,
+          status: 'paid',
+          createdAt: today,
+          items: [{ name: 'Barang', price: 20000, qty: 1, subtotal: 20000 }],
+        },
+      ]
+
+      ctx.shiftStore.closeShift()
+
+      const payload = createBackupPayload({
+        businessStore: ctx.businessStore,
+        productStore: ctx.productStore,
+        customerStore: ctx.customerStore,
+        expenseStore: ctx.expenseStore,
+        transactionStore: ctx.transactionStore,
+        cashStore: ctx.cashStore,
+        shiftStore: ctx.shiftStore,
+      })
+
+      const txs = payload.data.transactions
+      expect(txs.find((t) => t.id === 'tx-paid-1').paidAt).toBe(specificPaidAt)
+      expect(txs.find((t) => t.id === 'tx-unpaid-1').paidAt).toBe(null)
+      expect(txs.find((t) => t.id === 'tx-legacy-paid').paidAt).toBe(today)
+
+      ctx.transactionStore.items = []
+      const restoreResult = restoreBackupPayload(payload, {
+        businessStore: ctx.businessStore,
+        productStore: ctx.productStore,
+        customerStore: ctx.customerStore,
+        expenseStore: ctx.expenseStore,
+        transactionStore: ctx.transactionStore,
+        cashStore: ctx.cashStore,
+        shiftStore: ctx.shiftStore,
+      })
+      expect(restoreResult.success).toBe(true)
+
+      const restoredTxs = ctx.transactionStore.items
+      expect(restoredTxs.find((t) => t.id === 'tx-paid-1').paidAt).toBe(specificPaidAt)
+      expect(restoredTxs.find((t) => t.id === 'tx-unpaid-1').paidAt).toBe(null)
+      expect(restoredTxs.find((t) => t.id === 'tx-legacy-paid').paidAt).toBe(today)
+    })
+  })
 })

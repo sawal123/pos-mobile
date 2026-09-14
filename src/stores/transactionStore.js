@@ -118,6 +118,9 @@ export const useTransactionStore = defineStore('transaction', {
     },
     createTransaction(payload) {
       const items = payload.items.map(normalizeTransactionItem)
+      const createdAt = payload.createdAt ?? new Date().toISOString()
+      const isPaid = payload.paymentStatus === 'paid'
+        || (!payload.paymentStatus && (payload.status === 'paid' || payload.status === undefined))
       const transaction = {
         id: createTransactionId(),
         invoiceNumber: createInvoiceNumber(),
@@ -137,8 +140,9 @@ export const useTransactionStore = defineStore('transaction', {
         paymentMethod: payload.paymentMethod,
         cashReceived: payload.cashReceived ?? null,
         changeAmount: payload.changeAmount ?? null,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+        paidAt: payload.paidAt ?? (isPaid ? createdAt : null),
+        createdAt,
+        updatedAt: payload.updatedAt ?? createdAt,
       }
 
       return this.addTransaction(transaction)
@@ -148,6 +152,7 @@ export const useTransactionStore = defineStore('transaction', {
       const createdAt = payload.createdAt ?? new Date().toISOString()
       const orderNumber = payload.orderNumber ?? createLaundryOrderNumber(this.items, new Date(createdAt))
       const paymentStatus = payload.paymentStatus ?? (payload.status === 'paid' ? 'paid' : 'unpaid')
+      const isPaid = paymentStatus === 'paid'
       const subtotal = payload.subtotal != null ? Number(payload.subtotal) : items.reduce((sum, item) => sum + item.subtotal, 0)
       const tax = payload.tax != null ? Number(payload.tax) : 0
       const total = payload.total != null ? Number(payload.total) : subtotal + tax
@@ -172,6 +177,7 @@ export const useTransactionStore = defineStore('transaction', {
         paymentMethod: payload.paymentMethod ?? (paymentStatus === 'paid' ? 'cash' : ''),
         cashReceived: payload.cashReceived ?? null,
         changeAmount: payload.changeAmount ?? null,
+        paidAt: payload.paidAt ?? (isPaid ? createdAt : null),
         estimatedCompletedAt: payload.estimatedCompletedAt ?? null,
         note: payload.note ?? '',
         createdAt,
@@ -283,12 +289,14 @@ export const useTransactionStore = defineStore('transaction', {
         }
 
         // 6. HANYA setelah cash entry berhasil:
+        const paymentTimestamp = new Date().toISOString()
         order.paymentStatus = 'paid'
         order.status = 'paid'
         order.paymentMethod = 'cash'
         order.cashReceived = received
         order.changeAmount = calculatedChange
-        order.updatedAt = new Date().toISOString()
+        order.paidAt = order.paidAt ?? paymentTimestamp
+        order.updatedAt = paymentTimestamp
 
         if (this.lastTransaction?.id === order.id) {
           this.lastTransaction = order
@@ -301,12 +309,14 @@ export const useTransactionStore = defineStore('transaction', {
       // - tidak membuat cash entry
       // - langsung mark paid setelah validation
       // - tetap idempotent
+      const paymentTimestamp = new Date().toISOString()
       order.paymentStatus = 'paid'
       order.status = 'paid'
       order.paymentMethod = method
       order.cashReceived = null
       order.changeAmount = null
-      order.updatedAt = new Date().toISOString()
+      order.paidAt = order.paidAt ?? paymentTimestamp
+      order.updatedAt = paymentTimestamp
 
       if (this.lastTransaction?.id === order.id) {
         this.lastTransaction = order

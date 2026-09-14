@@ -75,6 +75,22 @@ function normalizeTransactionForBackup(transaction) {
     ? transaction.grossProfit
     : items.reduce((sum, item) => sum + computeItemGrossProfit(item), 0)
 
+  const isPaid = transaction.paymentStatus === 'paid'
+    || (!transaction.paymentStatus && transaction.status === 'paid')
+
+  let paidAt = null
+  if (isPaid) {
+    if (isValidDateString(transaction.paidAt)) {
+      paidAt = transaction.paidAt
+    } else if (isValidDateString(transaction.createdAt)) {
+      paidAt = transaction.createdAt
+    } else {
+      paidAt = new Date().toISOString()
+    }
+  } else {
+    paidAt = null
+  }
+
   const normalized = {
     id: transaction.id,
     invoiceNumber: typeof transaction.invoiceNumber === 'string' ? transaction.invoiceNumber : String(transaction.id ?? ''),
@@ -94,6 +110,7 @@ function normalizeTransactionForBackup(transaction) {
     paymentMethod: typeof transaction.paymentMethod === 'string' ? transaction.paymentMethod : '',
     cashReceived: Number.isFinite(transaction.cashReceived) ? transaction.cashReceived : null,
     changeAmount: Number.isFinite(transaction.changeAmount) ? transaction.changeAmount : null,
+    paidAt,
     createdAt: isValidDateString(transaction.createdAt) ? transaction.createdAt : new Date().toISOString(),
     updatedAt: isValidDateString(transaction.updatedAt) ? transaction.updatedAt : (isValidDateString(transaction.createdAt) ? transaction.createdAt : new Date().toISOString()),
   }
@@ -120,11 +137,28 @@ function normalizeTransactionForRestore(transaction) {
     ? transaction.grossProfit
     : items.reduce((sum, item) => sum + computeItemGrossProfit(item), 0)
 
+  const isPaid = transaction.paymentStatus === 'paid'
+    || (!transaction.paymentStatus && transaction.status === 'paid')
+
+  let paidAt = null
+  if (isPaid) {
+    if (isValidDateString(transaction.paidAt)) {
+      paidAt = transaction.paidAt
+    } else if (isValidDateString(transaction.createdAt)) {
+      paidAt = transaction.createdAt
+    } else {
+      paidAt = new Date().toISOString()
+    }
+  } else {
+    paidAt = null
+  }
+
   return {
     ...transaction,
     customerSnapshot: normalizeCustomerSnapshot(transaction.customerSnapshot),
     orderStatus: typeof transaction.orderStatus === 'string' ? transaction.orderStatus : null,
     grossProfit,
+    paidAt,
   }
 }
 
@@ -307,6 +341,11 @@ function validateTransactionsData(transactions) {
       return 'File backup tidak valid.'
     }
 
+    if (transaction.paidAt !== null && transaction.paidAt !== undefined
+      && !isValidDateString(transaction.paidAt)) {
+      return 'File backup tidak valid.'
+    }
+
     if (!validateCustomerSnapshot(transaction.customerSnapshot ?? null)
       || !validateBusinessSnapshot(transaction.businessSnapshot ?? null)) {
       return 'File backup tidak valid.'
@@ -395,13 +434,19 @@ function normalizeBackupData(data) {
   if (Array.isArray(normalized.transactions)) {
     normalized.transactions = normalized.transactions.map((trx) => {
       if (!isObject(trx)) return trx
-      if (trx.customerSnapshot !== undefined && trx.customerSnapshot !== null) {
-        return {
-          ...trx,
-          customerSnapshot: normalizeCustomerSnapshot(trx.customerSnapshot),
-        }
+      const isPaid = trx.paymentStatus === 'paid'
+        || (!trx.paymentStatus && trx.status === 'paid')
+      const paidAt = isPaid
+        ? (isValidDateString(trx.paidAt) ? trx.paidAt : (isValidDateString(trx.createdAt) ? trx.createdAt : null))
+        : null
+      const updated = {
+        ...trx,
+        paidAt,
       }
-      return trx
+      if (trx.customerSnapshot !== undefined && trx.customerSnapshot !== null) {
+        updated.customerSnapshot = normalizeCustomerSnapshot(trx.customerSnapshot)
+      }
+      return updated
     })
   }
 
