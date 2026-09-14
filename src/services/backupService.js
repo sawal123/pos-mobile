@@ -39,14 +39,35 @@ function isValidDateString(value) {
   return typeof value === 'string' && !Number.isNaN(new Date(value).getTime())
 }
 
+function normalizeCustomerSnapshot(snapshot) {
+  if (snapshot === null || snapshot === undefined) {
+    return null
+  }
+
+  if (!isObject(snapshot)) {
+    return null
+  }
+
+  return {
+    id: snapshot.id ?? null,
+    name: typeof snapshot.name === 'string' ? snapshot.name : '',
+    phone: typeof snapshot.phone === 'string' ? snapshot.phone : (snapshot.phone != null ? String(snapshot.phone) : ''),
+    email: typeof snapshot.email === 'string' ? snapshot.email : (snapshot.email != null ? String(snapshot.email) : ''),
+  }
+}
+
+function normalizeTransactionItemForBackup(item) {
+  return { ...item }
+}
+
 function normalizeTransactionForBackup(transaction) {
   const items = Array.isArray(transaction.items)
-    ? transaction.items.map((item) => ({ ...item }))
+    ? transaction.items.map(normalizeTransactionItemForBackup)
     : []
 
   const itemCount = Number.isFinite(transaction.itemCount)
     ? transaction.itemCount
-    : (Array.isArray(transaction.items)
+    : (items.length
       ? items.reduce((count, item) => count + (Number(item.qty) || 0), 0)
       : (Number.isFinite(transaction.items) ? transaction.items : 0))
 
@@ -54,15 +75,32 @@ function normalizeTransactionForBackup(transaction) {
     ? transaction.grossProfit
     : items.reduce((sum, item) => sum + computeItemGrossProfit(item), 0)
 
-  return {
+  const isPaid = transaction.paymentStatus === 'paid'
+    || (!transaction.paymentStatus && transaction.status === 'paid')
+
+  let paidAt = null
+  if (isPaid) {
+    if (isValidDateString(transaction.paidAt)) {
+      paidAt = transaction.paidAt
+    } else if (isValidDateString(transaction.createdAt)) {
+      paidAt = transaction.createdAt
+    } else {
+      paidAt = new Date().toISOString()
+    }
+  } else {
+    paidAt = null
+  }
+
+  const normalized = {
     id: transaction.id,
     invoiceNumber: typeof transaction.invoiceNumber === 'string' ? transaction.invoiceNumber : String(transaction.id ?? ''),
     customer: typeof transaction.customer === 'string' ? transaction.customer : 'Walk-in Customer',
     customerId: transaction.customerId ?? null,
-    customerSnapshot: transaction.customerSnapshot ? { ...transaction.customerSnapshot } : null,
+    customerSnapshot: normalizeCustomerSnapshot(transaction.customerSnapshot),
     businessSnapshot: transaction.businessSnapshot ? { ...transaction.businessSnapshot } : null,
     status: typeof transaction.status === 'string' ? transaction.status : 'paid',
     orderStatus: typeof transaction.orderStatus === 'string' ? transaction.orderStatus : null,
+    paymentStatus: typeof transaction.paymentStatus === 'string' ? transaction.paymentStatus : (transaction.status === 'paid' ? 'paid' : 'unpaid'),
     items,
     itemCount,
     subtotal: Number.isFinite(transaction.subtotal) ? transaction.subtotal : 0,
@@ -72,8 +110,22 @@ function normalizeTransactionForBackup(transaction) {
     paymentMethod: typeof transaction.paymentMethod === 'string' ? transaction.paymentMethod : '',
     cashReceived: Number.isFinite(transaction.cashReceived) ? transaction.cashReceived : null,
     changeAmount: Number.isFinite(transaction.changeAmount) ? transaction.changeAmount : null,
+    paidAt,
     createdAt: isValidDateString(transaction.createdAt) ? transaction.createdAt : new Date().toISOString(),
+    updatedAt: isValidDateString(transaction.updatedAt) ? transaction.updatedAt : (isValidDateString(transaction.createdAt) ? transaction.createdAt : new Date().toISOString()),
   }
+
+  if (transaction.orderNumber !== undefined) {
+    normalized.orderNumber = transaction.orderNumber
+  }
+  if (transaction.estimatedCompletedAt !== undefined) {
+    normalized.estimatedCompletedAt = transaction.estimatedCompletedAt
+  }
+  if (transaction.note !== undefined) {
+    normalized.note = transaction.note
+  }
+
+  return normalized
 }
 
 function normalizeTransactionForRestore(transaction) {
@@ -85,10 +137,28 @@ function normalizeTransactionForRestore(transaction) {
     ? transaction.grossProfit
     : items.reduce((sum, item) => sum + computeItemGrossProfit(item), 0)
 
+  const isPaid = transaction.paymentStatus === 'paid'
+    || (!transaction.paymentStatus && transaction.status === 'paid')
+
+  let paidAt = null
+  if (isPaid) {
+    if (isValidDateString(transaction.paidAt)) {
+      paidAt = transaction.paidAt
+    } else if (isValidDateString(transaction.createdAt)) {
+      paidAt = transaction.createdAt
+    } else {
+      paidAt = new Date().toISOString()
+    }
+  } else {
+    paidAt = null
+  }
+
   return {
     ...transaction,
+    customerSnapshot: normalizeCustomerSnapshot(transaction.customerSnapshot),
     orderStatus: typeof transaction.orderStatus === 'string' ? transaction.orderStatus : null,
     grossProfit,
+    paidAt,
   }
 }
 
@@ -214,11 +284,14 @@ function validateCustomerSnapshot(snapshot) {
     return true
   }
 
-  return isObject(snapshot)
-    && hasValue(snapshot.id)
-    && isNonEmptyString(snapshot.name)
-    && typeof snapshot.phone === 'string'
-    && typeof snapshot.email === 'string'
+  if (!isObject(snapshot)
+    || !hasValue(snapshot.id)
+    || !isNonEmptyString(snapshot.name)
+    || typeof snapshot.phone !== 'string') {
+    return false
+  }
+
+  return snapshot.email === undefined || typeof snapshot.email === 'string'
 }
 
 function validateBusinessSnapshot(snapshot) {
@@ -265,6 +338,11 @@ function validateTransactionsData(transactions) {
 
     if (transaction.changeAmount !== null && transaction.changeAmount !== undefined
       && !isFiniteNumber(transaction.changeAmount, { min: 0 })) {
+      return 'File backup tidak valid.'
+    }
+
+    if (transaction.paidAt !== null && transaction.paidAt !== undefined
+      && !isValidDateString(transaction.paidAt)) {
       return 'File backup tidak valid.'
     }
 
@@ -351,6 +429,25 @@ function normalizeBackupData(data) {
       ...normalized.products,
       products: normalized.products.products.map(normalizeProductForRestore),
     }
+  }
+
+  if (Array.isArray(normalized.transactions)) {
+    normalized.transactions = normalized.transactions.map((trx) => {
+      if (!isObject(trx)) return trx
+      const isPaid = trx.paymentStatus === 'paid'
+        || (!trx.paymentStatus && trx.status === 'paid')
+      const paidAt = isPaid
+        ? (isValidDateString(trx.paidAt) ? trx.paidAt : (isValidDateString(trx.createdAt) ? trx.createdAt : null))
+        : null
+      const updated = {
+        ...trx,
+        paidAt,
+      }
+      if (trx.customerSnapshot !== undefined && trx.customerSnapshot !== null) {
+        updated.customerSnapshot = normalizeCustomerSnapshot(trx.customerSnapshot)
+      }
+      return updated
+    })
   }
 
   return normalized
@@ -480,7 +577,7 @@ export function restoreBackupPayload(payload, stores) {
     lastTransaction: null,
   })
 
-  stores.cartStore.clearCart()
+  stores.cartStore?.clearCart?.()
 
   return {
     success: true,

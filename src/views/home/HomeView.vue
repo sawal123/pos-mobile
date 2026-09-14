@@ -10,7 +10,7 @@ import { useBusinessStore } from '@/stores/businessStore'
 import { useCashStore } from '@/stores/cashStore'
 import { useProductStore } from '@/stores/productStore'
 import { useShiftStore } from '@/stores/shiftStore'
-import { useTransactionStore } from '@/stores/transactionStore'
+import { isPaidTransaction, useTransactionStore } from '@/stores/transactionStore'
 import { formatCurrency } from '@/utils/formatters'
 
 const businessStore = useBusinessStore()
@@ -20,6 +20,7 @@ const shiftStore = useShiftStore()
 const transactionStore = useTransactionStore()
 
 function isToday(dateString) {
+  if (!dateString) return false
   const date = new Date(dateString)
   const today = new Date()
 
@@ -29,15 +30,54 @@ function isToday(dateString) {
 }
 
 const todayTransactions = computed(() => transactionStore.items.filter((transaction) => isToday(transaction.createdAt)))
-const todayRevenue = computed(() => todayTransactions.value.reduce((sum, transaction) => sum + Number(transaction.total || 0), 0))
+const todayRevenue = computed(() =>
+  transactionStore.items
+    .filter(isPaidTransaction)
+    .filter((transaction) => isToday(transaction.paidAt ?? transaction.createdAt))
+    .reduce((sum, transaction) => sum + Number(transaction.total || 0), 0),
+)
 const menuItems = computed(() => getOperationalMenuItems(businessStore.normalizedType))
 
-const summaries = computed(() => [
-  { label: 'Omzet Hari Ini', value: formatCurrency(todayRevenue.value), tone: 'text-primary' },
-  { label: 'Transaksi Hari Ini', value: todayTransactions.value.length, tone: 'text-ink-primary' },
-  { label: 'Saldo Kas', value: formatCurrency(cashStore.balance), tone: 'text-success' },
-  { label: 'Stok Minimum', value: productStore.lowStockProducts.length, tone: 'text-warning' },
-])
+const isLaundry = computed(() => businessStore.normalizedType === 'Laundry')
+
+const summaries = computed(() => {
+  if (isLaundry.value) {
+    return [
+      { label: 'Omzet Hari Ini', value: formatCurrency(todayRevenue.value), tone: 'text-primary' },
+      { label: 'Order Hari Ini', value: todayTransactions.value.length, tone: 'text-ink-primary' },
+      { label: 'Saldo Kas', value: formatCurrency(cashStore.balance), tone: 'text-success' },
+    ]
+  }
+
+  return [
+    { label: 'Omzet Hari Ini', value: formatCurrency(todayRevenue.value), tone: 'text-primary' },
+    { label: 'Transaksi Hari Ini', value: todayTransactions.value.length, tone: 'text-ink-primary' },
+    { label: 'Saldo Kas', value: formatCurrency(cashStore.balance), tone: 'text-success' },
+    { label: 'Stok Minimum', value: productStore.lowStockProducts.length, tone: 'text-warning' },
+  ]
+})
+
+const laundryStatusSummaries = computed(() => {
+  const counts = {
+    Masuk: 0,
+    Diproses: 0,
+    'Siap Diambil': 0,
+    Selesai: 0,
+  }
+
+  for (const item of transactionStore.items) {
+    if (item.orderStatus && counts[item.orderStatus] !== undefined) {
+      counts[item.orderStatus]++
+    }
+  }
+
+  return [
+    { status: 'Masuk', count: counts.Masuk, tone: 'text-primary' },
+    { status: 'Diproses', count: counts.Diproses, tone: 'text-indigo-600' },
+    { status: 'Siap Diambil', count: counts['Siap Diambil'], tone: 'text-amber-600' },
+    { status: 'Selesai', count: counts.Selesai, tone: 'text-emerald-600' },
+  ]
+})
 </script>
 
 <template>
@@ -60,7 +100,7 @@ const summaries = computed(() => [
         </BaseBadge>
       </div>
 
-      <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div class="grid grid-cols-2 gap-3" :class="isLaundry ? 'lg:grid-cols-3' : 'lg:grid-cols-4'">
         <div
           v-for="summary in summaries"
           :key="summary.label"
@@ -68,6 +108,23 @@ const summaries = computed(() => [
         >
           <p class="text-xs font-medium uppercase tracking-[0.14em] text-ink-secondary">{{ summary.label }}</p>
           <p class="mt-2 break-words text-xl font-semibold" :class="summary.tone">{{ summary.value }}</p>
+        </div>
+      </div>
+
+      <!-- Laundry Order Status summaries -->
+      <div v-if="isLaundry" class="space-y-2 border-t border-zinc-100 pt-4" data-testid="laundry-status-summaries">
+        <p class="text-xs font-semibold uppercase tracking-[0.14em] text-ink-secondary">Status Order Laundry</p>
+        <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <RouterLink
+            v-for="item in laundryStatusSummaries"
+            :key="item.status"
+            :to="{ path: '/laundry/orders', query: { status: item.status } }"
+            :data-testid="`laundry-summary-${item.status}`"
+            class="group min-h-[80px] rounded-2xl border border-zinc-200/80 bg-white p-3.5 shadow-soft transition hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md"
+          >
+            <p class="text-xs font-medium text-ink-secondary group-hover:text-primary transition">{{ item.status }}</p>
+            <p class="mt-1 text-2xl font-bold" :class="item.tone">{{ item.count }}</p>
+          </RouterLink>
         </div>
       </div>
     </BaseCard>

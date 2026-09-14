@@ -30,7 +30,8 @@ function handleCheckout() {
 
 <template>
   <div class="w-full min-w-0 space-y-4 md:space-y-5">
-    <div class="grid gap-5 xl:grid-cols-[1.3fr_0.7fr]">
+    <div class="grid gap-5 md:grid-cols-[1fr_340px] lg:grid-cols-[1fr_380px] xl:grid-cols-[1fr_420px] items-start">
+      <!-- Left Column: Product Catalog -->
       <section class="min-w-0 space-y-3 sm:space-y-4">
         <div class="space-y-3">
           <BaseInput
@@ -67,14 +68,20 @@ function handleCheckout() {
         </BaseCard>
       </section>
 
-      <section class="hidden min-w-0 space-y-4 md:block">
-        <BaseCard class="space-y-4 border border-white/40 bg-white/90">
-          <div class="flex items-center justify-between">
-            <h2 class="text-lg font-semibold text-ink-primary">Keranjang</h2>
-            <span class="text-sm text-ink-secondary">{{ items.length }} item</span>
+      <!-- Right Column: Cart Details (Sticky on the right side) -->
+      <section class="hidden min-w-0 space-y-4 md:block md:sticky md:top-4">
+        <BaseCard class="space-y-4 border border-zinc-200/70 bg-white/95 shadow-sm">
+          <div class="flex items-center justify-between border-b border-zinc-100 pb-3">
+            <div>
+              <h2 class="text-base font-bold text-ink-primary">Keranjang</h2>
+              <p class="text-xs text-ink-secondary">Daftar item pesanan</p>
+            </div>
+            <span class="rounded-lg bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">
+              {{ items.length }} item
+            </span>
           </div>
 
-          <div v-if="items.length" class="space-y-3">
+          <div v-if="items.length" class="no-scrollbar max-h-[calc(100vh-340px)] space-y-3 overflow-y-auto pr-1">
             <CartItem
               v-for="item in items"
               :key="item.id"
@@ -85,7 +92,10 @@ function handleCheckout() {
               @remove="cartStore.removeItem"
             />
           </div>
-          <p v-else class="text-sm text-ink-secondary">Belum ada item yang ditambahkan.</p>
+          <div v-else class="py-8 text-center text-sm text-ink-secondary">
+            <p class="font-medium text-ink-primary">Belum ada item yang ditambahkan.</p>
+            <p class="mt-1 text-xs text-ink-secondary">Pilih produk di sebelah kiri untuk menambahkan ke keranjang.</p>
+          </div>
         </BaseCard>
 
         <CartSummary

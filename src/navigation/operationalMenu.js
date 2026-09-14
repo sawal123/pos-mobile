@@ -6,14 +6,15 @@ export function getProductMenuLabel(businessType) {
 
 export function getOperationalMenuItems(businessType) {
   const productLabel = getProductMenuLabel(businessType)
+  const isLaundry = businessType === 'Laundry'
 
   return [
     {
       key: 'pos',
       icon: 'pos',
-      title: 'POS',
-      subtitle: 'Transaksi penjualan',
-      to: '/pos',
+      title: isLaundry ? 'Order Laundry' : 'POS',
+      subtitle: isLaundry ? 'Order & tracking laundry' : 'Transaksi penjualan',
+      to: isLaundry ? '/laundry/orders' : '/pos',
     },
     {
       key: 'products',
@@ -81,10 +82,12 @@ export function getOperationalMenuItems(businessType) {
   ]
 }
 
-export function getBottomNavItems() {
+export function getBottomNavItems(businessType = 'Cafe / UMKM') {
+  const isLaundry = businessType === 'Laundry'
+
   return [
     { key: 'home', icon: 'home', label: 'Home', to: '/home' },
-    { key: 'pos', icon: 'pos', label: 'POS', to: '/pos' },
+    { key: 'pos', icon: 'pos', label: isLaundry ? 'Order' : 'POS', to: isLaundry ? '/laundry/orders' : '/pos' },
     { key: 'transactions', icon: 'transactions', label: 'Transaksi', to: '/transactions' },
     { key: 'cash', icon: 'cash', label: 'Kas', to: '/cash' },
     { key: 'more', icon: 'more', label: 'Lainnya', to: null },
