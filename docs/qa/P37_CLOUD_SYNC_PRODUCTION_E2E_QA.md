@@ -165,7 +165,8 @@ localhost.
 
 ## Tests
 
-Full unit suite: **40 files, 1122 passed + 1 skipped (1123 total)** — includes
+Full unit suite: **39 passed + 1 skipped files, 1122 passed + 1 skipped tests
+(1123 total)** — includes
 `sync-parity-p37.spec.js` (29 tests: HPP/lifecycle/tombstone/convergence +
 tracker-dedup, shift-identity, expense-tombstone, deleted-product-category
 tests), `sync-pull-apply`, `sync-push-outbox`, `sync-bootstrap`, and the real
@@ -187,5 +188,5 @@ not P37 — P37 uses the localhost Laravel TEST server).
 
 Client P37 complete: mutation tracking, shift identity, tombstone pulls,
 canonical sale relations, real app-service HTTP E2E RUN #1 + RUN #2 PASS,
-1122/1122 unit green, build + cap sync PASS. **READY_FOR_P38** pending backend
+1122 passed + 1 skipped unit, build + cap sync PASS. **READY_FOR_P38** pending backend
 PR #13 merge first (contract dependency).
