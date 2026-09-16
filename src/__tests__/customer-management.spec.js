@@ -439,6 +439,39 @@ describe('P32 customer autocomplete', () => {
     expect(customerStore.searchCustomers('pelanggan', 2)).toHaveLength(2)
   })
 
+  it('searchCustomers memakai hard max 5 untuk limit yang lebih besar', () => {
+    const { customerStore } = createContext()
+
+    for (let index = 0; index < 8; index += 1) {
+      customerStore.createCustomer({
+        name: `Pelanggan ${index}`,
+        phone: `0812000${index}`,
+        email: '',
+      })
+    }
+
+    expect(customerStore.searchCustomers('pelanggan', 5)).toHaveLength(5)
+    expect(customerStore.searchCustomers('pelanggan', 10)).toHaveLength(5)
+    expect(customerStore.searchCustomers('pelanggan', 99)).toHaveLength(5)
+    expect(customerStore.searchCustomers('pelanggan', 999)).toHaveLength(5)
+  })
+
+  it('searchCustomers memakai default 5 untuk limit invalid atau tidak positif', () => {
+    const { customerStore } = createContext()
+
+    for (let index = 0; index < 8; index += 1) {
+      customerStore.createCustomer({
+        name: `Pelanggan ${index}`,
+        phone: `0812000${index}`,
+        email: '',
+      })
+    }
+
+    for (const invalidLimit of [0, -1, -99, Number.NaN, 'bukan-angka']) {
+      expect(customerStore.searchCustomers('pelanggan', invalidLimit)).toHaveLength(5)
+    }
+  })
+
   it('searchCustomers query kosong menghasilkan array kosong', () => {
     const { customerStore } = createContext()
     seedCustomers(customerStore)

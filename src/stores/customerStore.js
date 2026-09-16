@@ -54,7 +54,8 @@ export const useCustomerStore = defineStore('customer', {
       }
 
       const parsedLimit = Number(limit)
-      const max = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.floor(parsedLimit) : 5
+      const requested = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.floor(parsedLimit) : 5
+      const max = Math.min(5, requested)
 
       return this.customers
         .filter((customer) => {
