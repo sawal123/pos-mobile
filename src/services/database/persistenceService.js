@@ -5,6 +5,7 @@ import { useCashierStore } from '@/stores/cashierStore'
 import { useCashStore } from '@/stores/cashStore'
 import { useCustomerStore } from '@/stores/customerStore'
 import { useExpenseStore } from '@/stores/expenseStore'
+import { usePrinterStore } from '@/stores/printerStore'
 import { useProductStore } from '@/stores/productStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import { useTransactionStore } from '@/stores/transactionStore'
@@ -28,6 +29,7 @@ function createPersistenceContexts(pinia) {
   const cashierStore = useCashierStore(pinia)
   const cashStore = useCashStore(pinia)
   const shiftStore = useShiftStore(pinia)
+  const printerStore = usePrinterStore(pinia)
 
   return [
     {
@@ -169,6 +171,25 @@ function createPersistenceContexts(pinia) {
       },
       async save(adapter, snapshot) {
         await adapter.saveShiftState(snapshot)
+      },
+    },
+    {
+      // P33: device-local printer configuration only (no socket/connection state,
+      // and never part of business backup or cloud sync).
+      key: 'printer',
+      store: printerStore,
+      initialState: cloneValue(printerStore.$state),
+      read() {
+        return {
+          selectedPrinter: cloneValue(printerStore.selectedPrinter),
+          paperWidth: printerStore.paperWidth,
+        }
+      },
+      async load(adapter) {
+        return adapter.loadPrinterState()
+      },
+      async save(adapter, snapshot) {
+        await adapter.savePrinterState(snapshot)
       },
     },
   ]

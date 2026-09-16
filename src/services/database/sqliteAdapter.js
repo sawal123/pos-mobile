@@ -436,6 +436,13 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
     async saveShiftState(state) {
       await writeAppState(APP_STATE_KEYS.shift, state)
     },
+    // P33: device-local Bluetooth printer selection (not business data)
+    async loadPrinterState() {
+      return readAppState(APP_STATE_KEYS.printer, null)
+    },
+    async savePrinterState(state) {
+      await writeAppState(APP_STATE_KEYS.printer, state)
+    },
     async upsertSyncQueueItem(entry) {
       const db = await ensureConnection()
 

@@ -10,6 +10,7 @@ export const APP_STATE_KEYS = {
   shift: 'shift_state',
   cash: 'cash_state',
   stockMovements: 'stock_movements_state',
+  printer: 'printer_state',
 }
 
 export const RESERVED_CATEGORY = 'Semua'
