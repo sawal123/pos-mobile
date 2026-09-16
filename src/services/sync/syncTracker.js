@@ -3,6 +3,7 @@ import { useCashStore } from '@/stores/cashStore'
 import { useCustomerStore } from '@/stores/customerStore'
 import { useExpenseStore } from '@/stores/expenseStore'
 import { useProductStore } from '@/stores/productStore'
+import { useShiftStore } from '@/stores/shiftStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 
 import { SYNC_BUSINESS_ENTITY_ID, SYNC_ENTITY_TYPES, SYNC_RESERVED_CATEGORY } from './syncConstants'
@@ -37,6 +38,7 @@ export function createSyncChangeTracker({ pinia, queueService, stores = {} }) {
   const customerStore = stores.customerStore ?? useCustomerStore(pinia)
   const expenseStore = stores.expenseStore ?? useExpenseStore(pinia)
   const transactionStore = stores.transactionStore ?? useTransactionStore(pinia)
+  const shiftStore = stores.shiftStore ?? useShiftStore(pinia)
 
   const stopHandlers = []
 
@@ -269,21 +271,58 @@ export function createSyncChangeTracker({ pinia, queueService, stores = {} }) {
   })
 
   // ---- STOCK MOVEMENTS ----
-  // adjustStock is the canonical movement sync point: updateProduct stock
-  // changes and recordSaleStock both funnel into it. Each movement row has a
-  // stable local id and a referenceId that ties it to the originating sale,
-  // so retries are idempotent and pulls can never double-apply.
+  // Both adjustStock and updateProduct return the recorded movement directly,
+  // so the tracker enqueues exactly the movement that was created — never a
+  // stale head-of-list row and never two rows for one stock change.
+  function enqueueMovement(result) {
+    if (!result?.success || !result?.movement?.id) {
+      return
+    }
+
+    enqueueUpsert(SYNC_ENTITY_TYPES.STOCK_MOVEMENT, result.movement.id, result.movement)
+  }
+
   track(productStore, 'adjustStock', ({ after }) => {
     after((result) => {
-      if (!result?.success) {
-        return
-      }
+      enqueueMovement(result)
+    })
+  })
 
-      const movement = productStore.stockMovements?.[0]
+  track(productStore, 'updateProduct', ({ after }) => {
+    after((result) => {
+      enqueueMovement(result)
+    })
+  })
 
-      if (movement?.id) {
-        enqueueUpsert(SYNC_ENTITY_TYPES.STOCK_MOVEMENT, movement.id, movement)
-      }
+  // ---- SHIFT ----
+  // openShift/closeShift mutate the same stable shift identity; each call
+  // enqueues one upsert of that identity. Free mode never queues.
+  function enqueueShift(shiftStore) {
+    if (!shiftStore?.id) {
+      return
+    }
+
+    enqueueUpsert(SYNC_ENTITY_TYPES.SHIFT, shiftStore.id, {
+      id: shiftStore.id,
+      shiftNumber: shiftStore.shiftNumber ?? shiftStore.id,
+      status: shiftStore.status ?? (shiftStore.isOpen ? 'open' : 'closed'),
+      openingCash: shiftStore.openingBalance ?? 0,
+      closingCash: shiftStore.closingBalance ?? null,
+      openedAt: shiftStore.openedAt,
+      closedAt: shiftStore.closedAt ?? null,
+      notes: shiftStore.notes ?? '',
+    })
+  }
+
+  track(shiftStore, 'openShift', ({ after }) => {
+    after(() => {
+      enqueueShift(shiftStore)
+    })
+  })
+
+  track(shiftStore, 'closeShift', ({ after }) => {
+    after(() => {
+      enqueueShift(shiftStore)
     })
   })
 

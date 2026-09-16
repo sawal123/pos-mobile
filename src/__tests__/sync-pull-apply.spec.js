@@ -14,7 +14,7 @@
  * 10. Product Apply (stock=0 for new with warning, stock preserved for existing, price exact, isActive mapped, category resolved)
  * 11. Customer Apply (name/phone/email mapped, no schema mutation for extra remote fields)
  * 12. Expense Apply (category='Lainnya' for new with warning, category preserved for existing)
- * 13. Shift Ignored (ShiftStore untouched, UNSUPPORTED_LOCAL_SHIFT_APPLY warning, versions saved, cursor advances)
+ * 13. Shift Apply (ShiftStore restored from remote record, versions saved, cursor advances)
  * 14. Transaction Replay (sales + sale_items reconstructed into single transaction, payment fields null, lastTransaction untouched)
  * 15. Local Pending Outbox Conflict (LOCAL_PENDING_SYNC_CONFLICT, no local overwrite, no cursor advance)
  * 16. Outbox Echo Prevention (no new P9 outbox entries created from remote apply)
@@ -879,7 +879,7 @@ describe('P13: Entity Apply & Domain Logic', () => {
     expect(cust.email).toBe('budi@example.com')
   })
 
-  it('applies expense records: preserves existing category on update, assigns Lainnya on new with warning', async () => {
+  it('applies expense records: restores authoritative server category', async () => {
     const expUuid1 = '44444444-4444-4444-8444-444444444444'
     const expUuid2 = '55555555-5555-4555-8555-555555555555'
 
@@ -907,6 +907,7 @@ describe('P13: Entity Apply & Domain Logic', () => {
                 sync_id: expUuid1,
                 sync_version: 2,
                 description: 'Beli Gula Pasir',
+                category: 'Operasional',
                 amount: 30000,
                 notes: 'Updated note',
                 occurred_at: '2026-01-01T01:00:00Z',
@@ -919,6 +920,7 @@ describe('P13: Entity Apply & Domain Logic', () => {
                 sync_id: expUuid2,
                 sync_version: 1,
                 description: 'Beli Sabun Cuci',
+                category: 'Belanja Stok',
                 amount: 15000,
                 notes: '',
                 occurred_at: '2026-01-02T00:00:00Z',
@@ -943,16 +945,16 @@ describe('P13: Entity Apply & Domain Logic', () => {
 
     const res = await pullService.pullNow({ context: makeValidCloudContext() })
     expect(res.ok).toBe(true)
-    expect(res.warnings).toContain('SERVER_EXPENSE_CATEGORY_UNAVAILABLE')
+    expect(res.warnings).not.toContain('SERVER_EXPENSE_CATEGORY_UNAVAILABLE')
 
     const exp1 = expenseStore.expenses.find((e) => e.id === expUuid1)
     expect(exp1.title).toBe('Beli Gula Pasir')
     expect(exp1.amount).toBe(30000)
-    expect(exp1.category).toBe('Belanja Stok') // Preserved!
+    expect(exp1.category).toBe('Operasional')
 
     const exp2 = expenseStore.expenses.find((e) => e.id === expUuid2)
     expect(exp2.title).toBe('Beli Sabun Cuci')
-    expect(exp2.category).toBe('Lainnya')
+    expect(exp2.category).toBe('Belanja Stok')
   })
 
   it('reconstructs remote sales + sale_items into single transaction with items, lastTransaction untouched', async () => {
@@ -1226,7 +1228,7 @@ describe('P13: Entity Apply & Domain Logic', () => {
     expect(trx.itemCount).toBe(3)
   })
 
-  it('records shift version metadata, issues UNSUPPORTED_LOCAL_SHIFT_APPLY warning, leaves ShiftStore untouched', async () => {
+  it('applies remote shift records into ShiftStore and records version metadata', async () => {
     const shiftUuid = '99999999-9999-4999-8999-999999999999'
 
     shiftStore.isOpen = false
@@ -1244,8 +1246,13 @@ describe('P13: Entity Apply & Domain Logic', () => {
               data: {
                 sync_id: shiftUuid,
                 sync_version: 1,
-                shift_number: 1,
-                status: 'closed',
+                shift_number: 'SHIFT-001',
+                status: 'open',
+                opening_cash: 100000,
+                closing_cash: null,
+                opened_at: '2026-01-01T08:00:00Z',
+                closed_at: null,
+                notes: 'Pagi',
               },
             },
           ],
@@ -1267,11 +1274,12 @@ describe('P13: Entity Apply & Domain Logic', () => {
 
     const res = await pullService.pullNow({ context: makeValidCloudContext() })
     expect(res.ok).toBe(true)
-    expect(res.ignored).toBe(1)
-    expect(res.warnings).toContain('UNSUPPORTED_LOCAL_SHIFT_APPLY')
+    expect(res.warnings).not.toContain('UNSUPPORTED_LOCAL_SHIFT_APPLY')
 
-    // ShiftStore must remain unchanged
-    expect(shiftStore.isOpen).toBe(false)
+    expect(shiftStore.isOpen).toBe(true)
+    expect(shiftStore.openingBalance).toBe(100000)
+    expect(shiftStore.status).toBe('open')
+    expect(shiftStore.shiftNumber).toBe('SHIFT-001')
 
     // Version metadata must be recorded
     const versions = await adapter.loadSyncServerVersions()

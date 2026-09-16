@@ -628,7 +628,9 @@ describe('P37: pull applies extended records', () => {
     expect(trx.changeAmount).toBe(10000)
   })
 
-  it('accepts cash_ledger and stock_movements records and saves their cursors', async () => {
+  it('applies cash_ledger records into cashStore and saves their cursors', async () => {
+    const cashStore = (await import('../stores/cashStore')).useCashStore(pinia)
+
     const transport = async () => ({
       ok: true,
       status: 200,
@@ -638,12 +640,16 @@ describe('P37: pull applies extended records', () => {
             {
               entity: 'cash_ledger',
               sync_sequence: 1,
-              data: { sync_id: CAT_UUID, sync_version: 1 },
-            },
-            {
-              entity: 'stock_movements',
-              sync_sequence: 2,
-              data: { sync_id: PROD_UUID, sync_version: 1 },
+              data: {
+                sync_id: CAT_UUID,
+                sync_version: 1,
+                type: 'in',
+                amount: 50000,
+                category: 'Penjualan Cash',
+                note: 'INV-1',
+                reference_id: 'sale-remote-1',
+                occurred_at: '2026-09-16T10:00:00.000Z',
+              },
             },
           ],
           next_cursor: 10,
@@ -664,17 +670,508 @@ describe('P37: pull applies extended records', () => {
 
     const res = await pullService.pullNow({ context: makeContext() })
     expect(res.ok).toBe(true)
-    expect(res.warnings).toContain('UNSUPPORTED_LOCAL_CASH_LEDGER_APPLY')
-    expect(res.warnings).toContain('UNSUPPORTED_LOCAL_STOCK_MOVEMENT_APPLY')
+    expect(res.warnings).not.toContain('UNSUPPORTED_LOCAL_CASH_LEDGER_APPLY')
+
+    expect(cashStore.entries).toHaveLength(1)
+    expect(cashStore.entries[0].amount).toBe(50000)
+    expect(cashStore.entries[0].referenceId).toBe('sale-remote-1')
+    expect(cashStore.balance).toBe(50000)
 
     const versions = await adapter.loadSyncServerVersions()
     expect(versions[`cash_ledger:${CAT_UUID.toLowerCase()}`]).toBeDefined()
-    expect(versions[`stock_movements:${PROD_UUID.toLowerCase()}`]).toBeDefined()
+  })
+
+  it('repeats cash pull idempotently without duplicating entries', async () => {
+    const cashStore = (await import('../stores/cashStore')).useCashStore(pinia)
+
+    const transport = async () => ({
+      ok: true,
+      status: 200,
+      data: {
+        data: {
+          records: [
+            {
+              entity: 'cash_ledger',
+              sync_sequence: 1,
+              data: {
+                sync_id: CAT_UUID,
+                sync_version: 1,
+                type: 'in',
+                amount: 50000,
+                category: 'Penjualan Cash',
+                note: 'INV-1',
+                reference_id: 'sale-remote-1',
+                occurred_at: '2026-09-16T10:00:00.000Z',
+              },
+            },
+          ],
+          next_cursor: 10,
+          server_sequence: 10,
+          has_more: false,
+        },
+      },
+    })
+
+    const pullOnce = createSyncPullService({
+      adapter,
+      queueService,
+      registry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+    expect((await pullOnce.pullNow({ context: makeContext() })).ok).toBe(true)
+
+    // A second pull of the same cursor re-applies the same record: the
+    // cash entry resolves by sync_id/reference and is never duplicated.
+    const pullTwice = createSyncPullService({
+      adapter,
+      queueService,
+      registry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+    expect((await pullTwice.pullNow({ context: makeContext() })).ok).toBe(true)
+
+    expect(cashStore.entries).toHaveLength(1)
+    expect(cashStore.balance).toBe(50000)
+  })
+
+  it('applies stock_movements into history and converges product stock', async () => {
+    productStore.products = [
+      { id: PROD_UUID, name: 'Beras', category: 'Produk', price: 12000, stock: 50, isActive: true },
+    ]
+    productStore.stockMovements = []
+
+    const transport = async () => ({
+      ok: true,
+      status: 200,
+      data: {
+        data: {
+          records: [
+            {
+              entity: 'stock_movements',
+              sync_sequence: 1,
+              data: {
+                sync_id: 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',
+                sync_version: 1,
+                product_sync_id: PROD_UUID,
+                movement_type: 'sale',
+                quantity_change: -2,
+                stock_before: 50,
+                stock_after: 48,
+                reference_id: 'sale-remote-2',
+                category: 'Penjualan',
+                note: 'Penjualan Beras',
+                occurred_at: '2026-09-16T10:00:00.000Z',
+              },
+            },
+          ],
+          next_cursor: 10,
+          server_sequence: 10,
+          has_more: false,
+        },
+      },
+    })
+
+    const pullService = createSyncPullService({
+      adapter,
+      queueService,
+      registry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const res = await pullService.pullNow({ context: makeContext() })
+    expect(res.ok).toBe(true)
+    expect(res.warnings).not.toContain('UNSUPPORTED_LOCAL_STOCK_MOVEMENT_APPLY')
+
+    expect(productStore.stockMovements).toHaveLength(1)
+    expect(productStore.stockMovements[0].referenceId).toBe('sale-remote-2')
+    expect(productStore.products.find((p) => p.id === PROD_UUID).stock).toBe(48)
+
+    const versions = await adapter.loadSyncServerVersions()
+    expect(versions['stock_movements:aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa']).toBeDefined()
   })
 })
 
 describe('P37: production API configuration guard', () => {
   it('rejects localhost and empty base URLs as production API config', () => {
     expect(isProductionApiConfigured()).toBe(false)
+  })
+})
+
+describe('P37 patch: HPP snapshots, lifecycle, tombstones and convergence', () => {
+  let pinia
+  let adapter
+  let queueService
+  let registry
+
+  beforeEach(async () => {
+    pinia = createPinia()
+    setActivePinia(pinia)
+    adapter = createMemoryAdapter()
+    await adapter.initialize()
+    await adapter.saveSyncPushBinding({
+      businessId: 10,
+      deviceIdentifier: '33333333-3333-4333-8333-333333333333',
+      registeredDeviceId: 55,
+      boundAt: new Date().toISOString(),
+    })
+    queueService = createSyncQueueService({ adapter })
+    registry = createSyncIdentityRegistry({ adapter })
+    const businessStore = useBusinessStore(pinia)
+    businessStore.mode = 'cloud'
+  })
+
+  it('maps HPP snapshots and gross profit into sale payloads', async () => {
+    const result = await mapOutboxEntries(
+      [
+        {
+          id: 'q-patch-hpp',
+          entityType: SYNC_ENTITY_TYPES.TRANSACTION,
+          entityId: 'trx-hpp',
+          operation: SYNC_OPERATIONS.UPSERT,
+          payload: {
+            id: 'trx-hpp',
+            invoiceNumber: 'INV-HPP',
+            status: 'paid',
+            paymentStatus: 'paid',
+            subtotal: 36000,
+            total: 36000,
+            grossProfit: 18000,
+            createdAt: '2026-09-16T10:00:00.000Z',
+            items: [
+              {
+                id: 'p1',
+                name: 'Kopi',
+                price: 18000,
+                qty: 2,
+                hppSnapshot: 9000,
+                unit: 'pcs',
+                kind: 'product',
+                pricingUnit: 'pcs',
+                lineCost: 18000,
+              },
+            ],
+          },
+        },
+      ],
+      { registry },
+    )
+
+    expect(result.blocked).toHaveLength(0)
+    expect(result.changes.sales[0].gross_profit).toBe(18000)
+    const item = result.changes.sale_items[0]
+    expect(item.cost_snapshot).toBe(9000)
+    expect(item.unit).toBe('pcs')
+    expect(item.kind).toBe('product')
+    expect(item.pricing_unit).toBe('pcs')
+    expect(item.line_cost).toBe(18000)
+  })
+
+  it('maps Laundry lifecycle fields and customer/business snapshots', async () => {
+    const result = await mapOutboxEntries(
+      [
+        {
+          id: 'q-patch-ldr',
+          entityType: SYNC_ENTITY_TYPES.TRANSACTION,
+          entityId: 'trx-ldr',
+          operation: SYNC_OPERATIONS.UPSERT,
+          payload: {
+            id: 'trx-ldr',
+            invoiceNumber: 'LDR-20260916-0001',
+            status: 'unpaid',
+            paymentStatus: 'unpaid',
+            subtotal: 25000,
+            total: 25000,
+            orderStatus: 'Masuk',
+            estimatedCompletedAt: '2026-09-18T17:00:00.000Z',
+            note: 'Jangan pakai pewangi',
+            customerSnapshot: { id: 'c1', name: 'Andi', phone: '0811', email: '' },
+            businessSnapshot: { name: 'Berkah', outlet: 'Outlet 1', phone: '0800' },
+            createdAt: '2026-09-16T10:00:00.000Z',
+            items: [{ id: 'svc-1', name: 'Cuci', price: 10000, qty: 2.5 }],
+          },
+        },
+      ],
+      { registry },
+    )
+
+    expect(result.blocked).toHaveLength(0)
+    const sale = result.changes.sales[0]
+    expect(sale.order_status).toBe('Masuk')
+    expect(sale.estimated_completed_at).toBe('2026-09-18T17:00:00.000Z')
+    expect(sale.note).toBe('Jangan pakai pewangi')
+    expect(sale.customer_snapshot.name).toBe('Andi')
+    expect(sale.business_snapshot.name).toBe('Berkah')
+  })
+
+  it('maps shift upserts and expense categories', async () => {
+    const result = await mapOutboxEntries(
+      [
+        {
+          id: 'q-patch-shift',
+          entityType: SYNC_ENTITY_TYPES.SHIFT,
+          entityId: 'shift-1',
+          operation: SYNC_OPERATIONS.UPSERT,
+          payload: {
+            id: 'shift-1',
+            shiftNumber: 'SHIFT-001',
+            status: 'open',
+            openingCash: 100000,
+            openedAt: '2026-09-16T08:00:00.000Z',
+            notes: 'Pagi',
+          },
+        },
+        {
+          id: 'q-patch-exp',
+          entityType: SYNC_ENTITY_TYPES.EXPENSE,
+          entityId: 'exp-1',
+          operation: SYNC_OPERATIONS.UPSERT,
+          payload: {
+            id: 'exp-1',
+            title: 'Deterjen',
+            category: 'Belanja Stok',
+            amount: 75000,
+            createdAt: '2026-09-16T10:00:00.000Z',
+          },
+        },
+      ],
+      { registry },
+    )
+
+    expect(result.blocked).toHaveLength(0)
+    expect(result.changes.shifts).toHaveLength(1)
+    expect(result.changes.shifts[0].shift_number).toBe('SHIFT-001')
+    expect(result.changes.expenses[0].category).toBe('Belanja Stok')
+  })
+
+  it('maps tombstone deletions for masters and rejects history deletes', async () => {
+    const result = await mapOutboxEntries(
+      [
+        { id: 'q-del-p', entityType: SYNC_ENTITY_TYPES.PRODUCT, entityId: 'p1', operation: SYNC_OPERATIONS.DELETE },
+        { id: 'q-del-t', entityType: SYNC_ENTITY_TYPES.TRANSACTION, entityId: 't1', operation: SYNC_OPERATIONS.DELETE },
+      ],
+      { registry },
+    )
+
+    expect(result.changes.deletions).toHaveLength(1)
+    expect(result.changes.deletions[0].entity).toBe('products')
+    expect(result.mappedQueueIds).toEqual(['q-del-p'])
+    expect(result.blocked).toHaveLength(1)
+    expect(result.blocked[0].code).toBe('DELETE_NOT_SUPPORTED_BY_SERVER_V1')
+  })
+
+  it('converges unpaid -> paid from an accepted remote record', async () => {
+    const productStore = useProductStore(pinia)
+    const transactionStore = useTransactionStore(pinia)
+    await registry.bindSyncId('category', 'Produk', '22222222-2222-4222-8222-222222222222')
+    productStore.categories = ['Semua', 'Produk']
+    const saleUuid = '77777777-7777-4777-8777-777777777777'
+
+    transactionStore.items = [
+      {
+        id: saleUuid,
+        invoiceNumber: 'LDR-1',
+        status: 'unpaid',
+        paymentStatus: 'unpaid',
+        paymentMethod: null,
+        paidAt: null,
+        cashReceived: null,
+        changeAmount: null,
+        items: [],
+        subtotal: 25000,
+        total: 25000,
+        createdAt: '2026-09-16T10:00:00.000Z',
+      },
+    ]
+
+    const transport = async () => ({
+      ok: true,
+      status: 200,
+      data: {
+        data: {
+          records: [
+            {
+              entity: 'sales',
+              sync_sequence: 1,
+              data: {
+                sync_id: saleUuid,
+                sync_version: 2,
+                transaction_number: 'LDR-1',
+                status: 'paid',
+                subtotal: 25000,
+                total_amount: 25000,
+                payment_method: 'cash',
+                payment_status: 'paid',
+                paid_at: '2026-09-16T12:00:00.000Z',
+                cash_received: 50000,
+                change_amount: 25000,
+                sold_at: '2026-09-16T10:00:00.000Z',
+              },
+            },
+          ],
+          next_cursor: 10,
+          server_sequence: 10,
+          has_more: false,
+        },
+      },
+    })
+
+    const pullService = createSyncPullService({
+      adapter,
+      queueService,
+      registry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const res = await pullService.pullNow({ context: makeContext() })
+    expect(res.ok).toBe(true)
+
+    const trx = transactionStore.items.find((t) => t.id === saleUuid)
+    expect(trx.paymentStatus).toBe('paid')
+    expect(trx.paymentMethod).toBe('cash')
+    expect(trx.paidAt).toBe('2026-09-16T12:00:00.000Z')
+    expect(trx.cashReceived).toBe(50000)
+    expect(trx.changeAmount).toBe(25000)
+  })
+
+  it('keeps the historical customer snapshot after the master is renamed', async () => {
+    const customerStore = (await import('../stores/customerStore')).useCustomerStore(pinia)
+    const productStore = useProductStore(pinia)
+    const transactionStore = useTransactionStore(pinia)
+    await registry.bindSyncId('category', 'Produk', '22222222-2222-4222-8222-222222222222')
+    productStore.categories = ['Semua', 'Produk']
+    const custSyncId = '99999999-9999-4999-8999-999999999999'
+    await registry.bindSyncId('customer', 'cust-old', custSyncId)
+    customerStore.customers = [
+      { id: 'cust-old', name: 'Andi Baru', phone: '0811', email: '' },
+    ]
+    transactionStore.items = []
+
+    const saleUuid = '88888888-8888-4888-8888-888888888888'
+    const prodUuid = 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa'
+    const transport = async () => ({
+      ok: true,
+      status: 200,
+      data: {
+        data: {
+          records: [
+            {
+              entity: 'products',
+              sync_sequence: 1,
+              data: {
+                sync_id: prodUuid,
+                sync_version: 1,
+                category_sync_id: '22222222-2222-4222-8222-222222222222',
+                name: 'Kopi',
+                price: 10000,
+                status: 'active',
+              },
+            },
+            {
+              entity: 'customers',
+              sync_sequence: 2,
+              data: { sync_id: custSyncId, sync_version: 2, name: 'Andi Baru', phone: '0811', email: '' },
+            },
+            {
+              entity: 'sales',
+              sync_sequence: 3,
+              data: {
+                sync_id: saleUuid,
+                sync_version: 1,
+                transaction_number: 'INV-ANDI',
+                status: 'paid',
+                subtotal: 10000,
+                total_amount: 10000,
+                sold_at: '2026-09-16T10:00:00.000Z',
+                customer_sync_id: custSyncId,
+                customer_snapshot: { id: 'cust-old', name: 'Andi', phone: '0811', email: '' },
+              },
+            },
+            {
+              entity: 'sale_items',
+              sync_sequence: 4,
+              data: {
+                sync_id: 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb',
+                sync_version: 1,
+                sale_sync_id: saleUuid,
+                product_sync_id: prodUuid,
+                product_name: 'Kopi',
+                unit_price: 10000,
+                quantity: 1,
+                line_total: 10000,
+              },
+            },
+          ],
+          next_cursor: 10,
+          server_sequence: 10,
+          has_more: false,
+        },
+      },
+    })
+
+    const pullService = createSyncPullService({
+      adapter,
+      queueService,
+      registry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const res = await pullService.pullNow({ context: makeContext() })
+    expect(res.ok).toBe(true)
+
+    const trx = transactionStore.items.find((t) => t.id === saleUuid)
+    expect(trx).toBeDefined()
+    expect(trx.customerSnapshot.name).toBe('Andi')
+    expect(customerStore.customers.find((c) => c.id === 'cust-old').name).toBe('Andi Baru')
+  })
+
+  it('blocks pull over pending cash and shift mutations', async () => {
+    const cashStore = (await import('../stores/cashStore')).useCashStore(pinia)
+    cashStore.entries = [
+      { id: 'cash-local', type: 'in', amount: 1000, category: 'Kas', note: '', referenceId: null, createdAt: '2026-09-16T10:00:00.000Z' },
+    ]
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.CASH_ENTRY, 'cash-local', cashStore.entries[0])
+    await registry.resolveSyncId(SYNC_ENTITY_TYPES.CASH_ENTRY, 'cash-local')
+
+    const transport = async () => ({
+      ok: true,
+      status: 200,
+      data: {
+        data: {
+          records: [
+            {
+              entity: 'cash_ledger',
+              sync_sequence: 1,
+              data: { sync_id: await registry.resolveSyncId(SYNC_ENTITY_TYPES.CASH_ENTRY, 'cash-local'), sync_version: 2, type: 'in', amount: 2000, occurred_at: '2026-09-16T10:00:00.000Z' },
+            },
+          ],
+          next_cursor: 10,
+          server_sequence: 10,
+          has_more: false,
+        },
+      },
+    })
+
+    const pullService = createSyncPullService({
+      adapter,
+      queueService,
+      registry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const res = await pullService.pullNow({ context: makeContext() })
+    expect(res.ok).toBe(false)
+    expect(res.code).toBe('LOCAL_PENDING_SYNC_CONFLICT')
   })
 })

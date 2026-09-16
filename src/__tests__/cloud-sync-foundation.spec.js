@@ -550,7 +550,7 @@ describe('P9 product sync tracking', () => {
     expect(await runtime.queueService.countPending()).toBe(0)
   })
 
-  it('updateProduct -> latest upsert', async () => {
+  it('updateProduct -> latest upsert plus exactly one movement', async () => {
     const runtime = await createSyncRuntime()
 
     const created = runtime.productStore.createProduct({
@@ -559,19 +559,55 @@ describe('P9 product sync tracking', () => {
       price: 10000,
       stock: 5,
     })
-    runtime.productStore.updateProduct(created.product.id, {
+    const updated = runtime.productStore.updateProduct(created.product.id, {
       name: 'Kopi Susu',
       category: 'Minuman',
       price: 15000,
       stock: 3,
       isActive: true,
     })
+    expect(updated.success).toBe(true)
     await flush(runtime)
 
     const pending = await runtime.queueService.listPending()
-    expect(pending).toHaveLength(1)
-    expect(pending[0].payload.price).toBe(15000)
-    expect(pending[0].payload.name).toBe('Kopi Susu')
+    const productRows = pending.filter((row) => row.entityType === SYNC_ENTITY_TYPES.PRODUCT)
+    const movementRows = pending.filter((row) => row.entityType === SYNC_ENTITY_TYPES.STOCK_MOVEMENT)
+    expect(productRows).toHaveLength(1)
+    expect(productRows[0].payload.price).toBe(15000)
+    expect(productRows[0].payload.name).toBe('Kopi Susu')
+    // The stock change 5 -> 3 emits exactly one movement (+0 product doubles).
+    expect(movementRows).toHaveLength(1)
+    expect(movementRows[0].payload.quantityChange).toBe(-2)
+  })
+
+  it('edit product stock 10 -> 15 queues one movement with quantityChange +5', async () => {
+    const runtime = await createSyncRuntime()
+
+    const created = runtime.productStore.createProduct({
+      name: 'Beras',
+      category: 'Minuman',
+      price: 12000,
+      stock: 10,
+    })
+    expect(created.success).toBe(true)
+    await flush(runtime)
+
+    const updated = runtime.productStore.updateProduct(created.product.id, {
+      name: 'Beras',
+      category: 'Minuman',
+      price: 12000,
+      stock: 15,
+    })
+    expect(updated.success).toBe(true)
+    await flush(runtime)
+
+    expect(runtime.productStore.getProductById(created.product.id).stock).toBe(15)
+
+    const pending = await runtime.queueService.listPending()
+    const movementRows = pending.filter((row) => row.entityType === SYNC_ENTITY_TYPES.STOCK_MOVEMENT)
+    expect(movementRows).toHaveLength(1)
+    expect(movementRows[0].payload.quantityChange).toBe(5)
+    expect(movementRows[0].payload.stockAfter).toBe(15)
   })
 
   it('toggleProductActive -> upsert latest state', async () => {
@@ -1055,8 +1091,32 @@ describe('P9 sync safety', () => {
     expect(await runtime.queueService.countPending()).toBe(0)
   })
 
-  it('shift mutation tidak queue', async () => {
+  it('shift open queues one shift upsert in cloud mode', async () => {
     const runtime = await createSyncRuntime()
+
+    runtime.shiftStore.openShift(100000)
+    await flush(runtime)
+
+    const pending = await runtime.queueService.listPending()
+    const shiftRows = pending.filter((row) => row.entityType === SYNC_ENTITY_TYPES.SHIFT)
+    expect(shiftRows).toHaveLength(1)
+    expect(shiftRows[0].operation).toBe(SYNC_OPERATIONS.UPSERT)
+  })
+
+  it('shift close updates the same shift identity', async () => {
+    const runtime = await createSyncRuntime()
+
+    runtime.shiftStore.openShift(100000)
+    runtime.shiftStore.closeShift()
+    await flush(runtime)
+
+    const pending = await runtime.queueService.listPending()
+    const shiftRows = pending.filter((row) => row.entityType === SYNC_ENTITY_TYPES.SHIFT)
+    expect(shiftRows).toHaveLength(1)
+  })
+
+  it('shift mutation tidak queue in free mode', async () => {
+    const runtime = await createSyncRuntime({ mode: 'free' })
 
     runtime.shiftStore.openShift(100000)
     await flush(runtime)

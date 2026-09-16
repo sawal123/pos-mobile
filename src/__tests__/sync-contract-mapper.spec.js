@@ -261,7 +261,7 @@ describe('P11: Category Mapping', () => {
     expect(result.blocked).toHaveLength(0)
   })
 
-  it('blocks category delete with DELETE_NOT_SUPPORTED_BY_SERVER_V1', async () => {
+  it('maps category delete to a non-destructive tombstone deletion', async () => {
     const entries = [
       {
         id: 'q-cat-del',
@@ -275,10 +275,31 @@ describe('P11: Category Mapping', () => {
     const result = await mapOutboxEntries(entries, { registry })
 
     expect(result.changes.categories).toHaveLength(0)
+    expect(result.changes.deletions).toHaveLength(1)
+    expect(result.changes.deletions[0].entity).toBe('categories')
+    expect(isUuid(result.changes.deletions[0].sync_id)).toBe(true)
+    expect(result.mappedQueueIds).toEqual(['q-cat-del'])
+    expect(result.blocked).toHaveLength(0)
+  })
+
+  it('still rejects delete for immutable transaction history', async () => {
+    const entries = [
+      {
+        id: 'q-trx-del',
+        entityType: SYNC_ENTITY_TYPES.TRANSACTION,
+        entityId: 'trx-1',
+        operation: SYNC_OPERATIONS.DELETE,
+        payload: { id: 'trx-1' },
+      },
+    ]
+
+    const result = await mapOutboxEntries(entries, { registry })
+
+    expect(result.changes.deletions).toHaveLength(0)
     expect(result.mappedQueueIds).toHaveLength(0)
     expect(result.blocked).toHaveLength(1)
     expect(result.blocked[0]).toMatchObject({
-      queueId: 'q-cat-del',
+      queueId: 'q-trx-del',
       code: 'DELETE_NOT_SUPPORTED_BY_SERVER_V1',
     })
   })
@@ -451,7 +472,7 @@ describe('P11: Expense Mapping', () => {
     registry = createSyncIdentityRegistry({ adapter })
   })
 
-  it('maps expense title to description, normalizes date, and warns about local category', async () => {
+  it('maps expense title to description, normalizes date, and round-trips category', async () => {
     const entries = [
       {
         id: 'q-exp-1',
@@ -478,9 +499,8 @@ describe('P11: Expense Mapping', () => {
       shift_sync_id: null,
       occurred_at: '2026-08-24T10:00:00.000Z',
     })
-    expect(result.changes.expenses[0].category).toBeUndefined()
-    expect(result.warnings).toHaveLength(1)
-    expect(result.warnings[0].code).toBe('UNSUPPORTED_EXPENSE_CATEGORY_FIELD')
+    expect(result.changes.expenses[0].category).toBe('Operasional')
+    expect(result.warnings).toHaveLength(0)
     expect(result.mappedQueueIds).toEqual(['q-exp-1'])
   })
 
@@ -749,7 +769,7 @@ describe('P11: Business Entity & Delete Operation Blocking', () => {
     expect(result.mappedQueueIds).toHaveLength(0)
   })
 
-  it('blocks delete operations across all entity types', async () => {
+  it('tombstones master deletes and still rejects immutable history deletes', async () => {
     const entries = [
       { id: 'd-1', entityType: SYNC_ENTITY_TYPES.PRODUCT, entityId: 'p1', operation: SYNC_OPERATIONS.DELETE },
       { id: 'd-2', entityType: SYNC_ENTITY_TYPES.CUSTOMER, entityId: 'c1', operation: SYNC_OPERATIONS.DELETE },
@@ -759,9 +779,13 @@ describe('P11: Business Entity & Delete Operation Blocking', () => {
 
     const result = await mapOutboxEntries(entries, { registry })
 
-    expect(result.blocked).toHaveLength(4)
-    expect(result.blocked.every((b) => b.code === 'DELETE_NOT_SUPPORTED_BY_SERVER_V1')).toBe(true)
-    expect(result.mappedQueueIds).toHaveLength(0)
+    expect(result.changes.deletions).toHaveLength(3)
+    expect(result.mappedQueueIds).toEqual(['d-1', 'd-2', 'd-3'])
+    expect(result.blocked).toHaveLength(1)
+    expect(result.blocked[0]).toMatchObject({
+      queueId: 'd-4',
+      code: 'DELETE_NOT_SUPPORTED_BY_SERVER_V1',
+    })
   })
 
   it('fails closed on unsupported foreign operations besides upsert and delete', async () => {
@@ -847,11 +871,11 @@ describe('P11: Mixed Batch Processing & Ordering', () => {
     expect(result.changes.categories).toHaveLength(1)
     expect(result.changes.products).toHaveLength(1)
     expect(result.changes.customers).toHaveLength(1)
+    expect(result.changes.deletions).toHaveLength(1)
 
-    expect(result.mappedQueueIds).toEqual(['q-1', 'q-3', 'q-5'])
-    expect(result.blocked).toHaveLength(2)
+    expect(result.mappedQueueIds).toEqual(['q-1', 'q-3', 'q-4', 'q-5'])
+    expect(result.blocked).toHaveLength(1)
     expect(result.blocked[0].queueId).toBe('q-2')
-    expect(result.blocked[1].queueId).toBe('q-4')
   })
 })
 

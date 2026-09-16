@@ -92,6 +92,7 @@ export async function mapOutboxEntries(
     expenses: [],
     cash_ledger: [],
     stock_movements: [],
+    deletions: [],
   }
 
   const mappedQueueIds = []
@@ -105,16 +106,59 @@ export async function mapOutboxEntries(
     const operation = entry.operation
     const payload = entry.payload ?? {}
 
-    // ── 1. Block all DELETE operations (not supported by Laravel v1 push contract)
+    // ── 1. DELETE becomes a non-destructive tombstone for mutable master
+    // entities. Immutable history (transaction/cash/stock/shift) stays
+    // rejected: history rows are never deleted through sync.
     if (operation === SYNC_OPERATIONS.DELETE) {
-      blocked.push({
-        queueId,
-        entityType,
-        entityId,
-        operation,
-        code: 'DELETE_NOT_SUPPORTED_BY_SERVER_V1',
-        message: 'Delete operations are not supported by server v1 contract',
-      })
+      const tombstoneEntities = {
+        [SYNC_ENTITY_TYPES.CATEGORY]: 'categories',
+        [SYNC_ENTITY_TYPES.PRODUCT]: 'products',
+        [SYNC_ENTITY_TYPES.CUSTOMER]: 'customers',
+        [SYNC_ENTITY_TYPES.EXPENSE]: 'expenses',
+      }
+
+      const tombstoneTarget = tombstoneEntities[entityType]
+
+      if (!tombstoneTarget) {
+        blocked.push({
+          queueId,
+          entityType,
+          entityId,
+          operation,
+          code: 'DELETE_NOT_SUPPORTED_BY_SERVER_V1',
+          message: `Delete operations for '${entityType}' are not supported by server contract`,
+        })
+        continue
+      }
+
+      const deleteSyncId = entityType === SYNC_ENTITY_TYPES.CATEGORY && !isUuid(entityId)
+        ? await activeRegistry.resolveSyncId(SYNC_ENTITY_TYPES.CATEGORY, entityId)
+        : isUuid(entityId)
+          ? entityId.toLowerCase()
+          : await activeRegistry.resolveSyncId(entityType, entityId)
+
+      if (!isUuid(deleteSyncId)) {
+        blocked.push({
+          queueId,
+          entityType,
+          entityId,
+          operation,
+          code: 'INVALID_SYNC_ID',
+          message: 'Failed to resolve valid UUID for tombstone delete',
+        })
+        continue
+      }
+
+      const deletion = {
+        entity: tombstoneTarget,
+        sync_id: deleteSyncId,
+      }
+      const deleteBaseVer = extractServerSyncVersion(serverVersions, tombstoneTarget, deleteSyncId)
+      if (deleteBaseVer !== undefined) {
+        deletion.base_sync_version = deleteBaseVer
+      }
+      changes.deletions.push(deletion)
+      mappedQueueIds.push(queueId)
       continue
     }
 
@@ -405,16 +449,6 @@ export async function mapOutboxEntries(
         continue
       }
 
-      if (payload.category) {
-        warnings.push({
-          queueId,
-          entityType,
-          entityId,
-          code: 'UNSUPPORTED_EXPENSE_CATEGORY_FIELD',
-          message: 'Expense category is omitted from server v1 sync contract payload',
-        })
-      }
-
       const syncId = await activeRegistry.resolveSyncId(SYNC_ENTITY_TYPES.EXPENSE, expenseId)
       if (!isUuid(syncId)) {
         blocked.push({
@@ -441,6 +475,10 @@ export async function mapOutboxEntries(
         amount: payload.amount,
         occurred_at: new Date(occurredAt).toISOString(),
         notes,
+      }
+
+      if (isNonEmptyString(payload.category)) {
+        expenseChange.category = payload.category.trim()
       }
       const expBaseVer = extractServerSyncVersion(serverVersions, 'expenses', syncId)
       if (expBaseVer !== undefined) {
@@ -589,6 +627,11 @@ export async function mapOutboxEntries(
         const sku = buildProductSyncSku(prodSyncId)
         const lineTotal = item.price * qty
 
+        const itemHpp = Number(item.hppSnapshot ?? item.costSnapshot ?? item.cost)
+        const itemLineCost = item.lineCost !== undefined && item.lineCost !== null
+          ? Number(item.lineCost)
+          : (Number.isFinite(itemHpp) ? itemHpp * qty : 0)
+
         const saleItemChange = {
           sync_id: itemSyncId,
           sale_sync_id: saleSyncId,
@@ -598,6 +641,26 @@ export async function mapOutboxEntries(
           unit_price: item.price,
           quantity: qty,
           line_total: lineTotal,
+        }
+
+        if (Number.isFinite(itemHpp) && itemHpp >= 0) {
+          saleItemChange.cost_snapshot = itemHpp
+        }
+
+        const itemUnit = item.unit ?? item.pricingUnit
+        if (isNonEmptyString(itemUnit)) {
+          saleItemChange.unit = itemUnit.trim()
+        }
+
+        const itemKind = item.kind === 'service' ? 'service' : 'product'
+        saleItemChange.kind = itemKind
+
+        if (isNonEmptyString(item.pricingUnit)) {
+          saleItemChange.pricing_unit = item.pricingUnit.trim()
+        }
+
+        if (Number.isFinite(itemLineCost) && itemLineCost >= 0) {
+          saleItemChange.line_cost = itemLineCost
         }
         const itemBaseVer = extractServerSyncVersion(serverVersions, 'sale_items', itemSyncId)
         if (itemBaseVer !== undefined) {
@@ -678,6 +741,57 @@ export async function mapOutboxEntries(
       if (Number.isInteger(payload.changeAmount) && payload.changeAmount >= 0) {
         saleChange.change_amount = payload.changeAmount
       }
+
+      const grossProfitRaw = Number(payload.grossProfit)
+      if (Number.isFinite(grossProfitRaw)) {
+        saleChange.gross_profit = grossProfitRaw
+      }
+
+      if (isNonEmptyString(payload.orderStatus)) {
+        saleChange.order_status = payload.orderStatus.trim()
+      }
+
+      if (isNonEmptyString(payload.estimatedCompletedAt) && isValidDateString(payload.estimatedCompletedAt)) {
+        saleChange.estimated_completed_at = new Date(payload.estimatedCompletedAt).toISOString()
+      }
+
+      if (isNonEmptyString(payload.note)) {
+        saleChange.note = payload.note.trim()
+      }
+
+      const customerSnapshot = payload.customerSnapshot
+      if (customerSnapshot && typeof customerSnapshot === 'object') {
+        const normalizedSnapshot = {
+          id: customerSyncId ?? customerSnapshot.id ?? null,
+        }
+        if (isNonEmptyString(customerSnapshot.name)) {
+          normalizedSnapshot.name = customerSnapshot.name.trim()
+        }
+        if (customerSnapshot.phone !== undefined && customerSnapshot.phone !== null) {
+          normalizedSnapshot.phone = `${customerSnapshot.phone}`
+        }
+        if (customerSnapshot.email !== undefined && customerSnapshot.email !== null) {
+          normalizedSnapshot.email = `${customerSnapshot.email}`
+        }
+        saleChange.customer_snapshot = normalizedSnapshot
+      }
+
+      const businessSnapshot = payload.businessSnapshot
+      if (businessSnapshot && typeof businessSnapshot === 'object') {
+        const normalizedBusiness = {}
+        if (isNonEmptyString(businessSnapshot.name)) {
+          normalizedBusiness.name = businessSnapshot.name.trim()
+        }
+        if (isNonEmptyString(businessSnapshot.outlet)) {
+          normalizedBusiness.outlet = businessSnapshot.outlet.trim()
+        }
+        if (businessSnapshot.phone !== undefined && businessSnapshot.phone !== null) {
+          normalizedBusiness.phone = `${businessSnapshot.phone}`
+        }
+        if (Object.keys(normalizedBusiness).length > 0) {
+          saleChange.business_snapshot = normalizedBusiness
+        }
+      }
       const saleBaseVer = extractServerSyncVersion(serverVersions, 'sales', saleSyncId)
       if (saleBaseVer !== undefined) {
         saleChange.base_sync_version = saleBaseVer
@@ -689,7 +803,97 @@ export async function mapOutboxEntries(
       continue
     }
 
-    // ── 8. Cash entry mapping (physical CASH IN/OUT only)
+    // ── 8. Shift mapping
+    if (entityType === SYNC_ENTITY_TYPES.SHIFT) {
+      const shiftId = payload.id ?? entityId
+
+      if (!isNonEmptyString(payload.shiftNumber) && !isNonEmptyString(payload.openedAt)) {
+        blocked.push({
+          queueId,
+          entityType,
+          entityId,
+          operation,
+          code: 'INVALID_SHIFT_SNAPSHOT',
+          message: 'Shift snapshot must contain a shift number or openedAt',
+        })
+        continue
+      }
+
+      const syncId = await activeRegistry.resolveSyncId(SYNC_ENTITY_TYPES.SHIFT, shiftId)
+      if (!isUuid(syncId)) {
+        blocked.push({
+          queueId,
+          entityType,
+          entityId,
+          operation,
+          code: 'INVALID_SYNC_ID',
+          message: 'Failed to resolve valid UUID for shift',
+        })
+        continue
+      }
+
+      const shiftOpenedAt = payload.openedAt ?? payload.opened_at
+      if (!isValidDateString(shiftOpenedAt)) {
+        blocked.push({
+          queueId,
+          entityType,
+          entityId,
+          operation,
+          code: 'INVALID_SHIFT_DATE',
+          message: 'Shift opened_at date is invalid',
+        })
+        continue
+      }
+
+      const shiftChange = {
+        sync_id: syncId,
+        shift_number: isNonEmptyString(payload.shiftNumber)
+          ? payload.shiftNumber.trim()
+          : `${shiftId}`,
+        status: payload.status === 'closed' ? 'closed' : 'open',
+        opened_at: new Date(shiftOpenedAt).toISOString(),
+      }
+
+      const openingCash = Number(payload.openingCash ?? payload.opening_cash)
+      if (Number.isInteger(openingCash) && openingCash >= 0) {
+        shiftChange.opening_cash = openingCash
+      }
+
+      const closingCash = payload.closingCash ?? payload.closing_cash
+      if (closingCash !== undefined && closingCash !== null && Number.isInteger(Number(closingCash)) && Number(closingCash) >= 0) {
+        shiftChange.closing_cash = Number(closingCash)
+      }
+
+      const closedAt = payload.closedAt ?? payload.closed_at
+      if (closedAt !== undefined && closedAt !== null) {
+        if (!isValidDateString(closedAt)) {
+          blocked.push({
+            queueId,
+            entityType,
+            entityId,
+            operation,
+            code: 'INVALID_SHIFT_DATE',
+            message: 'Shift closed_at date is invalid',
+          })
+          continue
+        }
+        shiftChange.closed_at = new Date(closedAt).toISOString()
+      }
+
+      if (isNonEmptyString(payload.notes ?? payload.note)) {
+        shiftChange.notes = `${payload.notes ?? payload.note}`.trim()
+      }
+
+      const shiftBaseVer = extractServerSyncVersion(serverVersions, 'shifts', syncId)
+      if (shiftBaseVer !== undefined) {
+        shiftChange.base_sync_version = shiftBaseVer
+      }
+      changes.shifts.push(shiftChange)
+      mappedQueueIds.push(queueId)
+      continue
+    }
+
+    // ── 9. Cash entry mapping (physical CASH IN/OUT only)
     if (entityType === SYNC_ENTITY_TYPES.CASH_ENTRY) {
       const cashId = payload.id ?? entityId
       const cashType = `${payload.type ?? ''}`.toLowerCase()
@@ -785,7 +989,7 @@ export async function mapOutboxEntries(
       continue
     }
 
-    // ── 9. Stock movement mapping
+    // ── 10. Stock movement mapping
     if (entityType === SYNC_ENTITY_TYPES.STOCK_MOVEMENT) {
       const movementId = payload.id ?? entityId
 
@@ -917,7 +1121,7 @@ export async function mapOutboxEntries(
       continue
     }
 
-    // ── 10. Unknown entity type fallback
+    // ── 11. Unknown entity type fallback
     blocked.push({
       queueId,
       entityType,

@@ -382,6 +382,8 @@ describe('P14: Local Snapshot & Preflight Atomicity', () => {
   let queueService
   let registry
   let productStore
+  let cashStore
+  let shiftStore
   let customerStore
   let expenseStore
   let transactionStore
@@ -395,12 +397,29 @@ describe('P14: Local Snapshot & Preflight Atomicity', () => {
     registry = createSyncIdentityRegistry({ adapter })
 
     productStore = useProductStore(pinia)
+    const { useCashStore: useCash } = await import('../stores/cashStore')
+    const { useShiftStore: useShift } = await import('../stores/shiftStore')
+    cashStore = useCash(pinia)
+    shiftStore = useShift(pinia)
     customerStore = useCustomerStore(pinia)
     expenseStore = useExpenseStore(pinia)
     transactionStore = useTransactionStore(pinia)
 
     productStore.products = []
     productStore.categories = []
+    productStore.stockMovements = []
+    cashStore.entries = []
+    shiftStore.$patch({
+      isOpen: false,
+      openingBalance: 0,
+      openedAt: null,
+      id: null,
+      shiftNumber: null,
+      status: null,
+      closingBalance: null,
+      closedAt: null,
+      notes: '',
+    })
     customerStore.customers = []
     expenseStore.expenses = []
     transactionStore.items = []
@@ -447,6 +466,9 @@ describe('P14: Local Snapshot & Preflight Atomicity', () => {
       customers: 1,
       expenses: 1,
       transactions: 1,
+      shifts: 0,
+      cashEntries: 0,
+      stockMovements: 0,
     })
 
     const pending = await queueService.listPending({ limit: 100 })
@@ -463,6 +485,70 @@ describe('P14: Local Snapshot & Preflight Atomicity', () => {
     expect(state.status).toBe('staged')
     expect(state.businessId).toBe(10)
     expect(state.outletId).toBe(101)
+  })
+
+  it('stages shift, cash entries and stock movements in the Free snapshot', async () => {
+    productStore.categories = ['Minuman']
+    productStore.products = [
+      { id: 'p-1', name: 'Kopi', price: 10000, category: 'Minuman', stock: 10, isActive: true },
+    ]
+    productStore.stockMovements = [
+      {
+        id: 'move-1',
+        productId: 'p-1',
+        productName: 'Kopi',
+        type: 'adjustment',
+        quantityChange: 10,
+        stockBefore: 0,
+        stockAfter: 10,
+        referenceId: null,
+        category: 'Adjustment',
+        note: '',
+        createdAt: '2026-08-26T00:00:00.000Z',
+      },
+    ]
+    cashStore.entries = [
+      {
+        id: 'cash-1',
+        type: 'in',
+        amount: 100000,
+        category: 'Saldo Awal',
+        note: '',
+        referenceId: null,
+        createdAt: '2026-08-26T00:00:00.000Z',
+      },
+    ]
+    shiftStore.$patch({
+      id: 'shift-1',
+      shiftNumber: 'SHIFT-001',
+      status: 'open',
+      isOpen: true,
+      openingBalance: 100000,
+      openedAt: '2026-08-26T08:00:00.000Z',
+      closingBalance: null,
+      closedAt: null,
+      notes: '',
+    })
+
+    const service = createSyncBootstrapService({
+      adapter,
+      queueService,
+      registry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport: mockEmptyServerTransport(),
+    })
+
+    const res = await service.bootstrapNow({ context: makeValidCloudContext() })
+    expect(res.ok).toBe(true)
+    expect(res.counts.shifts).toBe(1)
+    expect(res.counts.cashEntries).toBe(1)
+    expect(res.counts.stockMovements).toBe(1)
+
+    const pending = await queueService.listPending({ limit: 100 })
+    expect(pending.some((item) => item.entityType === SYNC_ENTITY_TYPES.SHIFT)).toBe(true)
+    expect(pending.some((item) => item.entityType === SYNC_ENTITY_TYPES.CASH_ENTRY)).toBe(true)
+    expect(pending.some((item) => item.entityType === SYNC_ENTITY_TYPES.STOCK_MOVEMENT)).toBe(true)
   })
 
   it('fails with BOOTSTRAP_PREFLIGHT_FAILED and stages NOTHING if a legacy transaction has invalid items', async () => {

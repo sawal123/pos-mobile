@@ -98,7 +98,8 @@ describe('P12: Push Transport & Request Contract', () => {
       createdAt: '2026-08-25T10:00:00.000Z',
       items: [{ id: 'p1', name: 'Kopi Susu', price: 15000, qty: 1 }],
     })
-    // Blocked entries that should not be sent
+    // Blocked entries that should not be sent; the product delete becomes a
+    // tombstone deletion, so only the business entry stays blocked.
     await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.BUSINESS, '1', { name: 'Ignored Biz' })
     await queueService.enqueueDelete(SYNC_ENTITY_TYPES.PRODUCT, 'p-old')
 
@@ -148,10 +149,12 @@ describe('P12: Push Transport & Request Contract', () => {
     expect(body.changes.sales[0].status).toBe('paid')
     expect(body.changes.sale_items).toHaveLength(1)
 
-    // Blocked business and delete must be filtered out
-    expect(result.blocked).toHaveLength(2)
+    // Blocked business must be filtered out; the product delete now travels
+    // as a tombstone deletion.
+    expect(result.blocked).toHaveLength(1)
     expect(result.blocked.some((b) => b.code === 'UNSUPPORTED_SERVER_ENTITY_BUSINESS')).toBe(true)
-    expect(result.blocked.some((b) => b.code === 'DELETE_NOT_SUPPORTED_BY_SERVER_V1')).toBe(true)
+    expect(body.changes.deletions).toHaveLength(1)
+    expect(body.changes.deletions[0].entity).toBe('products')
   })
 })
 
@@ -173,7 +176,7 @@ describe('P12: Success & Idempotent Duplicate Handling', () => {
 
   it('removes sent unchanged queue items and clears envelope on server success (duplicate=false)', async () => {
     const q1 = await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.CATEGORY, 'Makanan', { name: 'Makanan' })
-    const q2 = await queueService.enqueueDelete(SYNC_ENTITY_TYPES.PRODUCT, 'p-del') // blocked
+    const q2 = await queueService.enqueueDelete(SYNC_ENTITY_TYPES.PRODUCT, 'p-del') // tombstone
 
     const transport = vi.fn().mockImplementation(async ({ body }) => ({
       ok: true,
@@ -198,9 +201,9 @@ describe('P12: Success & Idempotent Duplicate Handling', () => {
 
     expect(result.ok).toBe(true)
     expect(result.duplicate).toBe(false)
-    expect(result.removedQueueIds).toEqual([q1.entry.id])
+    expect(result.removedQueueIds).toEqual(expect.arrayContaining([q1.entry.id, q2.entry.id]))
     expect(result.preservedQueueIds).toEqual([])
-    expect(result.remaining).toBe(1) // only blocked delete remains
+    expect(result.remaining).toBe(0) // tombstone delete travels and clears too
 
     // Verify envelope is cleared
     const inflight = await adapter.loadSyncPushInflight()
@@ -208,8 +211,7 @@ describe('P12: Success & Idempotent Duplicate Handling', () => {
 
     // Verify queue in storage
     const pending = await queueService.listPending()
-    expect(pending).toHaveLength(1)
-    expect(pending[0].id).toBe(q2.entry.id)
+    expect(pending).toHaveLength(0)
   })
 
   it('removes sent unchanged queue items and clears envelope on duplicate success (duplicate=true)', async () => {

@@ -31,6 +31,9 @@ async function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegist
     expenses: SYNC_ENTITY_TYPES.EXPENSE,
     sales: SYNC_ENTITY_TYPES.TRANSACTION,
     sale_items: SYNC_ENTITY_TYPES.TRANSACTION,
+    shifts: SYNC_ENTITY_TYPES.SHIFT,
+    cash_ledger: SYNC_ENTITY_TYPES.CASH_ENTRY,
+    stock_movements: SYNC_ENTITY_TYPES.STOCK_MOVEMENT,
   }
   const targetEntityType = entityTypeMap[entity]
   if (!targetEntityType) {
@@ -211,6 +214,43 @@ async function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegist
     }
   }
 
+  // 6. Generic mapping for shifts, cash entries and stock movements: the
+  // queue snapshot entity type matches the conflict entity one-to-one.
+  const genericEntities = {
+    shifts: SYNC_ENTITY_TYPES.SHIFT,
+    cash_ledger: SYNC_ENTITY_TYPES.CASH_ENTRY,
+    stock_movements: SYNC_ENTITY_TYPES.STOCK_MOVEMENT,
+  }
+  if (genericEntities[entity]) {
+    const targetType = genericEntities[entity]
+    for (const snap of queueSnapshots) {
+      if (snap.entityType !== targetType) continue
+      const localId = snap.payload?.id ?? snap.entityId
+      const snapSyncId = activeRegistry && typeof activeRegistry.peekSyncId === 'function'
+        ? activeRegistry.peekSyncId(targetType, localId)
+        : null
+      if (
+        (snapSyncId && snapSyncId.toLowerCase() === sync_id.toLowerCase()) ||
+        String(snap.entityId).toLowerCase() === sync_id.toLowerCase() ||
+        String(snap.id).toLowerCase() === sync_id.toLowerCase()
+      ) {
+        return {
+          snapshot: snap,
+          queueId: snap.id,
+          entityType: targetType,
+          entityId: localId,
+        }
+      }
+    }
+
+    return {
+      snapshot: null,
+      queueId: null,
+      entityType: targetType,
+      entityId: null,
+    }
+  }
+
   return {
     snapshot: null,
     queueId: null,
@@ -272,7 +312,8 @@ export function createSyncPushService({
       changes.sale_items.length > MAX_ENTITY_PER_TYPE ||
       changes.expenses.length > MAX_ENTITY_PER_TYPE ||
       changes.cash_ledger.length > MAX_ENTITY_PER_TYPE ||
-      changes.stock_movements.length > MAX_ENTITY_PER_TYPE
+      changes.stock_movements.length > MAX_ENTITY_PER_TYPE ||
+      changes.deletions.length > MAX_ENTITY_PER_TYPE
     )
   }
 
@@ -641,6 +682,7 @@ export function createSyncPushService({
           expenses: [],
           cash_ledger: [],
           stock_movements: [],
+          deletions: [],
         }
 
         const batchSnapshots = []
@@ -721,7 +763,8 @@ export function createSyncPushService({
             mapped.changes.sale_items.length > 0 ||
             mapped.changes.expenses.length > 0 ||
             mapped.changes.cash_ledger.length > 0 ||
-            mapped.changes.stock_movements.length > 0
+            mapped.changes.stock_movements.length > 0 ||
+            mapped.changes.deletions.length > 0
 
           if (!isMapped || !hasServerChanges) {
             blocked.push({
@@ -762,6 +805,7 @@ export function createSyncPushService({
           accumulatedChanges.expenses.push(...mapped.changes.expenses)
           accumulatedChanges.cash_ledger.push(...mapped.changes.cash_ledger)
           accumulatedChanges.stock_movements.push(...mapped.changes.stock_movements)
+          accumulatedChanges.deletions.push(...mapped.changes.deletions)
 
           if (entry.entityType === SYNC_ENTITY_TYPES.CATEGORY) {
             const catName = entry.payload?.name || entry.entityId
@@ -1040,6 +1084,8 @@ export function createSyncPushService({
               'sales',
               'sale_items',
               'shifts',
+              'cash_ledger',
+              'stock_movements',
             ]
             if (!validEntities.includes(c.entity)) return false
             if (typeof c.sync_id !== 'string' || !c.sync_id.trim()) return false

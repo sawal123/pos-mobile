@@ -10,6 +10,7 @@ export const SYNC_ENTITY_TYPES = {
   CUSTOMER: 'customer',
   EXPENSE: 'expense',
   TRANSACTION: 'transaction',
+  SHIFT: 'shift',
   CASH_ENTRY: 'cash_entry',
   STOCK_MOVEMENT: 'stock_movement',
 }

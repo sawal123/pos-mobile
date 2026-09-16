@@ -52,6 +52,7 @@ function normalizeStockMovement(movement) {
     productId: movement.productId,
     productName: movement.productName ?? '',
     type: movement.type ?? 'adjustment',
+    movementType: movement.movementType ?? movement.type ?? 'adjustment',
     quantityChange: normalizeNumber(movement.quantityChange),
     stockBefore: normalizeNumber(movement.stockBefore),
     stockAfter: normalizeNumber(movement.stockAfter),
@@ -60,6 +61,12 @@ function normalizeStockMovement(movement) {
     note: movement.note ?? '',
     createdAt: movement.createdAt ?? new Date().toISOString(),
   }
+}
+
+function recordMovement(movements, movement) {
+  movements.unshift(normalizeStockMovement(movement))
+
+  return movements[0]
 }
 
 function normalizeName(value) {
@@ -337,9 +344,12 @@ export const useProductStore = defineStore('product', {
       existingProduct.isActive = values.isActive
 
       // Stock is authoritative: any stock change outside Adjust Stok still
-      // records a stock movement so history is never changed silently.
+      // records a stock movement so history is never changed silently. The
+      // movement funnels through the same canonical path as adjustStock so
+      // the sync tracker emits exactly one movement per stock change.
+      let recordedMovement = null
       if (values.kind !== 'service' && values.stock !== previousStock) {
-        this.stockMovements.unshift(normalizeStockMovement({
+        recordedMovement = recordMovement(this.stockMovements, {
           productId: existingProduct.id,
           productName: existingProduct.name,
           type: 'adjustment',
@@ -349,13 +359,14 @@ export const useProductStore = defineStore('product', {
           referenceId: null,
           category: 'Adjustment',
           note: 'Perubahan stok dari edit produk',
-        }))
+        })
       }
 
       return {
         success: true,
         product: existingProduct,
         errors: {},
+        movement: recordedMovement,
       }
     },
     toggleProductActive(id) {
@@ -451,7 +462,7 @@ export const useProductStore = defineStore('product', {
       }
 
       product.stock = stockAfter
-      this.stockMovements.unshift(normalizeStockMovement({
+      const movement = recordMovement(this.stockMovements, {
         productId: product.id,
         productName: product.name,
         type: payload.type ?? 'adjustment',
@@ -462,11 +473,12 @@ export const useProductStore = defineStore('product', {
         category: payload.category ?? 'Adjustment',
         note: payload.note ?? '',
         createdAt: payload.createdAt ?? new Date().toISOString(),
-      }))
+      })
 
       return {
         success: true,
         product,
+        movement,
       }
     },
     recordSaleStock(items, referenceId) {
