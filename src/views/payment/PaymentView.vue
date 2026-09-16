@@ -1,11 +1,11 @@
 <script setup>
-import { computed, ref } from 'vue'
-import { storeToRefs } from 'pinia'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import CustomerAutocomplete from '@/components/customer/CustomerAutocomplete.vue'
 import PaymentMethodCard from '@/components/payment/PaymentMethodCard.vue'
 import CartSummary from '@/components/pos/CartSummary.vue'
 import { useBusinessStore } from '@/stores/businessStore'
@@ -26,10 +26,9 @@ const productStore = useProductStore()
 const transactionStore = useTransactionStore()
 const router = useRouter()
 
-const { customers } = storeToRefs(customerStore)
-
 const selectedMethod = ref('cash')
 const selectedCustomerId = ref('')
+const customerQuery = ref('')
 const cashReceived = ref('')
 const isProcessing = ref(false)
 const hasAttemptedSubmit = ref(false)
@@ -44,6 +43,34 @@ const paymentMethods = [
 
 const isCashMethod = computed(() => selectedMethod.value === 'cash')
 const selectedCustomer = computed(() => customerStore.getCustomerById(selectedCustomerId.value))
+
+function onSelectCustomer(customer) {
+  selectedCustomerId.value = customer.id
+  customerQuery.value = customer.name
+}
+
+function clearCustomer() {
+  selectedCustomerId.value = ''
+  customerQuery.value = ''
+}
+
+// Mengetik ulang sampai tidak cocok lagi = kembali Walk-in Customer
+watch(customerQuery, (value) => {
+  if (!selectedCustomerId.value) {
+    return
+  }
+
+  const selected = customerStore.getCustomerById(selectedCustomerId.value)
+
+  if (!selected) {
+    selectedCustomerId.value = ''
+    return
+  }
+
+  if (selected.name.trim() !== `${value}`.trim()) {
+    selectedCustomerId.value = ''
+  }
+})
 
 const parsedCashReceived = computed(() => {
   if (cashReceived.value == null || `${cashReceived.value}`.trim() === '') {
@@ -272,15 +299,27 @@ async function completePayment() {
           <span class="text-[11px] text-ink-secondary">Opsional</span>
         </div>
 
-        <select
-          v-model="selectedCustomerId"
-          class="h-10 w-full rounded-xl border border-zinc-200 bg-white px-3 text-xs text-ink-primary outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/10"
-        >
-          <option value="">Walk-in Customer</option>
-          <option v-for="customer in customers" :key="customer.id" :value="customer.id">
-            {{ customer.name }}
-          </option>
-        </select>
+        <CustomerAutocomplete
+          v-model="customerQuery"
+          testid="input-customer-search"
+          placeholder="Cari nama / nomor pelanggan"
+          @select="onSelectCustomer"
+        />
+
+        <div class="flex items-center justify-between gap-2 text-[11px]">
+          <span class="truncate text-ink-secondary" data-testid="selected-customer-label">
+            {{ selectedCustomer ? selectedCustomer.name : 'Walk-in Customer' }}
+          </span>
+          <button
+            v-if="selectedCustomer || customerQuery"
+            type="button"
+            data-testid="btn-clear-customer"
+            class="shrink-0 rounded-lg border border-zinc-200 px-2.5 py-1 font-semibold text-ink-secondary transition active:bg-zinc-100"
+            @click="clearCustomer"
+          >
+            Hapus
+          </button>
+        </div>
       </BaseCard>
 
       <!-- Cash Section: Minimalist Summary + Keypad Trigger -->

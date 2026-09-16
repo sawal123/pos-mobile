@@ -7,6 +7,7 @@ import BaseBadge from '@/components/base/BaseBadge.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import CustomerAutocomplete from '@/components/customer/CustomerAutocomplete.vue'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCashStore } from '@/stores/cashStore'
 import { useCustomerStore } from '@/stores/customerStore'
@@ -24,6 +25,7 @@ const transactionStore = useTransactionStore()
 // Customer state
 const customerName = ref('')
 const customerPhone = ref('')
+const selectedCustomerId = ref('')
 const orderNote = ref('')
 
 // Service selection state
@@ -71,6 +73,59 @@ const matchedCustomer = computed(() => {
 function applyMatchedCustomer() {
   if (matchedCustomer.value) {
     customerName.value = matchedCustomer.value.name
+    selectedCustomerId.value = matchedCustomer.value.id
+  }
+}
+
+// Suggestion dipilih: isi nama + nomor HP dan tandai customer existing
+function onSelectCustomer(customer) {
+  customerName.value = customer.name
+  customerPhone.value = customer.phone
+  selectedCustomerId.value = customer.id
+}
+
+// Bila field diubah sampai tidak lagi cocok dengan customer terpilih,
+// lepas selectedCustomerId agar snapshot tidak salah.
+watch([customerName, customerPhone], () => {
+  if (!selectedCustomerId.value) {
+    return
+  }
+
+  const selected = customerStore.getCustomerById(selectedCustomerId.value)
+
+  if (!selected) {
+    selectedCustomerId.value = ''
+    return
+  }
+
+  const nameMatches = selected.name.trim() === customerName.value.trim()
+  const phoneMatches = `${selected.phone ?? ''}`.trim() === customerPhone.value.trim()
+
+  if (!nameMatches || !phoneMatches) {
+    selectedCustomerId.value = ''
+  }
+})
+
+// Customer final saat submit: pakai customer terpilih, atau reuse by phone,
+// atau buat baru tanpa pernah menduplikasi.
+function resolveCustomerForOrder() {
+  const selected = selectedCustomerId.value
+    ? customerStore.getCustomerById(selectedCustomerId.value)
+    : null
+
+  if (selected) {
+    return selected
+  }
+
+  const customerResult = customerStore.findOrCreateCustomer({
+    name: customerName.value.trim(),
+    phone: customerPhone.value.trim(),
+  })
+
+  return customerResult.customer || {
+    id: null,
+    name: customerName.value.trim(),
+    phone: customerPhone.value.trim(),
   }
 }
 
@@ -259,17 +314,8 @@ async function submitOrder() {
   isSubmitting.value = true
 
   try {
-    // 1. Create or resolve customer
-    const customerResult = customerStore.findOrCreateCustomer({
-      name: customerName.value.trim(),
-      phone: customerPhone.value.trim(),
-    })
-
-    const customer = customerResult.customer || {
-      id: null,
-      name: customerName.value.trim(),
-      phone: customerPhone.value.trim(),
-    }
+    // 1. Resolve customer: pakai yang terpilih, reuse by phone, atau buat baru
+    const customer = resolveCustomerForOrder()
 
     // 2. Prepare datetime for estimated completion
     let estimatedCompletedAt = null
@@ -394,12 +440,13 @@ async function submitOrder() {
 
       <div class="space-y-3">
         <div>
-          <BaseInput
+          <CustomerAutocomplete
             v-model="customerPhone"
             label="Nomor HP Pelanggan *"
             placeholder="Contoh: 08123456789"
             type="tel"
-            data-testid="input-customer-phone"
+            testid="input-customer-phone"
+            @select="onSelectCustomer"
           />
           <p v-if="validationErrors.customerPhone" class="mt-1 text-xs text-red-500" data-testid="error-customer-phone">
             {{ validationErrors.customerPhone }}
@@ -418,11 +465,12 @@ async function submitOrder() {
         </div>
 
         <div>
-          <BaseInput
+          <CustomerAutocomplete
             v-model="customerName"
             label="Nama Pelanggan *"
             placeholder="Nama lengkap pelanggan"
-            data-testid="input-customer-name"
+            testid="input-customer-name"
+            @select="onSelectCustomer"
           />
           <p v-if="validationErrors.customerName" class="mt-1 text-xs text-red-500" data-testid="error-customer-name">
             {{ validationErrors.customerName }}
