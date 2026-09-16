@@ -773,6 +773,30 @@ export function createSyncPullService({
           estimated_duration,
         } = data
 
+        // Tombstone deletes must never require a live category: a deleted
+        // product is removed purely by identity, even when its category is
+        // gone or unknown.
+        if (status === 'deleted') {
+          const localKey = await activeRegistry.findLocalKeyBySyncId('product', syncId)
+          const existingGone = localKey
+            ? nextProducts.find((p) => String(p.id) === String(localKey))
+            : nextProducts.find((p) => String(p.id).toLowerCase() === syncId)
+
+          if (existingGone) {
+            const prodIdx = nextProducts.findIndex((p) => p === existingGone)
+            if (prodIdx !== -1) {
+              nextProducts.splice(prodIdx, 1)
+            }
+          }
+
+          appliedCount++
+          serverVersionsToSave[`products:${syncId}`] = {
+            syncVersion,
+            syncSequence: sync_sequence,
+          }
+          continue
+        }
+
         if (category_sync_id === null || category_sync_id === undefined) {
           return {
             ok: false,
@@ -856,16 +880,6 @@ export function createSyncPullService({
             ? estimated_duration
             : ''
           existingProd.isActive = status === 'active'
-
-          // Tombstone: a deleted product or category disappears from the
-          // local master lists. Sale snapshots keep their own copies.
-          if (status === 'deleted') {
-            existingProd.isActive = false
-            const prodIdx = nextProducts.findIndex((p) => p === existingProd)
-            if (prodIdx !== -1) {
-              nextProducts.splice(prodIdx, 1)
-            }
-          }
         } else if (status !== 'deleted') {
           nextProducts.push({
             id: syncId,
@@ -976,11 +990,15 @@ export function createSyncPullService({
           })
         }
 
-        // Tombstone: a deleted/void expense is deactivated locally.
+        // Tombstone: a deleted/void expense disappears from the local master,
+        // exactly like product/customer tombstones. Historical sales keep
+        // their own copies and are never touched.
         if (data.status === 'deleted' || data.status === 'void') {
-          const idx = nextExpenses.findIndex((e) => String(e.id).toLowerCase() === syncId)
+          const idx = existingExp
+            ? nextExpenses.findIndex((e) => e === existingExp)
+            : nextExpenses.findIndex((e) => String(e.id).toLowerCase() === syncId)
           if (idx !== -1) {
-            nextExpenses[idx] = { ...nextExpenses[idx], status: data.status }
+            nextExpenses.splice(idx, 1)
           }
         }
 
@@ -1059,8 +1077,17 @@ export function createSyncPullService({
           if (reference_id && !existingCash.referenceId) {
             existingCash.referenceId = reference_id
           }
+          if (data.sale_sync_id && !existingCash.transactionId) {
+            const saleLocalKey = activeRegistry
+              ? await activeRegistry.findLocalKeyBySyncId('transaction', data.sale_sync_id)
+              : null
+            existingCash.transactionId = saleLocalKey ?? data.sale_sync_id
+          }
           existingCash.createdAt = cashOccurredAt ?? existingCash.createdAt
         } else {
+          const cashLocalKey = activeRegistry && data.sale_sync_id
+            ? await activeRegistry.findLocalKeyBySyncId('transaction', data.sale_sync_id)
+            : null
           nextCashEntries.push({
             id: syncId,
             type: cashType,
@@ -1068,6 +1095,7 @@ export function createSyncPullService({
             category: cashCategory ?? (cashType === 'out' ? 'Kas Keluar' : 'Kas Masuk'),
             note: cashNote ?? '',
             referenceId: reference_id ?? null,
+            transactionId: data.sale_sync_id ? (cashLocalKey ?? data.sale_sync_id) : null,
             createdAt: cashOccurredAt,
           })
           plannedRegistryBinds.push({
@@ -1125,6 +1153,9 @@ export function createSyncPullService({
         }
 
         if (!existingMovement) {
+          const movementLocalKey = activeRegistry && data.sale_sync_id
+            ? await activeRegistry.findLocalKeyBySyncId('transaction', data.sale_sync_id)
+            : null
           nextStockMovements.push({
             id: syncId,
             productId: targetProductId,
@@ -1135,6 +1166,7 @@ export function createSyncPullService({
             stockBefore: Number(stock_before ?? targetProduct?.stock ?? 0),
             stockAfter: Number(stock_after ?? targetProduct?.stock ?? 0),
             referenceId: movementRef ?? null,
+            transactionId: data.sale_sync_id ? (movementLocalKey ?? data.sale_sync_id) : null,
             category: movementCategory ?? 'Adjustment',
             note: movementNote ?? '',
             createdAt: movementOccurredAt,

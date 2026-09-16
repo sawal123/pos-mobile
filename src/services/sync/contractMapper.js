@@ -970,10 +970,15 @@ export async function mapOutboxEntries(
         cashChange.reference_id = payload.referenceId.trim()
       }
 
-      if (isNonEmptyString(payload.transactionId)) {
+      // Canonical relation wins: an explicit transactionId links this cash
+      // entry to its sale. Never parse the human reference string.
+      const cashTransactionId = isNonEmptyString(payload.transactionId)
+        ? payload.transactionId.trim()
+        : null
+      if (cashTransactionId) {
         const saleSyncId = await activeRegistry.resolveSyncId(
           SYNC_ENTITY_TYPES.TRANSACTION,
-          payload.transactionId.trim(),
+          cashTransactionId,
         )
         if (isUuid(saleSyncId)) {
           cashChange.sale_sync_id = saleSyncId
@@ -1102,10 +1107,15 @@ export async function mapOutboxEntries(
         movementChange.note = null
       }
 
-      if (isNonEmptyString(payload.transactionId)) {
+      // Canonical relation wins: an explicit transactionId links this
+      // movement to its sale. Never parse the human reference string.
+      const movementTransactionId = isNonEmptyString(payload.transactionId)
+        ? payload.transactionId.trim()
+        : null
+      if (movementTransactionId) {
         const saleSyncId = await activeRegistry.resolveSyncId(
           SYNC_ENTITY_TYPES.TRANSACTION,
-          payload.transactionId.trim(),
+          movementTransactionId,
         )
         if (isUuid(saleSyncId)) {
           movementChange.sale_sync_id = saleSyncId

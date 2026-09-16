@@ -51,7 +51,16 @@ export function createSyncChangeTracker({ pinia, queueService, stores = {} }) {
       return
     }
 
-    void queueService.enqueueUpsert(entityType, entityId, payload)
+    // Snapshot reactive Pinia state synchronously: queueService.enqueue is
+    // async (serialized persistence), so a later in-place mutation such as
+    // updateOrderStatus/settle would otherwise rewrite the payload that the
+    // already-queued snapshot points at, and the server-accepted cleanup
+    // would CAS-mismatch against the mutated row.
+    const snapshot = payload === undefined || payload === null
+      ? payload
+      : JSON.parse(JSON.stringify(payload))
+
+    void queueService.enqueueUpsert(entityType, entityId, snapshot)
   }
 
   function enqueueDelete(entityType, entityId) {
@@ -243,7 +252,12 @@ export function createSyncChangeTracker({ pinia, queueService, stores = {} }) {
   // ---- TRANSACTION ----
   // addTransaction is the canonical sync point. createTransaction calls
   // addTransaction internally, so tracking only addTransaction guarantees
-  // exactly one outbox row per local transaction.
+  // exactly one outbox row per local transaction. updateOrderStatus and
+  // settleLaundryOrderPayment mutate transactions in place (they never call
+  // addTransaction), so they need explicit tracking: re-enqueue the full
+  // mutated transaction snapshot as one upsert. advanceOrderStatus and
+  // payLaundryOrder both delegate to those two canonical actions, so they
+  // are intentionally NOT tracked — tracking the wrappers too would double.
   track(transactionStore, 'addTransaction', ({ after }) => {
     after((transaction) => {
       if (!transaction) {
@@ -251,6 +265,32 @@ export function createSyncChangeTracker({ pinia, queueService, stores = {} }) {
       }
 
       enqueueUpsert(SYNC_ENTITY_TYPES.TRANSACTION, transaction.id, transaction)
+    })
+  })
+
+  function enqueueTransactionSnapshot(id) {
+    const transaction = transactionStore.items.find((item) => item.id === id)
+
+    if (transaction) {
+      enqueueUpsert(SYNC_ENTITY_TYPES.TRANSACTION, transaction.id, transaction)
+    }
+  }
+
+  track(transactionStore, 'updateOrderStatus', ({ args, after }) => {
+    const [id] = args
+
+    after((result) => {
+      if (result === true) {
+        enqueueTransactionSnapshot(id)
+      }
+    })
+  })
+
+  track(transactionStore, 'settleLaundryOrderPayment', ({ after }) => {
+    after((result) => {
+      if (result?.success && !result?.duplicated && result?.transaction?.id) {
+        enqueueTransactionSnapshot(result.transaction.id)
+      }
     })
   })
 

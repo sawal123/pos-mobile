@@ -1134,6 +1134,152 @@ describe('P37 patch: HPP snapshots, lifecycle, tombstones and convergence', () =
     expect(customerStore.customers.find((c) => c.id === 'cust-old').name).toBe('Andi Baru')
   })
 
+  it('removes tombstoned expenses from the local master without touching history', async () => {
+    const expenseStore = (await import('../stores/expenseStore')).useExpenseStore(pinia)
+    const transactionStore = useTransactionStore(pinia)
+    const expSyncId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
+    await registry.bindSyncId('expense', 'exp-local', expSyncId)
+    expenseStore.expenses = [
+      { id: 'exp-local', title: 'Deterjen', category: 'Belanja Stok', amount: 75000, note: '', createdAt: '2026-09-16T10:00:00.000Z' },
+    ]
+    transactionStore.items = [
+      { id: 'trx-hist', invoiceNumber: 'INV-HIST', status: 'paid', items: [], subtotal: 10000, total: 10000, createdAt: '2026-09-16T10:00:00.000Z' },
+    ]
+
+    const transport = async () => ({
+      ok: true,
+      status: 200,
+      data: {
+        data: {
+          records: [
+            {
+              entity: 'expenses',
+              sync_sequence: 1,
+              data: { sync_id: expSyncId, sync_version: 2, description: 'Deterjen', amount: 75000, occurred_at: '2026-09-16T10:00:00.000Z', status: 'void' },
+            },
+          ],
+          next_cursor: 10,
+          server_sequence: 10,
+          has_more: false,
+        },
+      },
+    })
+
+    const pullService = createSyncPullService({
+      adapter,
+      queueService,
+      registry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const res = await pullService.pullNow({ context: makeContext() })
+    expect(res.ok).toBe(true)
+    expect(expenseStore.expenses.find((e) => e.id === 'exp-local')).toBeUndefined()
+    expect(transactionStore.items).toHaveLength(1)
+  })
+
+  it('applies deleted-product tombstones without requiring a live category', async () => {
+    const productStore = useProductStore(pinia)
+    const prodSyncId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+    await registry.bindSyncId('product', 'p-gone', prodSyncId)
+    productStore.categories = []
+    productStore.products = [
+      { id: 'p-gone', name: 'Kopi Lama', category: 'KategoriHilang', price: 10000, stock: 5, isActive: true },
+    ]
+
+    const transport = async () => ({
+      ok: true,
+      status: 200,
+      data: {
+        data: {
+          records: [
+            {
+              entity: 'products',
+              sync_sequence: 1,
+              data: { sync_id: prodSyncId, sync_version: 2, name: 'Kopi Lama', price: 10000, status: 'deleted' },
+            },
+          ],
+          next_cursor: 10,
+          server_sequence: 10,
+          has_more: false,
+        },
+      },
+    })
+
+    const pullService = createSyncPullService({
+      adapter,
+      queueService,
+      registry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const res = await pullService.pullNow({ context: makeContext() })
+    expect(res.ok).toBe(true)
+    expect(productStore.products.find((p) => p.id === 'p-gone')).toBeUndefined()
+  })
+
+  it('tracker enqueues one upsert for orderStatus and settle mutations without double-counting wrappers', async () => {
+    const productStore = useProductStore(pinia)
+    const transactionStore = useTransactionStore(pinia)
+    const cashStore = (await import('../stores/cashStore')).useCashStore(pinia)
+    productStore.categories = ['LaundryMaster']
+    productStore.products = [
+      { id: 'svc-1', name: 'Cuci', category: 'LaundryMaster', price: 10000, kind: 'service', isActive: true },
+    ]
+    transactionStore.items = []
+    cashStore.entries = []
+
+    const tracker = createSyncChangeTracker({ pinia, queueService })
+    const order = transactionStore.createLaundryOrder({
+      items: [{ id: 'svc-1', name: 'Cuci', price: 10000, qty: 2 }],
+      customer: 'Andi',
+      paymentMethod: '',
+    })
+    expect(await queueService.countPending()).toBe(1)
+
+    transactionStore.advanceOrderStatus(order.id)
+    expect(await queueService.countPending()).toBe(1)
+    const afterAdvance = await queueService.listPending({ limit: 10 })
+    expect(afterAdvance.filter((q) => q.entityType === SYNC_ENTITY_TYPES.TRANSACTION)).toHaveLength(1)
+
+    const settle = transactionStore.settleLaundryOrderPayment({
+      orderId: order.id,
+      paymentMethod: 'cash',
+      cashReceived: 25000,
+      changeAmount: 5000,
+      cashStore,
+    })
+    expect(settle.success).toBe(true)
+    const trxRows = (await queueService.listPending({ limit: 10 }))
+      .filter((q) => q.entityType === SYNC_ENTITY_TYPES.TRANSACTION)
+    const cashRows = (await queueService.listPending({ limit: 10 }))
+      .filter((q) => q.entityType === SYNC_ENTITY_TYPES.CASH_ENTRY)
+    expect(trxRows).toHaveLength(1)
+    expect(cashRows).toHaveLength(1)
+    tracker.dispose()
+  })
+
+  it('opening a shift after close mints a fresh identity', async () => {
+    const shiftStore = (await import('../stores/shiftStore')).useShiftStore(pinia)
+    shiftStore.$patch({ isOpen: false, id: null, shiftNumber: null, status: null, openingBalance: 0, openedAt: null, closingBalance: null, closedAt: null, notes: '' })
+
+    const tracker = createSyncChangeTracker({ pinia, queueService })
+    const firstId = shiftStore.openShift(100000)
+    shiftStore.closeShift()
+    expect(shiftStore.isOpen).toBe(false)
+    const secondId = shiftStore.openShift(100000)
+    expect(shiftStore.isOpen).toBe(true)
+    expect(firstId).toBeTruthy()
+    expect(secondId).toBeTruthy()
+    expect(secondId).not.toBe(firstId)
+    expect(shiftStore.openShift(100000)).toBe(false)
+    tracker.dispose()
+  })
+
   it('blocks pull over pending cash and shift mutations', async () => {
     const cashStore = (await import('../stores/cashStore')).useCashStore(pinia)
     cashStore.entries = [

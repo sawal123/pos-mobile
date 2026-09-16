@@ -21,16 +21,26 @@
 | product.minQuantity | products.min_quantity | yes | yes | no | number ≥ 0 | PASS |
 | product.estimatedDuration | products.estimated_duration | yes | yes | no | trim | PASS |
 | product.imageData | — (device-local) | **no** | **no** | — | never serialized; no `image_data` key emitted | PASS (limitation documented) |
-| transaction.paymentMethod | sales.payment_method | yes | yes (fill-in) | no | lowercase trim | PASS |
-| transaction.paymentStatus/status | sales.payment_status | yes | yes (fill-in) | no (`paid`/`unpaid`) | enum passthrough | PASS |
-| transaction.paidAt | sales.paid_at | yes | yes (fill-in) | no | ISO string | PASS |
-| transaction.cashReceived | sales.cash_received | yes | yes (fill-in) | no | int ≥ 0 | PASS |
-| transaction.changeAmount | sales.change_amount | yes | yes (fill-in) | no | int ≥ 0 | PASS |
+| transaction.paymentMethod | sales.payment_method | yes | yes (authoritative converge) | no | lowercase trim | PASS |
+| transaction.paymentStatus/status | sales.payment_status | yes | yes (authoritative converge) | no (`paid`/`unpaid`) | enum passthrough | PASS |
+| transaction.paidAt | sales.paid_at | yes | yes (authoritative converge, incl. explicit null) | no | ISO string | PASS |
+| transaction.cashReceived | sales.cash_received | yes | yes (authoritative converge) | no | int ≥ 0 | PASS |
+| transaction.changeAmount | sales.change_amount | yes | yes (authoritative converge) | no | int ≥ 0 | PASS |
+| transaction.grossProfit | sales.gross_profit | yes | yes | no | number | PASS |
+| transaction.orderStatus | sales.order_status | yes | yes | no | Laundry lifecycle enum | PASS |
+| transaction.estimatedCompletedAt | sales.estimated_completed_at | yes | yes | no | ISO string | PASS |
+| transaction.note | sales.note | yes | yes | no | trim | PASS |
+| transaction.customerSnapshot | sales.customer_snapshot | yes | yes (authoritative history; master keeps own name) | no | id/name/phone/email | PASS |
+| transaction.businessSnapshot | sales.business_snapshot | yes | yes | no | name/outlet/phone | PASS |
 | transaction items qty | sale_items.quantity | yes | yes | yes | **float** (2.5 kg preserved) | PASS |
-| item hppSnapshot | — (snapshot stays local) | no | no | — | historical cost never recomputed from current product cost | PASS |
-| cash entry (type/amount/category/note/referenceId/createdAt) | cash_ledger (same) | yes | versions only | yes | `reference_id` is the retry identity | PASS |
-| stock movement (productId/type/qtyChange/before/after/referenceId) | stock_movements (same) | yes | versions only | yes | `product_sync_id` resolved; reference is the retry identity | PASS |
-| transaction.customerSnapshot/businessSnapshot | — | no | no | — | local-only blobs, warning only | PASS |
+| item hppSnapshot/costSnapshot | sale_items.cost_snapshot | yes | yes | no | **historical HPP, never recomputed** | PASS |
+| item unit/pricingUnit | sale_items.unit/pricing_unit | yes | yes | no | trim | PASS |
+| item kind | sale_items.kind | yes | yes | no | product/service | PASS |
+| item lineCost | sale_items.line_cost | yes | yes | no | number ≥ 0 | PASS |
+| cash entry (type/amount/category/note/referenceId/transactionId/createdAt) | cash_ledger (same + sale_sync_id) | yes | yes (applies; sale_sync_id → transactionId) | yes | stable movement/entry `sync_id`; canonical `transactionId` wins, never parse reference | PASS |
+| stock movement (productId/type/qtyChange/before/after/referenceId/transactionId) | stock_movements (same + sale_sync_id) | yes | yes (applies; sale_sync_id → transactionId) | yes | `product_sync_id` resolved; same reference across products allowed | PASS |
+| expense category | expenses.category | yes | yes | no | trim | PASS |
+| tombstone deletes | changes.deletions[] | yes | yes (master removed locally; history untouched) | — | categories/products/customers/expenses only | PASS |
 
 Pull conflict/lifecycle rules unchanged: pending-outbox records block remote
 overwrite (`LOCAL_PENDING_SYNC_CONFLICT`), category renames rebind, sale items
@@ -38,10 +48,13 @@ resolve against pulled sales, cursor advances last.
 
 ## Supported entities
 
-`categories`, `products` (+semantics), `customers`, `shifts` (versions only),
-`sales` (+payment snapshot), `sale_items` (decimal qty), `expenses`,
-**`cash_ledger`**, **`stock_movements`**. Business/profile rows stay local-only
-(`UNSUPPORTED_SERVER_ENTITY_BUSINESS`); deletes stay blocked
+`categories`, `products` (+semantics), `customers`, `shifts`,
+`sales` (+payment snapshot, lifecycle, gross profit, snapshots), `sale_items`
+(HPP snapshots, decimal qty), `expenses` (+category),
+**`cash_ledger`** (applies + converges balance), **`stock_movements`** (apply +
+converge product stock), **`changes.deletions[]`** tombstones (master removed
+locally, history untouched). Business/profile rows stay local-only
+(`UNSUPPORTED_SERVER_ENTITY_BUSINESS`); history deletes stay blocked
 (`DELETE_NOT_SUPPORTED_BY_SERVER_V1`) — no destructive replication.
 
 ## Free behavior
@@ -81,23 +94,48 @@ expenses, cash_ledger, stock_movements) with semantics, payment snapshots and
 decimal quantities intact. No default seed contaminates the restored catalog
 (bootstrap is pull-driven; template seeding only happens pre-cloud).
 
+## Tracker / shift semantics (P37 fixes)
+
+- `transactionStore.updateOrderStatus` and `settleLaundryOrderPayment` are
+  tracked (one transaction upsert each); `advanceOrderStatus`/`payLaundryOrder`
+  wrappers are intentionally untracked so one mutation = one upsert. Cash
+  settlement = one transaction upsert + one cash_entry upsert.
+- `shiftStore.openShift` is a no-op (`false`) while a shift is open; after
+  `closeShift`, the next `openShift` mints a fresh identity (`shift1.id !==
+  shift2.id`), persisted as two logical server rows.
+- Deleted-product tombstones apply without requiring a live category; deleted
+  expenses are removed from the local master without touching history.
+
 ## Real HTTP E2E
 
-Against a real `php artisan serve` instance (dedicated `p37e2e.sqlite`;
-recipe: create a dedicated env file — shell `DB_*` overrides do **not** reach
-`serve` reliably — then `migrate`, `serve --env=<file>`):
+Backend TEST server on dedicated `p37e2e.sqlite` (started with
+`DB_CONNECTION=sqlite DB_DATABASE=.../p37e2e.sqlite php artisan serve
+--host=127.0.0.1 --port=18010` — the TEST env must be set on the server
+process; no production/dev DB touched; TEST sqlite is git-ignored):
 
-1. seeded owner/business/outlet/cloud subscription; 2. login → Bearer token;
-3. registered device A; 4. pushed 9-entity payload (Laundry service semantics,
-cash sale, decimal 2.5 kg item, cash entry, stock movement); 5. verified
-server-side via pull shape; 6. clean device B pull restored 9/9; 7. offline
-mutation (price 10000→12000 + new cash-out) pushed; 8. device-B pull converged
-(update + new entry visible); 9. stale `base_sync_version: 1` push rejected
-with `409 SYNC_CONFLICT`.
+- Device A builds category, 2 retail products + 1 Laundry service, customer
+  Andi, shift #1, expense (Belanja Stok), cash sale, 2-product retail sale,
+  Laundry unpaid 2.5 kg with HPP/customer snapshots; pushes via the actual
+  push service; server verified (products, stock, 2 stock movements, cash,
+  shift, expense, sales, items, HPP, gross profit, lifecycle, snapshots).
+- Device B (fresh) pulls via the actual pull service and reconstructs Pinia
+  (products, movements, stock, cash entries/balance, shift, expense, qty 2.5,
+  HPP, gross profit, orderStatus, customerSnapshot).
+- Lifecycle: A advances Masuk→Diproses, pushes; B sees Diproses. A settles
+  cash, pushes; B sees paid/cash/paidAt + exactly one extra cash entry with
+  exact balance; second B pull adds no duplicates.
+- History: customer renamed Andi→Andi Baru pushes/pulls with master renamed
+  while `customerSnapshot.name` stays Andi.
+- Deletes: product/customer/expense tombstones push/pull with masters
+  removed locally, queue back to 0, history intact, no
+  `DELETE_NOT_SUPPORTED_BY_SERVER_V1`.
+- Shifts: A opens #1, closes #1, opens #2 with fresh identity; server holds
+  two rows; B converges on #2.
+- Gate: E2E suite SKIPs (= FAIL) without `P37_E2E_BASE_URL`.
 
-Result: **31/31 E2E checks passed**, reproduced twice after a full reset
-(reset seeder wiped devices/tokens/sync rows; E2E env/seeders/sqlite deleted
-afterwards, none committed). Mock unit tests did not replace this gate.
+Result: **RUN #1 PASS (1/1), full TEST DB reset, RUN #2 PASS (1/1)** using the
+actual `createSyncPushService`, `createSyncPullService`, `syncTracker`,
+`contractMapper`, registry, queue, Pinia stores and real Laravel HTTP.
 
 ## Local-first failure behavior
 
@@ -127,13 +165,12 @@ localhost.
 
 ## Tests
 
-Full unit suite: **39 files, 1104 tests, 0 failed** (baseline 1088 + 16 new
-in `src/__tests__/sync-parity-p37.spec.js`). Also updated
-`sync-contract-mapper.spec.js` (product semantics replace the old
-`UNSUPPORTED_PRODUCT_STOCK_FIELD` warning; payment snapshots replace the old
-transaction-field warning). Changed-file ESLint: clean. Changed-file oxlint:
-clean after removing the now-unused `isPositiveInteger` helper
-(`syncPushService.js` findings are pre-existing debt, out of scope).
+Full unit suite: **40 files, 1122 passed + 1 skipped (1123 total)** — includes
+`sync-parity-p37.spec.js` (29 tests: HPP/lifecycle/tombstone/convergence +
+tracker-dedup, shift-identity, expense-tombstone, deleted-product-category
+tests), `sync-pull-apply`, `sync-push-outbox`, `sync-bootstrap`, and the real
+`p37-app-service-e2e.spec.js` (RUN #1 PASS, reset, RUN #2 PASS). `DB_VERSION`
+stays unchanged — no local schema bump for the extra JSON/state fields.
 
 ## Build gates
 
@@ -143,13 +180,12 @@ clean after removing the now-unused `isPositiveInteger` helper
 ## Known manual requirements
 
 `UPGRADE_DEVICE_MANUAL_REQUIRED` · `RELEASE_FIRST_INSTALL_MANUAL_REQUIRED` ·
-`PRINT_HARDWARE_MANUAL_REQUIRED` · `PRODUCTION_API_URL_REQUIRED`. Cash/stock
-pull is intentionally versions-only on the client (server history never
-rewrites local ledger/stock levels); product `imageData` is device-local for
-P37 (no object storage architecture exists).
+`PRINT_HARDWARE_MANUAL_REQUIRED` · `PRODUCTION_API_URL_REQUIRED` (P39 gate,
+not P37 — P37 uses the localhost Laravel TEST server).
 
 ## Verdict
 
-Client-side P37 complete: parity mapping, idempotent cash/stock tracking,
-safe bootstrap, new-device restore, real HTTP E2E 31/31, 1104/1104 green.
-**READY_FOR_P38** pending backend merge first (contract dependency).
+Client P37 complete: mutation tracking, shift identity, tombstone pulls,
+canonical sale relations, real app-service HTTP E2E RUN #1 + RUN #2 PASS,
+1122/1122 unit green, build + cap sync PASS. **READY_FOR_P38** pending backend
+PR #13 merge first (contract dependency).

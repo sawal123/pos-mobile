@@ -70,6 +70,9 @@ export function createSyncQueueService({ adapter, scheduler }) {
       return { ok: false, error }
     }
 
+    // Every mutation gets a unique outbox row; the push service collapses
+    // older snapshots of the same entity row so the server still sees one
+    // logical mutation per entity.
     const now = new Date().toISOString()
     const entry = {
       id: createQueueEntryId(),

@@ -14,13 +14,15 @@ export const useShiftStore = defineStore('shift', {
   }),
   actions: {
     openShift(balance) {
+      if (this.isOpen) {
+        return false
+      }
+
       const now = new Date().toISOString()
 
-      if (!this.id) {
-        this.id = globalThis.crypto?.randomUUID
-          ? globalThis.crypto.randomUUID()
-          : `shift-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
-      }
+      this.id = globalThis.crypto?.randomUUID
+        ? globalThis.crypto.randomUUID()
+        : `shift-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 
       this.isOpen = true
       this.openingBalance = Number(balance) || 0

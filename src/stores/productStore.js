@@ -47,6 +47,8 @@ function buildTemplateState(type) {
 }
 
 function normalizeStockMovement(movement) {
+  const transactionId = movement.transactionId ?? movement.transaction_id ?? null
+
   return {
     id: movement.id ?? generateProductId(),
     productId: movement.productId,
@@ -57,6 +59,7 @@ function normalizeStockMovement(movement) {
     stockBefore: normalizeNumber(movement.stockBefore),
     stockAfter: normalizeNumber(movement.stockAfter),
     referenceId: movement.referenceId ?? null,
+    transactionId,
     category: movement.category ?? 'Adjustment',
     note: movement.note ?? '',
     createdAt: movement.createdAt ?? new Date().toISOString(),
@@ -470,6 +473,7 @@ export const useProductStore = defineStore('product', {
         stockBefore,
         stockAfter,
         referenceId: payload.referenceId ?? null,
+        transactionId: payload.transactionId ?? null,
         category: payload.category ?? 'Adjustment',
         note: payload.note ?? '',
         createdAt: payload.createdAt ?? new Date().toISOString(),
@@ -481,7 +485,7 @@ export const useProductStore = defineStore('product', {
         movement,
       }
     },
-    recordSaleStock(items, referenceId) {
+    recordSaleStock(items, referenceId, transactionId = null) {
       for (const item of items) {
         const product = this.getProductById(item.id)
 
@@ -493,6 +497,7 @@ export const useProductStore = defineStore('product', {
           quantityChange: -normalizeNumber(item.qty),
           type: 'sale',
           referenceId,
+          transactionId: transactionId ?? item.transactionId ?? null,
           category: 'Penjualan',
           note: `Penjualan ${item.name}`,
         })
