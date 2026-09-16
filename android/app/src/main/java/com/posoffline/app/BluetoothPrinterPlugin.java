@@ -301,7 +301,10 @@ public class BluetoothPrinterPlugin extends Plugin {
             insecureSocket = device.createInsecureRfcommSocketToServiceRecord(SPP_UUID);
             connectSocket(insecureSocket, timeoutMs);
             return insecureSocket;
-        } catch (Exception error) {
+        } catch (TimeoutException error) {
+            closeQuietly(insecureSocket);
+            throw error;
+        } catch (IOException error) {
             closeQuietly(insecureSocket);
             throw secureError != null ? secureError : error;
         }
@@ -342,7 +345,19 @@ public class BluetoothPrinterPlugin extends Plugin {
     }
 
     private BluetoothDevice findBondedDevice(String address) {
-        for (BluetoothDevice device : readBondedDevices()) {
+        BluetoothAdapter adapter = getBluetoothAdapter();
+
+        if (adapter == null) {
+            return null;
+        }
+
+        Set<BluetoothDevice> bonded = adapter.getBondedDevices();
+
+        if (bonded == null) {
+            return null;
+        }
+
+        for (BluetoothDevice device : bonded) {
             if (device.getAddress().equalsIgnoreCase(address)) {
                 return device;
             }
