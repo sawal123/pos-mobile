@@ -2,6 +2,7 @@ import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import BaseInput from '@/components/base/BaseInput.vue'
 import { getBusinessTemplate } from '@/data/businessTemplates'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useProductStore } from '@/stores/productStore'
@@ -36,30 +37,24 @@ function mountBusinessSetup(pinia) {
   return mount(BusinessSetupView, {
     global: {
       plugins: [pinia],
-      stubs: {
-        BaseCard: {
-          template: '<section><slot /></section>',
-        },
-        BaseInput: {
-          props: ['modelValue', 'label', 'placeholder'],
-          emits: ['update:modelValue'],
-          template: `
-            <input
-              :aria-label="label"
-              :placeholder="placeholder"
-              :value="modelValue"
-              @input="$emit('update:modelValue', $event.target.value)"
-            >
-          `,
-        },
-        BaseButton: {
-          props: ['disabled', 'size'],
-          emits: ['click'],
-          template: '<button type="button" :disabled="disabled" @click="$emit(\'click\')"><slot /></button>',
-        },
-      },
+      // Name-keyed stubs are inert for these <script setup> base components, so the
+      // view always renders the production BaseCard/BaseButton/BaseInput components.
     },
   })
+}
+
+async function setBaseInputByLabel(wrapper, label, value) {
+  const component = wrapper
+    .findAllComponents(BaseInput)
+    .find((item) => item.props('label') === label)
+
+  expect(component).toBeTruthy()
+
+  const input = component.find('input')
+
+  expect(input.exists()).toBe(true)
+
+  await input.setValue(value)
 }
 
 async function chooseBusinessType(wrapper, type) {
@@ -122,7 +117,7 @@ describe('business template onboarding', () => {
     const { pinia, businessStore, productStore } = createContext()
     const wrapper = mountBusinessSetup(pinia)
 
-    await wrapper.find('input[aria-label="Nama Toko"]').setValue('Laundry Rapi')
+    await setBaseInputByLabel(wrapper, 'Nama Toko', 'Laundry Rapi')
     await chooseBusinessType(wrapper, 'Laundry')
     await saveBusinessSetup(wrapper)
 
