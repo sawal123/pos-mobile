@@ -5,7 +5,11 @@ import { createRuntimeSignalService } from '@/services/runtime/runtimeSignalServ
 import { useSyncAutoSyncStore } from '@/stores/syncAutoSyncStore'
 import { useSyncStatusStore } from '@/stores/syncStatusStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
-import { bootstrapApp } from '@/main'
+import { bootstrapApp, renderNativePersistenceFatal } from '@/main'
+import {
+  NativePersistenceError,
+  NATIVE_PERSISTENCE_ERROR_CODES,
+} from '@/services/database'
 
 describe('P22: Native Network & App Lifecycle Integration', () => {
   let pinia
@@ -1352,6 +1356,54 @@ describe('P22: Native Network & App Lifecycle Integration', () => {
     expect(runtime.getSnapshot().online).toBe(true)
   })
 
+  function createBootstrapRuntime() {
+    let subscriber = null
+    const runtime = {
+      subscribe: vi.fn((callback) => {
+        subscriber = callback
+        return vi.fn()
+      }),
+      start: vi.fn().mockResolvedValue({ ok: true }),
+      getSnapshot: vi.fn().mockReturnValue({
+        initialized: true,
+        native: true,
+        online: true,
+        foreground: true,
+      }),
+    }
+
+    return {
+      runtime,
+      emit(event) {
+        subscriber?.(event)
+      },
+    }
+  }
+
+  async function bootstrapWithRuntime({ persistence, runtimeFactory }) {
+    const fakeApp = {
+      use: vi.fn().mockReturnThis(),
+      mount: vi.fn(),
+    }
+    if (persistence?.adapter) {
+      persistence.adapter.loadDeviceIdentifier ??= vi.fn().mockResolvedValue('device-test')
+      persistence.adapter.saveDeviceIdentifier ??= vi.fn().mockResolvedValue(undefined)
+    }
+
+    const result = await bootstrapApp({
+      appFactory: () => fakeApp,
+      piniaFactory: () => pinia,
+      routerFactory: () => ({}),
+      initialize: async () => persistence,
+      initializeSync: async () => null,
+      runtimeSignalFactory: runtimeFactory,
+      rootComponent: {},
+      mountTarget: document.createElement('div'),
+    })
+
+    return { fakeApp, result }
+  }
+
   // 122. TEST RECONCILED BACKGROUND STATE PREVENTS AUTO SYNC UNTIL SUBSEQUENT RESUME
   it('122. reconciled background state correctly prevents auto sync until subsequent resume', async () => {
     let resolveState
@@ -1418,5 +1470,159 @@ describe('P22: Native Network & App Lifecycle Integration', () => {
     expect(runs[1].trigger).toBe('resume')
     expect(runs[1].online).toBe(true)
     expect(runs[1].isForeground).toBe(true)
+  })
+
+  it('123. bootstrap flushes persistence exactly once on pause', async () => {
+    const bridge = createBootstrapRuntime()
+    const persistence = { adapter: {}, flush: vi.fn().mockResolvedValue(undefined) }
+
+    await bootstrapWithRuntime({ persistence, runtimeFactory: () => bridge.runtime })
+    bridge.emit({ type: 'app-state', transition: 'pause' })
+    await flushPromises()
+
+    expect(bridge.runtime.subscribe).toHaveBeenCalledTimes(1)
+    expect(persistence.flush).toHaveBeenCalledTimes(1)
+  })
+
+  it('124. bootstrap does not flush persistence on resume or network events', async () => {
+    const bridge = createBootstrapRuntime()
+    const persistence = { adapter: {}, flush: vi.fn().mockResolvedValue(undefined) }
+
+    await bootstrapWithRuntime({ persistence, runtimeFactory: () => bridge.runtime })
+    bridge.emit({ type: 'app-state', transition: 'resume' })
+    bridge.emit({ type: 'network', transition: 'offline' })
+    bridge.emit({ type: 'network', transition: 'online' })
+    await flushPromises()
+
+    expect(persistence.flush).not.toHaveBeenCalled()
+  })
+
+  it('125. rejected pause flush does not crash bootstrap or runtime', async () => {
+    const bridge = createBootstrapRuntime()
+    const flushError = new Error('SQLite flush failed')
+    const persistence = { adapter: {}, flush: vi.fn().mockRejectedValue(flushError) }
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const { result } = await bootstrapWithRuntime({
+      persistence,
+      runtimeFactory: () => bridge.runtime,
+    })
+    bridge.emit({ type: 'app-state', transition: 'pause' })
+    await flushPromises()
+
+    expect(result.app).toBeDefined()
+    expect(persistence.flush).toHaveBeenCalledTimes(1)
+    expect(consoleError).toHaveBeenCalledWith(
+      'Failed to flush persistence when app entered background.',
+      flushError,
+    )
+  })
+
+  it('126. bootstrap without persistence remains safe and does not create runtime bridge', async () => {
+    const runtimeFactory = vi.fn()
+
+    const { fakeApp, result } = await bootstrapWithRuntime({
+      persistence: null,
+      runtimeFactory,
+    })
+
+    expect(fakeApp.mount).toHaveBeenCalledTimes(1)
+    expect(runtimeFactory).not.toHaveBeenCalled()
+    expect(result.runtimeSignalService).toBeNull()
+  })
+
+  it('127. runtime start failure keeps pause flush subscriber safe and mounts POS', async () => {
+    const bridge = createBootstrapRuntime()
+    bridge.runtime.start.mockRejectedValue(new Error('runtime unavailable'))
+    const persistence = { adapter: {}, flush: vi.fn().mockResolvedValue(undefined) }
+
+    const { fakeApp } = await bootstrapWithRuntime({
+      persistence,
+      runtimeFactory: () => bridge.runtime,
+    })
+    bridge.emit({ type: 'app-state', transition: 'pause' })
+    await flushPromises()
+
+    expect(fakeApp.mount).toHaveBeenCalledTimes(1)
+    expect(bridge.runtime.subscribe).toHaveBeenCalledTimes(1)
+    expect(persistence.flush).toHaveBeenCalledTimes(1)
+  })
+
+  it('128. native SQLite persistence normal path mounts POS', async () => {
+    const bridge = createBootstrapRuntime()
+    const persistence = {
+      adapter: { name: 'sqlite' },
+      flush: vi.fn().mockResolvedValue(undefined),
+    }
+
+    const { fakeApp, result } = await bootstrapWithRuntime({
+      persistence,
+      runtimeFactory: () => bridge.runtime,
+    })
+
+    expect(fakeApp.mount).toHaveBeenCalledTimes(1)
+    expect(result.persistence).toBe(persistence)
+    expect(result.fatalPersistenceError).toBeUndefined()
+  })
+
+  it('129. native persistence fatal error prevents app mount and renders storage screen', async () => {
+    const mountTarget = document.createElement('div')
+    const fakeApp = {
+      use: vi.fn().mockReturnThis(),
+      mount: vi.fn(),
+    }
+    const fatalError = new NativePersistenceError(
+      NATIVE_PERSISTENCE_ERROR_CODES.initFailed,
+      'SQLite failed',
+    )
+
+    const result = await bootstrapApp({
+      appFactory: () => fakeApp,
+      piniaFactory: () => pinia,
+      routerFactory: vi.fn(),
+      initialize: vi.fn().mockRejectedValue(fatalError),
+      initializeSync: vi.fn(),
+      runtimeSignalFactory: vi.fn(),
+      rootComponent: {},
+      mountTarget,
+    })
+
+    expect(fakeApp.mount).not.toHaveBeenCalled()
+    expect(result.fatalPersistenceError).toBe(fatalError)
+    expect(result.router).toBeNull()
+    expect(mountTarget.textContent).toContain('Penyimpanan Lokal Bermasalah')
+    expect(mountTarget.textContent).toContain('tidak akan menggunakan penyimpanan sementara')
+    expect(mountTarget.textContent).toContain('Jangan hapus data aplikasi atau uninstall')
+    expect(mountTarget.querySelector('button')?.textContent).toBe('Coba Lagi')
+  })
+
+  it('130. fatal storage retry button reloads the application', async () => {
+    const mountTarget = document.createElement('div')
+    const reload = vi.fn()
+    const fakeApp = {
+      use: vi.fn().mockReturnThis(),
+      mount: vi.fn(),
+    }
+
+    await bootstrapApp({
+      appFactory: () => fakeApp,
+      piniaFactory: () => pinia,
+      initialize: vi.fn().mockRejectedValue(
+        new NativePersistenceError(
+          NATIVE_PERSISTENCE_ERROR_CODES.unavailable,
+          'SQLite unavailable',
+        ),
+      ),
+      fatalPersistenceRenderer: renderNativePersistenceFatal,
+      documentRef: document,
+      windowRef: { location: { reload } },
+      rootComponent: {},
+      mountTarget,
+    })
+
+    mountTarget.querySelector('button').click()
+
+    expect(reload).toHaveBeenCalledTimes(1)
+    expect(fakeApp.mount).not.toHaveBeenCalled()
   })
 })

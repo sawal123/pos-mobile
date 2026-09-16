@@ -111,15 +111,24 @@ function createFakeDbLike({ initialVersion = 1 } = {}) {
 
 function assertNoDrop(executed) {
   for (const sql of executed) {
-    for (const table of ['business', 'products', 'customers', 'expenses', 'transactions']) {
+    for (const table of [
+      'app_meta',
+      'app_state',
+      'business',
+      'products',
+      'customers',
+      'expenses',
+      'transactions',
+    ]) {
       expect(sql).not.toMatch(new RegExp(`DROP TABLE\\s+${table}`, 'i'))
+      expect(sql).not.toMatch(new RegExp(`DELETE FROM\\s+${table}`, 'i'))
     }
   }
 }
 
 beforeEach(() => {
   fakeUserVersion.userVersion = 0
-    fakeUserVersion.targetVersion = 4
+  fakeUserVersion.targetVersion = 4
   fakeUserVersion.upgrades = []
   fakeUserVersion.executedUpgradeSql = []
   fakeDb.query.mockClear()
@@ -179,6 +188,15 @@ describe('P9 database migration v2/v3/v4', () => {
     const adapter = createMemoryAdapter()
 
     await adapter.setSchemaVersion(1)
+    await adapter.initialize()
+
+    expect(await adapter.getSchemaVersion()).toBe(4)
+  })
+
+  it.each([2, 3])('existing v%s memory DB dapat upgrade ke v4', async (version) => {
+    const adapter = createMemoryAdapter()
+
+    await adapter.setSchemaVersion(version)
     await adapter.initialize()
 
     expect(await adapter.getSchemaVersion()).toBe(4)
@@ -304,6 +322,21 @@ describe('P9 database migration v2/v3/v4', () => {
     expect(executed.some((sql) => sql.includes('CREATE TABLE IF NOT EXISTS products'))).toBe(false)
   })
 
+  it('existing native v2 menjalankan upgrade v3 dan v4 tanpa membuat ulang tabel existing', async () => {
+    fakeUserVersion.userVersion = 2
+    const adapter = createSQLiteAdapter()
+
+    await adapter.initialize()
+
+    expect(await adapter.getSchemaVersion()).toBe(4)
+
+    const executed = fakeUserVersion.executedUpgradeSql
+    expect(executed.some((sql) => sql.includes('ALTER TABLE products ADD COLUMN sku'))).toBe(true)
+    expect(executed.some((sql) => sql.includes('ALTER TABLE products ADD COLUMN image_data'))).toBe(true)
+    expect(executed.some((sql) => sql.includes('CREATE TABLE IF NOT EXISTS products'))).toBe(false)
+    assertNoDrop(executed)
+  })
+
   it('existing native v3 menjalankan upgrade v4 tanpa membuat ulang products', async () => {
     fakeUserVersion.userVersion = 3
     const adapter = createSQLiteAdapter()
@@ -315,6 +348,7 @@ describe('P9 database migration v2/v3/v4', () => {
     const executed = fakeUserVersion.executedUpgradeSql
     expect(executed.some((sql) => sql.includes('ALTER TABLE products ADD COLUMN image_data'))).toBe(true)
     expect(executed.some((sql) => sql.includes('CREATE TABLE IF NOT EXISTS products'))).toBe(false)
+    assertNoDrop(executed)
   })
 
   it('base schema P8 tersedia pada fresh install', async () => {
@@ -356,6 +390,8 @@ describe('P9 database migration v2/v3/v4', () => {
     const joined = upgrade.map(({ statements }) => statements.join('\n')).join('\n')
 
     for (const table of [
+      'app_meta',
+      'app_state',
       'business',
       'categories',
       'products',

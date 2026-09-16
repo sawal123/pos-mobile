@@ -2,7 +2,11 @@ import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { bootstrapApp } from '@/main'
-import { resolvePersistenceAdapter } from '@/services/database'
+import {
+  initializePersistence,
+  NATIVE_PERSISTENCE_ERROR_CODES,
+  resolvePersistenceAdapter,
+} from '@/services/database'
 import { createMemoryAdapter } from '@/services/database/memoryAdapter'
 import { createPersistenceService } from '@/services/database/persistenceService'
 import { createSQLiteAdapter, deserializeTransactionRows } from '@/services/database/sqliteAdapter'
@@ -17,20 +21,105 @@ import { useProductStore } from '@/stores/productStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 
-const { fakeDb } = vi.hoisted(() => {
+const { fakeDb, nativeState } = vi.hoisted(() => {
+  const state = {
+    version: 0,
+    business: null,
+    categories: [],
+    products: [],
+    customers: [],
+    expenses: [],
+    transactions: [],
+    meta: new Map(),
+    appState: new Map(),
+    reset() {
+      this.version = 0
+      this.business = null
+      this.categories = []
+      this.products = []
+      this.customers = []
+      this.expenses = []
+      this.transactions = []
+      this.meta.clear()
+      this.appState.clear()
+    },
+  }
+
   const fakeDb = {
     beginTransaction: vi.fn(async () => {}),
     commitTransaction: vi.fn(async () => {}),
     rollbackTransaction: vi.fn(async () => {}),
-    run: vi.fn(async () => {}),
-    query: vi.fn(async () => ({ values: [] })),
-    execute: vi.fn(async () => {}),
+    run: vi.fn(async (sql, values = []) => {
+      const normalized = sql.replace(/\s+/g, ' ').trim()
+
+      if (normalized.startsWith('DELETE FROM business')) state.business = null
+      else if (normalized.startsWith('DELETE FROM categories')) state.categories = []
+      else if (normalized.startsWith('DELETE FROM products')) state.products = []
+      else if (normalized.startsWith('DELETE FROM customers')) state.customers = []
+      else if (normalized.startsWith('DELETE FROM expenses')) state.expenses = []
+      else if (normalized.startsWith('DELETE FROM transactions')) state.transactions = []
+      else if (normalized.startsWith('INSERT INTO business')) {
+        state.business = {
+          name: values[1], type: values[2], owner: values[3], phone: values[4],
+          outlet: values[5], mode: values[6],
+        }
+      } else if (normalized.startsWith('INSERT INTO categories')) {
+        state.categories.push({ name: values[0] })
+      } else if (normalized.startsWith('INSERT INTO products')) {
+        state.products.push({
+          id: values[0], name: values[1], category: values[2], sku: values[3],
+          cost: values[4], price: values[5], stock: values[6], unit: values[7],
+          min_stock: values[8], kind: values[9], pricing_unit: values[10],
+          min_quantity: values[11], estimated_duration: values[12], image_data: values[13],
+          is_active: values[14],
+        })
+      } else if (normalized.startsWith('INSERT INTO customers')) {
+        state.customers.push({ id: values[0], name: values[1], phone: values[2], email: values[3] })
+      } else if (normalized.startsWith('INSERT INTO expenses')) {
+        state.expenses.push({
+          id: values[0], title: values[1], category: values[2], amount: values[3],
+          note: values[4], created_at: values[5],
+        })
+      } else if (normalized.startsWith('INSERT INTO transactions')) {
+        state.transactions.push({ id: values[0], payload: values[1], created_at: values[2] })
+      } else if (normalized.startsWith('INSERT OR REPLACE INTO app_meta')) {
+        state.meta.set(values[0], values[1])
+      } else if (normalized.startsWith('INSERT OR REPLACE INTO app_state')) {
+        state.appState.set(values[0], values[1])
+      }
+
+      return { changes: { changes: 1 } }
+    }),
+    query: vi.fn(async (sql, values = []) => {
+      const normalized = sql.replace(/\s+/g, ' ').trim()
+
+      if (normalized.includes('PRAGMA user_version')) {
+        return { values: [{ user_version: state.version }] }
+      }
+      if (normalized.includes('FROM app_meta')) {
+        return { values: state.meta.has(values[0]) ? [{ value: state.meta.get(values[0]) }] : [] }
+      }
+      if (normalized.includes('FROM app_state')) {
+        return { values: state.appState.has(values[0]) ? [{ value: state.appState.get(values[0]) }] : [] }
+      }
+      if (normalized.includes('FROM business')) return { values: state.business ? [state.business] : [] }
+      if (normalized.includes('FROM categories')) return { values: [...state.categories] }
+      if (normalized.includes('FROM products')) return { values: [...state.products] }
+      if (normalized.includes('FROM customers')) return { values: [...state.customers] }
+      if (normalized.includes('FROM expenses')) return { values: [...state.expenses] }
+      if (normalized.includes('FROM transactions')) return { values: [...state.transactions] }
+      return { values: [] }
+    }),
+    execute: vi.fn(async (sql) => {
+      const match = /PRAGMA user_version\s*=\s*(\d+)/.exec(sql)
+      if (match) state.version = Number(match[1])
+    }),
     isDBOpen: async () => ({ result: true }),
     open: async () => {},
     close: async () => {},
   }
 
-  return { fakeDb }
+  return { fakeDb, nativeState: state }
 })
 
 vi.mock('@capacitor-community/sqlite', () => {
@@ -94,6 +183,15 @@ async function restartRuntime(adapter) {
   return initializeRuntime(adapter)
 }
 
+async function initializeNativeRuntime() {
+  return initializeRuntime(createSQLiteAdapter())
+}
+
+async function reopenNativeRuntime(runtime) {
+  await runtime.service.close()
+  return initializeNativeRuntime()
+}
+
 function makeBusinessPayload(overrides = {}) {
   return {
     name: 'Toko ABC',
@@ -108,6 +206,13 @@ function makeBusinessPayload(overrides = {}) {
 
 beforeEach(() => {
   vi.restoreAllMocks()
+  nativeState.reset()
+  fakeDb.run.mockClear()
+  fakeDb.query.mockClear()
+  fakeDb.execute.mockClear()
+  fakeDb.beginTransaction.mockClear()
+  fakeDb.commitTransaction.mockClear()
+  fakeDb.rollbackTransaction.mockClear()
 })
 
 describe('P8 sqlite persistence foundation', () => {
@@ -563,6 +668,199 @@ describe('P8 sqlite persistence foundation', () => {
       'mount:#app',
     ])
   })
+
+  it('native SQLite preserves complete product fields and imageData after reopen', async () => {
+    let runtime = await initializeNativeRuntime()
+    runtime.productStore.$patch({ products: [], categories: [], stockMovements: [] })
+    runtime.productStore.createCategory('Laundry')
+    const created = runtime.productStore.createProduct({
+      name: 'Cuci Premium',
+      category: 'Laundry',
+      sku: 'LDR-001',
+      cost: 4500,
+      price: 12000,
+      stock: 0,
+      unit: 'kg',
+      minStock: 0,
+      kind: 'service',
+      pricingUnit: 'kg',
+      minQuantity: 1.5,
+      estimatedDuration: '2 hari',
+      imageData: 'data:image/webp;base64,cHJvZHVjdC1pbWFnZQ==',
+      isActive: false,
+    })
+    expect(created.success).toBe(true)
+
+    await runtime.service.flush()
+    runtime = await reopenNativeRuntime(runtime)
+
+    expect(runtime.productStore.getProductById(created.product.id)).toMatchObject({
+      name: 'Cuci Premium',
+      category: 'Laundry',
+      sku: 'LDR-001',
+      cost: 4500,
+      price: 12000,
+      stock: 0,
+      unit: 'kg',
+      minStock: 0,
+      kind: 'service',
+      pricingUnit: 'kg',
+      minQuantity: 1.5,
+      estimatedDuration: '2 hari',
+      imageData: 'data:image/webp;base64,cHJvZHVjdC1pbWFnZQ==',
+      isActive: false,
+    })
+  })
+
+  it('native SQLite preserves retail transaction, stock movement, cash, and HPP after reopen', async () => {
+    let runtime = await initializeNativeRuntime()
+    runtime.productStore.$patch({
+      products: [{
+        id: 'retail-1', name: 'Beras', category: 'Grosir', sku: 'BRS-01', cost: 7000,
+        price: 10000, stock: 10, unit: 'pcs', minStock: 2, kind: 'product',
+        pricingUnit: 'pcs', minQuantity: 0, estimatedDuration: '', imageData: '', isActive: true,
+      }],
+      categories: ['Grosir'],
+      stockMovements: [],
+    })
+    runtime.transactionStore.$patch({ items: [], lastTransaction: null })
+    runtime.cashStore.$patch({ entries: [] })
+
+    const paidAt = '2026-09-16T10:30:00.000Z'
+    const transaction = runtime.transactionStore.createTransaction({
+      customer: 'Budi',
+      customerId: 'customer-1',
+      customerSnapshot: { id: 'customer-1', name: 'Budi', phone: '08123', email: 'budi@example.com' },
+      businessSnapshot: { name: 'Grosir QA', outlet: 'Utama', type: 'Grosir' },
+      items: [{ id: 'retail-1', name: 'Beras', qty: 2, price: 10000, hppSnapshot: 7000 }],
+      subtotal: 20000,
+      tax: 0,
+      total: 20000,
+      paymentStatus: 'paid',
+      paymentMethod: 'CASH',
+      cashReceived: 25000,
+      changeAmount: 5000,
+      paidAt,
+      createdAt: '2026-09-16T10:29:00.000Z',
+    })
+    runtime.productStore.recordSaleStock(transaction.items, transaction.id)
+    runtime.cashStore.recordSalePayment(transaction)
+    await runtime.service.flush()
+
+    runtime = await reopenNativeRuntime(runtime)
+    const hydrated = runtime.transactionStore.items.find(({ id }) => id === transaction.id)
+
+    expect(runtime.productStore.getProductById('retail-1').stock).toBe(8)
+    expect(runtime.productStore.stockMovements).toEqual([
+      expect.objectContaining({
+        productId: 'retail-1', quantityChange: -2, stockBefore: 10, stockAfter: 8,
+        type: 'sale', referenceId: transaction.id,
+      }),
+    ])
+    expect(hydrated).toMatchObject({
+      paidAt,
+      paymentMethod: 'CASH',
+      grossProfit: 6000,
+      customerSnapshot: { id: 'customer-1', name: 'Budi' },
+      businessSnapshot: { name: 'Grosir QA', outlet: 'Utama' },
+      total: 20000,
+    })
+    expect(hydrated.items[0]).toMatchObject({ hppSnapshot: 7000, costSnapshot: 7000 })
+    expect(runtime.cashStore.entries).toEqual([
+      expect.objectContaining({ referenceId: `sale-${transaction.id}`, amount: 20000 }),
+    ])
+  })
+
+  it('native SQLite preserves Laundry unpaid order, settlement, and cash idempotency across reopen', async () => {
+    let runtime = await initializeNativeRuntime()
+    runtime.transactionStore.$patch({ items: [], lastTransaction: null })
+    runtime.cashStore.$patch({ entries: [] })
+
+    const createdAt = '2026-09-16T08:00:00.000Z'
+    const order = runtime.transactionStore.createLaundryOrder({
+      id: 'laundry-order-1',
+      orderNumber: 'LDR-20260916-0001',
+      customerId: 'customer-laundry-1',
+      customerSnapshot: { id: 'customer-laundry-1', name: 'Sari', phone: '08124', email: '' },
+      businessSnapshot: { name: 'Laundry QA', outlet: 'Utama', type: 'Laundry' },
+      items: [
+        { serviceId: 'service-kg', serviceName: 'Cuci Kering', qty: 2.5, unitPrice: 10000, hppSnapshot: 4000, pricingUnit: 'kg', kind: 'service' },
+        { serviceId: 'service-pcs', serviceName: 'Bed Cover', qty: 2, unitPrice: 15000, hppSnapshot: 6000, pricingUnit: 'pcs', kind: 'service' },
+      ],
+      paymentStatus: 'unpaid',
+      paidAt: null,
+      orderStatus: 'Masuk',
+      estimatedCompletedAt: '2026-09-18T08:00:00.000Z',
+      note: 'Gunakan pewangi lembut',
+      createdAt,
+    })
+    await runtime.service.flush()
+
+    runtime = await reopenNativeRuntime(runtime)
+    let hydrated = runtime.transactionStore.items.find(({ id }) => id === order.id)
+    expect(hydrated).toMatchObject({
+      orderNumber: 'LDR-20260916-0001',
+      paymentStatus: 'unpaid',
+      paidAt: null,
+      orderStatus: 'Masuk',
+      estimatedCompletedAt: '2026-09-18T08:00:00.000Z',
+      note: 'Gunakan pewangi lembut',
+      createdAt,
+      customerSnapshot: { id: 'customer-laundry-1', name: 'Sari' },
+      businessSnapshot: { name: 'Laundry QA', type: 'Laundry' },
+      grossProfit: 33000,
+    })
+    expect(hydrated.items.map(({ qty, pricingUnit, hppSnapshot }) => ({ qty, pricingUnit, hppSnapshot }))).toEqual([
+      { qty: 2.5, pricingUnit: 'kg', hppSnapshot: 4000 },
+      { qty: 2, pricingUnit: 'pcs', hppSnapshot: 6000 },
+    ])
+
+    const settlement = runtime.transactionStore.settleLaundryOrderPayment({
+      orderId: order.id,
+      paymentMethod: 'cash',
+      cashReceived: 60000,
+      changeAmount: 5000,
+      cashStore: runtime.cashStore,
+    })
+    expect(settlement.success).toBe(true)
+    const paidAt = settlement.order.paidAt
+    await runtime.service.flush()
+
+    runtime = await reopenNativeRuntime(runtime)
+    hydrated = runtime.transactionStore.items.find(({ id }) => id === order.id)
+    expect(hydrated).toMatchObject({
+      paymentStatus: 'paid', paymentMethod: 'cash', paidAt, cashReceived: 60000, changeAmount: 5000,
+    })
+    expect(runtime.cashStore.entries.filter(({ referenceId }) => referenceId === `sale-${order.id}`)).toEqual([
+      expect.objectContaining({ amount: 55000 }),
+    ])
+
+    const retry = runtime.transactionStore.settleLaundryOrderPayment({
+      orderId: order.id,
+      paymentMethod: 'cash',
+      cashReceived: 60000,
+      cashStore: runtime.cashStore,
+    })
+    expect(retry).toMatchObject({ success: true, duplicated: true })
+    expect(retry.order.paidAt).toBe(paidAt)
+    expect(runtime.cashStore.entries.filter(({ referenceId }) => referenceId === `sale-${order.id}`)).toHaveLength(1)
+  })
+
+  it('native SQLite preserves opening balance, manual entry, and calculated cash balance', async () => {
+    let runtime = await initializeNativeRuntime()
+    runtime.cashStore.$patch({ entries: [] })
+    runtime.cashStore.recordOpeningBalance(100000, 'shift-1')
+    runtime.cashStore.recordEntry({ type: 'out', amount: 25000, category: 'Operasional', referenceId: 'manual-1' })
+    await runtime.service.flush()
+
+    runtime = await reopenNativeRuntime(runtime)
+
+    expect(runtime.cashStore.entries).toHaveLength(2)
+    expect(runtime.cashStore.entries.map(({ referenceId }) => referenceId)).toEqual(
+      expect.arrayContaining(['opening-shift-1', 'manual-1']),
+    )
+    expect(runtime.cashStore.balance).toBe(75000)
+  })
 })
 
 describe('P8 sqlite adapter transaction flag', () => {
@@ -743,23 +1041,23 @@ describe('P8 native sqlite plugin fallback', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('native tanpa plugin sqlite memakai memory adapter dan console.error sekali', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+  it('native tanpa plugin sqlite fail closed tanpa membuat memory adapter', async () => {
+    const createMemory = vi.fn(createMemoryAdapter)
     const createSQLite = vi.fn(async () => ({ name: 'sqlite' }))
 
-    const adapter = await resolvePersistenceAdapter({
-      isNativePlatform: true,
-      isPluginAvailable: false,
-      createMemory: createMemoryAdapter,
-      createSQLite,
+    await expect(
+      resolvePersistenceAdapter({
+        isNativePlatform: true,
+        isPluginAvailable: false,
+        createMemory,
+        createSQLite,
+      }),
+    ).rejects.toMatchObject({
+      code: NATIVE_PERSISTENCE_ERROR_CODES.unavailable,
     })
 
-    expect(adapter.name).toBe('memory')
+    expect(createMemory).not.toHaveBeenCalled()
     expect(createSQLite).not.toHaveBeenCalled()
-    expect(consoleError).toHaveBeenCalledTimes(1)
-    expect(consoleError.mock.calls[0][0]).toContain(
-      'CapacitorSQLite is unavailable on native platform',
-    )
   })
 
   it('native dengan plugin sqlite memakai adapter sqlite tanpa console.error', async () => {
@@ -777,5 +1075,69 @@ describe('P8 native sqlite plugin fallback', () => {
     expect(createSQLite).toHaveBeenCalledTimes(1)
     expect(adapter).toBe(sqliteAdapter)
     expect(consoleError).not.toHaveBeenCalled()
+  })
+
+  it('native rejects an injected memory adapter before initialization', async () => {
+    const memoryAdapter = createMemoryAdapter()
+    const initialize = vi.spyOn(memoryAdapter, 'initialize')
+
+    await expect(
+      initializePersistence(createPinia(), {
+        adapter: memoryAdapter,
+        isNativePlatform: true,
+      }),
+    ).rejects.toMatchObject({
+      code: NATIVE_PERSISTENCE_ERROR_CODES.unavailable,
+    })
+    expect(initialize).not.toHaveBeenCalled()
+  })
+
+  it('native SQLite initialization failure rejects without creating memory adapter', async () => {
+    const sqliteError = new Error('SQLite open failed')
+    const sqliteAdapter = {
+      name: 'sqlite',
+      initialize: vi.fn().mockRejectedValue(sqliteError),
+    }
+
+    await expect(
+      initializePersistence(createPinia(), {
+        adapter: sqliteAdapter,
+        isNativePlatform: true,
+      }),
+    ).rejects.toMatchObject({
+      code: NATIVE_PERSISTENCE_ERROR_CODES.initFailed,
+      cause: sqliteError,
+    })
+  })
+
+  it('native SQLite adapter creation failure rejects as unavailable', async () => {
+    const createMemory = vi.fn(createMemoryAdapter)
+    const adapterError = new Error('SQLite module load failed')
+
+    await expect(
+      resolvePersistenceAdapter({
+        isNativePlatform: true,
+        isPluginAvailable: true,
+        createMemory,
+        createSQLite: vi.fn().mockRejectedValue(adapterError),
+      }),
+    ).rejects.toMatchObject({
+      code: NATIVE_PERSISTENCE_ERROR_CODES.unavailable,
+      cause: adapterError,
+    })
+    expect(createMemory).not.toHaveBeenCalled()
+  })
+
+  it('memory initialization failure is not hidden behind another fallback', async () => {
+    const memoryError = new Error('Memory initialization failed')
+    const memoryAdapter = {
+      name: 'memory',
+      initialize: vi.fn().mockRejectedValue(memoryError),
+    }
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    await expect(
+      initializePersistence(createPinia(), { adapter: memoryAdapter }),
+    ).rejects.toThrow(memoryError)
   })
 })
