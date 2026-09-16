@@ -5,7 +5,11 @@ import { createRuntimeSignalService } from '@/services/runtime/runtimeSignalServ
 import { useSyncAutoSyncStore } from '@/stores/syncAutoSyncStore'
 import { useSyncStatusStore } from '@/stores/syncStatusStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
-import { bootstrapApp } from '@/main'
+import { bootstrapApp, renderNativePersistenceFatal } from '@/main'
+import {
+  NativePersistenceError,
+  NATIVE_PERSISTENCE_ERROR_CODES,
+} from '@/services/database'
 
 describe('P22: Native Network & App Lifecycle Integration', () => {
   let pinia
@@ -1542,5 +1546,83 @@ describe('P22: Native Network & App Lifecycle Integration', () => {
     expect(fakeApp.mount).toHaveBeenCalledTimes(1)
     expect(bridge.runtime.subscribe).toHaveBeenCalledTimes(1)
     expect(persistence.flush).toHaveBeenCalledTimes(1)
+  })
+
+  it('128. native SQLite persistence normal path mounts POS', async () => {
+    const bridge = createBootstrapRuntime()
+    const persistence = {
+      adapter: { name: 'sqlite' },
+      flush: vi.fn().mockResolvedValue(undefined),
+    }
+
+    const { fakeApp, result } = await bootstrapWithRuntime({
+      persistence,
+      runtimeFactory: () => bridge.runtime,
+    })
+
+    expect(fakeApp.mount).toHaveBeenCalledTimes(1)
+    expect(result.persistence).toBe(persistence)
+    expect(result.fatalPersistenceError).toBeUndefined()
+  })
+
+  it('129. native persistence fatal error prevents app mount and renders storage screen', async () => {
+    const mountTarget = document.createElement('div')
+    const fakeApp = {
+      use: vi.fn().mockReturnThis(),
+      mount: vi.fn(),
+    }
+    const fatalError = new NativePersistenceError(
+      NATIVE_PERSISTENCE_ERROR_CODES.initFailed,
+      'SQLite failed',
+    )
+
+    const result = await bootstrapApp({
+      appFactory: () => fakeApp,
+      piniaFactory: () => pinia,
+      routerFactory: vi.fn(),
+      initialize: vi.fn().mockRejectedValue(fatalError),
+      initializeSync: vi.fn(),
+      runtimeSignalFactory: vi.fn(),
+      rootComponent: {},
+      mountTarget,
+    })
+
+    expect(fakeApp.mount).not.toHaveBeenCalled()
+    expect(result.fatalPersistenceError).toBe(fatalError)
+    expect(result.router).toBeNull()
+    expect(mountTarget.textContent).toContain('Penyimpanan Lokal Bermasalah')
+    expect(mountTarget.textContent).toContain('tidak akan menggunakan penyimpanan sementara')
+    expect(mountTarget.textContent).toContain('Jangan hapus data aplikasi atau uninstall')
+    expect(mountTarget.querySelector('button')?.textContent).toBe('Coba Lagi')
+  })
+
+  it('130. fatal storage retry button reloads the application', async () => {
+    const mountTarget = document.createElement('div')
+    const reload = vi.fn()
+    const fakeApp = {
+      use: vi.fn().mockReturnThis(),
+      mount: vi.fn(),
+    }
+
+    await bootstrapApp({
+      appFactory: () => fakeApp,
+      piniaFactory: () => pinia,
+      initialize: vi.fn().mockRejectedValue(
+        new NativePersistenceError(
+          NATIVE_PERSISTENCE_ERROR_CODES.unavailable,
+          'SQLite unavailable',
+        ),
+      ),
+      fatalPersistenceRenderer: renderNativePersistenceFatal,
+      documentRef: document,
+      windowRef: { location: { reload } },
+      rootComponent: {},
+      mountTarget,
+    })
+
+    mountTarget.querySelector('button').click()
+
+    expect(reload).toHaveBeenCalledTimes(1)
+    expect(fakeApp.mount).not.toHaveBeenCalled()
   })
 })

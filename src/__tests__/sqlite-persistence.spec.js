@@ -2,7 +2,11 @@ import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { bootstrapApp } from '@/main'
-import { initializePersistence, resolvePersistenceAdapter } from '@/services/database'
+import {
+  initializePersistence,
+  NATIVE_PERSISTENCE_ERROR_CODES,
+  resolvePersistenceAdapter,
+} from '@/services/database'
 import { createMemoryAdapter } from '@/services/database/memoryAdapter'
 import { createPersistenceService } from '@/services/database/persistenceService'
 import { createSQLiteAdapter, deserializeTransactionRows } from '@/services/database/sqliteAdapter'
@@ -1037,23 +1041,23 @@ describe('P8 native sqlite plugin fallback', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('native tanpa plugin sqlite memakai memory adapter dan console.error sekali', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+  it('native tanpa plugin sqlite fail closed tanpa membuat memory adapter', async () => {
+    const createMemory = vi.fn(createMemoryAdapter)
     const createSQLite = vi.fn(async () => ({ name: 'sqlite' }))
 
-    const adapter = await resolvePersistenceAdapter({
-      isNativePlatform: true,
-      isPluginAvailable: false,
-      createMemory: createMemoryAdapter,
-      createSQLite,
+    await expect(
+      resolvePersistenceAdapter({
+        isNativePlatform: true,
+        isPluginAvailable: false,
+        createMemory,
+        createSQLite,
+      }),
+    ).rejects.toMatchObject({
+      code: NATIVE_PERSISTENCE_ERROR_CODES.unavailable,
     })
 
-    expect(adapter.name).toBe('memory')
+    expect(createMemory).not.toHaveBeenCalled()
     expect(createSQLite).not.toHaveBeenCalled()
-    expect(consoleError).toHaveBeenCalledTimes(1)
-    expect(consoleError.mock.calls[0][0]).toContain(
-      'CapacitorSQLite is unavailable on native platform',
-    )
   })
 
   it('native dengan plugin sqlite memakai adapter sqlite tanpa console.error', async () => {
@@ -1073,22 +1077,55 @@ describe('P8 native sqlite plugin fallback', () => {
     expect(consoleError).not.toHaveBeenCalled()
   })
 
-  it('native SQLite initialization failure falls back to memory with explicit error', async () => {
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+  it('native rejects an injected memory adapter before initialization', async () => {
+    const memoryAdapter = createMemoryAdapter()
+    const initialize = vi.spyOn(memoryAdapter, 'initialize')
+
+    await expect(
+      initializePersistence(createPinia(), {
+        adapter: memoryAdapter,
+        isNativePlatform: true,
+      }),
+    ).rejects.toMatchObject({
+      code: NATIVE_PERSISTENCE_ERROR_CODES.unavailable,
+    })
+    expect(initialize).not.toHaveBeenCalled()
+  })
+
+  it('native SQLite initialization failure rejects without creating memory adapter', async () => {
     const sqliteError = new Error('SQLite open failed')
     const sqliteAdapter = {
       name: 'sqlite',
       initialize: vi.fn().mockRejectedValue(sqliteError),
     }
-    const pinia = createPinia()
 
-    const service = await initializePersistence(pinia, { adapter: sqliteAdapter })
+    await expect(
+      initializePersistence(createPinia(), {
+        adapter: sqliteAdapter,
+        isNativePlatform: true,
+      }),
+    ).rejects.toMatchObject({
+      code: NATIVE_PERSISTENCE_ERROR_CODES.initFailed,
+      cause: sqliteError,
+    })
+  })
 
-    expect(service.adapter.name).toBe('memory')
-    expect(consoleError).toHaveBeenCalledWith(
-      'Failed to initialize persistence adapter. Falling back to memory adapter.',
-      sqliteError,
-    )
+  it('native SQLite adapter creation failure rejects as unavailable', async () => {
+    const createMemory = vi.fn(createMemoryAdapter)
+    const adapterError = new Error('SQLite module load failed')
+
+    await expect(
+      resolvePersistenceAdapter({
+        isNativePlatform: true,
+        isPluginAvailable: true,
+        createMemory,
+        createSQLite: vi.fn().mockRejectedValue(adapterError),
+      }),
+    ).rejects.toMatchObject({
+      code: NATIVE_PERSISTENCE_ERROR_CODES.unavailable,
+      cause: adapterError,
+    })
+    expect(createMemory).not.toHaveBeenCalled()
   })
 
   it('memory initialization failure is not hidden behind another fallback', async () => {

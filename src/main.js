@@ -5,7 +5,7 @@ import { createPinia } from 'pinia'
 
 import App from './App.vue'
 import { createAppRouter } from './router'
-import { initializePersistence } from './services/database'
+import { initializePersistence, isNativePersistenceError } from './services/database'
 import { initializeSyncFoundation } from './services/sync'
 import { resolveDeviceIdentifier } from './services/cloud/deviceIdentifier'
 import { useCloudSessionStore } from './stores/cloudSessionStore'
@@ -22,6 +22,42 @@ import { useSyncStatusStore } from './stores/syncStatusStore'
 import { useSyncContextGuardStore } from './stores/syncContextGuardStore'
 import { createRuntimeSignalService } from './services/runtime/runtimeSignalService'
 
+export function renderNativePersistenceFatal({
+  documentRef = typeof document !== 'undefined' ? document : null,
+  windowRef = typeof window !== 'undefined' ? window : null,
+  mountTarget = '#app',
+} = {}) {
+  if (!documentRef) {
+    return null
+  }
+
+  const container = typeof mountTarget === 'string'
+    ? documentRef.querySelector(mountTarget)
+    : mountTarget
+
+  if (!container) {
+    return null
+  }
+
+  container.replaceChildren()
+  const section = documentRef.createElement('section')
+  const title = documentRef.createElement('h1')
+  const message = documentRef.createElement('p')
+  const warning = documentRef.createElement('p')
+  const retry = documentRef.createElement('button')
+
+  title.textContent = 'Penyimpanan Lokal Bermasalah'
+  message.textContent = 'Database perangkat tidak dapat dibuka. Untuk melindungi data transaksi, aplikasi dihentikan dan tidak akan menggunakan penyimpanan sementara.'
+  warning.textContent = 'Jangan hapus data aplikasi atau uninstall sebelum data diperiksa.'
+  retry.type = 'button'
+  retry.textContent = 'Coba Lagi'
+  retry.addEventListener('click', () => windowRef?.location?.reload())
+
+  section.append(title, message, warning, retry)
+  container.append(section)
+  return section
+}
+
 export async function bootstrapApp({
   appFactory = createApp,
   piniaFactory = createPinia,
@@ -29,6 +65,9 @@ export async function bootstrapApp({
   initialize = initializePersistence,
   initializeSync = initializeSyncFoundation,
   runtimeSignalFactory = createRuntimeSignalService,
+  fatalPersistenceRenderer = renderNativePersistenceFatal,
+  documentRef = typeof document !== 'undefined' ? document : null,
+  windowRef = typeof window !== 'undefined' ? window : null,
   rootComponent = App,
   mountTarget = '#app',
 } = {}) {
@@ -37,7 +76,27 @@ export async function bootstrapApp({
 
   app.use(pinia)
 
-  const persistence = await initialize(pinia)
+  let persistence
+
+  try {
+    persistence = await initialize(pinia)
+  } catch (error) {
+    if (!isNativePersistenceError(error)) {
+      throw error
+    }
+
+    fatalPersistenceRenderer({ documentRef, windowRef, mountTarget })
+    return {
+      app,
+      pinia,
+      router: null,
+      persistence: null,
+      syncFoundation: null,
+      runtimeSignalService: null,
+      fatalPersistenceError: error,
+    }
+  }
+
   const syncFoundation = persistence
     ? await initializeSync({
         pinia,
