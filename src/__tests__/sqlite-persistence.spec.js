@@ -17,6 +17,7 @@ import { useCashStore } from '@/stores/cashStore'
 import { useCashierStore } from '@/stores/cashierStore'
 import { useCustomerStore } from '@/stores/customerStore'
 import { useExpenseStore } from '@/stores/expenseStore'
+import { usePrinterStore } from '@/stores/printerStore'
 import { useProductStore } from '@/stores/productStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import { useTransactionStore } from '@/stores/transactionStore'
@@ -165,6 +166,7 @@ function createRuntime(adapter = createMemoryAdapter()) {
     cashierStore: useCashierStore(),
     customerStore: useCustomerStore(),
     expenseStore: useExpenseStore(),
+    printerStore: usePrinterStore(),
     productStore: useProductStore(),
     shiftStore: useShiftStore(),
     transactionStore: useTransactionStore(),
@@ -844,6 +846,36 @@ describe('P8 sqlite persistence foundation', () => {
     expect(retry).toMatchObject({ success: true, duplicated: true })
     expect(retry.order.paidAt).toBe(paidAt)
     expect(runtime.cashStore.entries.filter(({ referenceId }) => referenceId === `sale-${order.id}`)).toHaveLength(1)
+  })
+
+  it('native SQLite preserves selected printer and paper width after reopen', async () => {
+    let runtime = await initializeNativeRuntime()
+
+    runtime.printerStore.selectPrinter({ name: 'POS-58', address: 'AA:BB:CC:DD:EE:FF' })
+    runtime.printerStore.setPaperWidth('80')
+    await runtime.service.flush()
+
+    runtime = await reopenNativeRuntime(runtime)
+
+    expect(runtime.printerStore.selectedPrinter).toEqual({
+      name: 'POS-58',
+      address: 'AA:BB:CC:DD:EE:FF',
+    })
+    expect(runtime.printerStore.paperWidth).toBe('80')
+    expect(runtime.printerStore.hasSelectedPrinter).toBe(true)
+    // Connection state is never persisted.
+    expect(runtime.printerStore.$state).not.toHaveProperty('socket')
+  })
+
+  it('native SQLite keeps printer unset when none was selected', async () => {
+    let runtime = await initializeNativeRuntime()
+
+    await runtime.service.flush()
+    runtime = await reopenNativeRuntime(runtime)
+
+    expect(runtime.printerStore.selectedPrinter).toEqual({ name: '', address: '' })
+    expect(runtime.printerStore.paperWidth).toBe('58')
+    expect(runtime.printerStore.hasSelectedPrinter).toBe(false)
   })
 
   it('native SQLite preserves opening balance, manual entry, and calculated cash balance', async () => {

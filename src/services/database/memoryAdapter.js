@@ -23,6 +23,7 @@ export function createMemoryAdapter() {
     cashierState: null,
     shiftState: null,
     cashState: null,
+    printerState: null,
     syncQueue: [],
     deviceIdentifier: null,
     cloudContext: null,
@@ -118,6 +119,12 @@ export function createMemoryAdapter() {
     },
     async saveShiftState(value) {
       state.shiftState = cloneValue(value)
+    },
+    async loadPrinterState() {
+      return cloneValue(state.printerState)
+    },
+    async savePrinterState(value) {
+      state.printerState = cloneValue(value)
     },
     async upsertSyncQueueItem(entry) {
       const index = state.syncQueue.findIndex(
