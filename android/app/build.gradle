@@ -3,14 +3,18 @@ apply plugin: 'com.android.application'
 // ---------------------------------------------------------------------------
 // Release signing configuration
 //
-// Credential sources, in priority order:
-//   1. environment variables: POS_RELEASE_STORE_FILE, POS_RELEASE_STORE_PASSWORD,
+// Two mutually exclusive credential sources:
+//   1. environment: POS_RELEASE_STORE_FILE, POS_RELEASE_STORE_PASSWORD,
 //      POS_RELEASE_KEY_ALIAS, POS_RELEASE_KEY_PASSWORD
 //   2. android/keystore.properties: storeFile, storePassword, keyAlias, keyPassword
 //
+// Source selection is ATOMIC. A source is used only as a whole: a partially
+// supplied source always fails, even when the other source is complete, and a
+// missing key is never filled in from the other source.
+//
+//   - complete environment      -> environment credentials
+//   - complete properties       -> properties credentials
 //   - no credentials at all     -> release compiles unsigned (QA artifact only)
-//   - partial credentials       -> release configuration fails with a clear error
-//   - complete credentials      -> keystore is validated and signing is applied
 //
 // storeFile is resolved against the Android root (rootProject.file), never
 // against the ambient working directory.
@@ -31,29 +35,47 @@ if (keystorePropertiesFile.exists()) {
     keystorePropertiesFile.withInputStream { keystoreProperties.load(it) }
 }
 
-def releaseSigningValues = [:]
-releaseSigningKeys.each { key ->
-    def value = envReleaseSigning[key]
-    if (value == null || value.toString().trim().isEmpty()) {
-        value = keystoreProperties.getProperty(key)
-    }
-    releaseSigningValues[key] = (value == null || value.toString().trim().isEmpty()) ? null : value.toString().trim()
+def propertyReleaseSigning = [
+        storeFile    : keystoreProperties.getProperty('storeFile'),
+        storePassword: keystoreProperties.getProperty('storePassword'),
+        keyAlias     : keystoreProperties.getProperty('keyAlias'),
+        keyPassword  : keystoreProperties.getProperty('keyPassword'),
+]
+
+def normalizeSigningValue = { value ->
+    (value == null || value.toString().trim().isEmpty()) ? null : value.toString().trim()
 }
 
-ext.hasAnyReleaseSigningValue = releaseSigningValues.values().any { it != null }
-ext.hasCompleteReleaseSigningConfig = releaseSigningValues.values().every { it != null }
+def normalizedEnvSigning = envReleaseSigning.collectEntries { key, value -> [(key): normalizeSigningValue(value)] }
+def normalizedPropertySigning = propertyReleaseSigning.collectEntries { key, value -> [(key): normalizeSigningValue(value)] }
 
-if (hasAnyReleaseSigningValue && !hasCompleteReleaseSigningConfig) {
-    def missingKeys = releaseSigningKeys.findAll { releaseSigningValues[it] == null }
-    throw new GradleException(
-            "Incomplete Android release signing configuration. Missing: ${missingKeys.join(', ')}. " +
-                    "Provide every POS_RELEASE_STORE_FILE / POS_RELEASE_STORE_PASSWORD / POS_RELEASE_KEY_ALIAS / POS_RELEASE_KEY_PASSWORD " +
-                    "environment variable, or every storeFile / storePassword / keyAlias / keyPassword entry in android/keystore.properties. " +
-                    "Refusing to silently fall back to an unsigned release artifact."
-    )
+def hasAnyEnvSigning = normalizedEnvSigning.values().any { it != null }
+def hasCompleteEnvSigning = normalizedEnvSigning.values().every { it != null }
+def hasAnyPropertySigning = normalizedPropertySigning.values().any { it != null }
+def hasCompletePropertySigning = normalizedPropertySigning.values().every { it != null }
+
+def incompleteSigningError = { sourceLabel, values ->
+    def missingKeys = releaseSigningKeys.findAll { values[it] == null }
+
+    return "Incomplete Android release signing ${sourceLabel} configuration. Missing: ${missingKeys.join(', ')}. " +
+            "Credential sources are never mixed and a partial source never falls back to the other source or to an unsigned artifact."
 }
 
-def completeReleaseSigning = hasCompleteReleaseSigningConfig
+// Atomic source selection. A partially supplied environment always fails, even
+// when android/keystore.properties is complete.
+if (hasAnyEnvSigning && !hasCompleteEnvSigning) {
+    throw new GradleException(incompleteSigningError('environment', normalizedEnvSigning))
+}
+
+if (!hasAnyEnvSigning && hasAnyPropertySigning && !hasCompletePropertySigning) {
+    throw new GradleException(incompleteSigningError('properties', normalizedPropertySigning))
+}
+
+def releaseSigningValues = hasCompleteEnvSigning
+        ? normalizedEnvSigning
+        : (hasCompletePropertySigning ? normalizedPropertySigning : null)
+
+def completeReleaseSigning = releaseSigningValues != null
 def releaseKeystoreFile = completeReleaseSigning ? rootProject.file(releaseSigningValues.storeFile) : null
 
 if (completeReleaseSigning && !releaseKeystoreFile.exists()) {

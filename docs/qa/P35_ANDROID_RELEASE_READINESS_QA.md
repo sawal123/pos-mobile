@@ -21,13 +21,30 @@
 
 ## Signing configuration
 
-Credential sources, in priority order: environment variables (`POS_RELEASE_STORE_FILE`, `POS_RELEASE_STORE_PASSWORD`, `POS_RELEASE_KEY_ALIAS`, `POS_RELEASE_KEY_PASSWORD`), then `android/keystore.properties`. `storeFile` is resolved with `rootProject.file(...)` against the Android root.
+Two credential sources exist: environment variables (`POS_RELEASE_STORE_FILE`, `POS_RELEASE_STORE_PASSWORD`, `POS_RELEASE_KEY_ALIAS`, `POS_RELEASE_KEY_PASSWORD`) and `android/keystore.properties` (`storeFile`, `storePassword`, `keyAlias`, `keyPassword`).
+
+**The priority is source-level and atomic, not a per-field fallback.** `envReleaseSigning` and `propertyReleaseSigning` are separate maps, each with its own `hasAny*` / `hasComplete*` flags, and exactly one source is selected as a whole:
 
 | Rule | Implemented behavior |
 |---|---|
-| No credentials at all | release compiles **unsigned** for QA; not distributable |
-| Partial credentials | release configuration **fails** with `Incomplete Android release signing configuration. Missing: …` — no silent fallback to unsigned |
-| Complete credentials | keystore existence is validated, then `signingConfigs.release` is applied to `buildTypes.release` |
+| At least one `POS_RELEASE_*` env var | the environment becomes the **only** source; all four variables are required. A partial environment **always fails**, even when `keystore.properties` is complete, and the missing keys are never taken from properties |
+| No env var, at least one property | properties become the **only** source; all four properties are required, otherwise the build fails with `Incomplete Android release signing properties configuration. Missing: …` |
+| Neither source | release compiles **unsigned** for QA; not distributable |
+| Complete source | `rootProject.file(storeFile)` is resolved against the Android root, the keystore is checked for existence, then `signingConfigs.release` is applied to `buildTypes.release` |
+
+Effective priority: **complete environment → complete properties → unsigned**. Sources are never merged, and a partial source never falls back to the other source or to an unsigned artifact.
+
+### Signing source-selection QA (real Gradle runs, dummy credentials only)
+
+| Case | Setup | Expected | Observed |
+|---|---|---|---|
+| 1 | no env, no `keystore.properties` | configuration passes, unsigned mode | `BUILD SUCCESSFUL` (`gradlew help`) |
+| 2 | only `POS_RELEASE_STORE_FILE=signing/dummy.jks` | partial environment fails | `BUILD FAILED` — `Incomplete Android release signing environment configuration. Missing: storePassword, keyAlias, keyPassword.` |
+| 3 | **complete** dummy `keystore.properties` + only `POS_RELEASE_STORE_FILE=signing/dummy-env.jks` | partial environment still fails; the 3 other keys must **not** come from properties | `BUILD FAILED` — same environment error naming `storePassword, keyAlias, keyPassword` as missing, proving no cross-source mixing despite complete properties |
+| 4 | no env, complete dummy `keystore.properties` | properties selected as a whole source | `BUILD FAILED` — `Android release keystore not found at …\android\signing\dummy-properties.jks` (source selected and resolved against the Android root, failing only on file existence) |
+| 5 (extra) | no env, partial `keystore.properties` (`storeFile`, `storePassword` only) | partial properties fails with its own message | `BUILD FAILED` — `Incomplete Android release signing properties configuration. Missing: keyAlias, keyPassword.` |
+
+The temporary `android/keystore.properties` was deleted afterwards and never appeared in `git status` (it is git-ignored). No signing key was generated; every value used was a dummy.
 
 Machine inspection at run time: **no** `POS_RELEASE_*` environment variables, **no** `android/keystore.properties`, **no** `*.jks`/`*.keystore` anywhere in the project. No keystore was generated and no password was invented.
 
@@ -37,8 +54,9 @@ Machine inspection at run time: **no** `POS_RELEASE_*` environment variables, **
 
 | Gate | Result | Evidence |
 |---|---|---|
-| `npm run test:unit -- --run` | PASS | **38/38 files, 1085/1085 tests, 0 failed** |
-| New release-config guard spec | PASS | `src/__tests__/release-config.spec.js`, 7/7 |
+| `npm run test:unit -- --run` | PASS | **38/38 files, 1088/1088 tests, 0 failed** |
+| Release-config guard spec | PASS | `src/__tests__/release-config.spec.js`, 10/10 — including 3 guards for source atomicity |
+| Guard negative control | PASS | restoring the previous per-key `env → property` fallback makes 3 guard tests fail (`expected 0 to be greater than 100`, missing `def hasAnyEnvSigning = `, `expected -1 to be greater than -1`), so the guard is not cosmetic |
 | `npm run build` | PASS | Vite production build completed |
 | `npx cap sync android` | PASS | 4 npm plugins detected (secure-storage `8.0.0`, sqlite `8.1.1`, app `8.1.1`, network `8.0.1`) |
 | `gradlew.bat clean assembleDebug` | PASS | `BUILD SUCCESSFUL` (26s) |

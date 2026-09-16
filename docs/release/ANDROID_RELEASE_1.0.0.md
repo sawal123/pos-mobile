@@ -41,7 +41,7 @@
 
 2. Put it at `android/signing/pos-mobile-release.jks` (or any path outside Git — both are covered by `android/.gitignore`).
 
-3. Copy `android/keystore.properties.example` to `android/keystore.properties` and fill in the real values. Environment variables take priority when both are present.
+3. Copy `android/keystore.properties.example` to `android/keystore.properties` and fill in the real values — **or** export all four `POS_RELEASE_*` environment variables. Use one source or the other, never a mix: if any `POS_RELEASE_*` variable is present, the environment is the only source and all four are required.
 
 4. Build and verify:
 
@@ -53,11 +53,15 @@
    "…/jdk/bin/jarsigner.exe" -verify -certs android/app/build/outputs/bundle/release/app-release.aab
    ```
 
-Behavior of the release signing configuration:
+Behavior of the release signing configuration — **source selection is atomic**:
 
-- **no credentials** → release compiles unsigned (QA artifact only, never claim it distributable)
-- **partial credentials** → the build fails with `Incomplete Android release signing configuration`; there is no silent fallback to an unsigned artifact
-- **complete credentials** → the keystore file is checked for existence, then `signingConfigs.release` is applied to `buildTypes.release`
+- the environment (`POS_RELEASE_*`) and `android/keystore.properties` are two separate, mutually exclusive sources; a source is always used as a whole
+- **any** `POS_RELEASE_*` variable present → the environment is the only source and all four variables are required. A partial environment fails with `Incomplete Android release signing environment configuration. Missing: …` **even when `keystore.properties` is complete** — missing keys are never borrowed from the other source
+- no env variable, but at least one property → properties are the only source, and a partial file fails with `Incomplete Android release signing properties configuration. Missing: …`
+- **neither source** → release compiles unsigned (QA artifact only, never claim it distributable)
+- complete single source → the keystore file is checked for existence, then `signingConfigs.release` is applied to `buildTypes.release`
+
+Effective priority: **complete environment → complete properties → unsigned**. There is no per-field fallback and no silent fallback to an unsigned artifact.
 
 `storeFile` is resolved with `rootProject.file(...)`, so it is always relative to the Android root, never to the ambient working directory.
 
