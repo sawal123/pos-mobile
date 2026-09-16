@@ -105,6 +105,48 @@ describe('P33 bluetooth printer service', () => {
     expect(decoded).toContain('INV-1')
   })
 
+  it('timeout JS diteruskan apa adanya dan nilai tidak valid memakai default', async () => {
+    const explicitPlugin = createPlugin()
+
+    await printReceipt({
+      transaction: createTransaction(),
+      business,
+      printer: PRINTER,
+      timeoutMs: 5000,
+      capacitor: nativeCapacitor(),
+      plugin: explicitPlugin,
+    })
+
+    expect(explicitPlugin.printRaw.mock.calls[0][0].timeoutMs).toBe(5000)
+
+    // Native caps the value (60000); JS must forward it unchanged.
+    const capPlugin = createPlugin()
+
+    await printReceipt({
+      transaction: createTransaction(),
+      business,
+      printer: PRINTER,
+      timeoutMs: 999999,
+      capacitor: nativeCapacitor(),
+      plugin: capPlugin,
+    })
+
+    expect(capPlugin.printRaw.mock.calls[0][0].timeoutMs).toBe(999999)
+
+    const invalidPlugin = createPlugin()
+
+    await printReceipt({
+      transaction: createTransaction(),
+      business,
+      printer: PRINTER,
+      timeoutMs: 0,
+      capacitor: nativeCapacitor(),
+      plugin: invalidPlugin,
+    })
+
+    expect(invalidPlugin.printRaw.mock.calls[0][0].timeoutMs).toBe(10000)
+  })
+
   it('native tanpa printer terpilih mengembalikan PRINTER_NOT_SELECTED', async () => {
     const plugin = createPlugin()
 

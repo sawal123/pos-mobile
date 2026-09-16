@@ -116,6 +116,20 @@ public class BluetoothPrinterPlugin extends Plugin {
         return Math.min(timeoutMs, MAX_TIMEOUT_MS);
     }
 
+    /**
+     * Capacitor parses the JSON payload with org.json, which turns an integral JS
+     * number into Integer (or Long when it does not fit). PluginCall.getLong() only
+     * accepts a Long, so reading the raw value and coercing any Number is required
+     * for the JS timeout contract to be honored.
+     */
+    static long resolveTimeoutMs(Object rawTimeout) {
+        if (rawTimeout instanceof Number) {
+            return normalizeTimeout(((Number) rawTimeout).longValue());
+        }
+
+        return normalizeTimeout(null);
+    }
+
     /** Maps a lower level failure to the plugin error contract. */
     static String mapErrorCode(Throwable error, boolean connected) {
         if (error instanceof TimeoutException) {
@@ -244,9 +258,10 @@ public class BluetoothPrinterPlugin extends Plugin {
             return;
         }
 
-        final long timeoutMs = normalizeTimeout(call.getLong("timeoutMs"));
+        final long timeoutMs = resolveTimeoutMs(call.getData().opt("timeoutMs"));
+        // One-shot async call: Capacitor releases the call after the single
+        // resolve/reject, so no keep-alive, listener, or manual release is used.
         final AtomicBoolean settled = new AtomicBoolean(false);
-        call.setKeepAlive(true);
 
         printExecutor.execute(() -> {
             BluetoothSocket socket = null;
