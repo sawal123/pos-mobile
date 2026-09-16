@@ -107,6 +107,17 @@ export async function bootstrapApp({
 
       // P22: Single shared runtime signal bridge for native & browser events
       runtimeSignalService = runtimeSignalFactory()
+      runtimeSignalService.subscribe((event) => {
+        if (event.type !== 'app-state' || event.transition !== 'pause') {
+          return
+        }
+
+        void Promise.resolve()
+          .then(() => persistence.flush())
+          .catch((error) => {
+            console.error('Failed to flush persistence when app entered background.', error)
+          })
+      })
       try {
         await runtimeSignalService.start()
       } catch {
