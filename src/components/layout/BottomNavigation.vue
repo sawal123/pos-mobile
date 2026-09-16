@@ -11,7 +11,7 @@ const route = useRoute()
 const businessStore = useBusinessStore()
 const showMore = ref(false)
 
-const items = getBottomNavItems()
+const items = computed(() => getBottomNavItems(businessStore.normalizedType))
 const moreItems = computed(() => getMoreMenuItems(businessStore.normalizedType))
 
 function isActive(path) {
