@@ -1,5 +1,68 @@
 apply plugin: 'com.android.application'
 
+// ---------------------------------------------------------------------------
+// Release signing configuration
+//
+// Credential sources, in priority order:
+//   1. environment variables: POS_RELEASE_STORE_FILE, POS_RELEASE_STORE_PASSWORD,
+//      POS_RELEASE_KEY_ALIAS, POS_RELEASE_KEY_PASSWORD
+//   2. android/keystore.properties: storeFile, storePassword, keyAlias, keyPassword
+//
+//   - no credentials at all     -> release compiles unsigned (QA artifact only)
+//   - partial credentials       -> release configuration fails with a clear error
+//   - complete credentials      -> keystore is validated and signing is applied
+//
+// storeFile is resolved against the Android root (rootProject.file), never
+// against the ambient working directory.
+// ---------------------------------------------------------------------------
+
+def releaseSigningKeys = ['storeFile', 'storePassword', 'keyAlias', 'keyPassword']
+
+def envReleaseSigning = [
+        storeFile    : System.getenv('POS_RELEASE_STORE_FILE'),
+        storePassword: System.getenv('POS_RELEASE_STORE_PASSWORD'),
+        keyAlias     : System.getenv('POS_RELEASE_KEY_ALIAS'),
+        keyPassword  : System.getenv('POS_RELEASE_KEY_PASSWORD'),
+]
+
+def keystorePropertiesFile = rootProject.file('keystore.properties')
+def keystoreProperties = new Properties()
+if (keystorePropertiesFile.exists()) {
+    keystorePropertiesFile.withInputStream { keystoreProperties.load(it) }
+}
+
+def releaseSigningValues = [:]
+releaseSigningKeys.each { key ->
+    def value = envReleaseSigning[key]
+    if (value == null || value.toString().trim().isEmpty()) {
+        value = keystoreProperties.getProperty(key)
+    }
+    releaseSigningValues[key] = (value == null || value.toString().trim().isEmpty()) ? null : value.toString().trim()
+}
+
+ext.hasAnyReleaseSigningValue = releaseSigningValues.values().any { it != null }
+ext.hasCompleteReleaseSigningConfig = releaseSigningValues.values().every { it != null }
+
+if (hasAnyReleaseSigningValue && !hasCompleteReleaseSigningConfig) {
+    def missingKeys = releaseSigningKeys.findAll { releaseSigningValues[it] == null }
+    throw new GradleException(
+            "Incomplete Android release signing configuration. Missing: ${missingKeys.join(', ')}. " +
+                    "Provide every POS_RELEASE_STORE_FILE / POS_RELEASE_STORE_PASSWORD / POS_RELEASE_KEY_ALIAS / POS_RELEASE_KEY_PASSWORD " +
+                    "environment variable, or every storeFile / storePassword / keyAlias / keyPassword entry in android/keystore.properties. " +
+                    "Refusing to silently fall back to an unsigned release artifact."
+    )
+}
+
+def completeReleaseSigning = hasCompleteReleaseSigningConfig
+def releaseKeystoreFile = completeReleaseSigning ? rootProject.file(releaseSigningValues.storeFile) : null
+
+if (completeReleaseSigning && !releaseKeystoreFile.exists()) {
+    throw new GradleException(
+            "Android release keystore not found at ${releaseKeystoreFile}. " +
+                    "Fix storeFile/POS_RELEASE_STORE_FILE, or remove every release signing credential to build an unsigned QA artifact."
+    )
+}
+
 android {
     namespace = "com.posoffline.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +70,9 @@ android {
         applicationId "com.posoffline.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        // versionCode policy: major * 10000 + minor * 100 + patch (minor/patch <= 99)
+        versionCode 10000
+        versionName "1.0.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,10 +80,23 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    if (completeReleaseSigning) {
+        signingConfigs {
+            release {
+                storeFile releaseKeystoreFile
+                storePassword releaseSigningValues.storePassword
+                keyAlias releaseSigningValues.keyAlias
+                keyPassword releaseSigningValues.keyPassword
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (completeReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 }
