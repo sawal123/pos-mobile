@@ -85,7 +85,7 @@ The lifecycle-fix revision has no on-device logcat evidence (no device attached 
 ## Blockers and verdict
 
 - `PRINT_HARDWARE_MANUAL_REQUIRED`: no paired Bluetooth thermal printer on the connected device, so no hardware print claim is made.
-- `FULL_UNIT_SUITE_PREEXISTING_UI_FAILURE`: only `business-template.spec.js` fails, and it fails identically on `main` (`c09a385`) and on this branch with the same error (`Cannot call setValue on an empty DOMWrapper` at `input[aria-label="Nama Toko"]`) → PRE-EXISTING BASELINE, not fixed in P33. Superseded: repaired in [P34](./P34_TEST_SUITE_RELEASE_BASELINE_QA.md) — full suite is now 37/37 files, 1078/1078 tests.
+- `FULL_UNIT_SUITE_PREEXISTING_UI_FAILURE`: only `business-template.spec.js` fails, and it fails identically on `main` (`c09a385`) and on this branch with the same error (`Cannot call setValue on an empty DOMWrapper` at `input[aria-label="Nama Toko"]`) → PRE-EXISTING BASELINE, not fixed in P33.
 - Android 12+ runtime permission was intentionally left ungranted at startup; granting it and printing must be validated manually on a device with a paired printer.
 
 **Final status: BELUM SELESAI** — plugin, builder, service, persistence, JS/native contract tests, and the Android build pass; physical printer verification remains MANUAL REQUIRED.
