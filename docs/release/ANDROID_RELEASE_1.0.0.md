@@ -13,22 +13,38 @@
 
 | Status | Item | Note |
 |---|---|---|
-| [x] | unit tests green | 38/38 files, 1085/1085 tests |
+| [x] | unit tests green | 38/38 files, 1088/1088 tests |
 | [x] | npm build | Vite production build completed |
 | [x] | cap sync | 4 npm plugins detected; `BluetoothPrinter` still registered |
 | [x] | debug APK | `android/app/build/outputs/apk/debug/app-debug.apk` |
-| [x] | release APK | builds, but **unsigned QA artifact** — not for distribution |
-| [x] | release AAB | builds, but **unsigned** — not for distribution |
-| [x] | signing configured | Gradle wiring, credential sources and ignore rules in place; **production key not yet provided** |
-| [ ] | APK signature verified | blocked: no production key (`RELEASE_SIGNING_KEY_REQUIRED`) |
-| [ ] | AAB signature verified | blocked: no production key |
-| [x] | zipalign verified | `zipalign -c 4` → verification successful (checked on the unsigned release APK; alignment is independent of signing) |
-| [x] | metadata verified | `com.posoffline.app`, versionName `1.0.0`, versionCode `10000`, minSdk 24, targetSdk 36, not debuggable |
-| [x] | SHA256 generated | see the P35 QA report |
+| [x] | release APK signed | `android/app/build/outputs/apk/release/app-release.apk` — 12,107,942 bytes; no `app-release-unsigned.apk` is produced |
+| [x] | release AAB signed | `android/app/build/outputs/bundle/release/app-release.aab` — 8,128,190 bytes |
+| [x] | signing configured | complete `android/keystore.properties` source; atomic source selection, no mixing |
+| [x] | APK signature verified | `apksigner verify --verbose --print-certs` → **Verifies** (v2 scheme); signer certificate SHA-256 matches the keystore certificate |
+| [x] | AAB signature verified | `jarsigner -verify -certs` → **jar verified**; AAB signer certificate SHA-256 identical to the keystore certificate |
+| [x] | zipalign verified | `zipalign -c -v 4` → **Verification successful** |
+| [x] | metadata verified | `com.posoffline.app`, versionName `1.0.0`, versionCode `10000`, minSdk 24, targetSdk 36, label `POS Mobile`, not debuggable |
+| [x] | SHA256 generated | APK `5EDA9B70DE706B2377E5379B90DE24124946253A499F73FB57F8DDF0D029C097`; AAB `962718AFCF9B3F678AE634B611AADBD837CD063D23B5D4C3003473E469A660BE` |
 | [ ] | debug upgrade test | `UPGRADE_DEVICE_MANUAL_REQUIRED` — no device attached |
 | [ ] | data persistence after upgrade | blocked on the debug upgrade test |
 | [ ] | release first-install QA | `RELEASE_FIRST_INSTALL_MANUAL_REQUIRED` — needs a clean test device/emulator; the existing device holds debug-signed data and must not be wiped |
+| [ ] | release SQLite persistence | `RELEASE_SQLITE_PERSISTENCE_MANUAL_REQUIRED` — needs the clean first-install run |
 | [ ] | Bluetooth physical printer QA | `PRINT_HARDWARE_MANUAL_REQUIRED` — no paired thermal printer |
+
+## Signed release evidence
+
+| Item | Value |
+|---|---|
+| Certificate SHA-256 | `E9:FA:CB:C0:01:3A:F5:A5:13:B3:C5:6D:EE:32:A9:A6:B2:35:BA:17:49:3B:48:33:48:BC:53:B2:35:4F:04:E0` |
+| Certificate validity | 2026-09-16 → 2054-02-01 (10,000 days) |
+| Signing identity | alias `pos-mobile-release`, entry type `PrivateKeyEntry`, self-signed |
+| Certificate subject / issuer | `CN=POS Mobile, OU=IT, O=Software Developer, L=Medan, ST=Sumatera Utara, C=ID` |
+| Signature algorithm | `SHA384withRSA` |
+| Public key | 4096-bit RSA |
+| Serial number | `5ce9b45a27ba2242` |
+| Key backup | **ACKNOWLEDGED** — owner confirmed the keystore is backed up; no backup location is recorded here |
+
+The same certificate signs both artifacts: the APK signer digest and the AAB signer certificate resolve to the fingerprint above, and it matches `keytool -list -v` on the keystore. Nothing about the password, private key, or raw keystore content is recorded in this document.
 
 ## How to produce a signed release
 
@@ -75,6 +91,23 @@ Without secrets:
 - Never send the keystore or passwords over chat or plaintext email.
 - Record the certificate SHA-256 fingerprint in the release documentation. The fingerprint is not a secret.
 - If distributing through Google Play, enable **Play App Signing** so the upload key can be reset without losing the ability to update installed apps.
+
+## Distribution mode
+
+### Mode A — Google Play (chosen for 1.0.0)
+
+- The signed **AAB** (`app-release.aab`) is the upload artifact. APK files are not uploaded to Play.
+- Enable **Google Play App Signing**: Play holds the app signing key, so the local key documented above is the **upload key**.
+- A lost upload key can be reset through Play Console, which is why this mode is preferred.
+- Once Play assigns the app signing certificate, record its SHA-256 fingerprint **separately** — it is not the fingerprint in this document.
+- Do not claim the local certificate above is necessarily the final Play app-signing certificate.
+- Nothing was uploaded, published, or released: P36 only prepares and verifies artifacts.
+
+### Mode B — direct APK distribution (outside Google Play)
+
+- The certificate documented above signs `app-release.apk` and becomes the **update identity**.
+- Every future direct APK update must keep `applicationId com.posoffline.app`, use a higher `versionCode`, and be signed with the same compatible key.
+- Losing the key can make updates to existing installations impossible.
 
 ## Signature continuity rule
 
