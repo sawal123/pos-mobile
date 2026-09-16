@@ -46,6 +46,26 @@ export const useCustomerStore = defineStore('customer', {
       if (!cleanPhone) return null
       return this.customers.find((customer) => normalizeText(customer.phone) === cleanPhone) ?? null
     },
+    searchCustomers(query, limit = 5) {
+      const term = normalizeText(query).toLowerCase()
+
+      if (!term) {
+        return []
+      }
+
+      const parsedLimit = Number(limit)
+      const requested = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.floor(parsedLimit) : 5
+      const max = Math.min(5, requested)
+
+      return this.customers
+        .filter((customer) => {
+          const name = normalizeText(customer.name).toLowerCase()
+          const phone = normalizeText(customer.phone).toLowerCase()
+
+          return name.includes(term) || phone.includes(term)
+        })
+        .slice(0, max)
+    },
     findOrCreateCustomer(payload) {
       const phone = normalizeText(payload?.phone)
       const name = normalizeText(payload?.name)

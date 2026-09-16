@@ -1283,4 +1283,160 @@ describe('Laundry Transaction and Order Flow', () => {
       expect(restoredTxs.find((t) => t.id === 'tx-legacy-paid').paidAt).toBe(today)
     })
   })
+
+  describe('18. P32 customer autocomplete pada order Laundry', () => {
+    beforeEach(() => {
+      ctx.productStore.products = [
+        {
+          id: 'srv-auto',
+          name: 'Cuci Autocomplete',
+          kind: 'service',
+          isActive: true,
+          price: 10000,
+          pricingUnit: 'kg',
+          cost: 4000,
+          minQuantity: 0,
+        },
+      ]
+    })
+
+    async function mountCreateView() {
+      await ctx.router.push('/laundry/orders/create')
+      await flushPromises()
+
+      return mount(LaundryOrderCreateView, {
+        global: { plugins: [ctx.pinia, ctx.router] },
+      })
+    }
+
+    it('mengetik nama parsial menampilkan suggestion dan memilih mengisi nama + nomor HP', async () => {
+      const existing = ctx.customerStore.createCustomer({
+        name: 'Sawal',
+        phone: '08123456789',
+        email: '',
+      }).customer
+      const wrapper = await mountCreateView()
+
+      await wrapper.find('[data-testid="input-customer-name"] input').setValue('saw')
+      await flushPromises()
+
+      const option = wrapper.find(`[data-testid="input-customer-name-option-${existing.id}"]`)
+      expect(option.exists()).toBe(true)
+
+      await option.trigger('click')
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="input-customer-name"] input').element.value).toBe('Sawal')
+      expect(wrapper.find('[data-testid="input-customer-phone"] input').element.value).toBe(
+        '08123456789',
+      )
+    })
+
+    it('mengetik nomor HP parsial menampilkan suggestion', async () => {
+      const existing = ctx.customerStore.createCustomer({
+        name: 'Budi',
+        phone: '08211234567',
+        email: '',
+      }).customer
+      const wrapper = await mountCreateView()
+
+      await wrapper.find('[data-testid="input-customer-phone"] input').setValue('0821')
+      await flushPromises()
+
+      expect(
+        wrapper.find(`[data-testid="input-customer-phone-option-${existing.id}"]`).exists(),
+      ).toBe(true)
+    })
+
+    it('mengetik tanpa hasil tidak menampilkan dropdown', async () => {
+      const wrapper = await mountCreateView()
+
+      await wrapper.find('[data-testid="input-customer-name"] input').setValue('Pelanggan Asing')
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="input-customer-name-suggestions"]').exists()).toBe(false)
+    })
+
+    it('submit setelah memilih suggestion me-reuse customer existing tanpa duplikasi', async () => {
+      const existing = ctx.customerStore.createCustomer({
+        name: 'Sawal',
+        phone: '08123456789',
+        email: '',
+      }).customer
+      const wrapper = await mountCreateView()
+
+      await wrapper.find('[data-testid="input-customer-name"] input').setValue('saw')
+      await flushPromises()
+      await wrapper.find(`[data-testid="input-customer-name-option-${existing.id}"]`).trigger('click')
+      await flushPromises()
+
+      await wrapper.find('[data-testid="service-card-srv-auto"]').trigger('click')
+      await flushPromises()
+
+      await wrapper.find('[data-testid="btn-submit-order"]').trigger('click')
+      await flushPromises()
+
+      expect(ctx.customerStore.customers).toHaveLength(1)
+
+      const order = ctx.transactionStore.items[0]
+      expect(order.customerId).toBe(existing.id)
+      expect(order.customerSnapshot).toMatchObject({
+        id: existing.id,
+        name: 'Sawal',
+        phone: '08123456789',
+      })
+    })
+
+    it('mengubah field setelah memilih tidak memakai snapshot customer lama', async () => {
+      const existing = ctx.customerStore.createCustomer({
+        name: 'Sawal',
+        phone: '08123456789',
+        email: '',
+      }).customer
+      const wrapper = await mountCreateView()
+
+      await wrapper.find('[data-testid="input-customer-name"] input').setValue('saw')
+      await flushPromises()
+      await wrapper.find(`[data-testid="input-customer-name-option-${existing.id}"]`).trigger('click')
+      await flushPromises()
+
+      await wrapper.find('[data-testid="input-customer-name"] input').setValue('Sawal Ganti')
+      await wrapper.find('[data-testid="input-customer-phone"] input').setValue('08999999999')
+      await flushPromises()
+
+      await wrapper.find('[data-testid="service-card-srv-auto"]').trigger('click')
+      await flushPromises()
+      await wrapper.find('[data-testid="btn-submit-order"]').trigger('click')
+      await flushPromises()
+
+      const order = ctx.transactionStore.items[0]
+      expect(order.customerId).not.toBe(existing.id)
+      expect(order.customerSnapshot).toMatchObject({
+        name: 'Sawal Ganti',
+        phone: '08999999999',
+      })
+      expect(ctx.customerStore.customers).toHaveLength(2)
+    })
+
+    it('customer dengan nomor HP sama tetap di-reuse saat submit manual', async () => {
+      const existing = ctx.customerStore.createCustomer({
+        name: 'Sawal',
+        phone: '08123456789',
+        email: '',
+      }).customer
+      const wrapper = await mountCreateView()
+
+      await wrapper.find('[data-testid="input-customer-name"] input').setValue('Sawal')
+      await wrapper.find('[data-testid="input-customer-phone"] input').setValue('08123456789')
+      await flushPromises()
+
+      await wrapper.find('[data-testid="service-card-srv-auto"]').trigger('click')
+      await flushPromises()
+      await wrapper.find('[data-testid="btn-submit-order"]').trigger('click')
+      await flushPromises()
+
+      expect(ctx.customerStore.customers).toHaveLength(1)
+      expect(ctx.transactionStore.items[0].customerId).toBe(existing.id)
+    })
+  })
 })

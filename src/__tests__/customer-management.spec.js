@@ -68,9 +68,15 @@ async function setCashInputValue(wrapper, value) {
   await flushPromises()
 }
 
-async function selectCustomer(wrapper, customerId) {
+async function searchCustomer(wrapper, query) {
   await flushPromises()
-  await wrapper.find('select').setValue(customerId)
+  await wrapper.find('[data-testid="input-customer-search"] input').setValue(query)
+  await flushPromises()
+}
+
+async function selectCustomer(wrapper, customer) {
+  await searchCustomer(wrapper, customer.name)
+  await wrapper.find(`[data-testid="input-customer-search-option-${customer.id}"]`).trigger('click')
   await flushPromises()
 }
 
@@ -234,7 +240,7 @@ describe('P4 customer management', () => {
       email: 'budi@email.com',
     })
 
-    await selectCustomer(wrapper, created.customer.id)
+    await selectCustomer(wrapper, created.customer)
     await getButtonByText(wrapper, 'QRIS').trigger('click')
     await flushPromises()
     await getButtonByText(wrapper, 'Selesaikan Pembayaran').trigger('click')
@@ -251,7 +257,7 @@ describe('P4 customer management', () => {
       email: 'budi@email.com',
     })
 
-    await selectCustomer(wrapper, created.customer.id)
+    await selectCustomer(wrapper, created.customer)
     await getButtonByText(wrapper, 'QRIS').trigger('click')
     await flushPromises()
     await getButtonByText(wrapper, 'Selesaikan Pembayaran').trigger('click')
@@ -268,7 +274,7 @@ describe('P4 customer management', () => {
       email: 'budi@email.com',
     })
 
-    await selectCustomer(wrapper, created.customer.id)
+    await selectCustomer(wrapper, created.customer)
     await getButtonByText(wrapper, 'QRIS').trigger('click')
     await flushPromises()
     await getButtonByText(wrapper, 'Selesaikan Pembayaran').trigger('click')
@@ -285,7 +291,7 @@ describe('P4 customer management', () => {
       email: 'budi@email.com',
     })
 
-    await selectCustomer(wrapper, created.customer.id)
+    await selectCustomer(wrapper, created.customer)
     await getButtonByText(wrapper, 'QRIS').trigger('click')
     await flushPromises()
     await getButtonByText(wrapper, 'Selesaikan Pembayaran').trigger('click')
@@ -314,7 +320,7 @@ describe('P4 customer management', () => {
       email: 'budi@email.com',
     })
 
-    await selectCustomer(wrapper, created.customer.id)
+    await selectCustomer(wrapper, created.customer)
     await getButtonByText(wrapper, 'QRIS').trigger('click')
     await flushPromises()
     await getButtonByText(wrapper, 'Selesaikan Pembayaran').trigger('click')
@@ -366,5 +372,198 @@ describe('P4 customer management', () => {
     await flushPromises()
 
     expect(transactionStore.lastTransaction.changeAmount).toBe(25580)
+  })
+})
+
+describe('P32 customer autocomplete', () => {
+  function seedCustomers(customerStore) {
+    return [
+      { name: 'Sawal', phone: '08123456789' },
+      { name: 'Budi', phone: '08211234567' },
+      { name: 'Sawalina', phone: '089900001111' },
+    ].map((entry) => customerStore.createCustomer({ ...entry, email: '' }).customer)
+  }
+
+  it('searchCustomers mencocokkan nama secara parsial', () => {
+    const { customerStore } = createContext()
+    seedCustomers(customerStore)
+
+    expect(customerStore.searchCustomers('saw').map((customer) => customer.name)).toEqual([
+      'Sawal',
+      'Sawalina',
+    ])
+  })
+
+  it('searchCustomers tidak case-sensitive', () => {
+    const { customerStore } = createContext()
+    seedCustomers(customerStore)
+
+    expect(customerStore.searchCustomers('SAW').map((customer) => customer.name)).toEqual([
+      'Sawal',
+      'Sawalina',
+    ])
+  })
+
+  it('searchCustomers mencocokkan nomor HP secara parsial', () => {
+    const { customerStore } = createContext()
+    seedCustomers(customerStore)
+
+    expect(customerStore.searchCustomers('456789').map((customer) => customer.name)).toEqual([
+      'Sawal',
+    ])
+    expect(customerStore.searchCustomers('0821').map((customer) => customer.name)).toEqual(['Budi'])
+  })
+
+  it('searchCustomers trim whitespace pada query', () => {
+    const { customerStore } = createContext()
+    seedCustomers(customerStore)
+
+    expect(customerStore.searchCustomers('  saw  ').map((customer) => customer.name)).toEqual([
+      'Sawal',
+      'Sawalina',
+    ])
+  })
+
+  it('searchCustomers membatasi hasil maksimal 5', () => {
+    const { customerStore } = createContext()
+
+    for (let index = 0; index < 8; index += 1) {
+      customerStore.createCustomer({
+        name: `Pelanggan ${index}`,
+        phone: `0812000${index}`,
+        email: '',
+      })
+    }
+
+    expect(customerStore.searchCustomers('pelanggan')).toHaveLength(5)
+    expect(customerStore.searchCustomers('pelanggan', 2)).toHaveLength(2)
+  })
+
+  it('searchCustomers memakai hard max 5 untuk limit yang lebih besar', () => {
+    const { customerStore } = createContext()
+
+    for (let index = 0; index < 8; index += 1) {
+      customerStore.createCustomer({
+        name: `Pelanggan ${index}`,
+        phone: `0812000${index}`,
+        email: '',
+      })
+    }
+
+    expect(customerStore.searchCustomers('pelanggan', 5)).toHaveLength(5)
+    expect(customerStore.searchCustomers('pelanggan', 10)).toHaveLength(5)
+    expect(customerStore.searchCustomers('pelanggan', 99)).toHaveLength(5)
+    expect(customerStore.searchCustomers('pelanggan', 999)).toHaveLength(5)
+  })
+
+  it('searchCustomers memakai default 5 untuk limit invalid atau tidak positif', () => {
+    const { customerStore } = createContext()
+
+    for (let index = 0; index < 8; index += 1) {
+      customerStore.createCustomer({
+        name: `Pelanggan ${index}`,
+        phone: `0812000${index}`,
+        email: '',
+      })
+    }
+
+    for (const invalidLimit of [0, -1, -99, Number.NaN, 'bukan-angka']) {
+      expect(customerStore.searchCustomers('pelanggan', invalidLimit)).toHaveLength(5)
+    }
+  })
+
+  it('searchCustomers query kosong menghasilkan array kosong', () => {
+    const { customerStore } = createContext()
+    seedCustomers(customerStore)
+
+    expect(customerStore.searchCustomers('')).toEqual([])
+    expect(customerStore.searchCustomers('   ')).toEqual([])
+    expect(customerStore.searchCustomers(null)).toEqual([])
+  })
+
+  it('searchCustomers tidak mengubah state customers', () => {
+    const { customerStore } = createContext()
+    seedCustomers(customerStore)
+    const before = JSON.stringify(customerStore.customers)
+
+    customerStore.searchCustomers('saw')
+
+    expect(JSON.stringify(customerStore.customers)).toBe(before)
+  })
+
+  it('retail: mengetik menampilkan suggestion maksimal 5', async () => {
+    const { wrapper, customerStore } = await mountPaymentView()
+
+    for (let index = 0; index < 7; index += 1) {
+      customerStore.createCustomer({
+        name: `Cari ${index}`,
+        phone: `0813000${index}`,
+        email: '',
+      })
+    }
+
+    await searchCustomer(wrapper, 'cari')
+
+    expect(wrapper.findAll('[data-testid^="input-customer-search-option-"]')).toHaveLength(5)
+  })
+
+  it('retail: memilih suggestion menyimpan customerSnapshot yang benar', async () => {
+    const { wrapper, customerStore, transactionStore } = await mountPaymentView()
+    const created = customerStore.createCustomer({
+      name: 'Sawal',
+      phone: '08123456789',
+      email: '',
+    })
+
+    await selectCustomer(wrapper, created.customer)
+
+    expect(wrapper.find('[data-testid="selected-customer-label"]').text()).toBe('Sawal')
+
+    await getButtonByText(wrapper, 'QRIS').trigger('click')
+    await flushPromises()
+    await getButtonByText(wrapper, 'Selesaikan Pembayaran').trigger('click')
+    await flushPromises()
+
+    expect(transactionStore.lastTransaction.customer).toBe('Sawal')
+    expect(transactionStore.lastTransaction.customerId).toBe(created.customer.id)
+    expect(transactionStore.lastTransaction.customerSnapshot).toEqual(created.customer)
+  })
+
+  it('retail: clear mengembalikan transaksi ke Walk-in Customer', async () => {
+    const { wrapper, customerStore, transactionStore } = await mountPaymentView()
+    const created = customerStore.createCustomer({
+      name: 'Sawal',
+      phone: '08123456789',
+      email: '',
+    })
+
+    await selectCustomer(wrapper, created.customer)
+    await wrapper.find('[data-testid="btn-clear-customer"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="selected-customer-label"]').text()).toBe('Walk-in Customer')
+
+    await getButtonByText(wrapper, 'QRIS').trigger('click')
+    await flushPromises()
+    await getButtonByText(wrapper, 'Selesaikan Pembayaran').trigger('click')
+    await flushPromises()
+
+    expect(transactionStore.lastTransaction.customer).toBe('Walk-in Customer')
+    expect(transactionStore.lastTransaction.customerId).toBeNull()
+    expect(transactionStore.lastTransaction.customerSnapshot).toBeNull()
+  })
+
+  it('retail: mengubah query setelah memilih melepas customer terpilih', async () => {
+    const { wrapper, customerStore } = await mountPaymentView()
+    const created = customerStore.createCustomer({
+      name: 'Sawal',
+      phone: '08123456789',
+      email: '',
+    })
+
+    await selectCustomer(wrapper, created.customer)
+    await searchCustomer(wrapper, 'Sawal Ganti')
+
+    expect(wrapper.find('[data-testid="selected-customer-label"]').text()).toBe('Walk-in Customer')
   })
 })
