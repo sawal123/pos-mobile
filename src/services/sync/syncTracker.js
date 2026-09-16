@@ -1,4 +1,5 @@
 import { useBusinessStore } from '@/stores/businessStore'
+import { useCashStore } from '@/stores/cashStore'
 import { useCustomerStore } from '@/stores/customerStore'
 import { useExpenseStore } from '@/stores/expenseStore'
 import { useProductStore } from '@/stores/productStore'
@@ -32,6 +33,7 @@ function cloudSyncableBusinessChanged(before, after) {
 export function createSyncChangeTracker({ pinia, queueService, stores = {} }) {
   const businessStore = stores.businessStore ?? useBusinessStore(pinia)
   const productStore = stores.productStore ?? useProductStore(pinia)
+  const cashStore = stores.cashStore ?? useCashStore(pinia)
   const customerStore = stores.customerStore ?? useCustomerStore(pinia)
   const expenseStore = stores.expenseStore ?? useExpenseStore(pinia)
   const transactionStore = stores.transactionStore ?? useTransactionStore(pinia)
@@ -247,6 +249,41 @@ export function createSyncChangeTracker({ pinia, queueService, stores = {} }) {
       }
 
       enqueueUpsert(SYNC_ENTITY_TYPES.TRANSACTION, transaction.id, transaction)
+    })
+  })
+
+  // ---- CASH ----
+  // recordEntry is the canonical cash sync point: recordSalePayment and
+  // recordOpeningBalance both funnel into it, so tracking it alone gives
+  // exactly one outbox row per physical cash movement. The stable local entry
+  // id is the retry identity; retries of the same entry overwrite, never
+  // create a second outbox row.
+  track(cashStore, 'recordEntry', ({ after }) => {
+    after((result) => {
+      if (!result?.success || result?.duplicated || !result?.entry?.id) {
+        return
+      }
+
+      enqueueUpsert(SYNC_ENTITY_TYPES.CASH_ENTRY, result.entry.id, result.entry)
+    })
+  })
+
+  // ---- STOCK MOVEMENTS ----
+  // adjustStock is the canonical movement sync point: updateProduct stock
+  // changes and recordSaleStock both funnel into it. Each movement row has a
+  // stable local id and a referenceId that ties it to the originating sale,
+  // so retries are idempotent and pulls can never double-apply.
+  track(productStore, 'adjustStock', ({ after }) => {
+    after((result) => {
+      if (!result?.success) {
+        return
+      }
+
+      const movement = productStore.stockMovements?.[0]
+
+      if (movement?.id) {
+        enqueueUpsert(SYNC_ENTITY_TYPES.STOCK_MOVEMENT, movement.id, movement)
+      }
     })
   })
 

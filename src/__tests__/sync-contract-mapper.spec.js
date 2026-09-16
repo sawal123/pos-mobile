@@ -324,12 +324,10 @@ describe('P11: Product Mapping', () => {
     expect(p.sku).toBe(`MOBILE-${p.sync_id}`)
     expect(isUuid(p.sync_id)).toBe(true)
     expect(isUuid(p.category_sync_id)).toBe(true)
-    expect(p.stock).toBeUndefined()
+    expect(p.kind).toBe('product')
+    expect(p.stock).toBe(25)
 
-    // Warnings should capture unsupported local stock field
-    expect(result.warnings).toHaveLength(1)
-    expect(result.warnings[0].code).toBe('UNSUPPORTED_PRODUCT_STOCK_FIELD')
-
+    expect(result.warnings).toHaveLength(0)
     expect(result.mappedQueueIds).toEqual(['q-prod-1'])
   })
 
@@ -612,9 +610,12 @@ describe('P11: Transaction Mapping (Sale + Sale Items)', () => {
     expect(item2.quantity).toBe(2)
     expect(item2.line_total).toBe(15000)
 
-    // Warnings for local payment snapshot fields
-    expect(result.warnings).toHaveLength(1)
-    expect(result.warnings[0].code).toBe('UNSUPPORTED_TRANSACTION_SNAPSHOT_FIELDS')
+    // Payment snapshot fields are now part of the sale change payload
+    expect(sale.payment_method).toBe('cash')
+    expect(sale.payment_status).toBe('paid')
+    expect(sale.cash_received).toBe(50000)
+    expect(sale.change_amount).toBe(11500)
+    expect(result.warnings).toHaveLength(0)
 
     expect(result.mappedQueueIds).toEqual(['q-trx-1'])
   })

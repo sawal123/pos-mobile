@@ -17,7 +17,23 @@ const KNOWN_ENTITIES = new Set([
   'sales',
   'sale_items',
   'expenses',
+  'cash_ledger',
+  'stock_movements',
 ])
+
+const BASE_URL = (import.meta.env?.VITE_API_BASE_URL ?? '').replace(/\/+$/, '')
+
+export function isProductionApiConfigured() {
+  if (!BASE_URL) {
+    return false
+  }
+
+  if (/^(https?:\/\/)?localhost([:/]|$)/i.test(BASE_URL)) {
+    return false
+  }
+
+  return /^https?:\/\//i.test(BASE_URL)
+}
 
 const MAX_PULL_PAGES = 1000
 
@@ -694,7 +710,20 @@ export function createSyncPullService({
           syncSequence: sync_sequence,
         }
       } else if (entity === 'products') {
-        const { category_sync_id, name, price, status } = data
+        const {
+          category_sync_id,
+          name,
+          price,
+          status,
+          kind,
+          cost,
+          stock,
+          unit,
+          min_stock,
+          pricing_unit,
+          min_quantity,
+          estimated_duration,
+        } = data
 
         if (category_sync_id === null || category_sync_id === undefined) {
           return {
@@ -744,22 +773,54 @@ export function createSyncPullService({
           }
         }
 
+        const remoteKind = kind === 'service' ? 'service' : 'product'
+        const remoteCost = Number(cost)
+        const remoteStock = Number(stock)
+        const remoteMinStock = Number(min_stock)
+        const remoteMinQuantity = Number(min_quantity)
+
         if (existingProd) {
           existingProd.name = name
           existingProd.category = resolvedCategoryName
           existingProd.price = Number(price)
+          existingProd.kind = existingProd.kind ?? remoteKind
+          if (Number.isFinite(remoteCost) && remoteCost >= 0) {
+            existingProd.cost = remoteCost
+          }
+          // Never overwrite a locally authoritative stock level with a remote
+          // copy: pulled stock blindly applied could erase offline changes.
+          if (typeof unit === 'string' && unit.trim()) {
+            existingProd.unit = unit.trim()
+          }
+          if (Number.isFinite(remoteMinStock) && remoteMinStock >= 0) {
+            existingProd.minStock = remoteMinStock
+          }
+          if (typeof pricing_unit === 'string' && pricing_unit.trim()) {
+            existingProd.pricingUnit = pricing_unit.trim()
+          }
+          if (Number.isFinite(remoteMinQuantity) && remoteMinQuantity >= 0) {
+            existingProd.minQuantity = remoteMinQuantity
+          }
+          if (typeof estimated_duration === 'string' && estimated_duration.trim()) {
+            existingProd.estimatedDuration = estimated_duration.trim()
+          }
           existingProd.isActive = status === 'active'
-          // PRESERVE existingProd.stock
         } else {
           nextProducts.push({
             id: syncId,
             name,
             category: resolvedCategoryName,
             price: Number(price),
-            stock: 0,
+            kind: remoteKind,
+            cost: Number.isFinite(remoteCost) && remoteCost >= 0 ? remoteCost : 0,
+            stock: Number.isFinite(remoteStock) && remoteStock >= 0 ? remoteStock : 0,
+            unit: typeof unit === 'string' && unit.trim() ? unit.trim() : remoteKind === 'service' ? 'kg' : 'pcs',
+            minStock: Number.isFinite(remoteMinStock) && remoteMinStock >= 0 ? remoteMinStock : 0,
+            pricingUnit: typeof pricing_unit === 'string' && pricing_unit.trim() ? pricing_unit.trim() : remoteKind === 'service' ? 'kg' : 'pcs',
+            minQuantity: Number.isFinite(remoteMinQuantity) && remoteMinQuantity >= 0 ? remoteMinQuantity : 0,
+            estimatedDuration: typeof estimated_duration === 'string' ? estimated_duration : '',
             isActive: status === 'active',
           })
-          warnings.push('SERVER_PRODUCT_STOCK_UNAVAILABLE')
           plannedRegistryBinds.push({
             type: 'bind',
             entityType: 'product',
@@ -855,6 +916,20 @@ export function createSyncPullService({
           syncVersion,
           syncSequence: sync_sequence,
         }
+      } else if (entity === 'cash_ledger') {
+        warnings.push('UNSUPPORTED_LOCAL_CASH_LEDGER_APPLY')
+        ignoredCount++
+        serverVersionsToSave[`cash_ledger:${syncId}`] = {
+          syncVersion,
+          syncSequence: sync_sequence,
+        }
+      } else if (entity === 'stock_movements') {
+        warnings.push('UNSUPPORTED_LOCAL_STOCK_MOVEMENT_APPLY')
+        ignoredCount++
+        serverVersionsToSave[`stock_movements:${syncId}`] = {
+          syncVersion,
+          syncSequence: sync_sequence,
+        }
       } else if (entity === 'sales') {
         const {
           transaction_number,
@@ -865,6 +940,11 @@ export function createSyncPullService({
           sold_at,
           discount_amount,
           customer_sync_id,
+          payment_method,
+          payment_status,
+          paid_at,
+          cash_received,
+          change_amount,
         } = data
 
         if (discount_amount && Number(discount_amount) > 0) {
@@ -980,6 +1060,10 @@ export function createSyncPullService({
 
         const itemCount = mappedItems.reduce((acc, it) => acc + (Number(it.qty) || 0), 0)
 
+        const remotePaidAt = typeof paid_at === 'string' && paid_at.trim() ? paid_at : null
+        const remoteCashReceived = Number(cash_received)
+        const remoteChangeAmount = Number(change_amount)
+
         if (existingTrx) {
           existingTrx.invoiceNumber = transaction_number
           existingTrx.status = status
@@ -993,6 +1077,22 @@ export function createSyncPullService({
           existingTrx.customerId = resolvedCustomerId
           if (customerSnapshot && !existingTrx.customerSnapshot) {
             existingTrx.customerSnapshot = customerSnapshot
+          }
+          // Historical payment snapshots are preserved from the server record.
+          if (!existingTrx.paymentMethod && typeof payment_method === 'string' && payment_method.trim()) {
+            existingTrx.paymentMethod = payment_method.trim()
+          }
+          if (!existingTrx.paymentStatus && (payment_status === 'paid' || payment_status === 'unpaid')) {
+            existingTrx.paymentStatus = payment_status
+          }
+          if (!existingTrx.paidAt && remotePaidAt) {
+            existingTrx.paidAt = remotePaidAt
+          }
+          if (existingTrx.cashReceived == null && Number.isInteger(remoteCashReceived) && remoteCashReceived >= 0) {
+            existingTrx.cashReceived = remoteCashReceived
+          }
+          if (existingTrx.changeAmount == null && Number.isInteger(remoteChangeAmount) && remoteChangeAmount >= 0) {
+            existingTrx.changeAmount = remoteChangeAmount
           }
         } else {
           nextTransactions.push({
@@ -1008,9 +1108,11 @@ export function createSyncPullService({
             subtotal: Number(subtotal),
             tax: Number(tax_amount),
             total: Number(total_amount),
-            paymentMethod: null,
-            cashReceived: null,
-            changeAmount: null,
+            paymentMethod: typeof payment_method === 'string' && payment_method.trim() ? payment_method.trim() : null,
+            paymentStatus: payment_status === 'paid' || payment_status === 'unpaid' ? payment_status : null,
+            paidAt: remotePaidAt,
+            cashReceived: Number.isInteger(remoteCashReceived) && remoteCashReceived >= 0 ? remoteCashReceived : null,
+            changeAmount: Number.isInteger(remoteChangeAmount) && remoteChangeAmount >= 0 ? remoteChangeAmount : null,
             createdAt: sold_at,
           })
           plannedRegistryBinds.push({

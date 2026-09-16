@@ -270,7 +270,9 @@ export function createSyncPushService({
       changes.shifts.length > MAX_ENTITY_PER_TYPE ||
       changes.sales.length > MAX_ENTITY_PER_TYPE ||
       changes.sale_items.length > MAX_ENTITY_PER_TYPE ||
-      changes.expenses.length > MAX_ENTITY_PER_TYPE
+      changes.expenses.length > MAX_ENTITY_PER_TYPE ||
+      changes.cash_ledger.length > MAX_ENTITY_PER_TYPE ||
+      changes.stock_movements.length > MAX_ENTITY_PER_TYPE
     )
   }
 
@@ -637,6 +639,8 @@ export function createSyncPushService({
           sales: [],
           sale_items: [],
           expenses: [],
+          cash_ledger: [],
+          stock_movements: [],
         }
 
         const batchSnapshots = []
@@ -715,7 +719,9 @@ export function createSyncPushService({
             mapped.changes.shifts.length > 0 ||
             mapped.changes.sales.length > 0 ||
             mapped.changes.sale_items.length > 0 ||
-            mapped.changes.expenses.length > 0
+            mapped.changes.expenses.length > 0 ||
+            mapped.changes.cash_ledger.length > 0 ||
+            mapped.changes.stock_movements.length > 0
 
           if (!isMapped || !hasServerChanges) {
             blocked.push({
@@ -754,6 +760,8 @@ export function createSyncPushService({
           accumulatedChanges.sales.push(...mapped.changes.sales)
           accumulatedChanges.sale_items.push(...mapped.changes.sale_items)
           accumulatedChanges.expenses.push(...mapped.changes.expenses)
+          accumulatedChanges.cash_ledger.push(...mapped.changes.cash_ledger)
+          accumulatedChanges.stock_movements.push(...mapped.changes.stock_movements)
 
           if (entry.entityType === SYNC_ENTITY_TYPES.CATEGORY) {
             const catName = entry.payload?.name || entry.entityId

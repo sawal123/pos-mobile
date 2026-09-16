@@ -10,6 +10,8 @@ export const SYNC_ENTITY_TYPES = {
   CUSTOMER: 'customer',
   EXPENSE: 'expense',
   TRANSACTION: 'transaction',
+  CASH_ENTRY: 'cash_entry',
+  STOCK_MOVEMENT: 'stock_movement',
 }
 
 export const SYNC_QUEUE_DEFAULT_LIMIT = 100
