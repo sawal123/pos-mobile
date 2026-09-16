@@ -1,7 +1,9 @@
 import { useBusinessStore } from '@/stores/businessStore'
+import { useCashStore } from '@/stores/cashStore'
 import { useCustomerStore } from '@/stores/customerStore'
 import { useExpenseStore } from '@/stores/expenseStore'
 import { useProductStore } from '@/stores/productStore'
+import { useShiftStore } from '@/stores/shiftStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 
 import { SYNC_BUSINESS_ENTITY_ID, SYNC_ENTITY_TYPES, SYNC_RESERVED_CATEGORY } from './syncConstants'
@@ -32,9 +34,11 @@ function cloudSyncableBusinessChanged(before, after) {
 export function createSyncChangeTracker({ pinia, queueService, stores = {} }) {
   const businessStore = stores.businessStore ?? useBusinessStore(pinia)
   const productStore = stores.productStore ?? useProductStore(pinia)
+  const cashStore = stores.cashStore ?? useCashStore(pinia)
   const customerStore = stores.customerStore ?? useCustomerStore(pinia)
   const expenseStore = stores.expenseStore ?? useExpenseStore(pinia)
   const transactionStore = stores.transactionStore ?? useTransactionStore(pinia)
+  const shiftStore = stores.shiftStore ?? useShiftStore(pinia)
 
   const stopHandlers = []
 
@@ -47,7 +51,16 @@ export function createSyncChangeTracker({ pinia, queueService, stores = {} }) {
       return
     }
 
-    void queueService.enqueueUpsert(entityType, entityId, payload)
+    // Snapshot reactive Pinia state synchronously: queueService.enqueue is
+    // async (serialized persistence), so a later in-place mutation such as
+    // updateOrderStatus/settle would otherwise rewrite the payload that the
+    // already-queued snapshot points at, and the server-accepted cleanup
+    // would CAS-mismatch against the mutated row.
+    const snapshot = payload === undefined || payload === null
+      ? payload
+      : JSON.parse(JSON.stringify(payload))
+
+    void queueService.enqueueUpsert(entityType, entityId, snapshot)
   }
 
   function enqueueDelete(entityType, entityId) {
@@ -239,7 +252,12 @@ export function createSyncChangeTracker({ pinia, queueService, stores = {} }) {
   // ---- TRANSACTION ----
   // addTransaction is the canonical sync point. createTransaction calls
   // addTransaction internally, so tracking only addTransaction guarantees
-  // exactly one outbox row per local transaction.
+  // exactly one outbox row per local transaction. updateOrderStatus and
+  // settleLaundryOrderPayment mutate transactions in place (they never call
+  // addTransaction), so they need explicit tracking: re-enqueue the full
+  // mutated transaction snapshot as one upsert. advanceOrderStatus and
+  // payLaundryOrder both delegate to those two canonical actions, so they
+  // are intentionally NOT tracked — tracking the wrappers too would double.
   track(transactionStore, 'addTransaction', ({ after }) => {
     after((transaction) => {
       if (!transaction) {
@@ -247,6 +265,104 @@ export function createSyncChangeTracker({ pinia, queueService, stores = {} }) {
       }
 
       enqueueUpsert(SYNC_ENTITY_TYPES.TRANSACTION, transaction.id, transaction)
+    })
+  })
+
+  function enqueueTransactionSnapshot(id) {
+    const transaction = transactionStore.items.find((item) => item.id === id)
+
+    if (transaction) {
+      enqueueUpsert(SYNC_ENTITY_TYPES.TRANSACTION, transaction.id, transaction)
+    }
+  }
+
+  track(transactionStore, 'updateOrderStatus', ({ args, after }) => {
+    const [id] = args
+
+    after((result) => {
+      if (result === true) {
+        enqueueTransactionSnapshot(id)
+      }
+    })
+  })
+
+  track(transactionStore, 'settleLaundryOrderPayment', ({ after }) => {
+    after((result) => {
+      if (result?.success && !result?.duplicated && result?.transaction?.id) {
+        enqueueTransactionSnapshot(result.transaction.id)
+      }
+    })
+  })
+
+  // ---- CASH ----
+  // recordEntry is the canonical cash sync point: recordSalePayment and
+  // recordOpeningBalance both funnel into it, so tracking it alone gives
+  // exactly one outbox row per physical cash movement. The stable local entry
+  // id is the retry identity; retries of the same entry overwrite, never
+  // create a second outbox row.
+  track(cashStore, 'recordEntry', ({ after }) => {
+    after((result) => {
+      if (!result?.success || result?.duplicated || !result?.entry?.id) {
+        return
+      }
+
+      enqueueUpsert(SYNC_ENTITY_TYPES.CASH_ENTRY, result.entry.id, result.entry)
+    })
+  })
+
+  // ---- STOCK MOVEMENTS ----
+  // Both adjustStock and updateProduct return the recorded movement directly,
+  // so the tracker enqueues exactly the movement that was created — never a
+  // stale head-of-list row and never two rows for one stock change.
+  function enqueueMovement(result) {
+    if (!result?.success || !result?.movement?.id) {
+      return
+    }
+
+    enqueueUpsert(SYNC_ENTITY_TYPES.STOCK_MOVEMENT, result.movement.id, result.movement)
+  }
+
+  track(productStore, 'adjustStock', ({ after }) => {
+    after((result) => {
+      enqueueMovement(result)
+    })
+  })
+
+  track(productStore, 'updateProduct', ({ after }) => {
+    after((result) => {
+      enqueueMovement(result)
+    })
+  })
+
+  // ---- SHIFT ----
+  // openShift/closeShift mutate the same stable shift identity; each call
+  // enqueues one upsert of that identity. Free mode never queues.
+  function enqueueShift(shiftStore) {
+    if (!shiftStore?.id) {
+      return
+    }
+
+    enqueueUpsert(SYNC_ENTITY_TYPES.SHIFT, shiftStore.id, {
+      id: shiftStore.id,
+      shiftNumber: shiftStore.shiftNumber ?? shiftStore.id,
+      status: shiftStore.status ?? (shiftStore.isOpen ? 'open' : 'closed'),
+      openingCash: shiftStore.openingBalance ?? 0,
+      closingCash: shiftStore.closingBalance ?? null,
+      openedAt: shiftStore.openedAt,
+      closedAt: shiftStore.closedAt ?? null,
+      notes: shiftStore.notes ?? '',
+    })
+  }
+
+  track(shiftStore, 'openShift', ({ after }) => {
+    after(() => {
+      enqueueShift(shiftStore)
+    })
+  })
+
+  track(shiftStore, 'closeShift', ({ after }) => {
+    after(() => {
+      enqueueShift(shiftStore)
     })
   })
 

@@ -5,8 +5,10 @@ import { createSyncQueueService } from './syncQueueService'
 import { getToken } from '@/services/cloud/tokenRepository'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useProductStore } from '@/stores/productStore'
+import { useCashStore } from '@/stores/cashStore'
 import { useCustomerStore } from '@/stores/customerStore'
 import { useExpenseStore } from '@/stores/expenseStore'
+import { useShiftStore } from '@/stores/shiftStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 
 const KNOWN_ENTITIES = new Set([
@@ -17,7 +19,23 @@ const KNOWN_ENTITIES = new Set([
   'sales',
   'sale_items',
   'expenses',
+  'cash_ledger',
+  'stock_movements',
 ])
+
+const BASE_URL = (import.meta.env?.VITE_API_BASE_URL ?? '').replace(/\/+$/, '')
+
+export function isProductionApiConfigured() {
+  if (!BASE_URL) {
+    return false
+  }
+
+  if (/^(https?:\/\/)?localhost([:/]|$)/i.test(BASE_URL)) {
+    return false
+  }
+
+  return /^https?:\/\//i.test(BASE_URL)
+}
 
 const MAX_PULL_PAGES = 1000
 
@@ -391,10 +409,12 @@ export function createSyncPullService({
 
     // ── 8. Resolve domain stores and build prospective next state ─────────────
     const productStore = stores?.productStore ?? (pinia ? useProductStore(pinia) : null)
+    const cashStore = stores?.cashStore ?? (pinia ? useCashStore(pinia) : null)
     const customerStore = stores?.customerStore ?? (pinia ? useCustomerStore(pinia) : null)
     const expenseStore = stores?.expenseStore ?? (pinia ? useExpenseStore(pinia) : null)
     const transactionStore =
       stores?.transactionStore ?? (pinia ? useTransactionStore(pinia) : null)
+    const shiftStore = stores?.shiftStore ?? (pinia ? useShiftStore(pinia) : null)
 
     // Helper to scan for conflicts against all pending outbox mutations
     async function checkForPendingConflicts(records) {
@@ -415,14 +435,15 @@ export function createSyncPullService({
       }
 
       for (const record of records) {
-        if (record.entity === 'shifts') continue
-
         let syncId = (record.data.sync_id || '').toLowerCase()
         let outboxType = null
         if (record.entity === 'categories') outboxType = 'category'
         else if (record.entity === 'products') outboxType = 'product'
         else if (record.entity === 'customers') outboxType = 'customer'
         else if (record.entity === 'expenses') outboxType = 'expense'
+        else if (record.entity === 'shifts') outboxType = 'shift'
+        else if (record.entity === 'cash_ledger') outboxType = 'cash_entry'
+        else if (record.entity === 'stock_movements') outboxType = 'stock_movement'
         else if (record.entity === 'sales') outboxType = 'transaction'
         else if (record.entity === 'sale_items') {
           outboxType = 'transaction'
@@ -561,6 +582,23 @@ export function createSyncPullService({
     const nextProducts = productStore ? productStore.products.map((p) => ({ ...p })) : []
     const nextCustomers = customerStore ? customerStore.customers.map((c) => ({ ...c })) : []
     const nextExpenses = expenseStore ? expenseStore.expenses.map((e) => ({ ...e })) : []
+    const nextCashEntries = cashStore ? cashStore.entries.map((e) => ({ ...e })) : []
+    const nextStockMovements = productStore
+      ? productStore.stockMovements.map((m) => ({ ...m }))
+      : []
+    const nextShift = shiftStore
+      ? {
+          id: shiftStore.id,
+          shiftNumber: shiftStore.shiftNumber,
+          status: shiftStore.status,
+          openingBalance: shiftStore.openingBalance,
+          openedAt: shiftStore.openedAt,
+          closingBalance: shiftStore.closingBalance,
+          closedAt: shiftStore.closedAt,
+          notes: shiftStore.notes,
+          isOpen: shiftStore.isOpen,
+        }
+      : null
     const nextTransactions = transactionStore
       ? transactionStore.items.map((t) => ({
           ...t,
@@ -614,6 +652,32 @@ export function createSyncPullService({
 
       if (entity === 'categories') {
         const { name, status } = data
+
+        // Tombstone: a deleted category disappears from the local master and
+        // is detached from products (which keep selling under no category).
+        if (status === 'deleted') {
+          const existingLocalName = await activeRegistry.findLocalKeyBySyncId('category', syncId)
+
+          if (existingLocalName) {
+            const catIdx = nextCategories.indexOf(existingLocalName)
+            if (catIdx !== -1) {
+              nextCategories.splice(catIdx, 1)
+            }
+            for (const prod of nextProducts) {
+              if (prod.category === existingLocalName) {
+                prod.category = ''
+              }
+            }
+          }
+
+          appliedCount++
+          serverVersionsToSave[`categories:${syncId}`] = {
+            syncVersion,
+            syncSequence: sync_sequence,
+          }
+          continue
+        }
+
         if (status && status !== 'active') {
           warnings.push('UNSUPPORTED_LOCAL_CATEGORY_STATUS')
         }
@@ -694,7 +758,44 @@ export function createSyncPullService({
           syncSequence: sync_sequence,
         }
       } else if (entity === 'products') {
-        const { category_sync_id, name, price, status } = data
+        const {
+          category_sync_id,
+          name,
+          price,
+          status,
+          kind,
+          cost,
+          stock,
+          unit,
+          min_stock,
+          pricing_unit,
+          min_quantity,
+          estimated_duration,
+        } = data
+
+        // Tombstone deletes must never require a live category: a deleted
+        // product is removed purely by identity, even when its category is
+        // gone or unknown.
+        if (status === 'deleted') {
+          const localKey = await activeRegistry.findLocalKeyBySyncId('product', syncId)
+          const existingGone = localKey
+            ? nextProducts.find((p) => String(p.id) === String(localKey))
+            : nextProducts.find((p) => String(p.id).toLowerCase() === syncId)
+
+          if (existingGone) {
+            const prodIdx = nextProducts.findIndex((p) => p === existingGone)
+            if (prodIdx !== -1) {
+              nextProducts.splice(prodIdx, 1)
+            }
+          }
+
+          appliedCount++
+          serverVersionsToSave[`products:${syncId}`] = {
+            syncVersion,
+            syncSequence: sync_sequence,
+          }
+          continue
+        }
 
         if (category_sync_id === null || category_sync_id === undefined) {
           return {
@@ -744,22 +845,57 @@ export function createSyncPullService({
           }
         }
 
+        const remoteKind = kind === 'service' ? 'service' : 'product'
+        const remoteCost = Number(cost)
+        const remoteStock = Number(stock)
+        const remoteMinStock = Number(min_stock)
+        const remoteMinQuantity = Number(min_quantity)
+
+        // Accepted remote records converge normal mutable fields to the server
+        // value (this branch only runs when no pending local mutation
+        // conflicts). Stock is the deliberate exception handled below.
         if (existingProd) {
           existingProd.name = name
           existingProd.category = resolvedCategoryName
           existingProd.price = Number(price)
+          existingProd.kind = remoteKind
+          if (Number.isFinite(remoteCost) && remoteCost >= 0) {
+            existingProd.cost = remoteCost
+          }
+          if (typeof unit === 'string' && unit.trim()) {
+            existingProd.unit = unit.trim()
+          }
+          if (Number.isFinite(remoteMinStock) && remoteMinStock >= 0) {
+            existingProd.minStock = remoteMinStock
+          }
+          if (typeof pricing_unit === 'string' && pricing_unit.trim()) {
+            existingProd.pricingUnit = pricing_unit.trim()
+          }
+          if (Number.isFinite(remoteMinQuantity) && remoteMinQuantity >= 0) {
+            existingProd.minQuantity = remoteMinQuantity
+          }
+          // An emptied remote duration clears the local value: it is a real
+          // server-side edit, not a missing field.
+          existingProd.estimatedDuration = typeof estimated_duration === 'string'
+            ? estimated_duration
+            : ''
           existingProd.isActive = status === 'active'
-          // PRESERVE existingProd.stock
-        } else {
+        } else if (status !== 'deleted') {
           nextProducts.push({
             id: syncId,
             name,
             category: resolvedCategoryName,
             price: Number(price),
-            stock: 0,
+            kind: remoteKind,
+            cost: Number.isFinite(remoteCost) && remoteCost >= 0 ? remoteCost : 0,
+            stock: Number.isFinite(remoteStock) && remoteStock >= 0 ? remoteStock : 0,
+            unit: typeof unit === 'string' && unit.trim() ? unit.trim() : remoteKind === 'service' ? 'kg' : 'pcs',
+            minStock: Number.isFinite(remoteMinStock) && remoteMinStock >= 0 ? remoteMinStock : 0,
+            pricingUnit: typeof pricing_unit === 'string' && pricing_unit.trim() ? pricing_unit.trim() : remoteKind === 'service' ? 'kg' : 'pcs',
+            minQuantity: Number.isFinite(remoteMinQuantity) && remoteMinQuantity >= 0 ? remoteMinQuantity : 0,
+            estimatedDuration: typeof estimated_duration === 'string' ? estimated_duration : '',
             isActive: status === 'active',
           })
-          warnings.push('SERVER_PRODUCT_STOCK_UNAVAILABLE')
           plannedRegistryBinds.push({
             type: 'bind',
             entityType: 'product',
@@ -774,7 +910,7 @@ export function createSyncPullService({
           syncSequence: sync_sequence,
         }
       } else if (entity === 'customers') {
-        const { name, phone, email } = data
+        const { name, phone, email, status: customerStatus } = data
 
         let existingCust = nextCustomers.find((c) => String(c.id).toLowerCase() === syncId)
         if (!existingCust) {
@@ -788,7 +924,15 @@ export function createSyncPullService({
           existingCust.name = name
           existingCust.phone = phone ?? ''
           existingCust.email = email ?? ''
-        } else {
+
+          // Tombstone: a deleted customer disappears from the local master.
+          if (customerStatus === 'deleted') {
+            const custIdx = nextCustomers.findIndex((c) => c === existingCust)
+            if (custIdx !== -1) {
+              nextCustomers.splice(custIdx, 1)
+            }
+          }
+        } else if (customerStatus !== 'deleted') {
           nextCustomers.push({
             id: syncId,
             name,
@@ -809,7 +953,7 @@ export function createSyncPullService({
           syncSequence: sync_sequence,
         }
       } else if (entity === 'expenses') {
-        const { description, amount, occurred_at, notes } = data
+        const { description, amount, occurred_at, notes, category } = data
 
         let existingExp = nextExpenses.find((e) => String(e.id).toLowerCase() === syncId)
         if (!existingExp) {
@@ -821,20 +965,23 @@ export function createSyncPullService({
 
         if (existingExp) {
           existingExp.title = description
+          // Restore the authoritative server category instead of forcing
+          // every pulled expense into 'Lainnya'.
+          if (typeof category === 'string' && category.trim()) {
+            existingExp.category = category.trim()
+          }
           existingExp.amount = Number(amount)
           existingExp.note = notes ?? ''
           existingExp.createdAt = occurred_at
-          // PRESERVE existingExp.category
         } else {
           nextExpenses.push({
             id: syncId,
             title: description,
-            category: 'Lainnya',
+            category: typeof category === 'string' && category.trim() ? category.trim() : 'Lainnya',
             amount: Number(amount),
             note: notes ?? '',
             createdAt: occurred_at,
           })
-          warnings.push('SERVER_EXPENSE_CATEGORY_UNAVAILABLE')
           plannedRegistryBinds.push({
             type: 'bind',
             entityType: 'expense',
@@ -843,15 +990,202 @@ export function createSyncPullService({
           })
         }
 
+        // Tombstone: a deleted/void expense disappears from the local master,
+        // exactly like product/customer tombstones. Historical sales keep
+        // their own copies and are never touched.
+        if (data.status === 'deleted' || data.status === 'void') {
+          const idx = existingExp
+            ? nextExpenses.findIndex((e) => e === existingExp)
+            : nextExpenses.findIndex((e) => String(e.id).toLowerCase() === syncId)
+          if (idx !== -1) {
+            nextExpenses.splice(idx, 1)
+          }
+        }
+
         appliedCount++
         serverVersionsToSave[`expenses:${syncId}`] = {
           syncVersion,
           syncSequence: sync_sequence,
         }
       } else if (entity === 'shifts') {
-        warnings.push('UNSUPPORTED_LOCAL_SHIFT_APPLY')
-        ignoredCount++
+        const {
+          shift_number,
+          status: shiftStatus,
+          opening_cash,
+          closing_cash,
+          opened_at,
+          closed_at,
+          notes: shiftNotes,
+        } = data
+
+        if (nextShift) {
+          if (!nextShift.id) {
+            nextShift.id = syncId
+          }
+          nextShift.shiftNumber = shift_number ?? nextShift.shiftNumber
+          nextShift.status = shiftStatus ?? nextShift.status
+          nextShift.openingBalance = opening_cash !== null && opening_cash !== undefined
+            ? Number(opening_cash)
+            : nextShift.openingBalance
+          nextShift.openedAt = opened_at ?? nextShift.openedAt
+          nextShift.closingBalance = closing_cash !== null && closing_cash !== undefined
+            ? Number(closing_cash)
+            : nextShift.closingBalance
+          nextShift.closedAt = closed_at ?? nextShift.closedAt
+          nextShift.notes = shiftNotes ?? nextShift.notes
+          nextShift.isOpen = (shiftStatus ?? nextShift.status) === 'open'
+        }
+
+        plannedRegistryBinds.push({
+          type: 'bind',
+          entityType: 'shift',
+          key: shift_number ?? syncId,
+          syncId,
+        })
+
+        appliedCount++
         serverVersionsToSave[`shifts:${syncId}`] = {
+          syncVersion,
+          syncSequence: sync_sequence,
+        }
+      } else if (entity === 'cash_ledger') {
+        const {
+          type: cashType,
+          amount: cashAmount,
+          category: cashCategory,
+          note: cashNote,
+          reference_id,
+          occurred_at: cashOccurredAt,
+        } = data
+
+        let existingCash = nextCashEntries.find((e) => String(e.id).toLowerCase() === syncId)
+        if (!existingCash) {
+          const localKey = await activeRegistry.findLocalKeyBySyncId('cash_entry', syncId)
+          if (localKey) {
+            existingCash = nextCashEntries.find((e) => String(e.id) === String(localKey))
+          }
+        }
+        if (!existingCash && reference_id) {
+          existingCash = nextCashEntries.find((e) => e.referenceId === reference_id)
+        }
+
+        if (existingCash) {
+          existingCash.type = cashType ?? existingCash.type
+          existingCash.amount = Number(cashAmount ?? existingCash.amount)
+          existingCash.category = cashCategory ?? existingCash.category
+          existingCash.note = cashNote ?? existingCash.note
+          if (reference_id && !existingCash.referenceId) {
+            existingCash.referenceId = reference_id
+          }
+          if (data.sale_sync_id && !existingCash.transactionId) {
+            const saleLocalKey = activeRegistry
+              ? await activeRegistry.findLocalKeyBySyncId('transaction', data.sale_sync_id)
+              : null
+            existingCash.transactionId = saleLocalKey ?? data.sale_sync_id
+          }
+          existingCash.createdAt = cashOccurredAt ?? existingCash.createdAt
+        } else {
+          const cashLocalKey = activeRegistry && data.sale_sync_id
+            ? await activeRegistry.findLocalKeyBySyncId('transaction', data.sale_sync_id)
+            : null
+          nextCashEntries.push({
+            id: syncId,
+            type: cashType,
+            amount: Number(cashAmount),
+            category: cashCategory ?? (cashType === 'out' ? 'Kas Keluar' : 'Kas Masuk'),
+            note: cashNote ?? '',
+            referenceId: reference_id ?? null,
+            transactionId: data.sale_sync_id ? (cashLocalKey ?? data.sale_sync_id) : null,
+            createdAt: cashOccurredAt,
+          })
+          plannedRegistryBinds.push({
+            type: 'bind',
+            entityType: 'cash_entry',
+            key: syncId,
+            syncId,
+          })
+        }
+
+        appliedCount++
+        serverVersionsToSave[`cash_ledger:${syncId}`] = {
+          syncVersion,
+          syncSequence: sync_sequence,
+        }
+      } else if (entity === 'stock_movements') {
+        const {
+          product_sync_id,
+          movement_type,
+          quantity_change,
+          stock_before,
+          stock_after,
+          reference_id: movementRef,
+          category: movementCategory,
+          note: movementNote,
+          occurred_at: movementOccurredAt,
+        } = data
+
+        let resolvedProductId = await activeRegistry.findLocalKeyBySyncId('product', product_sync_id)
+        if (!resolvedProductId) {
+          const plannedProdBind = plannedRegistryBinds.find(
+            (p) =>
+              p.entityType === 'product' &&
+              p.syncId.toLowerCase() === `${product_sync_id ?? ''}`.toLowerCase(),
+          )
+          if (plannedProdBind) {
+            resolvedProductId = plannedProdBind.key
+          }
+        }
+        const targetProductId = resolvedProductId ?? product_sync_id
+
+        const targetProduct = nextProducts.find(
+          (p) => String(p.id) === String(targetProductId) || String(p.id).toLowerCase() === syncId,
+        )
+
+        let existingMovement = nextStockMovements.find((m) => String(m.id).toLowerCase() === syncId)
+        if (!existingMovement) {
+          const localKey = await activeRegistry.findLocalKeyBySyncId('stock_movement', syncId)
+          if (localKey) {
+            existingMovement = nextStockMovements.find((m) => String(m.id) === String(localKey))
+          }
+        }
+        if (!existingMovement && movementRef) {
+          existingMovement = nextStockMovements.find((m) => m.referenceId === movementRef)
+        }
+
+        if (!existingMovement) {
+          const movementLocalKey = activeRegistry && data.sale_sync_id
+            ? await activeRegistry.findLocalKeyBySyncId('transaction', data.sale_sync_id)
+            : null
+          nextStockMovements.push({
+            id: syncId,
+            productId: targetProductId,
+            productName: targetProduct?.name ?? '',
+            type: movement_type,
+            movementType: movement_type,
+            quantityChange: Number(quantity_change),
+            stockBefore: Number(stock_before ?? targetProduct?.stock ?? 0),
+            stockAfter: Number(stock_after ?? targetProduct?.stock ?? 0),
+            referenceId: movementRef ?? null,
+            transactionId: data.sale_sync_id ? (movementLocalKey ?? data.sale_sync_id) : null,
+            category: movementCategory ?? 'Adjustment',
+            note: movementNote ?? '',
+            createdAt: movementOccurredAt,
+          })
+          plannedRegistryBinds.push({
+            type: 'bind',
+            entityType: 'stock_movement',
+            key: syncId,
+            syncId,
+          })
+
+          // Authoritative chronology: the accepted remote stock_after wins.
+          if (targetProduct && Number.isFinite(Number(stock_after))) {
+            targetProduct.stock = Number(stock_after)
+          }
+        }
+
+        appliedCount++
+        serverVersionsToSave[`stock_movements:${syncId}`] = {
           syncVersion,
           syncSequence: sync_sequence,
         }
@@ -865,6 +1199,17 @@ export function createSyncPullService({
           sold_at,
           discount_amount,
           customer_sync_id,
+          payment_method,
+          payment_status,
+          paid_at,
+          cash_received,
+          change_amount,
+          gross_profit,
+          order_status,
+          estimated_completed_at,
+          note,
+          customer_snapshot,
+          business_snapshot,
         } = data
 
         if (discount_amount && Number(discount_amount) > 0) {
@@ -965,12 +1310,24 @@ export function createSyncPullService({
                 }
               }
               const resolvedProductId = localProdKey ?? siData.product_sync_id
+              const snapshotHpp = Number(siData.cost_snapshot)
+              const snapshotLineCost = Number(siData.line_cost)
 
               return {
                 id: resolvedProductId,
                 name: siData.product_name,
                 price: Number(siData.unit_price),
                 qty: Number(siData.quantity),
+                hppSnapshot: Number.isFinite(snapshotHpp) && snapshotHpp >= 0 ? snapshotHpp : 0,
+                costSnapshot: Number.isFinite(snapshotHpp) && snapshotHpp >= 0 ? snapshotHpp : 0,
+                unit: typeof siData.unit === 'string' && siData.unit.trim() ? siData.unit.trim() : 'pcs',
+                kind: siData.kind === 'service' ? 'service' : 'product',
+                pricingUnit: typeof siData.pricing_unit === 'string' && siData.pricing_unit.trim()
+                  ? siData.pricing_unit.trim()
+                  : 'pcs',
+                lineCost: Number.isFinite(snapshotLineCost) && snapshotLineCost >= 0
+                  ? snapshotLineCost
+                  : (Number.isFinite(snapshotHpp) ? snapshotHpp * Number(siData.quantity) : 0),
               }
             }),
           )
@@ -979,6 +1336,34 @@ export function createSyncPullService({
         }
 
         const itemCount = mappedItems.reduce((acc, it) => acc + (Number(it.qty) || 0), 0)
+
+        const remotePaidAt = typeof paid_at === 'string' && paid_at.trim() ? paid_at : null
+        const remoteCashReceived = Number(cash_received)
+        const remoteChangeAmount = Number(change_amount)
+        const remoteGrossProfit = Number(gross_profit)
+
+        // The pulled payment/lifecycle fields are authoritative here: this
+        // branch only runs when no pending local mutation conflicts, so an
+        // unpaid -> paid settlement from another device must converge —
+        // including explicit nulls (e.g. a reopened order clearing paidAt).
+        // The customer snapshot is likewise authoritative history: the live
+        // master record keeps its own name while the receipt keeps the name
+        // at sale time.
+        const remoteCustomerSnapshot = customer_snapshot && typeof customer_snapshot === 'object'
+          ? {
+              id: resolvedCustomerId ?? customer_snapshot.id ?? null,
+              name: typeof customer_snapshot.name === 'string' ? customer_snapshot.name : '',
+              phone: customer_snapshot.phone != null ? `${customer_snapshot.phone}` : '',
+              email: customer_snapshot.email != null ? `${customer_snapshot.email}` : '',
+            }
+          : customerSnapshot
+        const remoteBusinessSnapshot = business_snapshot && typeof business_snapshot === 'object'
+          ? {
+              name: typeof business_snapshot.name === 'string' ? business_snapshot.name : '',
+              outlet: typeof business_snapshot.outlet === 'string' ? business_snapshot.outlet : '',
+              phone: business_snapshot.phone != null ? `${business_snapshot.phone}` : '',
+            }
+          : null
 
         if (existingTrx) {
           existingTrx.invoiceNumber = transaction_number
@@ -991,26 +1376,52 @@ export function createSyncPullService({
           existingTrx.itemCount = itemCount
           existingTrx.customer = customerName
           existingTrx.customerId = resolvedCustomerId
-          if (customerSnapshot && !existingTrx.customerSnapshot) {
-            existingTrx.customerSnapshot = customerSnapshot
-          }
+          existingTrx.customerSnapshot = remoteCustomerSnapshot
+          existingTrx.businessSnapshot = remoteBusinessSnapshot
+          existingTrx.paymentMethod = typeof payment_method === 'string' && payment_method.trim()
+            ? payment_method.trim()
+            : null
+          existingTrx.paymentStatus = payment_status === 'paid' || payment_status === 'unpaid'
+            ? payment_status
+            : null
+          existingTrx.paidAt = remotePaidAt
+          existingTrx.cashReceived = Number.isInteger(remoteCashReceived) && remoteCashReceived >= 0
+            ? remoteCashReceived
+            : null
+          existingTrx.changeAmount = Number.isInteger(remoteChangeAmount) && remoteChangeAmount >= 0
+            ? remoteChangeAmount
+            : null
+          existingTrx.grossProfit = Number.isFinite(remoteGrossProfit) ? remoteGrossProfit : 0
+          existingTrx.orderStatus = typeof order_status === 'string' ? order_status : null
+          existingTrx.estimatedCompletedAt = typeof estimated_completed_at === 'string' && estimated_completed_at.trim()
+            ? estimated_completed_at
+            : null
+          existingTrx.note = typeof note === 'string' ? note : ''
         } else {
           nextTransactions.push({
             id: syncId,
             invoiceNumber: transaction_number,
             customer: customerName,
             customerId: resolvedCustomerId,
-            customerSnapshot,
-            businessSnapshot: null,
+            customerSnapshot: remoteCustomerSnapshot,
+            businessSnapshot: remoteBusinessSnapshot,
             status,
+            orderStatus: typeof order_status === 'string' ? order_status : null,
+            paymentStatus: payment_status === 'paid' || payment_status === 'unpaid' ? payment_status : null,
             items: mappedItems,
             itemCount,
             subtotal: Number(subtotal),
             tax: Number(tax_amount),
             total: Number(total_amount),
-            paymentMethod: null,
-            cashReceived: null,
-            changeAmount: null,
+            grossProfit: Number.isFinite(remoteGrossProfit) ? remoteGrossProfit : 0,
+            paymentMethod: typeof payment_method === 'string' && payment_method.trim() ? payment_method.trim() : null,
+            paidAt: remotePaidAt,
+            cashReceived: Number.isInteger(remoteCashReceived) && remoteCashReceived >= 0 ? remoteCashReceived : null,
+            changeAmount: Number.isInteger(remoteChangeAmount) && remoteChangeAmount >= 0 ? remoteChangeAmount : null,
+            estimatedCompletedAt: typeof estimated_completed_at === 'string' && estimated_completed_at.trim()
+              ? estimated_completed_at
+              : null,
+            note: typeof note === 'string' ? note : '',
             createdAt: sold_at,
           })
           plannedRegistryBinds.push({
@@ -1088,11 +1499,23 @@ export function createSyncPullService({
           String(it.id).toLowerCase() === String(resolvedProductId).toLowerCase() ||
           String(it.id).toLowerCase() === data.product_sync_id.toLowerCase(),
       )
+      const standaloneHpp = Number(data.cost_snapshot)
+      const standaloneLineCost = Number(data.line_cost)
       const newItem = {
         id: resolvedProductId,
         name: data.product_name,
         price: Number(data.unit_price),
         qty: Number(data.quantity),
+        hppSnapshot: Number.isFinite(standaloneHpp) && standaloneHpp >= 0 ? standaloneHpp : 0,
+        costSnapshot: Number.isFinite(standaloneHpp) && standaloneHpp >= 0 ? standaloneHpp : 0,
+        unit: typeof data.unit === 'string' && data.unit.trim() ? data.unit.trim() : 'pcs',
+        kind: data.kind === 'service' ? 'service' : 'product',
+        pricingUnit: typeof data.pricing_unit === 'string' && data.pricing_unit.trim()
+          ? data.pricing_unit.trim()
+          : 'pcs',
+        lineCost: Number.isFinite(standaloneLineCost) && standaloneLineCost >= 0
+          ? standaloneLineCost
+          : (Number.isFinite(standaloneHpp) ? standaloneHpp * Number(data.quantity) : 0),
       }
 
       if (itemIdx !== -1) {
@@ -1120,10 +1543,13 @@ export function createSyncPullService({
     }
 
     // ── 10. Apply mutations safely to Pinia stores via $patch ─────────────────
+    // Remote apply always patches plain staged state: no user mutation action
+    // is invoked, so pulled rows never create new outbox entries.
     if (productStore) {
       productStore.$patch({
         categories: nextCategories,
         products: nextProducts,
+        stockMovements: nextStockMovements,
       })
     }
     if (customerStore) {
@@ -1135,6 +1561,14 @@ export function createSyncPullService({
       expenseStore.$patch({
         expenses: nextExpenses,
       })
+    }
+    if (cashStore) {
+      cashStore.$patch({
+        entries: nextCashEntries,
+      })
+    }
+    if (shiftStore && nextShift && nextShift.id) {
+      shiftStore.setShiftSnapshot(nextShift)
     }
     if (transactionStore) {
       transactionStore.$patch({

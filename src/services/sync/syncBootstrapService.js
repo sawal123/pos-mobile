@@ -5,8 +5,10 @@ import { mapOutboxEntries } from './contractMapper'
 import { pullSyncChanges } from './syncPullTransport'
 import { SYNC_RESERVED_CATEGORY, SYNC_ENTITY_TYPES, SYNC_OPERATIONS } from './syncConstants'
 import { useProductStore } from '../../stores/productStore'
+import { useCashStore } from '../../stores/cashStore'
 import { useCustomerStore } from '../../stores/customerStore'
 import { useExpenseStore } from '../../stores/expenseStore'
+import { useShiftStore } from '../../stores/shiftStore'
 import { useTransactionStore } from '../../stores/transactionStore'
 
 /**
@@ -110,6 +112,10 @@ export function createSyncBootstrapService({
       }
     }
 
+    // NOTE: a non-empty cloud target stays fail-closed here. Automatic merging
+    // of existing cloud data with local Free data is intentionally NOT
+    // attempted in P37 (FREE_TO_EXISTING_CLOUD_MERGE_REQUIRES_P38); P38 will
+    // cover intentional multi-device conflict/recovery semantics.
     // ── 2. Verify Sync Has Not Already Started ────────────────────────────────
     if (adapter) {
       const pushBinding = await adapter.loadSyncPushBinding()
@@ -245,10 +251,12 @@ export function createSyncBootstrapService({
 
     // ── 5. Build Local Snapshot From Stores ───────────────────────────────────
     const productStore = stores?.productStore ?? (pinia ? useProductStore(pinia) : null)
+    const cashStore = stores?.cashStore ?? (pinia ? useCashStore(pinia) : null)
     const customerStore = stores?.customerStore ?? (pinia ? useCustomerStore(pinia) : null)
     const expenseStore = stores?.expenseStore ?? (pinia ? useExpenseStore(pinia) : null)
     const transactionStore =
       stores?.transactionStore ?? (pinia ? useTransactionStore(pinia) : null)
+    const shiftStore = stores?.shiftStore ?? (pinia ? useShiftStore(pinia) : null)
 
     const rawCategories = productStore?.categories ?? []
     const categories = rawCategories.filter(
@@ -313,6 +321,48 @@ export function createSyncBootstrapService({
         entityId: t.id,
         operation: SYNC_OPERATIONS.UPSERT,
         payload: { ...t },
+      })
+    }
+
+    // Current meaningful shift state (open or most recently closed).
+    if (shiftStore?.id && shiftStore?.openedAt) {
+      syntheticEntries.push({
+        id: `bootstrap-shift-${shiftStore.id}`,
+        entityType: SYNC_ENTITY_TYPES.SHIFT,
+        entityId: shiftStore.id,
+        operation: SYNC_OPERATIONS.UPSERT,
+        payload: {
+          id: shiftStore.id,
+          shiftNumber: shiftStore.shiftNumber ?? shiftStore.id,
+          status: shiftStore.status ?? (shiftStore.isOpen ? 'open' : 'closed'),
+          openingCash: shiftStore.openingBalance ?? 0,
+          closingCash: shiftStore.closingBalance ?? null,
+          openedAt: shiftStore.openedAt,
+          closedAt: shiftStore.closedAt ?? null,
+          notes: shiftStore.notes ?? '',
+        },
+      })
+    }
+
+    const cashEntries = (cashStore?.entries ?? []).filter((e) => e && e.id !== undefined && e.id !== null)
+    for (const entry of cashEntries) {
+      syntheticEntries.push({
+        id: `bootstrap-cash-${entry.id}`,
+        entityType: SYNC_ENTITY_TYPES.CASH_ENTRY,
+        entityId: entry.id,
+        operation: SYNC_OPERATIONS.UPSERT,
+        payload: { ...entry },
+      })
+    }
+
+    const stockMovements = (productStore?.stockMovements ?? []).filter((m) => m && m.id !== undefined && m.id !== null)
+    for (const movement of stockMovements) {
+      syntheticEntries.push({
+        id: `bootstrap-move-${movement.id}`,
+        entityType: SYNC_ENTITY_TYPES.STOCK_MOVEMENT,
+        entityId: movement.id,
+        operation: SYNC_OPERATIONS.UPSERT,
+        payload: { ...movement },
       })
     }
 
@@ -413,6 +463,30 @@ export function createSyncBootstrapService({
       }
     }
 
+    // 5. Stock movement -> Product
+    for (const movement of mappedChanges.stock_movements || []) {
+      if (movement.product_sync_id && !prodSyncIds.has(movement.product_sync_id.toLowerCase())) {
+        missingDependencies.push({
+          entity: 'stock_movements',
+          syncId: movement.sync_id,
+          dependencyEntity: 'products',
+          dependencySyncId: movement.product_sync_id,
+        })
+      }
+    }
+
+    // 6. Cash entry -> Sale (optional link; only when present)
+    for (const entry of mappedChanges.cash_ledger || []) {
+      if (entry.sale_sync_id && !saleSyncIds.has(entry.sale_sync_id.toLowerCase())) {
+        missingDependencies.push({
+          entity: 'cash_ledger',
+          syncId: entry.sync_id,
+          dependencyEntity: 'sales',
+          dependencySyncId: entry.sale_sync_id,
+        })
+      }
+    }
+
     if (missingDependencies.length > 0) {
       return {
         ok: false,
@@ -453,6 +527,9 @@ export function createSyncBootstrapService({
         customers: customers.length,
         expenses: expenses.length,
         transactions: transactions.length,
+        shifts: shiftStore?.id && shiftStore?.openedAt ? 1 : 0,
+        cashEntries: cashEntries.length,
+        stockMovements: stockMovements.length,
       },
     }
 

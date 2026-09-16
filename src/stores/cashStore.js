@@ -72,6 +72,7 @@ export const useCashStore = defineStore('cash', {
         category: payload.category ?? (type === 'in' ? 'Kas Masuk' : 'Kas Keluar'),
         note: payload.note ?? '',
         referenceId,
+        transactionId: payload.transactionId ?? null,
         createdAt: payload.createdAt ?? new Date().toISOString(),
       }
 
@@ -106,6 +107,7 @@ export const useCashStore = defineStore('cash', {
         category: 'Penjualan Cash',
         note: transaction.invoiceNumber ?? transaction.id,
         referenceId: `sale-${transaction.id}`,
+        transactionId: transaction.id ?? null,
         createdAt: transaction.createdAt,
       })
     },

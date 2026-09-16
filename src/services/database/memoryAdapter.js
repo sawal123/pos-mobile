@@ -3,7 +3,12 @@ import { applyMigrations } from './migrations'
 
 function cloneValue(value) {
   if (typeof globalThis.structuredClone === 'function') {
-    return globalThis.structuredClone(value)
+    try {
+      return globalThis.structuredClone(value)
+    } catch {
+      // Fall through to the JSON clone below: Pinia transaction objects may
+      // carry uncloneable reactive internals in some runtimes.
+    }
   }
 
   return JSON.parse(JSON.stringify(value))
