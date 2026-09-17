@@ -122,7 +122,7 @@ export const useTransactionStore = defineStore('transaction', {
       const isPaid = payload.paymentStatus === 'paid'
         || (!payload.paymentStatus && (payload.status === 'paid' || payload.status === undefined))
       const transaction = {
-        id: createTransactionId(),
+        id: payload.id ?? createTransactionId(),
         invoiceNumber: createInvoiceNumber(),
         customer: payload.customer ?? 'Walk-in Customer',
         customerId: payload.customerId ?? null,

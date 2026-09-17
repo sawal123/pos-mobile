@@ -1178,9 +1178,15 @@ export function createSyncPullService({
             syncId,
           })
 
-          // Authoritative chronology: the accepted remote stock_after wins.
-          if (targetProduct && Number.isFinite(Number(stock_after))) {
-            targetProduct.stock = Number(stock_after)
+          // Server delta authority (P38): quantity_change is the authoritative
+          // mutation. The remote stock_before/stock_after are historical
+          // evidence only, so a concurrent peer's stale snapshot can never
+          // overwrite the local current stock. Applying the delta is
+          // idempotent because this branch only runs for a movement the device
+          // has not seen yet (deduped by sync_id above).
+          const movementDelta = Number(quantity_change)
+          if (targetProduct && Number.isFinite(movementDelta)) {
+            targetProduct.stock = Number(targetProduct.stock ?? 0) + movementDelta
           }
         }
 

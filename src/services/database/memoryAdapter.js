@@ -39,6 +39,7 @@ export function createMemoryAdapter() {
     syncPullState: null,
     syncServerVersions: null,
     syncConflicts: null,
+    localOperationJournal: null,
   }
 
   return {
@@ -254,6 +255,16 @@ export function createMemoryAdapter() {
     },
     async clearSyncPushInflight() {
       state.syncPushInflight = null
+    },
+    // P38: durable local operation journal (crash-recovery record)
+    async loadLocalOperationJournal() {
+      return state.localOperationJournal ? cloneValue(state.localOperationJournal) : null
+    },
+    async saveLocalOperationJournal(journal) {
+      state.localOperationJournal = cloneValue(journal)
+    },
+    async clearLocalOperationJournal() {
+      state.localOperationJournal = null
     },
     // P13: sync pull context binding (durable, survives restart & logout)
     async loadSyncPullBinding() {

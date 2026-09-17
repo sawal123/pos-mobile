@@ -10,20 +10,18 @@ import PaymentMethodCard from '@/components/payment/PaymentMethodCard.vue'
 import CartSummary from '@/components/pos/CartSummary.vue'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCartStore } from '@/stores/cartStore'
-import { useCashStore } from '@/stores/cashStore'
 import { useCustomerStore } from '@/stores/customerStore'
 import { useProductStore } from '@/stores/productStore'
-import { useTransactionStore } from '@/stores/transactionStore'
+import { resolveLocalOperationService } from '@/services/database/localOperationService'
 import { formatCurrency } from '@/utils/formatters'
 
 const QUICK_CASH_AMOUNTS = [20000, 50000, 100000, 200000, 500000]
 
 const businessStore = useBusinessStore()
 const cartStore = useCartStore()
-const cashStore = useCashStore()
 const customerStore = useCustomerStore()
 const productStore = useProductStore()
-const transactionStore = useTransactionStore()
+const localOperations = resolveLocalOperationService()
 const router = useRouter()
 
 const selectedMethod = ref('cash')
@@ -243,27 +241,27 @@ async function completePayment() {
     return
   }
 
-  const transaction = transactionStore.createTransaction({
-    items: cartStore.items,
-    subtotal: cartStore.subtotal,
-    tax: cartStore.tax,
-    total: cartStore.total,
-    businessSnapshot: {
-      name: businessStore.name,
-      outlet: businessStore.outlet,
-      phone: businessStore.phone,
+  await localOperations.commitRetailSale({
+    checkout: {
+      items: cartStore.items,
+      subtotal: cartStore.subtotal,
+      tax: cartStore.tax,
+      total: cartStore.total,
+      businessSnapshot: {
+        name: businessStore.name,
+        outlet: businessStore.outlet,
+        phone: businessStore.phone,
+      },
+      customer: selectedCustomer.value?.name ?? 'Walk-in Customer',
+      customerId: selectedCustomer.value?.id ?? null,
+      customerSnapshot: selectedCustomer.value ? { ...selectedCustomer.value } : null,
+      paymentMethod: selectedMethod.value,
+      cashReceived: isCashMethod.value ? parsedCashReceived.value : null,
+      changeAmount: isCashMethod.value ? changeAmount.value : null,
+      orderStatus: businessStore.normalizedType === 'Laundry' ? 'Masuk' : null,
     },
-    customer: selectedCustomer.value?.name ?? 'Walk-in Customer',
-    customerId: selectedCustomer.value?.id ?? null,
-    customerSnapshot: selectedCustomer.value ? { ...selectedCustomer.value } : null,
-    paymentMethod: selectedMethod.value,
-    cashReceived: isCashMethod.value ? parsedCashReceived.value : null,
-    changeAmount: isCashMethod.value ? changeAmount.value : null,
-    orderStatus: businessStore.normalizedType === 'Laundry' ? 'Masuk' : null,
   })
 
-  productStore.recordSaleStock(transaction.items, transaction.id)
-  cashStore.recordSalePayment(transaction)
   cartStore.clearCart()
   isCashModalOpen.value = false
   await router.push('/payment/success')

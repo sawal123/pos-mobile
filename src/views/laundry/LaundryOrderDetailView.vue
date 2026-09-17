@@ -8,7 +8,7 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSheet from '@/components/base/BaseSheet.vue'
-import { useCashStore } from '@/stores/cashStore'
+import { resolveLocalOperationService } from '@/services/database/localOperationService'
 import {
   ORDER_LIFECYCLE,
   NEXT_ORDER_STATUS,
@@ -19,7 +19,7 @@ import { formatCurrency, formatDateTime } from '@/utils/formatters'
 
 const route = useRoute()
 const router = useRouter()
-const cashStore = useCashStore()
+const localOperations = resolveLocalOperationService()
 const transactionStore = useTransactionStore()
 
 const orderId = computed(() => String(route.params.id))
@@ -100,7 +100,7 @@ const quickCashAmounts = computed(() => {
   return base.filter((val) => val > order.value.total).slice(0, 3)
 })
 
-function submitPayment() {
+async function submitPayment() {
   paymentError.value = ''
 
   if (!order.value) return
@@ -124,12 +124,11 @@ function submitPayment() {
   isProcessingPayment.value = true
 
   try {
-    const result = transactionStore.settleLaundryOrderPayment({
+    const result = await localOperations.settleLaundryOrder({
       orderId: order.value.id,
       paymentMethod: selectedPayMethod.value,
       cashReceived: selectedPayMethod.value === 'cash' ? parsedCashReceived.value : null,
       changeAmount: selectedPayMethod.value === 'cash' ? changeAmount.value : null,
-      cashStore,
     })
 
     if (!result.success) {
