@@ -696,6 +696,16 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
       const db = await ensureConnection()
       await db.run("DELETE FROM app_meta WHERE key = 'sync_auto_settings_v1'", [])
     },
+    // P38: durable local operation journal. Written before the first
+    // irreversible local mutation and cleared only after every domain store
+    // and the outbox are durable, so a crash mid-operation is always
+    // detectable and idempotently recoverable on the next start.
+    async loadLocalOperationJournal() {
+      return readMetaValue('local_operation_journal_v1', null)
+    },
+    async saveLocalOperationJournal(journal) {
+      await writeMetaValue('local_operation_journal_v1', journal)
+    },
     async persistSyncConflictsAndClearInflightAtomic({ expectedRequestId, conflictsState }) {
       return await withTransaction(async (db) => {
         const { values = [] } = await db.query(

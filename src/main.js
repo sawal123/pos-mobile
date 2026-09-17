@@ -6,6 +6,10 @@ import { createPinia } from 'pinia'
 import App from './App.vue'
 import { createAppRouter } from './router'
 import { initializePersistence, isNativePersistenceError } from './services/database'
+import {
+  createLocalOperationService,
+  setActiveLocalOperationService,
+} from './services/database/localOperationService'
 import { initializeSyncFoundation } from './services/sync'
 import { resolveDeviceIdentifier } from './services/cloud/deviceIdentifier'
 import { useCloudSessionStore } from './stores/cloudSessionStore'
@@ -162,6 +166,22 @@ export async function bootstrapApp({
       if (syncFoundation?.activityLogService) {
         const syncActivityLogStore = useSyncActivityLogStore(pinia)
         syncActivityLogStore.init({ activityLogService: syncFoundation.activityLogService, adapter })
+      }
+
+      // P38: register the durable local operation journal and recover any
+      // operation interrupted by a crash. This runs after hydration and after
+      // the sync tracker is attached, so recovered mutations are persisted to
+      // the domain stores and re-enqueued to the outbox exactly once.
+      const localOperations = createLocalOperationService({
+        adapter,
+        scheduler: persistence,
+        pinia,
+      })
+      setActiveLocalOperationService(localOperations)
+      try {
+        await localOperations.recoverPendingOperations()
+      } catch (error) {
+        console.error('Failed to recover interrupted local operations.', error)
       }
 
       // P22: Single shared runtime signal bridge for native & browser events

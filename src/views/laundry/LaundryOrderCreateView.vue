@@ -9,18 +9,18 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import CustomerAutocomplete from '@/components/customer/CustomerAutocomplete.vue'
 import { useBusinessStore } from '@/stores/businessStore'
-import { useCashStore } from '@/stores/cashStore'
 import { useCustomerStore } from '@/stores/customerStore'
 import { useProductStore } from '@/stores/productStore'
 import { useTransactionStore } from '@/stores/transactionStore'
+import { resolveLocalOperationService } from '@/services/database/localOperationService'
 import { formatCurrency, toLocalDateString } from '@/utils/formatters'
 
 const router = useRouter()
 const businessStore = useBusinessStore()
-const cashStore = useCashStore()
 const customerStore = useCustomerStore()
 const productStore = useProductStore()
 const transactionStore = useTransactionStore()
+const localOperations = resolveLocalOperationService()
 
 // Customer state
 const customerName = ref('')
@@ -390,12 +390,11 @@ async function submitOrder() {
     }
 
     // 6. If Bayar Sekarang: panggil authoritative settlement flow
-    const settlement = transactionStore.settleLaundryOrderPayment({
+    const settlement = await localOperations.settleLaundryOrder({
       orderId: order.id,
       paymentMethod: selectedMethod.value,
       cashReceived: selectedMethod.value === 'cash' ? parsedCashReceived.value : null,
       changeAmount: selectedMethod.value === 'cash' ? changeAmount.value : null,
-      cashStore,
     })
 
     if (!settlement.success) {
