@@ -1,13 +1,172 @@
-<!DOCTYPE html>
-<html lang="">
+<!doctype html>
+<html lang="id">
   <head>
-    <meta charset="UTF-8">
-    <link rel="icon" href="/favicon.ico">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Vite App</title>
+    <meta charset="UTF-8" />
+    <link rel="icon" href="/favicon.ico" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#4945D6" />
+    <title>POS Mobile</title>
+    <style>
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 2.5rem;
+        margin: 0;
+        padding: calc(2rem + env(safe-area-inset-top)) 1.5rem
+          calc(2rem + env(safe-area-inset-bottom));
+        background-color: #4945d6;
+        background-image: linear-gradient(160deg, #4945d6 0%, #5b55e7 100%);
+        color: #ffffff;
+        font-family:
+          Inter,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          'Segoe UI',
+          sans-serif;
+        text-align: center;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      .boot-splash__brand {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.75rem;
+        animation: boot-splash-enter 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
+      }
+
+      .boot-splash__logo {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 4.25rem;
+        height: 4.25rem;
+        border-radius: 1.25rem;
+        background-color: rgba(255, 255, 255, 0.14);
+        border: 1px solid rgba(255, 255, 255, 0.24);
+        box-shadow: 0 14px 32px rgba(24, 20, 96, 0.32);
+        font-size: 1.375rem;
+        font-weight: 700;
+        letter-spacing: 0.1em;
+        color: #ffffff;
+      }
+
+      .boot-splash__title {
+        margin: 0;
+        font-size: 1.5rem;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+
+      .boot-splash__subtitle {
+        margin: 0;
+        max-width: 16rem;
+        font-size: 0.875rem;
+        line-height: 1.5;
+        color: rgba(255, 255, 255, 0.78);
+      }
+
+      .boot-splash__loading {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 1rem;
+        animation: boot-splash-fade 600ms ease-out 200ms both;
+      }
+
+      .boot-splash__spinner {
+        width: 2.25rem;
+        height: 2.25rem;
+        border-radius: 50%;
+        border: 3px solid rgba(255, 255, 255, 0.24);
+        border-top-color: #ff7a00;
+        animation: boot-splash-spin 800ms linear infinite;
+      }
+
+      .boot-splash__status {
+        margin: 0;
+        font-size: 0.8125rem;
+        letter-spacing: 0.01em;
+        color: rgba(255, 255, 255, 0.82);
+      }
+
+      .boot-splash__footer {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: calc(1.5rem + env(safe-area-inset-bottom));
+        margin: 0;
+        font-size: 0.6875rem;
+        font-weight: 500;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.62);
+      }
+
+      @keyframes boot-splash-enter {
+        from {
+          opacity: 0;
+          transform: scale(0.94) translateY(8px);
+        }
+
+        to {
+          opacity: 1;
+          transform: scale(1) translateY(0);
+        }
+      }
+
+      @keyframes boot-splash-fade {
+        from {
+          opacity: 0;
+        }
+
+        to {
+          opacity: 1;
+        }
+      }
+
+      @keyframes boot-splash-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        #boot-splash .boot-splash__brand,
+        #boot-splash .boot-splash__loading,
+        #boot-splash .boot-splash__spinner {
+          animation-duration: 0.01ms;
+          animation-iteration-count: 1;
+        }
+      }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <div id="boot-splash">
+        <div class="boot-splash__brand">
+          <span class="boot-splash__logo">POS</span>
+          <h1 class="boot-splash__title">POS Mobile</h1>
+          <p class="boot-splash__subtitle">Kasir cepat, praktis, dan siap offline</p>
+        </div>
+        <div
+          class="boot-splash__loading"
+          role="status"
+          aria-live="polite"
+          aria-label="Menyiapkan aplikasi"
+        >
+          <span class="boot-splash__spinner" aria-hidden="true"></span>
+          <p class="boot-splash__status">Menyiapkan aplikasi...</p>
+        </div>
+        <p class="boot-splash__footer">POS Offline</p>
+      </div>
+    </div>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

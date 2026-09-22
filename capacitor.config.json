@@ -1,5 +1,8 @@
 {
   "appId": "com.posoffline.app",
   "appName": "POS Mobile",
-  "webDir": "dist"
+  "webDir": "dist",
+  "android": {
+    "backgroundColor": "#4945D6"
+  }
 }
