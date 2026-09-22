@@ -250,6 +250,12 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
         )
       })
     },
+    async loadTaxState() {
+      return readAppState(APP_STATE_KEYS.tax, null)
+    },
+    async saveTaxState(state) {
+      await writeAppState(APP_STATE_KEYS.tax, state)
+    },
     async loadProducts() {
       const db = await ensureConnection()
       const [{ values: categoryRows = [] }, { values: productRows = [] }] = await Promise.all([
