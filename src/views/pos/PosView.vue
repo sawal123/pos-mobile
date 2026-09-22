@@ -10,10 +10,12 @@ import CategoryPill from '@/components/pos/CategoryPill.vue'
 import ProductCard from '@/components/pos/ProductCard.vue'
 import { useCartStore } from '@/stores/cartStore'
 import { useProductStore } from '@/stores/productStore'
+import { useTaxStore } from '@/stores/taxStore'
 import { formatCurrency } from '@/utils/formatters'
 
 const productStore = useProductStore()
 const cartStore = useCartStore()
+const taxStore = useTaxStore()
 const router = useRouter()
 
 const { filterCategories, filteredProducts, searchQuery, selectedCategory } = storeToRefs(productStore)
@@ -101,6 +103,8 @@ function handleCheckout() {
         <CartSummary
           :subtotal="subtotal"
           :tax="tax"
+          :tax-enabled="taxStore.enabled"
+          :tax-rate="taxStore.rate"
           :total="total"
           :disabled="!items.length"
           @checkout="handleCheckout"
