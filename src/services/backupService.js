@@ -325,6 +325,8 @@ function validateTransactionsData(transactions) {
       || !Array.isArray(transaction.items)
       || !isFiniteNumber(transaction.subtotal, { min: 0 })
       || !isFiniteNumber(transaction.tax, { min: 0 })
+      || (transaction.taxRate != null && !isValidTaxRate(transaction.taxRate))
+      || (transaction.taxEnabled !== undefined && typeof transaction.taxEnabled !== 'boolean')
       || !isFiniteNumber(transaction.total, { min: 0 })
       || typeof transaction.paymentMethod !== 'string'
       || !isValidDateString(transaction.createdAt)) {
