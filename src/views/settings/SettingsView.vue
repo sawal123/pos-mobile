@@ -275,25 +275,6 @@ async function handleRestoreFileChange(event) {
       <h2 class="mt-2 text-2xl font-semibold text-ink-primary">Pengaturan aplikasi</h2>
     </div>
 
-    <BaseCard class="space-y-4">
-      <div
-        v-for="item in businessSummary"
-        :key="item.label"
-        class="flex items-center justify-between rounded-2xl bg-surface px-4 py-3"
-      >
-        <span class="text-sm text-ink-secondary">{{ item.label }}</span>
-        <span class="font-medium text-ink-primary">{{ item.value }}</span>
-      </div>
-
-      <div class="flex flex-wrap gap-3">
-        <BaseButton variant="secondary" @click="showProfileModal = true">Edit Profil</BaseButton>
-        <BaseButton variant="secondary" @click="router.push('/customers')">Kelola Pelanggan</BaseButton>
-        <BaseButton variant="secondary" @click="router.push('/expenses')">Kelola Pengeluaran</BaseButton>
-        <BaseButton id="settings-cloud-btn" variant="secondary" @click="router.push('/cloud')">Cloud Login</BaseButton>
-        <BaseButton variant="ghost" @click="showActionSheet = true">Aksi Lainnya</BaseButton>
-      </div>
-    </BaseCard>
-
     <BaseCard class="space-y-5" data-testid="tax-settings-card">
       <div>
         <h3 class="text-lg font-semibold text-ink-primary">Pengaturan Pajak</h3>
@@ -372,6 +353,25 @@ async function handleRestoreFileChange(event) {
           </span>
         </div>
       </form>
+    </BaseCard>
+
+    <BaseCard class="space-y-4">
+      <div
+        v-for="item in businessSummary"
+        :key="item.label"
+        class="flex items-center justify-between rounded-2xl bg-surface px-4 py-3"
+      >
+        <span class="text-sm text-ink-secondary">{{ item.label }}</span>
+        <span class="font-medium text-ink-primary">{{ item.value }}</span>
+      </div>
+
+      <div class="flex flex-wrap gap-3">
+        <BaseButton variant="secondary" @click="showProfileModal = true">Edit Profil</BaseButton>
+        <BaseButton variant="secondary" @click="router.push('/customers')">Kelola Pelanggan</BaseButton>
+        <BaseButton variant="secondary" @click="router.push('/expenses')">Kelola Pengeluaran</BaseButton>
+        <BaseButton id="settings-cloud-btn" variant="secondary" @click="router.push('/cloud')">Cloud Login</BaseButton>
+        <BaseButton variant="ghost" @click="showActionSheet = true">Aksi Lainnya</BaseButton>
+      </div>
     </BaseCard>
 
     <BaseCard class="space-y-4" data-testid="printer-settings-card">
