@@ -123,7 +123,7 @@ describe('dynamic POS tax configuration', () => {
     expect(wrapper.find('[data-testid="tax-settings-card"]').exists()).toBe(true)
     const input = wrapper.find('[data-testid="tax-rate-input"]')
     await input.setValue('7.5')
-    await wrapper.find('[data-testid="save-tax-settings"]').trigger('click')
+    await wrapper.find('[data-testid="tax-settings-card"] form').trigger('submit')
     await flushPromises()
 
     expect(ctx.taxStore.rate).toBe(7.5)
@@ -131,7 +131,7 @@ describe('dynamic POS tax configuration', () => {
     expect(wrapper.find('[data-testid="tax-feedback"]').text()).toContain('berhasil')
 
     await wrapper.find('[data-testid="tax-enabled-switch"]').setValue(false)
-    await wrapper.find('[data-testid="save-tax-settings"]').trigger('click')
+    await wrapper.find('[data-testid="tax-settings-card"] form').trigger('submit')
     await flushPromises()
 
     expect(ctx.taxStore.enabled).toBe(false)
