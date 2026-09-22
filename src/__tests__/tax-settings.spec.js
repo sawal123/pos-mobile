@@ -184,6 +184,39 @@ describe('dynamic POS tax configuration', () => {
     expect(validateBackupPayload(malformed).valid).toBe(false)
   })
 
+  it('backs up and restores the tax rate snapshot of a completed sale', () => {
+    const ctx = context()
+    ctx.productStore.$patch({ products: [], categories: [] })
+    ctx.transactionStore.$patch({ items: [] })
+
+    ctx.transactionStore.createTransaction({
+      items: [{ id: 'p1', name: 'Kopi', price: 10000, qty: 1 }],
+      subtotal: 10000,
+      tax: 750,
+      taxRate: 7.5,
+      taxEnabled: true,
+      total: 10750,
+      paymentMethod: 'cash',
+    })
+
+    const payload = createBackupPayload(ctx)
+    expect(payload.data.transactions[0]).toMatchObject({
+      subtotal: 10000,
+      tax: 750,
+      taxEnabled: true,
+      taxRate: 7.5,
+      total: 10750,
+    })
+    expect(validateBackupPayload(payload).valid).toBe(true)
+
+    const receiver = context()
+    expect(restoreBackupPayload(payload, receiver).success).toBe(true)
+    receiver.taxStore.setSettings({ enabled: true, rate: 11 })
+    expect(receiver.transactionStore.items[0].taxRate).toBe(7.5)
+    expect(receiver.transactionStore.items[0].tax).toBe(750)
+    expect(receiver.transactionStore.items[0].total).toBe(10750)
+  })
+
   it('locks receipt and print labels to historic transaction tax rate', () => {
     const ctx = context()
     const transaction = ctx.transactionStore.createTransaction({
