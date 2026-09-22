@@ -1,4 +1,5 @@
 import { EXPENSE_CATEGORIES } from '@/stores/expenseStore'
+import { DEFAULT_TAX_ENABLED, DEFAULT_TAX_RATE, isValidTaxRate } from '@/stores/taxStore'
 
 export const BACKUP_SCHEMA = 'pos-mobile-backup'
 export const BACKUP_VERSION = 2
@@ -105,6 +106,8 @@ function normalizeTransactionForBackup(transaction) {
     itemCount,
     subtotal: Number.isFinite(transaction.subtotal) ? transaction.subtotal : 0,
     tax: Number.isFinite(transaction.tax) ? transaction.tax : 0,
+    ...(typeof transaction.taxEnabled === 'boolean' ? { taxEnabled: transaction.taxEnabled } : {}),
+    ...(isValidTaxRate(transaction.taxRate) ? { taxRate: Number(transaction.taxRate) } : {}),
     total: Number.isFinite(transaction.total) ? transaction.total : 0,
     grossProfit,
     paymentMethod: typeof transaction.paymentMethod === 'string' ? transaction.paymentMethod : '',
@@ -191,6 +194,12 @@ function validateBusinessData(business) {
   }
 
   return ''
+}
+
+function validateTaxSettings(taxSettings) {
+  return isObject(taxSettings)
+    && typeof taxSettings.enabled === 'boolean'
+    && isValidTaxRate(taxSettings.rate)
 }
 
 function validateProductsData(productsSection) {
@@ -416,6 +425,10 @@ function normalizeBackupData(data) {
 
   // Backward compatibility: older backup versions did not persist cash ledger
   // or stock movement history yet default them to empty collections.
+  if (normalized.taxSettings === undefined) {
+    normalized.taxSettings = { enabled: DEFAULT_TAX_ENABLED, rate: DEFAULT_TAX_RATE }
+  }
+
   if (normalized.cash === undefined || normalized.cash === null) {
     normalized.cash = []
   }
@@ -471,6 +484,9 @@ export function createBackupPayload(stores) {
     exportedAt: new Date().toISOString(),
     data: {
       business: buildBusinessData(stores.businessStore),
+      taxSettings: stores.taxStore
+        ? { enabled: stores.taxStore.enabled, rate: stores.taxStore.rate }
+        : { enabled: DEFAULT_TAX_ENABLED, rate: DEFAULT_TAX_RATE },
       products: buildProductData(stores.productStore),
       stockMovements: (stores.productStore?.stockMovements ?? []).map((movement) => ({ ...movement })),
       cash: (stores.cashStore?.entries ?? []).map((entry) => ({ ...entry })),
@@ -502,6 +518,7 @@ export function validateBackupPayload(payload) {
 
   const dataError = ensureDataSections(data)
     || validateBusinessData(data.business)
+    || (!validateTaxSettings(data.taxSettings) ? 'File backup tidak valid: pengaturan pajak.' : '')
     || validateProductsData(data.products)
     || validateStockMovementsData(data.stockMovements)
     || validateCashEntriesData(data.cash)
@@ -541,6 +558,11 @@ export function restoreBackupPayload(payload, stores) {
   }
 
   const { data } = validation
+
+  stores.taxStore?.$patch({
+    enabled: data.taxSettings.enabled,
+    rate: Number(data.taxSettings.rate),
+  })
 
   stores.businessStore.$patch({
     name: data.business.name,
