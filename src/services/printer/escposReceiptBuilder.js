@@ -305,8 +305,15 @@ export function createReceiptCommands({ transaction, business, paperWidth } = {}
     commands.push({ type: 'text', value: line })
   }
 
-  for (const line of alignRow('Pajak', formatIdr(transaction?.tax), width)) {
-    commands.push({ type: 'text', value: line })
+  if (Number(transaction?.tax) > 0) {
+    const rate = transaction?.taxRate
+    const taxLabel = typeof rate === 'number' && Number.isFinite(rate) && rate > 0
+      ? `Pajak (${rate}%)`
+      : 'Pajak'
+
+    for (const line of alignRow(taxLabel, formatIdr(transaction.tax), width)) {
+      commands.push({ type: 'text', value: line })
+    }
   }
 
   commands.push({ type: 'bold', value: true })

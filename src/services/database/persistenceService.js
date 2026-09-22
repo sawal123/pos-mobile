@@ -9,6 +9,7 @@ import { usePrinterStore } from '@/stores/printerStore'
 import { useProductStore } from '@/stores/productStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import { useTransactionStore } from '@/stores/transactionStore'
+import { useTaxStore } from '@/stores/taxStore'
 
 import { DB_VERSION } from './schema'
 
@@ -30,6 +31,7 @@ function createPersistenceContexts(pinia) {
   const cashStore = useCashStore(pinia)
   const shiftStore = useShiftStore(pinia)
   const printerStore = usePrinterStore(pinia)
+  const taxStore = useTaxStore(pinia)
 
   return [
     {
@@ -51,6 +53,23 @@ function createPersistenceContexts(pinia) {
       },
       async save(adapter, snapshot) {
         await adapter.saveBusiness(snapshot)
+      },
+    },
+    {
+      key: 'tax',
+      store: taxStore,
+      initialState: cloneValue(taxStore.$state),
+      read() {
+        return {
+          enabled: taxStore.enabled,
+          rate: taxStore.rate,
+        }
+      },
+      async load(adapter) {
+        return adapter.loadTaxState()
+      },
+      async save(adapter, snapshot) {
+        await adapter.saveTaxState(snapshot)
       },
     },
     {

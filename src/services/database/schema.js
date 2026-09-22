@@ -11,6 +11,7 @@ export const APP_STATE_KEYS = {
   cash: 'cash_state',
   stockMovements: 'stock_movements_state',
   printer: 'printer_state',
+  tax: 'tax_settings',
 }
 
 export const RESERVED_CATEGORY = 'Semua'

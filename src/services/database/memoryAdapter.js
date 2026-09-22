@@ -19,6 +19,7 @@ export function createMemoryAdapter() {
     initialized: false,
     schemaVersion: 0,
     business: null,
+    taxSettings: null,
     products: [],
     categories: [],
     stockMovements: [],
@@ -73,6 +74,12 @@ export function createMemoryAdapter() {
     },
     async saveBusiness(data) {
       state.business = cloneValue(data)
+    },
+    async loadTaxState() {
+      return cloneValue(state.taxSettings)
+    },
+    async saveTaxState(data) {
+      state.taxSettings = cloneValue(data)
     },
     async loadProducts() {
       return {

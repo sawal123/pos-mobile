@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { useTaxStore } from '@/stores/taxStore'
 
 function itemPrice(item) {
   return Number(item.price ?? item.unitPrice) || 0
@@ -28,7 +29,10 @@ export const useCartStore = defineStore('cart', {
   }),
   getters: {
     subtotal: (state) => state.items.reduce((sum, item) => sum + itemPrice(item) * itemQuantity(item), 0),
-    tax: (state) => Math.round(state.items.reduce((sum, item) => sum + itemPrice(item) * itemQuantity(item), 0) * 0.11),
+    tax() {
+      const taxStore = useTaxStore()
+      return Math.round(this.subtotal * taxStore.effectiveRate / 100)
+    },
     total() {
       return this.subtotal + this.tax
     },

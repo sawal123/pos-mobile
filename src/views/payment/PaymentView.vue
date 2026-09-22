@@ -12,6 +12,7 @@ import { useBusinessStore } from '@/stores/businessStore'
 import { useCartStore } from '@/stores/cartStore'
 import { useCustomerStore } from '@/stores/customerStore'
 import { useProductStore } from '@/stores/productStore'
+import { useTaxStore } from '@/stores/taxStore'
 import { resolveLocalOperationService } from '@/services/database/localOperationService'
 import { formatCurrency } from '@/utils/formatters'
 
@@ -19,6 +20,7 @@ const QUICK_CASH_AMOUNTS = [20000, 50000, 100000, 200000, 500000]
 
 const businessStore = useBusinessStore()
 const cartStore = useCartStore()
+const taxStore = useTaxStore()
 const customerStore = useCustomerStore()
 const productStore = useProductStore()
 const localOperations = resolveLocalOperationService()
@@ -246,6 +248,8 @@ async function completePayment() {
       items: cartStore.items,
       subtotal: cartStore.subtotal,
       tax: cartStore.tax,
+      taxEnabled: taxStore.enabled,
+      taxRate: taxStore.enabled ? taxStore.rate : 0,
       total: cartStore.total,
       businessSnapshot: {
         name: businessStore.name,
@@ -404,6 +408,8 @@ async function completePayment() {
         <CartSummary
           :subtotal="cartStore.subtotal"
           :tax="cartStore.tax"
+          :tax-enabled="taxStore.enabled"
+          :tax-rate="taxStore.rate"
           :total="cartStore.total"
           :show-action="false"
         />

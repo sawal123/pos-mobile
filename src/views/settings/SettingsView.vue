@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -30,6 +30,7 @@ import { usePrinterStore } from '@/stores/printerStore'
 import { useProductStore } from '@/stores/productStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import { useTransactionStore } from '@/stores/transactionStore'
+import { isValidTaxRate, useTaxStore } from '@/stores/taxStore'
 
 const businessStore = useBusinessStore()
 const cartStore = useCartStore()
@@ -41,7 +42,29 @@ const printerStore = usePrinterStore()
 const productStore = useProductStore()
 const shiftStore = useShiftStore()
 const transactionStore = useTransactionStore()
+const taxStore = useTaxStore()
 const router = useRouter()
+
+const taxDraftEnabled = ref(taxStore.enabled)
+const taxDraftRate = ref(String(taxStore.rate))
+const taxFeedback = ref('')
+const taxRateValid = computed(() => !taxDraftEnabled.value || isValidTaxRate(taxDraftRate.value))
+watch([taxDraftEnabled, taxDraftRate], () => { taxFeedback.value = '' })
+const taxPreview = computed(() => {
+  if (!taxDraftEnabled.value || !taxRateValid.value) return 0
+  return Math.round(100000 * Number(taxDraftRate.value) / 100)
+})
+
+function saveTaxSettings() {
+  const result = taxStore.setSettings({
+    enabled: taxDraftEnabled.value,
+    rate: taxDraftEnabled.value
+      ? taxDraftRate.value
+      : (isValidTaxRate(taxDraftRate.value) ? taxDraftRate.value : taxStore.rate),
+  })
+
+  taxFeedback.value = result.success ? 'Pengaturan pajak berhasil disimpan.' : result.error
+}
 
 const showProfileModal = ref(false)
 const showActionSheet = ref(false)
@@ -76,6 +99,7 @@ const businessSummary = computed(() => [
 function getStoreContext() {
   return {
     businessStore,
+    taxStore,
     productStore,
     customerStore,
     expenseStore,
@@ -250,6 +274,86 @@ async function handleRestoreFileChange(event) {
       <p class="text-sm font-medium uppercase tracking-[0.18em] text-primary">Settings</p>
       <h2 class="mt-2 text-2xl font-semibold text-ink-primary">Pengaturan aplikasi</h2>
     </div>
+
+    <BaseCard class="space-y-5" data-testid="tax-settings-card">
+      <div>
+        <h3 class="text-lg font-semibold text-ink-primary">Pengaturan Pajak</h3>
+        <p class="mt-1 text-sm text-ink-secondary">
+          Atur pajak untuk transaksi POS berikutnya. Transaksi sebelumnya tidak berubah.
+        </p>
+      </div>
+
+      <form class="space-y-5" @submit.prevent="saveTaxSettings">
+        <label class="flex cursor-pointer items-center justify-between gap-4 rounded-2xl bg-surface px-4 py-4">
+          <span>
+            <span class="block text-sm font-semibold text-ink-primary">Aktifkan pajak</span>
+            <span class="mt-1 block text-xs leading-relaxed text-ink-secondary">Nonaktifkan untuk transaksi tanpa pajak.</span>
+          </span>
+          <input
+            v-model="taxDraftEnabled"
+            data-testid="tax-enabled-switch"
+            type="checkbox"
+            role="switch"
+            :aria-checked="taxDraftEnabled"
+            class="size-5 shrink-0 accent-primary"
+          />
+        </label>
+
+        <div class="space-y-2">
+          <label for="tax-rate-input" class="block text-sm font-medium text-ink-primary">Persentase pajak</label>
+          <div class="relative">
+            <input
+              id="tax-rate-input"
+              v-model="taxDraftRate"
+              data-testid="tax-rate-input"
+              type="number"
+              min="0"
+              max="100"
+              step="0.01"
+              inputmode="decimal"
+              :disabled="!taxDraftEnabled"
+              :aria-invalid="taxDraftEnabled && !taxRateValid"
+              aria-describedby="tax-rate-help"
+              class="h-12 w-full rounded-2xl border border-zinc-200 bg-white px-4 pr-10 text-sm text-ink-primary outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/10 disabled:bg-zinc-100 disabled:text-zinc-500"
+            />
+            <span class="pointer-events-none absolute right-4 top-3.5 text-sm font-medium text-ink-secondary">%</span>
+          </div>
+          <p id="tax-rate-help" class="text-xs text-ink-secondary">Isi angka 0–100 dengan maksimal 2 angka desimal.</p>
+          <p v-if="taxDraftEnabled && !taxRateValid" class="text-xs font-medium text-danger" data-testid="tax-validation-error">
+            Persentase pajak tidak valid.
+          </p>
+        </div>
+
+        <div class="rounded-2xl border border-primary/10 bg-primary/5 p-4">
+          <p class="text-xs font-semibold uppercase tracking-widest text-primary">Simulasi transaksi</p>
+          <div class="mt-3 flex items-center justify-between text-sm">
+            <span class="text-ink-secondary">Subtotal</span>
+            <span class="font-medium text-ink-primary">Rp 100.000</span>
+          </div>
+          <div v-if="taxDraftEnabled" class="mt-2 flex items-center justify-between gap-3 text-sm">
+            <span class="text-ink-secondary">Pajak ({{ taxDraftRate || '0' }}%)</span>
+            <span class="font-medium text-ink-primary">{{ taxRateValid ? `Rp ${taxPreview.toLocaleString('id-ID')}` : '—' }}</span>
+          </div>
+          <div class="mt-3 flex items-center justify-between border-t border-primary/10 pt-3 text-sm font-semibold">
+            <span>Total</span>
+            <span data-testid="tax-preview-total">{{ taxRateValid ? `Rp ${(100000 + taxPreview).toLocaleString('id-ID')}` : '—' }}</span>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-3">
+          <BaseButton
+            type="submit"
+            data-testid="save-tax-settings"
+            :disabled="!taxRateValid"
+          >
+            Simpan Pengaturan
+          </BaseButton>
+          <span v-if="taxFeedback" class="text-xs text-ink-secondary" role="status" data-testid="tax-feedback">
+            {{ taxFeedback }}
+          </span>
+        </div>
+      </form>
+    </BaseCard>
 
     <BaseCard class="space-y-4">
       <div

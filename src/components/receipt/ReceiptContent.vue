@@ -30,6 +30,13 @@ const paymentMethodLabel = computed(() => {
   return props.transaction.paymentMethod || '-'
 })
 
+const taxLabel = computed(() => {
+  const rate = props.transaction.taxRate
+  return typeof rate === 'number' && Number.isFinite(rate) && rate > 0
+    ? `Pajak (${rate}%)`
+    : 'Pajak'
+})
+
 const showCashSummary = computed(() => (
   `${props.transaction.paymentMethod ?? ''}`.toLowerCase() === 'cash'
   && props.transaction.cashReceived != null
@@ -87,8 +94,8 @@ const showCashSummary = computed(() => (
         <span class="text-ink-secondary">Subtotal</span>
         <span class="font-medium">{{ formatCurrency(transaction.subtotal) }}</span>
       </div>
-      <div class="flex items-start justify-between gap-4">
-        <span class="text-ink-secondary">Pajak</span>
+      <div v-if="Number(transaction.tax) > 0" class="flex items-start justify-between gap-4">
+        <span class="text-ink-secondary">{{ taxLabel }}</span>
         <span class="font-medium">{{ formatCurrency(transaction.tax) }}</span>
       </div>
       <div class="flex items-start justify-between gap-4 text-base">
