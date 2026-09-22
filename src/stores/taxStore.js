@@ -4,7 +4,7 @@ export const DEFAULT_TAX_ENABLED = true
 export const DEFAULT_TAX_RATE = 11
 
 export function isValidTaxRate(value) {
-  if (value === null || value === undefined || typeof value === 'boolean'
+  if ((typeof value !== 'number' && typeof value !== 'string')
     || (typeof value === 'string' && !/^\d+(?:\.\d{1,2})?$/.test(value.trim()))) {
     return false
   }
