@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Matches the web boot splash background so the native launch screen flows
+         seamlessly into the WebView boot splash (see index.html #boot-splash). -->
+    <color name="boot_splash_background">#4945D6</color>
+</resources>
