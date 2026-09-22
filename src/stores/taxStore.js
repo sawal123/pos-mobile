@@ -4,7 +4,8 @@ export const DEFAULT_TAX_ENABLED = true
 export const DEFAULT_TAX_RATE = 11
 
 export function isValidTaxRate(value) {
-  if (value === '' || value === null || value === undefined || typeof value === 'boolean') {
+  if (value === null || value === undefined || typeof value === 'boolean'
+    || (typeof value === 'string' && !/^\d+(?:\.\d{1,2})?$/.test(value.trim()))) {
     return false
   }
 
@@ -13,7 +14,7 @@ export function isValidTaxRate(value) {
   return Number.isFinite(number)
     && number >= 0
     && number <= 100
-    && Math.round(number * 100) === number * 100
+    && Math.abs(number * 100 - Math.round(number * 100)) < 1e-8
 }
 
 export const useTaxStore = defineStore('tax', {
