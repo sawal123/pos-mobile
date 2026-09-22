@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -48,7 +48,8 @@ const router = useRouter()
 const taxDraftEnabled = ref(taxStore.enabled)
 const taxDraftRate = ref(String(taxStore.rate))
 const taxFeedback = ref('')
-const taxRateValid = computed(() => isValidTaxRate(taxDraftRate.value))
+const taxRateValid = computed(() => !taxDraftEnabled.value || isValidTaxRate(taxDraftRate.value))
+watch([taxDraftEnabled, taxDraftRate], () => { taxFeedback.value = '' })
 const taxPreview = computed(() => {
   if (!taxDraftEnabled.value || !taxRateValid.value) return 0
   return Math.round(100000 * Number(taxDraftRate.value) / 100)
@@ -57,7 +58,9 @@ const taxPreview = computed(() => {
 function saveTaxSettings() {
   const result = taxStore.setSettings({
     enabled: taxDraftEnabled.value,
-    rate: taxDraftRate.value,
+    rate: taxDraftEnabled.value
+      ? taxDraftRate.value
+      : (isValidTaxRate(taxDraftRate.value) ? taxDraftRate.value : taxStore.rate),
   })
 
   taxFeedback.value = result.success ? 'Pengaturan pajak berhasil disimpan.' : result.error
