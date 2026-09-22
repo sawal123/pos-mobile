@@ -12,6 +12,14 @@ defineProps({
     type: Number,
     default: 0,
   },
+  taxEnabled: {
+    type: Boolean,
+    default: true,
+  },
+  taxRate: {
+    type: Number,
+    default: 11,
+  },
   total: {
     type: Number,
     default: 0,
@@ -39,8 +47,8 @@ defineEmits(['checkout'])
       <span>Subtotal</span>
       <span>{{ formatCurrency(subtotal) }}</span>
     </div>
-    <div class="flex items-center justify-between text-sm text-ink-secondary">
-      <span>Pajak 11%</span>
+    <div v-if="taxEnabled && taxRate > 0" class="flex items-center justify-between text-sm text-ink-secondary">
+      <span>Pajak ({{ taxRate }}%)</span>
       <span>{{ formatCurrency(tax) }}</span>
     </div>
     <div class="flex items-center justify-between border-t border-zinc-200 pt-3 text-base font-semibold">
