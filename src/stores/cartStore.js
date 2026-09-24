@@ -42,10 +42,6 @@ export const useCartStore = defineStore('cart', {
       const existingItem = this.items.find((item) => item.id === product.id)
       const nextQty = (existingItem?.qty ?? 0) + 1
 
-      if ((product.kind ?? 'product') !== 'service' && nextQty > Number(product.stock ?? 0)) {
-        return false
-      }
-
       if (existingItem) {
         existingItem.qty = nextQty
         return true
@@ -66,10 +62,6 @@ export const useCartStore = defineStore('cart', {
       const item = this.items.find((entry) => entry.id === id)
 
       if (item) {
-        if ((item.kind ?? 'product') !== 'service' && item.qty + 1 > Number(item.stock ?? 0)) {
-          return
-        }
-
         item.qty += 1
       }
     },
@@ -98,11 +90,6 @@ export const useCartStore = defineStore('cart', {
 
       if (nextQuantity <= 0) {
         this.removeItem(id)
-        return
-      }
-
-      if ((item.kind ?? 'product') !== 'service' && nextQuantity > Number(item.stock ?? 0)) {
-        item.qty = Number(item.stock ?? 0)
         return
       }
 

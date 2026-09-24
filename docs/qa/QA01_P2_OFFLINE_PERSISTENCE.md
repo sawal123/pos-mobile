@@ -10,13 +10,14 @@
 
 ## 1. Environment Pengujian
 
-| Komponen | Spesifikasi |
+| Komponen | Spesifikasi Aktual |
 |---|---|
 | Sistem Operasi | Windows 11 Pro (win32 10.0.26100) |
 | Runtime | Node.js v22.18.0 / npm 10.9.3 |
-| Test Runner | Vitest 4.1.11 |
-| Framework | Vue 3, Pinia 2, Vite 6 |
-| Mobile Engine | Capacitor 7 (@capacitor/core, @capacitor-community/sqlite) |
+| Test Runner | Vitest 4.1.11 (`vitest` ^4.1.10) |
+| UI & State Framework | Vue 3.5.40 (`vue` ^3.5.40), Pinia 4.0.2 (`pinia` ^4.0.2), Vue Router 5.2.0 |
+| Bundler | Vite 8.2.2 (`vite` ^8.1.5) |
+| Mobile Engine | Capacitor 8.5.0 (`@capacitor/core` ^8.5.0, `@capacitor-community/sqlite` ^8.1.1, `@capacitor/android` ^8.5.0) |
 | Database Adapter | Memory Adapter (`createMemoryAdapter`) & SQLite Adapter (`createSQLiteAdapter`) |
 | Perangkat Fisik / Android Emulator | **TIDAK TERHUBUNG** (`adb devices` kosong). Sesuai klausul QA-01 P2, pengujian native Android dilaporkan sebagai **NOT TESTED**. |
 
@@ -26,16 +27,16 @@
 
 ### 2.1 Inisialisasi & Resolusi Adapter
 - **Browser Development (`!Capacitor.isNativePlatform()`)**: `resolvePersistenceAdapter()` mengembalikan `createMemoryAdapter()`. Data disimpan dalam memori JavaScript selama siklus hidup sesi browser/test runner.
-- **Android / iOS Device (`Capacitor.isNativePlatform()`)**: `resolvePersistenceAdapter()` mewajibkan plugin `@capacitor-community/sqlite`. Jika tidak tersedia, melempar `NativePersistenceError` (`NATIVE_PERSISTENCE_UNAVAILABLE`). Kegagalan inisialisasi native akan menghentikan bootloader aplikasi (`renderNativePersistenceFatal`) untuk melindungi integritas transaksi lokal.
+- **Android / iOS Device (`Capacitor.isNativePlatform()`)**: `resolvePersistenceAdapter()` mewajibkan plugin `@capacitor-community/sqlite`. Jika tidak tersedia, melempar `NativePersistenceError` (`NATIVE_PERSISTENCE_UNAVAILABLE`). Kegagalan inisialisasi native menghentikan bootloader aplikasi (`renderNativePersistenceFatal`) untuk melindungi integritas transaksi lokal.
 
 ### 2.2 Perbedaan Memory Adapter vs Native SQLite
 | Karakteristik | Memory Adapter | Native SQLite (`CapacitorSQLite`) |
 |---|---|---|
 | Engine | JavaScript In-Memory Map/Array | Native Android/iOS SQLite C-Engine via Capacitor Plugin |
 | Storage Backing | RAM (Transient) | Local App Sandboxed SQLite DB (`pos_mobile.db`) |
-| Transaksi ACID | Simulatid / No-op rollback | Native SQLite `BEGIN TRANSACTION` / `COMMIT` / `ROLLBACK` |
-| Migrasi Schema | In-memory version pointer | Native `PRAGMA user_version`, `addUpgradeStatement` |
-| Batasan QA | Membuktikan logika store, watcher, dan hydration Pinia. **TIDAK BISA** diklaim sebagai bukti persistensi fisik SQLite pada storage flash internal perangkat Android. |
+| Transaksi ACID | Simulatid / In-memory commit | Native SQLite `BEGIN TRANSACTION` / `COMMIT` / `ROLLBACK` |
+| Migrasi Schema | In-memory version pointer | Native `PRAGMA user_version`, `addUpgradeStatement` (v1 -> v4) |
+| Batasan QA | Memvalidasi integritas logika store, watcher, dan hydration Pinia. **TIDAK BISA** diklaim sebagai bukti persistensi fisik SQLite pada storage flash internal perangkat Android. |
 
 ### 2.3 Persistensi Pinia (`persistenceService.js`)
 Stores yang dipersistensikan secara reaktif melalui Vue `watch()`:
@@ -61,30 +62,48 @@ Stores yang dipersistensikan secara reaktif melalui Vue `watch()`:
 | **3.3** | **Snapshot HPP & Gross Profit** | Nilai HPP (`hppSnapshot` / `costSnapshot`) terkunci saat checkout; gross profit dihitung presisi berdasarkan snapshot `(price - hpp) * qty`. | Memory | **PASS** |
 | **3.4** | **Pajak Dinamis (Tax Enabled/Disabled)** | Perhitungan subtotal, tax, dan total konsisten; atribut `taxEnabled` dan `taxRate` tersimpan akurat pada payload transaksi. | Memory | **PASS** |
 | **3.5** | **Uang Diterima & Kembalian** | Pembayaran tunai memvalidasi `cashReceived >= total` dan mencatat `changeAmount` dengan benar. | Memory | **PASS** |
-| **3.6** | **Stok & Inventory (Pengurangan Penjualan)** | Checkout penjualan mengurangi stok produk dan mencatat `stockMovements` bertipe `sale`. | Memory | **PASS** |
-| **3.7** | **Stok & Inventory (Penyesuaian Manual)** | `adjustStock()` dapat menambah (+qty), mengurangi (-qty), dan menyetel stok nol dengan audit trail `stockMovements`. | Memory | **PASS** |
-| **3.8** | **Stok & Inventory (Batas Stok Minimum)** | `lowStockProducts` mendeteksi produk dengan `stock <= minStock`. | Memory | **PASS** |
-| **3.9** | **Stok & Inventory (Stok Negatif)** | Nilai stok negatif (-4) didukung penuh oleh project, tersimpan di database, dan termuat kembali tanpa error. | Memory | **PASS** |
-| **3.10** | **Stok & Inventory (Pencegahan Double-Deduct)** | Restart aplikasi dan proses rehidrasi TIDAK mengurangi stok ulang ataupun menduplikasi `stockMovements`. | Memory | **PASS** |
-| **3.11** | **Bisnis: Cafe / UMKM** | Transaksi makanan & minuman, multi-item, variasi kuantitas, pajak, dan kembalian tunai terverifikasi. | Memory | **PASS** |
-| **3.12** | **Bisnis: Laundry (Kiloan Desimal & Pelunasan)** | Kuatitas desimal 2.5 kg × Rp 10.000 terhitung Rp 25.000; order belum bayar (`unpaid`) tidak menambah kas; status pengerjaan advance `Masuk` -> `Diproses` -> `Siap Diambil` -> `Selesai`; pelunasan via `settleLaundryOrderPayment()` mencatat kas secara idempoten. | Memory | **PASS** |
-| **3.13** | **Bisnis: Grosir / Toko Kelontong** | Katalog produk dengan SKU, multi-item checkout, dan mutasi stok sembako beroperasi akurat. | Memory | **PASS** |
-| **3.14** | **Kas & Shift (Siklus Shift)** | Buka shift (`openShift`), rekam saldo awal, tutup shift (`closeShift`), serta verifikasi saldo akhir. | Memory | **PASS** |
-| **3.15** | **Kas & Shift (Pencegahan Duplikasi Kas)** | Transaksi tunai sama tidak membuat entri kas ganda (`referenceId: sale-${id}`). Transaksi non-tunai (QRIS) dilewati tanpa menambah saldo fisik. | Memory | **PASS** |
-| **3.16** | **Persistensi & Restart Recovery** | Seluruh data (bisnis, PIN, produk, stok, transaksi, kas, shift, pengeluaran) utuh setelah restart instance Pinia. | Memory | **PASS** |
-| **3.17** | **SQLite Row Deserializer** | `deserializeTransactionRows()` mampu mengekstrak payload JSON transaksi valid dan mengabaikan baris korup secara aman tanpa crash. | SQLite Unit Mock | **PASS** |
-| **3.18** | **Backup & Restore** | Ekspor payload v2, validasi schema (`taxRate` numerik dan null, kuantitas desimal, HPP), pencegahan restore saat shift buka, dan pemulihan data berhasil. | Memory | **PASS** |
-| **3.19** | **Isolasi Sinkronisasi Mode Free** | Tidak ada panggilan jaringan ke backend Laravel produksi; outbox tetap terlindungi. | Memory | **PASS** |
-| **3.20** | **Native SQLite pada Perangkat Android** | Pengujian database SQLite fisik pada perangkat Android / emulator. | Native Android | **NOT TESTED** |
+| **3.6** | **Stok Negatif: Penjualan Melebihi Stok** | Penjualan 5 unit dari stok awal 2 menghasilkan stok -3 dengan tepat satu `stockMovement` bertipe `sale`. | Memory | **PASS** |
+| **3.7** | **Stok Negatif: Penyesuaian Manual** | `adjustStock()` dari stok 0 menjadi -4 berhasil dicatat dengan `stockBefore: 0`, `stockAfter: -4`, dan `quantityChange: -4`. | Memory | **PASS** |
+| **3.8** | **Validasi Kuantitas & Keaktifan Produk** | Kuantitas tidak valid (0, negatif, bukan angka), produk non-aktif, dan produk tidak ditemukan tetap ditolak oleh `canFulfillSale()`. | Memory | **PASS** |
+| **3.9** | **Pengecualian Layanan Laundry** | Layanan laundry (`kind: 'service'`) tidak memakai dan tidak mengurangi stok (`adjustStock` ditolak, penjualan tidak mencatat movement). | Memory | **PASS** |
+| **3.10** | **Batas Stok Minimum** | `lowStockProducts` mendeteksi produk dengan `stock <= minStock`, termasuk produk bersaldo stok negatif. | Memory | **PASS** |
+| **3.11** | **Transaksi Riil (`localOperationService`)** | `commitRetailSale()` mengeksekusi operasi transaksi, pengurangan stok, dan ledger kas secara durabel serta bebas duplikasi setelah restart. | Memory | **PASS** |
+| **3.12** | **Persistensi Shift Terbuka** | Restart saat shift masih buka memulihkan `isOpen: true`, `id`, `shiftNumber`, `status: 'open'`, `openingBalance`, `openedAt`, `notes` tanpa membuat saldo awal duplikat. | Memory | **PASS** |
+| **3.13** | **Persistensi Shift Ditutup** | Restart setelah shift ditutup memulihkan `isOpen: false`, `id`, `shiftNumber`, `status: 'closed'`, `closingBalance`, `closedAt`, `notes` secara utuh. | Memory | **PASS** |
+| **3.14** | **Bisnis: Cafe / UMKM** | Transaksi makanan & minuman, multi-item, variasi kuantitas, pajak, dan kembalian tunai terverifikasi. | Memory | **PASS** |
+| **3.15** | **Bisnis: Laundry (Kiloan Desimal & Pelunasan)** | Kuantitas desimal 2.5 kg × Rp 10.000 terhitung Rp 25.000; order belum bayar (`unpaid`) tidak menambah kas; status pengerjaan advance `Masuk` -> `Diproses` -> `Siap Diambil` -> `Selesai`; pelunasan via `settleLaundryOrderPayment()` mencatat kas secara idempoten. | Memory | **PASS** |
+| **3.16** | **Bisnis: Grosir / Toko Kelontong** | Katalog produk dengan SKU, multi-item checkout, dan mutasi stok sembako beroperasi akurat. | Memory | **PASS** |
+| **3.17** | **Kas & Shift (Pencegahan Duplikasi Kas)** | Transaksi tunai sama tidak membuat entri kas ganda (`referenceId: sale-${id}`). Transaksi non-tunai (QRIS) dilewati tanpa menambah saldo fisik. | Memory | **PASS** |
+| **3.18** | **SQLite Row Deserializer** | `deserializeTransactionRows()` mampu mengekstrak payload JSON transaksi valid dan mengabaikan baris korup secara aman tanpa crash. | SQLite Unit Mock | **PASS** |
+| **3.19** | **Backup & Restore** | Ekspor payload v2, validasi schema (`taxRate` numerik dan null, kuantitas desimal, HPP), pencegahan restore saat shift buka, dan pemulihan data berhasil. | Memory | **PASS** |
+| **3.20** | **Isolasi Sinkronisasi Mode Free** | Tidak ada panggilan jaringan ke backend Laravel produksi; outbox tetap terlindungi. | Memory | **PASS** |
+| **3.21** | **Native SQLite pada Perangkat Android** | Pengujian database SQLite fisik pada perangkat Android / emulator. | Native Android | **NOT TESTED** |
 
 ---
 
 ## 4. Temuan dan Perbaikan Bug (Findings & Bug Fixes)
 
-### Bug: Shift Metadata Terpotong Saat Rehidrasi / Restart
-- **Lokasi**: [persistenceService.js](file:///d:/PROJECT%20WEB/POS%20OFFLINE/pos-mobile/src/services/database/persistenceService.js#L180-L194)
-- **Gejala**: Ketika shift dibuka atau ditutup, `shiftStore` menyimpan atribut `id`, `shiftNumber`, `status` (`open`/`closed`), `closingBalance`, `closedAt`, dan `notes`. Namun, fungsi `read()` di persistence context shift sebelumnya hanya membaca `{ isOpen, openingBalance, openedAt }`. Akibatnya, saat aplikasi ditutup dan dibuka kembali, proses hidrasi me-reset `shiftStore.id` dan `shiftStore.status` kembali ke `null`.
-- **Perbaikan**: Memperbarui `read()` pada konteks shift agar menyertakan seluruh properti:
+### 4.1 Perbaikan Stok Negatif untuk Kebutuhan POS Offline
+- **Lokasi**:
+  - `src/stores/productStore.js`
+  - `src/stores/cartStore.js`
+- **Masalah**:
+  1. `productStore.canFulfillSale()` sebelumnya menolak penjualan apabila `quantity > product.stock`.
+  2. `productStore.adjustStock()` sebelumnya memiliki guard `if (stockAfter < 0) return { success: false, error: 'Stok tidak boleh kurang dari 0.' }`.
+  3. `cartStore.js` sebelumnya membatasi penambahan dan pengubahan kuantitas produk ke keranjang (`nextQty > product.stock`).
+- **Perbaikan**:
+  1. Menghapus batasan `quantity > product.stock` pada `canFulfillSale()` dan menggantinya dengan validasi kuantitas (`!Number.isFinite(quantity) || quantity <= 0`), pengecekan keaktifan produk, serta keberadaan produk.
+  2. Menghapus guard `stockAfter < 0` pada `adjustStock()`, sehingga stok dapat bergerak ke nilai negatif (misal: 2 menjadi -3 saat menjual 5 unit, atau 0 menjadi -4 saat penyesuaian manual).
+  3. Menghapus pembatasan stok di `cartStore.js` agar kasir dapat memasukkan kuantitas melebihi stok yang tercatat secara offline.
+- **Hasil Verifikasi**:
+  - Penjualan 5 unit dari stok awal 2 menghasilkan stok -3 dengan 1 stock movement.
+  - Penyesuaian manual dari stok 0 menjadi -4 berhasil.
+  - Seluruh pengujian regresi pada `qa-offline-persistence.spec.js` dan `offline-business-core.spec.js` lulus.
+
+### 4.2 Shift Metadata Terpotong Saat Rehidrasi / Restart
+- **Lokasi**: `src/services/database/persistenceService.js`
+- **Masalah**: Fungsi `read()` pada konteks persistensi shift sebelumnya hanya membaca `{ isOpen, openingBalance, openedAt }`. Properti `id`, `shiftNumber`, `status`, `closingBalance`, `closedAt`, dan `notes` ter-reset ke `null` setelah aplikasi ditutup dan dibuka kembali.
+- **Perbaikan**: Memperbarui `read()` pada konteks shift agar menyertakan seluruh properti shift:
   ```javascript
   read() {
     return {
@@ -100,15 +119,26 @@ Stores yang dipersistensikan secara reaktif melalui Vue `watch()`:
     }
   }
   ```
-- **Hasil Verifikasi**: Regression test pada [qa-offline-persistence.spec.js](file:///d:/PROJECT%20WEB/POS%20OFFLINE/pos-mobile/src/__tests__/qa-offline-persistence.spec.js) memastikan `shiftId` dan `status` tetap konsisten setelah aplikasi di-restart.
+- **Hasil Verifikasi**: Regression test memastikan restart ketika shift masih terbuka dan setelah shift ditutup mempertahankan seluruh metadata shift tanpa membuat duplikasi saldo awal.
 
 ---
 
-## 5. Status Verifikasi Native Device & Blocker
+## 5. Analisis Ketidaksesuaian Arsitektur & Blocker Sinkronisasi (P3 Blocker)
 
-1. **Android Physical Device / Emulator**:
-   - Status: **NOT TESTED** (Tidak ada hardware/emulator yang terdeteksi via adb).
-   - Pengujian persistence native SQLite harus dilakukan pada pipeline CI/CD Android atau perangkat fisik sebelum rilis APK produksi.
-2. **Blocker Sinkronisasi Online (P3+)**:
-   - Skema outbox `sync_queue` dan mutasi transaksi lokal sudah siap.
-   - Tidak ada blocker arsitektur offline untuk melanjutkan ke tahap pengujian sinkronisasi push/pull bertahap.
+> [!WARNING]
+> **BLOCKER P3: Ketidaksesuaian Penanganan Stok Negatif antara POS Mobile dan Backend Laravel**
+>
+> - **Kebutuhan POS Mobile Offline (Client)**: Mengizinkan transaksi penjualan dan penyesuaian stok bergerak ke nilai negatif agar operasional kasir di lapangan tidak terhenti ketika terjadi keterlambatan pencatatan barang masuk atau selisih stok fisik.
+> - **Kondisi Backend Laravel (Server)**: Backend saat ini memiliki validasi yang menolak mutasi stok (`stock_movements`) yang mengakibatkan stok di database server bernilai negatif (`stock < 0` validation error / constraint).
+> - **Dampak pada Sinkronisasi (P3)**: Ketika transaksi offline dengan stok negatif di-push dari POS Mobile ke Laravel via `syncPushService`, server akan menolak mutasi stok tersebut, menyebabkan kegagalan sinkronisasi outbox (`OUTBOX_PUSH_FAILED` / HTTP 422 Unprocessable Entity).
+> - **Rekomendasi Tindak Lanjut untuk P3**:
+>   1. Backend Laravel perlu diperbarui agar mendukung stok negatif atau memiliki perlakuan rekonsiliasi khusus untuk mutasi stok yang berasal dari offline checkout.
+>   2. Mekanisme resolution conflict di sisi klien perlu disiapkan untuk menangani penolakan stok dari server tanpa menghapus transaksi penjualan yang sah di kasir.
+>   *Catatan: Sesuai batasan lingkup PR #43, tidak ada perubahan kode yang dilakukan pada Laravel backend atau sinkronisasi produksi.*
+
+---
+
+## 6. Status Android Native
+
+- **Status**: **NOT TESTED**
+- **Keterangan**: Tidak ada perangkat fisik atau emulator Android yang terhubung (`adb devices` kosong). Pengujian unit test berbasis memory adapter dan mock SQLite SQLiteConnection membuktikan kebenaran logika JavaScript/Pinia, namun tidak diklaim sebagai bukti persistensi SQLite pada runtime native Android. Pengujian native akan dilakukan terpisah pada pipeline Android / emulator.

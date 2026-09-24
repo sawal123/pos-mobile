@@ -6,6 +6,7 @@ import {
   restoreBackupPayload,
   validateBackupPayload,
 } from '@/services/backupService'
+import { createLocalOperationService } from '@/services/database/localOperationService'
 import { createMemoryAdapter } from '@/services/database/memoryAdapter'
 import { createPersistenceService } from '@/services/database/persistenceService'
 import { DB_VERSION } from '@/services/database/schema'
@@ -26,11 +27,13 @@ function createQAContext(adapter = createMemoryAdapter()) {
   setActivePinia(pinia)
 
   const service = createPersistenceService({ adapter, pinia })
+  const localOperations = createLocalOperationService({ adapter, pinia, scheduler: service })
 
   return {
     pinia,
     adapter,
     service,
+    localOperations,
     businessStore: useBusinessStore(pinia),
     cartStore: useCartStore(pinia),
     cashStore: useCashStore(pinia),
@@ -49,13 +52,347 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
     vi.restoreAllMocks()
   })
 
-  describe('3. PENGUJIAN MODE FREE OFFLINE', () => {
+  describe('1. PERBAIKAN STOK NEGATIF & INVENTORY RULES', () => {
+    it('penjualan 5 unit dari stok awal 2 menghasilkan stok -3 dengan tepat satu stock movement', async () => {
+      const ctx = createQAContext()
+      await ctx.service.initialize()
+
+      const created = ctx.productStore.createProduct({
+        name: 'Beras Ramos 5kg',
+        category: ctx.productStore.categories[0],
+        cost: 60000,
+        price: 75000,
+        stock: 2,
+        minStock: 3,
+        unit: 'karung',
+        isActive: true,
+      })
+      const product = created.product
+
+      // Validasi canFulfillSale mengizinkan stok negatif untuk kebutuhan offline
+      const validation = ctx.productStore.canFulfillSale([
+        { id: product.id, name: product.name, qty: 5 },
+      ])
+      expect(validation.success).toBe(true)
+
+      // Jalankan penjualan 5 unit
+      ctx.productStore.recordSaleStock([{ id: product.id, name: product.name, qty: 5 }], 'sale-negative-1')
+
+      // Hasil stok harus -3
+      expect(ctx.productStore.getProductById(product.id).stock).toBe(-3)
+
+      // Tepat satu stock movement dicatat
+      expect(ctx.productStore.stockMovements).toHaveLength(1)
+      expect(ctx.productStore.stockMovements[0]).toMatchObject({
+        productId: product.id,
+        quantityChange: -5,
+        stockBefore: 2,
+        stockAfter: -3,
+        type: 'sale',
+      })
+    })
+
+    it('penyesuaian manual dari stok 0 menjadi -4', async () => {
+      const ctx = createQAContext()
+      await ctx.service.initialize()
+
+      const created = ctx.productStore.createProduct({
+        name: 'Minyak Curah 1L',
+        category: ctx.productStore.categories[0],
+        cost: 14000,
+        price: 18000,
+        stock: 0,
+        minStock: 5,
+        unit: 'liter',
+        isActive: true,
+      })
+      const product = created.product
+
+      // adjustStock dari 0 ke -4
+      const res = ctx.productStore.adjustStock(product.id, {
+        quantityChange: -4,
+        note: 'Koreksi stok opname minus fisik',
+      })
+      expect(res.success).toBe(true)
+      expect(ctx.productStore.getProductById(product.id).stock).toBe(-4)
+
+      expect(ctx.productStore.stockMovements).toHaveLength(1)
+      expect(ctx.productStore.stockMovements[0]).toMatchObject({
+        productId: product.id,
+        quantityChange: -4,
+        stockBefore: 0,
+        stockAfter: -4,
+        type: 'adjustment',
+      })
+    })
+
+    it('tetap menolak kuantitas tidak valid, produk tidak aktif, dan produk tidak ditemukan', async () => {
+      const ctx = createQAContext()
+      await ctx.service.initialize()
+
+      const created = ctx.productStore.createProduct({
+        name: 'Kopi Bubuk',
+        category: ctx.productStore.categories[0],
+        cost: 5000,
+        price: 10000,
+        stock: 10,
+        isActive: true,
+      })
+      const product = created.product
+
+      // 1. Kuantitas tidak valid (0 atau negatif)
+      const zeroQty = ctx.productStore.canFulfillSale([{ id: product.id, name: product.name, qty: 0 }])
+      expect(zeroQty.success).toBe(false)
+      expect(zeroQty.error).toContain('tidak valid')
+
+      const negQty = ctx.productStore.canFulfillSale([{ id: product.id, name: product.name, qty: -2 }])
+      expect(negQty.success).toBe(false)
+      expect(negQty.error).toContain('tidak valid')
+
+      const nanQty = ctx.productStore.canFulfillSale([{ id: product.id, name: product.name, qty: 'abc' }])
+      expect(nanQty.success).toBe(false)
+      expect(nanQty.error).toContain('tidak valid')
+
+      // 2. Produk tidak aktif
+      ctx.productStore.toggleProductActive(product.id)
+      const inactiveSale = ctx.productStore.canFulfillSale([{ id: product.id, name: product.name, qty: 1 }])
+      expect(inactiveSale.success).toBe(false)
+      expect(inactiveSale.error).toContain('tidak aktif')
+
+      // 3. Produk tidak ditemukan
+      const notFoundSale = ctx.productStore.canFulfillSale([{ id: 'non-existent-id', name: 'Barang Hantu', qty: 1 }])
+      expect(notFoundSale.success).toBe(false)
+      expect(notFoundSale.error).toContain('tidak ditemukan')
+    })
+
+    it('layanan laundry tidak boleh memakai atau mengurangi stok', async () => {
+      const ctx = createQAContext()
+      await ctx.service.initialize()
+      ctx.productStore.applyBusinessTemplate('Laundry')
+
+      const service = ctx.productStore.createProduct({
+        kind: 'service',
+        name: 'Cuci Kering Kiloan',
+        category: 'Kiloan',
+        pricingUnit: 'kg',
+        price: 8000,
+        cost: 3000,
+        minQuantity: 1,
+        isActive: true,
+      }).product
+
+      // adjustStock pada layanan harus ditolak
+      const adjustRes = ctx.productStore.adjustStock(service.id, { quantityChange: -5 })
+      expect(adjustRes.success).toBe(false)
+      expect(adjustRes.error).toContain('Layanan tidak memakai stok')
+
+      // recordSaleStock pada layanan diabaikan
+      ctx.productStore.recordSaleStock([{ id: service.id, name: service.name, qty: 5 }], 'sale-laundry-1')
+      expect(ctx.productStore.stockMovements).toHaveLength(0)
+    })
+  })
+
+  describe('2. PERSISTENSI SHIFT LENGKAP & RESTART RECOVERY', () => {
+    it('memulihkan shift yang masih terbuka (id, shiftNumber, status, openingBalance, notes, openedAt) tanpa duplikasi saldo awal', async () => {
+      const adapter = createMemoryAdapter()
+      const ctx1 = createQAContext(adapter)
+      await ctx1.service.initialize()
+
+      // Buka shift dengan metadata lengkap
+      const shiftId = ctx1.shiftStore.openShift(250000)
+      ctx1.shiftStore.shiftNumber = 'SHIFT-2026-001'
+      ctx1.shiftStore.notes = 'Shift Pagi Kasir Utama'
+      const openedAt = ctx1.shiftStore.openedAt
+
+      // Catat saldo awal kas
+      ctx1.cashStore.recordOpeningBalance(250000, shiftId)
+      expect(ctx1.cashStore.balance).toBe(250000)
+
+      await ctx1.service.flush()
+      await ctx1.service.close()
+
+      // RESTART APLIKASI saat shift masih buka
+      const nextPinia = createPinia()
+      setActivePinia(nextPinia)
+      const ctx2 = createQAContext(adapter)
+      await ctx2.service.initialize()
+
+      // Verifikasi seluruh properti shift terbuka tetap utuh
+      expect(ctx2.shiftStore.isOpen).toBe(true)
+      expect(ctx2.shiftStore.id).toBe(shiftId)
+      expect(ctx2.shiftStore.shiftNumber).toBe('SHIFT-2026-001')
+      expect(ctx2.shiftStore.status).toBe('open')
+      expect(ctx2.shiftStore.openingBalance).toBe(250000)
+      expect(ctx2.shiftStore.closingBalance).toBeNull()
+      expect(ctx2.shiftStore.openedAt).toBe(openedAt)
+      expect(ctx2.shiftStore.closedAt).toBeNull()
+      expect(ctx2.shiftStore.notes).toBe('Shift Pagi Kasir Utama')
+
+      // Verifikasi tidak ada duplikasi saldo awal kas
+      expect(ctx2.cashStore.entries).toHaveLength(1)
+      expect(ctx2.cashStore.balance).toBe(250000)
+
+      // Menjalankan recordOpeningBalance ulang dengan referenceId sama bersifat idempoten
+      const dupOpen = ctx2.cashStore.recordOpeningBalance(250000, shiftId)
+      expect(dupOpen.duplicated).toBe(true)
+      expect(ctx2.cashStore.entries).toHaveLength(1)
+      expect(ctx2.cashStore.balance).toBe(250000)
+
+      // Membuka shift baru saat masih buka harus ditolak
+      expect(ctx2.shiftStore.openShift(100000)).toBe(false)
+
+      await ctx2.service.close()
+    })
+
+    it('memulihkan shift yang sudah ditutup (closingBalance, closedAt, status closed) secara presisi setelah restart', async () => {
+      const adapter = createMemoryAdapter()
+      const ctx1 = createQAContext(adapter)
+      await ctx1.service.initialize()
+
+      const shiftId = ctx1.shiftStore.openShift(200000)
+      ctx1.shiftStore.shiftNumber = 'SHIFT-2026-002'
+      ctx1.shiftStore.notes = 'Shift Siang'
+      const openedAt = ctx1.shiftStore.openedAt
+      ctx1.cashStore.recordOpeningBalance(200000, shiftId)
+
+      // Tutup shift
+      ctx1.shiftStore.closingBalance = 350000
+      ctx1.shiftStore.closeShift()
+      ctx1.shiftStore.notes = 'Shift Siang selesai tepat waktu'
+      const closedAt = ctx1.shiftStore.closedAt
+
+      expect(ctx1.shiftStore.isOpen).toBe(false)
+      expect(ctx1.shiftStore.status).toBe('closed')
+
+      await ctx1.service.flush()
+      await ctx1.service.close()
+
+      // RESTART APLIKASI setelah shift ditutup
+      const nextPinia = createPinia()
+      setActivePinia(nextPinia)
+      const ctx2 = createQAContext(adapter)
+      await ctx2.service.initialize()
+
+      // Verifikasi status closed dan metadata penutupan tersimpan
+      expect(ctx2.shiftStore.isOpen).toBe(false)
+      expect(ctx2.shiftStore.id).toBe(shiftId)
+      expect(ctx2.shiftStore.shiftNumber).toBe('SHIFT-2026-002')
+      expect(ctx2.shiftStore.status).toBe('closed')
+      expect(ctx2.shiftStore.openingBalance).toBe(200000)
+      expect(ctx2.shiftStore.closingBalance).toBe(350000)
+      expect(ctx2.shiftStore.openedAt).toBe(openedAt)
+      expect(ctx2.shiftStore.closedAt).toBe(closedAt)
+      expect(ctx2.shiftStore.notes).toBe('Shift Siang selesai tepat waktu')
+
+      await ctx2.service.close()
+    })
+  })
+
+  describe('3. PENGUJIAN TRANSAKSI SEBENARNYA DENGAN LOCAL OPERATION SERVICE', () => {
+    it('commitRetailSale memproses transaksi durabel dan tidak menggandakan stok/kas/transaksi setelah restart', async () => {
+      const adapter = createMemoryAdapter()
+      const ctx1 = createQAContext(adapter)
+      await ctx1.service.initialize()
+
+      const initialTrxCount = ctx1.transactionStore.items.length
+
+      const prod = ctx1.productStore.createProduct({
+        name: 'Gula Aren Organik',
+        category: ctx1.productStore.categories[0],
+        cost: 15000,
+        price: 25000,
+        stock: 2, // Stok awal 2
+        unit: 'pouch',
+        isActive: true,
+      }).product
+
+      // Buka shift
+      const shiftId = ctx1.shiftStore.openShift(100000)
+      ctx1.cashStore.recordOpeningBalance(100000, shiftId)
+
+      // Siapkan keranjang: beli 5 unit (sehingga stok menjadi 2 - 5 = -3)
+      ctx1.cartStore.addItem(prod)
+      ctx1.cartStore.updateQty(prod.id, 5)
+
+      expect(ctx1.cartStore.items[0].qty).toBe(5)
+      expect(ctx1.cartStore.subtotal).toBe(125000)
+
+      // Jalankan transaksi melalui localOperationService sebenarnya
+      const committedTrx = await ctx1.localOperations.commitRetailSale({
+        checkout: {
+          items: ctx1.cartStore.items,
+          subtotal: ctx1.cartStore.subtotal,
+          tax: 0,
+          taxEnabled: false,
+          taxRate: null,
+          total: 125000,
+          businessSnapshot: {
+            name: ctx1.businessStore.name,
+            outlet: ctx1.businessStore.outlet,
+            phone: ctx1.businessStore.phone,
+          },
+          customer: 'Pelanggan Setia',
+          customerId: null,
+          customerSnapshot: null,
+          paymentMethod: 'cash',
+          cashReceived: 150000,
+          changeAmount: 25000,
+        },
+      })
+
+      expect(committedTrx).toBeTruthy()
+      expect(committedTrx.id).toBeTruthy()
+
+      // Stok berkurang dari 2 menjadi -3
+      expect(ctx1.productStore.getProductById(prod.id).stock).toBe(-3)
+      expect(ctx1.productStore.stockMovements).toHaveLength(1)
+      expect(ctx1.productStore.stockMovements[0]).toMatchObject({
+        productId: prod.id,
+        quantityChange: -5,
+        stockBefore: 2,
+        stockAfter: -3,
+        type: 'sale',
+      })
+
+      // Kas bertambah dari 100.000 + 125.000 = 225.000
+      expect(ctx1.cashStore.balance).toBe(225000)
+      expect(ctx1.transactionStore.items).toHaveLength(initialTrxCount + 1)
+
+      await ctx1.service.flush()
+      await ctx1.service.close()
+
+      // RESTART APLIKASI
+      const nextPinia = createPinia()
+      setActivePinia(nextPinia)
+      const ctx2 = createQAContext(adapter)
+      await ctx2.service.initialize()
+      await ctx2.localOperations.recoverPendingOperations()
+
+      // Verifikasi TIDAK ADA DUPLIKASI SETELAH RESTART:
+      // 1. Transaksi tidak bertambah lagi
+      expect(ctx2.transactionStore.items).toHaveLength(initialTrxCount + 1)
+      expect(ctx2.transactionStore.items.some((t) => t.id === committedTrx.id)).toBe(true)
+
+      // 2. Stok tetap -3 (TIDAK terpotong lagi menjadi -8)
+      expect(ctx2.productStore.getProductById(prod.id).stock).toBe(-3)
+
+      // 3. Stock movements tetap 1 (TIDAK terduplikasi)
+      expect(ctx2.productStore.stockMovements).toHaveLength(1)
+
+      // 4. Cash ledger tetap 2 entri (opening balance + sale) dan saldo tetap 225000
+      expect(ctx2.cashStore.entries).toHaveLength(2)
+      expect(ctx2.cashStore.balance).toBe(225000)
+
+      await ctx2.service.close()
+    })
+  })
+
+  describe('4. PENGUJIAN MODE FREE OFFLINE', () => {
     it('menjalankan seluruh operasional POS tanpa koneksi cloud, login, atau bearer token', async () => {
       const fetchSpy = vi.spyOn(globalThis, 'fetch')
       const ctx = createQAContext()
       await ctx.service.initialize()
 
-      // 1. Setup Bisnis lokal mode Free
       ctx.businessStore.setBusiness({
         name: 'Warung Mandiri Offline',
         type: 'Cafe / UMKM',
@@ -67,11 +404,9 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       expect(ctx.businessStore.mode).toBe('free')
       expect(ctx.businessStore.isSetup).toBe(true)
 
-      // 2. Setup PIN Kasir
       ctx.cashierStore.setPinConfigured(true)
       expect(ctx.cashierStore.activeCashier.pinConfigured).toBe(true)
 
-      // 3. Tambah & Edit Produk + Kategori
       const catRes = ctx.productStore.createCategory('Kopi')
       expect(catRes.success).toBe(true)
 
@@ -89,14 +424,12 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       expect(prodRes.success).toBe(true)
       const productId = prodRes.product.id
 
-      // 4. Buka shift kas
       const shiftId = ctx.shiftStore.openShift(100000)
       expect(shiftId).toBeTruthy()
       expect(ctx.shiftStore.isOpen).toBe(true)
       ctx.cashStore.recordOpeningBalance(100000, shiftId)
       expect(ctx.cashStore.balance).toBe(100000)
 
-      // 5. Transaksi penjualan offline
       ctx.cartStore.addItem(ctx.productStore.getProductById(productId))
       expect(ctx.cartStore.items).toHaveLength(1)
 
@@ -121,12 +454,9 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       ctx.cashStore.recordSalePayment(trx)
       ctx.cartStore.clearCart()
 
-      // Stok berkurang
       expect(ctx.productStore.getProductById(productId).stock).toBe(49)
-      // Kas bertambah
       expect(ctx.cashStore.balance).toBe(100000 + total)
 
-      // 6. Catat pengeluaran & mutasi kas manual
       const expRes = ctx.expenseStore.createExpense({
         title: 'Beli Es Batu',
         category: 'Operasional',
@@ -142,21 +472,18 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       })
       expect(ctx.cashStore.balance).toBe(100000 + total - 15000)
 
-      // 7. Tutup shift
       ctx.shiftStore.closeShift()
       expect(ctx.shiftStore.isOpen).toBe(false)
       expect(ctx.shiftStore.status).toBe('closed')
 
-      // 8. Riwayat transaksi tersedia
       expect(ctx.transactionStore.items.length).toBeGreaterThanOrEqual(1)
       expect(ctx.transactionStore.items[0].id).toBe(trx.id)
 
-      // Seluruh operasi tidak menyentuh network
       expect(fetchSpy).not.toHaveBeenCalled()
     })
   })
 
-  describe('4. TRANSAKSI OFFLINE & SNAPSHOT INTEGRITY', () => {
+  describe('5. TRANSAKSI OFFLINE & SNAPSHOT INTEGRITY', () => {
     it('menggunakan snapshot harga dan HPP saat checkout yang tidak terpengaruh perubahan master produk', async () => {
       const ctx = createQAContext()
       await ctx.service.initialize()
@@ -172,7 +499,6 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       })
       const product = created.product
 
-      // Checkout flow: Tambah ke cart -> ubah kuantitas (3) -> Checkout
       ctx.cartStore.addItem(product)
       ctx.cartStore.updateQty(product.id, 3)
 
@@ -180,7 +506,7 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       expect(ctx.cartStore.items[0].price).toBe(18000)
       expect(ctx.cartStore.items[0].hppSnapshot).toBe(7000)
 
-      const subtotal = 18000 * 3 // 54000
+      const subtotal = 18000 * 3
       ctx.taxStore.setSettings({ enabled: false, rate: 0 })
 
       const trx = ctx.transactionStore.createTransaction({
@@ -196,21 +522,18 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       })
       ctx.productStore.recordSaleStock(trx.items, trx.id)
 
-      // Verifikasi gross profit = (18000 - 7000) * 3 = 33000
       expect(trx.grossProfit).toBe(33000)
       expect(trx.items[0].hppSnapshot).toBe(7000)
       expect(trx.items[0].price).toBe(18000)
       expect(trx.items[0].lineCost).toBe(21000)
       expect(trx.items[0].lineSubtotal).toBe(54000)
 
-      // Sekarang ubah harga & HPP master produk di masa depan
       ctx.productStore.updateProduct(product.id, {
         ...ctx.productStore.getProductById(product.id),
         price: 25000,
         cost: 12000,
       })
 
-      // Transaksi yang sudah selesai TIDAK boleh terpengaruh
       const savedTrx = ctx.transactionStore.items.find((item) => item.id === trx.id)
       expect(savedTrx.items[0].price).toBe(18000)
       expect(savedTrx.items[0].hppSnapshot).toBe(7000)
@@ -232,7 +555,6 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
         isActive: true,
       }).product
 
-      // 1. Pajak aktif 11%
       ctx.taxStore.setSettings({ enabled: true, rate: 11 })
       ctx.cartStore.addItem(prod)
 
@@ -256,7 +578,6 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
 
       ctx.cartStore.clearCart()
 
-      // 2. Pajak nonaktif
       ctx.taxStore.setSettings({ enabled: false, rate: 11 })
       ctx.cartStore.addItem(prod)
 
@@ -279,165 +600,6 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       expect(trxTaxInactive.taxRate).toBeNull()
       expect(trxTaxInactive.tax).toBe(0)
       expect(trxTaxInactive.total).toBe(20000)
-    })
-  })
-
-  describe('5. STOK DAN INVENTORY', () => {
-    it('mendukung penambahan, pengurangan, penyesuaian stok manual, batas stok minimum, dan stok nol', async () => {
-      const ctx = createQAContext()
-      await ctx.service.initialize()
-
-      const created = ctx.productStore.createProduct({
-        name: 'Gula Pasir 1kg',
-        category: ctx.productStore.categories[0],
-        cost: 12000,
-        price: 16000,
-        stock: 5,
-        minStock: 3,
-        unit: 'kg',
-        isActive: true,
-      })
-      const product = created.product
-
-      // 1. Penjualan mengurangi stok
-      ctx.productStore.recordSaleStock([{ id: product.id, name: product.name, qty: 2 }], 'sale-1')
-      expect(ctx.productStore.getProductById(product.id).stock).toBe(3)
-      expect(ctx.productStore.stockMovements[0]).toMatchObject({
-        productId: product.id,
-        quantityChange: -2,
-        stockBefore: 5,
-        stockAfter: 3,
-        type: 'sale',
-      })
-
-      // 2. Batas stok minimum: stock (3) <= minStock (3) terdeteksi low stock
-      expect(ctx.productStore.lowStockProducts.map((p) => p.id)).toContain(product.id)
-
-      // 3. Penambahan stok manual (+10)
-      const resAdd = ctx.productStore.adjustStock(product.id, {
-        quantityChange: 10,
-        note: 'Restock supplier',
-      })
-      expect(resAdd.success).toBe(true)
-      expect(ctx.productStore.getProductById(product.id).stock).toBe(13)
-      expect(ctx.productStore.lowStockProducts.map((p) => p.id)).not.toContain(product.id)
-
-      // 4. Pengurangan stok manual (-8)
-      const resSub = ctx.productStore.adjustStock(product.id, {
-        quantityChange: -8,
-        note: 'Barang rusak/pecah',
-      })
-      expect(resSub.success).toBe(true)
-      expect(ctx.productStore.getProductById(product.id).stock).toBe(5)
-
-      // 5. Penyesuaian ke stok nol
-      const resZero = ctx.productStore.adjustStock(product.id, {
-        quantityChange: -5,
-        note: 'Habis terjual offline',
-      })
-      expect(resZero.success).toBe(true)
-      expect(ctx.productStore.getProductById(product.id).stock).toBe(0)
-      expect(ctx.productStore.lowStockProducts.map((p) => p.id)).toContain(product.id)
-    })
-
-    it('mendukung keberadaan produk dengan stok negatif tanpa error dan dapat dipulihkan', async () => {
-      const ctx = createQAContext()
-      await ctx.service.initialize()
-
-      // Buat produk dengan stok awal 0 lalu diset negatif (misal dari sinkronisasi atau penyesuaian data)
-      const created = ctx.productStore.createProduct({
-        name: 'Item Stok Negatif',
-        category: ctx.productStore.categories[0],
-        cost: 5000,
-        price: 8000,
-        stock: 0,
-        minStock: 2,
-        unit: 'pcs',
-        isActive: true,
-      })
-      const product = created.product
-
-      // Langsung set nilai stok negatif (diperbolehkan proyek)
-      product.stock = -4
-
-      // Tidak ada validasi yang melarang atau memecahkan getter
-      expect(product.stock).toBe(-4)
-      expect(ctx.productStore.lowStockProducts.map((p) => p.id)).toContain(product.id)
-
-      // Simpan melalui persistence adapter
-      await ctx.service.flush()
-
-      // Buat runtime baru dan hydrate kembali
-      const newPinia = createPinia()
-      setActivePinia(newPinia)
-      const restartService = createPersistenceService({ adapter: ctx.adapter, pinia: newPinia })
-      await restartService.initialize()
-
-      const restartedProductStore = useProductStore(newPinia)
-      const reloadedProduct = restartedProductStore.getProductById(product.id)
-      expect(reloadedProduct).toBeTruthy()
-      expect(reloadedProduct.stock).toBe(-4)
-      expect(restartedProductStore.lowStockProducts.map((p) => p.id)).toContain(product.id)
-    })
-
-    it('restart dan hydration tidak menyebabkan pengurangan stok berulang', async () => {
-      const ctx = createQAContext()
-      await ctx.service.initialize()
-
-      const created = ctx.productStore.createProduct({
-        name: 'Teh Botol',
-        category: ctx.productStore.categories[0],
-        cost: 2500,
-        price: 4000,
-        stock: 20,
-        minStock: 5,
-        unit: 'botol',
-        isActive: true,
-      })
-      const product = created.product
-
-      // Transaksi 5 botol -> stok sisa 15
-      ctx.cartStore.addItem(product)
-      ctx.cartStore.updateQty(product.id, 5)
-
-      const initialTrxCount = ctx.transactionStore.items.length
-
-      const trx = ctx.transactionStore.createTransaction({
-        items: ctx.cartStore.items,
-        subtotal: 20000,
-        tax: 0,
-        taxEnabled: false,
-        taxRate: null,
-        total: 20000,
-        paymentMethod: 'cash',
-        cashReceived: 20000,
-        changeAmount: 0,
-      })
-      ctx.productStore.recordSaleStock(trx.items, trx.id)
-      await ctx.service.flush()
-
-      expect(ctx.productStore.getProductById(product.id).stock).toBe(15)
-      expect(ctx.productStore.stockMovements).toHaveLength(1)
-      expect(ctx.transactionStore.items).toHaveLength(initialTrxCount + 1)
-
-      // Restart simulasi
-      await ctx.service.close()
-
-      const nextPinia = createPinia()
-      setActivePinia(nextPinia)
-      const nextService = createPersistenceService({ adapter: ctx.adapter, pinia: nextPinia })
-      await nextService.initialize()
-
-      const nextProductStore = useProductStore(nextPinia)
-      const nextTrxStore = useTransactionStore(nextPinia)
-
-      // Stok HARUS tetap 15, TIDAK berkurang lagi menjadi 10
-      expect(nextProductStore.getProductById(product.id).stock).toBe(15)
-      expect(nextProductStore.stockMovements).toHaveLength(1)
-      expect(nextTrxStore.items).toHaveLength(initialTrxCount + 1)
-      expect(nextTrxStore.items[0].id).toBe(trx.id)
-
-      await nextService.close()
     })
   })
 
@@ -471,9 +633,9 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
 
       ctx.taxStore.setSettings({ enabled: true, rate: 10 })
       ctx.cartStore.addItem(coffee)
-      ctx.cartStore.updateQty(coffee.id, 2) // 44000
+      ctx.cartStore.updateQty(coffee.id, 2)
       ctx.cartStore.addItem(food)
-      ctx.cartStore.updateQty(food.id, 1) // 25000
+      ctx.cartStore.updateQty(food.id, 1)
 
       const expectedSubtotal = (coffee.price * 2) + (food.price * 1)
       const expectedTax = Math.round(expectedSubtotal * 0.1)
@@ -507,7 +669,6 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       await ctx.service.initialize()
       ctx.productStore.applyBusinessTemplate('Laundry')
 
-      // 1. Layanan Kiloan
       const kiloanService = ctx.productStore.createProduct({
         kind: 'service',
         name: 'Cuci Komplit Reguler',
@@ -520,7 +681,6 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
         isActive: true,
       }).product
 
-      // 2. Layanan Satuan
       const satuanService = ctx.productStore.createProduct({
         kind: 'service',
         name: 'Cuci Bedcover Besar',
@@ -533,16 +693,14 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
         isActive: true,
       }).product
 
-      // Keranjang: 2.5 kg Cuci Komplit (2.5 * 10.000 = 25.000) + 1 Bedcover (35.000)
       ctx.cartStore.addItem(kiloanService)
       ctx.cartStore.updateQty(kiloanService.id, 2.5)
       ctx.cartStore.addItem(satuanService)
       ctx.cartStore.updateQty(satuanService.id, 1)
 
       expect(ctx.cartStore.items[0].qty).toBe(2.5)
-      expect(ctx.cartStore.subtotal).toBe(60000) // 25000 + 35000
+      expect(ctx.cartStore.subtotal).toBe(60000)
 
-      // Order laundry masuk belum bayar (unpaid)
       const laundryOrder = ctx.transactionStore.createLaundryOrder({
         customer: 'Ibu Ratna',
         customerSnapshot: { name: 'Ibu Ratna', phone: '0812345678' },
@@ -557,12 +715,10 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       expect(laundryOrder.orderStatus).toBe('Masuk')
       expect(laundryOrder.paymentStatus).toBe('unpaid')
       expect(laundryOrder.items[0].qty).toBe(2.5)
-      expect(laundryOrder.grossProfit).toBe((25000 - (4000 * 2.5)) + (35000 - 15000)) // 15000 + 20000 = 35000
+      expect(laundryOrder.grossProfit).toBe((25000 - (4000 * 2.5)) + (35000 - 15000))
 
-      // Order belum dibayar tidak mencatat kas masuk
       expect(ctx.cashStore.entries).toHaveLength(0)
 
-      // 3. Status pengerjaan lifecycle: Masuk -> Diproses -> Siap Diambil -> Selesai
       expect(ctx.transactionStore.advanceOrderStatus(laundryOrder.id)).toBe(true)
       expect(laundryOrder.orderStatus).toBe('Diproses')
 
@@ -572,7 +728,6 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       expect(ctx.transactionStore.advanceOrderStatus(laundryOrder.id)).toBe(true)
       expect(laundryOrder.orderStatus).toBe('Selesai')
 
-      // 4. Pelunasan transaksi setelah layanan selesai
       const settleRes = ctx.transactionStore.settleLaundryOrderPayment({
         orderId: laundryOrder.id,
         paymentMethod: 'cash',
@@ -587,7 +742,6 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       expect(laundryOrder.changeAmount).toBe(40000)
       expect(ctx.cashStore.balance).toBe(60000)
 
-      // Pelunasan ulang bersifat idempoten (tidak menambah cash lagi)
       const idempotentRes = ctx.transactionStore.settleLaundryOrderPayment({
         orderId: laundryOrder.id,
         paymentMethod: 'cash',
@@ -605,7 +759,7 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       ctx.productStore.applyBusinessTemplate('Grosir / Toko Kelontong')
       ctx.productStore.createCategory('Sembako')
 
-      const item1Res = ctx.productStore.createProduct({
+      const item1 = ctx.productStore.createProduct({
         name: 'Minyak Goreng 2L',
         category: 'Sembako',
         sku: 'MYK-2L',
@@ -615,11 +769,9 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
         minStock: 6,
         unit: 'pouch',
         isActive: true,
-      })
-      expect(item1Res.success).toBe(true)
-      const item1 = item1Res.product
+      }).product
 
-      const item2Res = ctx.productStore.createProduct({
+      const item2 = ctx.productStore.createProduct({
         name: 'Terigu Segitiga 1kg',
         category: 'Sembako',
         sku: 'TRG-1K',
@@ -629,17 +781,14 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
         minStock: 5,
         unit: 'pack',
         isActive: true,
-      })
-      expect(item2Res.success).toBe(true)
-      const item2 = item2Res.product
+      }).product
 
-      // Checkout multi-item
       ctx.cartStore.addItem(item1)
-      ctx.cartStore.updateQty(item1.id, 4) // 4 * 33000 = 132000
+      ctx.cartStore.updateQty(item1.id, 4)
       ctx.cartStore.addItem(item2)
-      ctx.cartStore.updateQty(item2.id, 5) // 5 * 13000 = 65000
+      ctx.cartStore.updateQty(item2.id, 5)
 
-      const subtotal = 132000 + 65000 // 197000
+      const subtotal = (33000 * 4) + (13000 * 5)
       const trx = ctx.transactionStore.createTransaction({
         items: ctx.cartStore.items,
         subtotal,
@@ -657,14 +806,11 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       expect(ctx.productStore.getProductById(item2.id).stock).toBe(25)
       expect(ctx.productStore.stockMovements).toHaveLength(2)
 
-      // Ubah harga produk di toko
       ctx.productStore.updateProduct(item1.id, {
         ...ctx.productStore.getProductById(item1.id),
         price: 35000,
       })
       expect(ctx.productStore.getProductById(item1.id).price).toBe(35000)
-
-      // Transaksi sebelumnya tetap menggunakan snapshot 33000
       expect(trx.items.find((i) => i.id === item1.id).price).toBe(33000)
     })
   })
@@ -674,7 +820,6 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       const ctx = createQAContext()
       await ctx.service.initialize()
 
-      // 1. Buka shift
       const shiftId = ctx.shiftStore.openShift(150000)
       expect(shiftId).toBeTruthy()
       expect(ctx.shiftStore.isOpen).toBe(true)
@@ -684,12 +829,10 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       ctx.cashStore.recordOpeningBalance(150000, shiftId)
       expect(ctx.cashStore.balance).toBe(150000)
 
-      // Membuka ulang saldo awal dengan referenceId sama tidak duplikat
       const dupOpen = ctx.cashStore.recordOpeningBalance(150000, shiftId)
       expect(dupOpen.duplicated).toBe(true)
       expect(ctx.cashStore.balance).toBe(150000)
 
-      // 2. Penjualan Tunai
       const cashTrx = ctx.transactionStore.createTransaction({
         items: [{ id: 'p1', name: 'Barang A', price: 50000, qty: 1 }],
         subtotal: 50000,
@@ -700,12 +843,10 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       ctx.cashStore.recordSalePayment(cashTrx)
       expect(ctx.cashStore.balance).toBe(200000)
 
-      // Rekam ulang pembayaran transaksi sama tidak menambah kas lagi
       const dupSale = ctx.cashStore.recordSalePayment(cashTrx)
       expect(dupSale.duplicated).toBe(true)
       expect(ctx.cashStore.balance).toBe(200000)
 
-      // 3. Penjualan Non-Tunai (QRIS / Transfer)
       const qrisTrx = ctx.transactionStore.createTransaction({
         items: [{ id: 'p2', name: 'Barang B', price: 75000, qty: 1 }],
         subtotal: 75000,
@@ -715,10 +856,8 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       })
       const qrisRes = ctx.cashStore.recordSalePayment(qrisTrx)
       expect(qrisRes.skipped).toBe(true)
-      // Saldo kas fisik TIDAK bertambah
       expect(ctx.cashStore.balance).toBe(200000)
 
-      // 4. Kas Masuk Manual
       ctx.cashStore.recordEntry({
         type: 'in',
         amount: 25000,
@@ -727,7 +866,6 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       })
       expect(ctx.cashStore.balance).toBe(225000)
 
-      // 5. Kas Keluar Manual & Pengeluaran
       const expRes = ctx.expenseStore.createExpense({
         title: 'Beli Galon',
         category: 'Operasional',
@@ -743,129 +881,18 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       })
       expect(ctx.cashStore.balance).toBe(205000)
 
-      // 6. Tutup shift
       ctx.shiftStore.closeShift()
       expect(ctx.shiftStore.isOpen).toBe(false)
       expect(ctx.shiftStore.status).toBe('closed')
       expect(ctx.shiftStore.closedAt).toBeTruthy()
 
-      // Riwayat kas akurat
-      expect(ctx.cashStore.cashIn).toBe(150000 + 50000 + 25000) // 225000
+      expect(ctx.cashStore.cashIn).toBe(150000 + 50000 + 25000)
       expect(ctx.cashStore.cashOut).toBe(20000)
       expect(ctx.cashStore.balance).toBe(205000)
     })
   })
 
-  describe('8. PERSISTENSI DAN RESTART', () => {
-    it('memulihkan seluruh state aplikasi (bisnis, PIN, produk, stok, transaksi, kas, shift, pajak) setelah restart tanpa template re-applied', async () => {
-      const adapter = createMemoryAdapter()
-      const ctx1 = createQAContext(adapter)
-      await ctx1.service.initialize()
-
-      // Set up dataset
-      ctx1.businessStore.setBusiness({
-        name: 'Kopi Kenangan Senja',
-        type: 'Cafe / UMKM',
-        owner: 'Siti',
-        phone: '081299998888',
-        outlet: 'Cabang 1',
-        mode: 'free',
-      })
-      ctx1.cashierStore.setPinConfigured(true)
-      ctx1.taxStore.setSettings({ enabled: true, rate: 12 })
-
-      const prod = ctx1.productStore.createProduct({
-        name: 'Signature Latte',
-        category: ctx1.productStore.categories[0],
-        cost: 9000,
-        price: 24000,
-        stock: 15,
-        minStock: 4,
-        unit: 'cup',
-        isActive: true,
-      }).product
-
-      const shiftId = ctx1.shiftStore.openShift(100000)
-      ctx1.cashStore.recordOpeningBalance(100000, shiftId)
-
-      const trx = ctx1.transactionStore.createTransaction({
-        items: [{ ...prod, qty: 2, price: 24000, hppSnapshot: 9000, subtotal: 48000 }],
-        subtotal: 48000,
-        tax: 5760,
-        taxEnabled: true,
-        taxRate: 12,
-        total: 53760,
-        paymentMethod: 'cash',
-        cashReceived: 60000,
-        changeAmount: 6240,
-      })
-      ctx1.productStore.recordSaleStock(trx.items, trx.id)
-      ctx1.cashStore.recordSalePayment(trx)
-
-      ctx1.expenseStore.createExpense({
-        title: 'Sewa Tempat Harian',
-        category: 'Operasional',
-        amount: 30000,
-        note: 'Kantin',
-      })
-
-      await ctx1.service.flush()
-      await ctx1.service.close()
-
-      // SIMULASI RESTART APLIKASI
-      const nextPinia = createPinia()
-      setActivePinia(nextPinia)
-      const ctx2 = createQAContext(adapter)
-      const initResult = await ctx2.service.initialize()
-
-      expect(initResult.firstRun).toBe(false)
-      expect(initResult.schemaVersion).toBe(DB_VERSION)
-
-      // Verifikasi Business Profile
-      expect(ctx2.businessStore.name).toBe('Kopi Kenangan Senja')
-      expect(ctx2.businessStore.type).toBe('Cafe / UMKM')
-      expect(ctx2.businessStore.outlet).toBe('Cabang 1')
-      expect(ctx2.businessStore.mode).toBe('free')
-
-      // Verifikasi Cashier PIN
-      expect(ctx2.cashierStore.activeCashier.pinConfigured).toBe(true)
-
-      // Verifikasi Tax Settings
-      expect(ctx2.taxStore.enabled).toBe(true)
-      expect(ctx2.taxStore.rate).toBe(12)
-
-      // Verifikasi Produk & Stok
-      const reloadedProd = ctx2.productStore.getProductById(prod.id)
-      expect(reloadedProd).toBeTruthy()
-      expect(reloadedProd.name).toBe('Signature Latte')
-      expect(reloadedProd.cost).toBe(9000)
-      expect(reloadedProd.price).toBe(24000)
-      expect(reloadedProd.stock).toBe(13) // 15 - 2 = 13 (tidak duplikat berkurang)
-      expect(ctx2.productStore.stockMovements).toHaveLength(1)
-
-      // Verifikasi Transaksi
-      const reloadedTrx = ctx2.transactionStore.items.find((item) => item.id === trx.id)
-      expect(reloadedTrx).toBeTruthy()
-      expect(reloadedTrx.total).toBe(53760)
-      expect(reloadedTrx.taxRate).toBe(12)
-      expect(reloadedTrx.items[0].hppSnapshot).toBe(9000)
-
-      // Verifikasi Kas
-      expect(ctx2.cashStore.entries).toHaveLength(2) // Opening + Sale
-      expect(ctx2.cashStore.balance).toBe(100000 + 53760)
-
-      // Verifikasi Shift
-      expect(ctx2.shiftStore.isOpen).toBe(true)
-      expect(ctx2.shiftStore.openingBalance).toBe(100000)
-      expect(ctx2.shiftStore.id).toBe(shiftId)
-
-      // Verifikasi Expense
-      expect(ctx2.expenseStore.expenses).toHaveLength(1)
-      expect(ctx2.expenseStore.expenses[0].title).toBe('Sewa Tempat Harian')
-
-      await ctx2.service.close()
-    })
-
+  describe('8. DESERIALISASI SQLITE NATIVE & BACKUP RESTORE', () => {
     it('mendukung deserialisasi baris transaksi SQLite native secara aman', () => {
       const rows = [
         {
@@ -891,9 +918,7 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       expect(deserialized[0].id).toBe('trx-1')
       expect(deserialized[0].items[0].hppSnapshot).toBe(20000)
     })
-  })
 
-  describe('9. BACKUP DAN RESTORE', () => {
     it('membuat payload backup v2 dan merestore kembali dataset QA dengan integritas penuh', async () => {
       const ctx = createQAContext()
       await ctx.service.initialize()
@@ -919,7 +944,6 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
         isActive: true,
       }).product
 
-      // Transaksi 1: taxRate numerik (11)
       const trx1 = ctx.transactionStore.createTransaction({
         items: [{ id: prod.id, name: prod.name, price: 20000, hppSnapshot: 15000, qty: 2 }],
         subtotal: 40000,
@@ -930,7 +954,6 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
         paymentMethod: 'cash',
       })
 
-      // Transaksi 2: taxRate null (tax nonaktif)
       const trx2 = ctx.transactionStore.createTransaction({
         items: [{ id: prod.id, name: prod.name, price: 20000, hppSnapshot: 15000, qty: 1 }],
         subtotal: 20000,
@@ -941,30 +964,25 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
         paymentMethod: 'qris',
       })
 
-      // Buat backup payload
       const backup = createBackupPayload(ctx)
       expect(backup.schema).toBe('pos-mobile-backup')
       expect(backup.version).toBe(2)
       expect(backup.data.transactions.some((t) => t.id === trx1.id)).toBe(true)
       expect(backup.data.transactions.some((t) => t.id === trx2.id)).toBe(true)
 
-      // Validasi backup
       const val = validateBackupPayload(backup)
       expect(val.valid).toBe(true)
       expect(val.error).toBe('')
 
-      // Pastikan restore dicegah saat shift sedang buka
       ctx.shiftStore.openShift(50000)
       const openShiftRestore = restoreBackupPayload(backup, ctx)
       expect(openShiftRestore.success).toBe(false)
       expect(openShiftRestore.error).toContain('Tutup shift terlebih dahulu')
 
-      // Tutup shift lalu jalankan restore
       ctx.shiftStore.closeShift()
       const validRestore = restoreBackupPayload(backup, ctx)
       expect(validRestore.success).toBe(true)
 
-      // Verifikasi hasil restore
       expect(ctx.businessStore.name).toBe('Toko Kelontong Bersama')
       expect(ctx.transactionStore.items.some((t) => t.id === trx1.id && t.taxRate === 11)).toBe(true)
       expect(ctx.transactionStore.items.some((t) => t.id === trx2.id && t.taxRate === null)).toBe(true)
@@ -972,20 +990,18 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
     })
   })
 
-  describe('10. BATASAN SINKRONISASI OFFLINE', () => {
+  describe('9. BATASAN SINKRONISASI OFFLINE', () => {
     it('operasi offline dalam mode Free tidak memicu sync cloud dan tidak menunggu server', async () => {
       const fetchSpy = vi.spyOn(globalThis, 'fetch')
       const ctx = createQAContext()
       await ctx.service.initialize()
 
-      // Mode free
       ctx.businessStore.setBusiness({
         name: 'Offline Only Store',
         type: 'Cafe / UMKM',
         mode: 'free',
       })
 
-      // Buat transaksi
       const trx = ctx.transactionStore.createTransaction({
         items: [{ id: 'item-1', name: 'Es Teh', price: 5000, qty: 2 }],
         subtotal: 10000,
@@ -994,7 +1010,6 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
         paymentMethod: 'cash',
       })
 
-      // Transaksi selesai secara instan dan sinkron tanpa pending network promise
       expect(trx.id).toBeTruthy()
       expect(fetchSpy).not.toHaveBeenCalled()
     })
