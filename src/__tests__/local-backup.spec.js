@@ -665,6 +665,40 @@ describe('P7 local backup & restore JSON', () => {
     expect(context.productStore.products[0].id).toBe('p-backup')
   })
 
+  it('restore mempertahankan stok produk dan pergerakan stok negatif tanpa duplikasi', () => {
+    const context = createContext()
+    const payload = makeValidBackup({
+      data: {
+        products: {
+          categories: ['Minuman'],
+          products: [
+            { id: 'p-neg', name: 'Kopi Hitam', category: 'Minuman', price: 10000, stock: -3, isActive: true },
+          ],
+        },
+        stockMovements: [
+          {
+            id: 'sm-neg',
+            productId: 'p-neg',
+            quantityChange: -5,
+            stockBefore: 2,
+            stockAfter: -3,
+            createdAt: '2026-08-21T06:00:00.000Z',
+          },
+        ],
+      },
+    })
+
+    const validation = validateBackupPayload(payload)
+    expect(validation.valid).toBe(true)
+
+    const result = restoreBackupPayload(payload, context)
+    expect(result.success).toBe(true)
+    expect(context.productStore.products[0].stock).toBe(-3)
+    expect(context.productStore.stockMovements[0].stockBefore).toBe(2)
+    expect(context.productStore.stockMovements[0].stockAfter).toBe(-3)
+    expect(context.productStore.stockMovements).toHaveLength(1)
+  })
+
   it('restore mempertahankan customer ID', () => {
     const context = createContext()
     seedStores(context)
@@ -772,7 +806,7 @@ describe('P7 local backup & restore JSON', () => {
     const context = createContext()
     seedStores(context)
     const payload = makeValidBackup()
-    payload.data.products.products[0].stock = -1
+    payload.data.products.products[0].price = -1
 
     restoreBackupPayload(payload, context)
 

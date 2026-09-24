@@ -227,7 +227,7 @@ function validateProductsData(productsSection) {
       || !isNonEmptyString(product.name)
       || !isNonEmptyString(product.category)
       || !isFiniteNumber(product.price, { min: 0 })
-      || !isFiniteNumber(product.stock, { min: 0 })
+      || !isFiniteNumber(product.stock)
       || typeof product.isActive !== 'boolean') {
       return 'File backup tidak valid.'
     }
@@ -392,8 +392,8 @@ function validateStockMovementsData(stockMovements) {
       || !hasValue(movement.id)
       || !hasValue(movement.productId)
       || !isFiniteNumber(movement.quantityChange)
-      || !isFiniteNumber(movement.stockBefore, { min: 0 })
-      || !isFiniteNumber(movement.stockAfter, { min: 0 })
+      || !isFiniteNumber(movement.stockBefore)
+      || !isFiniteNumber(movement.stockAfter)
       || !isValidDateString(movement.createdAt)) {
       return 'File backup tidak valid.'
     }

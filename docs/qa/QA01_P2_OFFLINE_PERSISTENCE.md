@@ -75,7 +75,7 @@ Stores yang dipersistensikan secara reaktif melalui Vue `watch()`:
 | **3.16** | **Bisnis: Grosir / Toko Kelontong** | Katalog produk dengan SKU, multi-item checkout, dan mutasi stok sembako beroperasi akurat. | Memory | **PASS** |
 | **3.17** | **Kas & Shift (Pencegahan Duplikasi Kas)** | Transaksi tunai sama tidak membuat entri kas ganda (`referenceId: sale-${id}`). Transaksi non-tunai (QRIS) dilewati tanpa menambah saldo fisik. | Memory | **PASS** |
 | **3.18** | **SQLite Row Deserializer** | `deserializeTransactionRows()` mampu mengekstrak payload JSON transaksi valid dan mengabaikan baris korup secara aman tanpa crash. | SQLite Unit Mock | **PASS** |
-| **3.19** | **Backup & Restore** | Ekspor payload v2, validasi schema (`taxRate` numerik dan null, kuantitas desimal, HPP), pencegahan restore saat shift buka, dan pemulihan data berhasil. | Memory | **PASS** |
+| **3.19** | **Backup & Restore (Termasuk Stok Negatif)** | Ekspor dan validasi payload v2 mengizinkan stok negatif (-3), menolak NaN/Infinity; restore memulihkan produk, transaksi, dan stock movement utuh tanpa duplikasi. | Memory | **PASS** |
 | **3.20** | **Isolasi Sinkronisasi Mode Free** | Tidak ada panggilan jaringan ke backend Laravel produksi; outbox tetap terlindungi. | Memory | **PASS** |
 | **3.21** | **Native SQLite pada Perangkat Android** | Pengujian database SQLite fisik pada perangkat Android / emulator. | Native Android | **NOT TESTED** |
 
@@ -121,6 +121,12 @@ Stores yang dipersistensikan secara reaktif melalui Vue `watch()`:
   ```
 - **Hasil Verifikasi**: Regression test memastikan restart ketika shift masih terbuka dan setelah shift ditutup mempertahankan seluruh metadata shift tanpa membuat duplikasi saldo awal.
 
+### 4.3 Validasi Stok Negatif pada Backup Service
+- **Lokasi**: `src/services/backupService.js`
+- **Masalah**: Fungsi `validateProductsData()` dan `validateStockMovementsData()` sebelumnya memvalidasi `isFiniteNumber(product.stock, { min: 0 })`, `stockBefore: { min: 0 }`, dan `stockAfter: { min: 0 }`. Validasi ini menolak file backup jika terdapat produk atau pergerakan dengan nilai stok negatif.
+- **Perbaikan**: Memperbarui validasi agar `product.stock`, `stockBefore`, dan `stockAfter` menggunakan `isFiniteNumber(val)` (tanpa batasan minimum 0). Dengan demikian, nilai negatif (seperti -3) diizinkan, tetapi nilai tidak valid (`NaN`, `Infinity`, `-Infinity`, string, tipe data non-numerik) tetap ditolak secara ketat.
+- **Hasil Verifikasi**: Regression test membuktikan stok awal 2, penjualan 5 unit, dan stok akhir -3 dapat di-backup dan di-restore dengan produk, transaksi, dan stock movement utuh tanpa duplikasi.
+
 ---
 
 ## 5. Analisis Ketidaksesuaian Arsitektur & Blocker Sinkronisasi (P3 Blocker)
@@ -129,11 +135,13 @@ Stores yang dipersistensikan secara reaktif melalui Vue `watch()`:
 > **BLOCKER P3: Ketidaksesuaian Penanganan Stok Negatif antara POS Mobile dan Backend Laravel**
 >
 > - **Kebutuhan POS Mobile Offline (Client)**: Mengizinkan transaksi penjualan dan penyesuaian stok bergerak ke nilai negatif agar operasional kasir di lapangan tidak terhenti ketika terjadi keterlambatan pencatatan barang masuk atau selisih stok fisik.
-> - **Kondisi Backend Laravel (Server)**: Backend saat ini memiliki validasi yang menolak mutasi stok (`stock_movements`) yang mengakibatkan stok di database server bernilai negatif (`stock < 0` validation error / constraint).
-> - **Dampak pada Sinkronisasi (P3)**: Ketika transaksi offline dengan stok negatif di-push dari POS Mobile ke Laravel via `syncPushService`, server akan menolak mutasi stok tersebut, menyebabkan kegagalan sinkronisasi outbox (`OUTBOX_PUSH_FAILED` / HTTP 422 Unprocessable Entity).
+> - **Kondisi Backend Laravel (Server)**:
+>   1. Backend Laravel menolak `stock_after` negatif melalui validasi request **HTTP 422 Unprocessable Entity**.
+>   2. Jika validasi input tersebut dilewati tetapi kalkulasi mutasi pada database server menghasilkan stok negatif, service backend mengembalikan status **HTTP 409 Conflict** dengan kode kesalahan **`STOCK_RECONCILIATION_REQUIRED`**.
+> - **Dampak pada Sinkronisasi (P3)**: Ketika transaksi offline dengan stok negatif di-push dari POS Mobile ke Laravel via `syncPushService`, server akan menolak mutasi stok tersebut (HTTP 422 atau HTTP 409 `STOCK_RECONCILIATION_REQUIRED`), menyebabkan outbox gagal terkirim dan sinkronisasi tertahan.
 > - **Rekomendasi Tindak Lanjut untuk P3**:
->   1. Backend Laravel perlu diperbarui agar mendukung stok negatif atau memiliki perlakuan rekonsiliasi khusus untuk mutasi stok yang berasal dari offline checkout.
->   2. Mekanisme resolution conflict di sisi klien perlu disiapkan untuk menangani penolakan stok dari server tanpa menghapus transaksi penjualan yang sah di kasir.
+>   1. Backend Laravel perlu diperbarui agar mendukung stok negatif atau menyediakan alur rekonsiliasi otomatis untuk mutasi stok yang berasal dari offline checkout kasir.
+>   2. Mekanisme resolution conflict di sisi klien perlu disiapkan untuk menangani penolakan stok dari server tanpa membatalkan transaksi penjualan yang sah di kasir.
 >   *Catatan: Sesuai batasan lingkup PR #43, tidak ada perubahan kode yang dilakukan pada Laravel backend atau sinkronisasi produksi.*
 
 ---

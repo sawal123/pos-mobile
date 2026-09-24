@@ -988,6 +988,136 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       expect(ctx.transactionStore.items.some((t) => t.id === trx2.id && t.taxRate === null)).toBe(true)
       expect(ctx.productStore.getProductById(prod.id)).toBeTruthy()
     })
+
+    it('backup dan restore mempertahankan stok awal 2, penjualan 5 unit, stok akhir -3 tanpa duplikasi', async () => {
+      const ctx = createQAContext()
+      await ctx.service.initialize()
+
+      const created = ctx.productStore.createProduct({
+        name: 'Gula Pasir Kristal 1kg',
+        category: ctx.productStore.categories[0],
+        cost: 14000,
+        price: 18000,
+        stock: 2,
+        minStock: 5,
+        unit: 'kg',
+        isActive: true,
+      })
+      const product = created.product
+
+      ctx.cartStore.addItem(product)
+      ctx.cartStore.updateQty(product.id, 5)
+
+      const trx = ctx.transactionStore.createTransaction({
+        items: ctx.cartStore.items,
+        subtotal: 90000,
+        tax: 0,
+        taxEnabled: false,
+        taxRate: null,
+        total: 90000,
+        paymentMethod: 'cash',
+        cashReceived: 100000,
+        changeAmount: 10000,
+      })
+      ctx.productStore.recordSaleStock(trx.items, trx.id)
+
+      expect(ctx.productStore.getProductById(product.id).stock).toBe(-3)
+      expect(ctx.productStore.stockMovements).toHaveLength(1)
+      expect(ctx.productStore.stockMovements[0]).toMatchObject({
+        productId: product.id,
+        quantityChange: -5,
+        stockBefore: 2,
+        stockAfter: -3,
+        type: 'sale',
+      })
+
+      const backup = createBackupPayload(ctx)
+      expect(backup.schema).toBe('pos-mobile-backup')
+      expect(backup.version).toBe(2)
+
+      const backupProduct = backup.data.products.products.find((p) => p.id === product.id)
+      expect(backupProduct).toBeTruthy()
+      expect(backupProduct.stock).toBe(-3)
+
+      const backupMovement = backup.data.stockMovements.find((m) => m.productId === product.id)
+      expect(backupMovement).toBeTruthy()
+      expect(backupMovement.stockBefore).toBe(2)
+      expect(backupMovement.stockAfter).toBe(-3)
+      expect(backupMovement.quantityChange).toBe(-5)
+
+      const validation = validateBackupPayload(backup)
+      expect(validation.valid).toBe(true)
+      expect(validation.error).toBe('')
+
+      ctx.shiftStore.closeShift()
+      const restoreResult = restoreBackupPayload(backup, ctx)
+      expect(restoreResult.success).toBe(true)
+
+      const restoredProd = ctx.productStore.getProductById(product.id)
+      expect(restoredProd).toBeTruthy()
+      expect(restoredProd.stock).toBe(-3)
+
+      const matchingMovements = ctx.productStore.stockMovements.filter((m) => m.productId === product.id)
+      expect(matchingMovements).toHaveLength(1)
+      expect(matchingMovements[0]).toMatchObject({
+        productId: product.id,
+        quantityChange: -5,
+        stockBefore: 2,
+        stockAfter: -3,
+        type: 'sale',
+      })
+
+      const matchingTrx = ctx.transactionStore.items.filter((t) => t.id === trx.id)
+      expect(matchingTrx).toHaveLength(1)
+      expect(matchingTrx[0].total).toBe(90000)
+    })
+
+    it('validasi backup mengizinkan stok negatif tetapi menolak NaN, Infinity, dan data tidak valid', () => {
+      const validPayload = {
+        schema: 'pos-mobile-backup',
+        version: 2,
+        exportedAt: '2026-09-24T12:00:00.000Z',
+        data: {
+          business: { name: 'Toko Test', type: 'Cafe / UMKM', owner: 'Owner', phone: '0812', outlet: 'Pusat' },
+          taxSettings: { enabled: true, rate: 11 },
+          products: {
+            categories: ['Kategori A'],
+            products: [
+              { id: 'p-1', name: 'Item Minus', category: 'Kategori A', price: 10000, stock: -3, isActive: true },
+            ],
+          },
+          stockMovements: [
+            { id: 'sm-1', productId: 'p-1', quantityChange: -5, stockBefore: 2, stockAfter: -3, createdAt: '2026-09-24T12:00:00.000Z' },
+          ],
+          cash: [],
+          customers: [],
+          expenses: [],
+          transactions: [],
+        },
+      }
+
+      expect(validateBackupPayload(validPayload).valid).toBe(true)
+
+      const nanStock = JSON.parse(JSON.stringify(validPayload))
+      nanStock.data.products.products[0].stock = Number.NaN
+      expect(validateBackupPayload(nanStock).valid).toBe(false)
+
+      const infStock = JSON.parse(JSON.stringify(validPayload))
+      infStock.data.products.products[0].stock = Number.POSITIVE_INFINITY
+      expect(validateBackupPayload(infStock).valid).toBe(false)
+
+      const strStock = JSON.parse(JSON.stringify(validPayload))
+      strStock.data.products.products[0].stock = '-3'
+      expect(validateBackupPayload(strStock).valid).toBe(false)
+
+      const nanStockBefore = JSON.parse(JSON.stringify(validPayload))
+      nanStockBefore.data.stockMovements[0].stockBefore = Number.NaN
+      expect(validateBackupPayload(nanStockBefore).valid).toBe(false)
+
+      const infStockAfter = JSON.parse(JSON.stringify(validPayload))
+      infStockAfter.data.stockMovements[0].stockAfter = Number.POSITIVE_INFINITY
+      expect(validateBackupPayload(infStockAfter).valid).toBe(false)
+    })
   })
 
   describe('9. BATASAN SINKRONISASI OFFLINE', () => {
