@@ -65,6 +65,12 @@ async function chooseBusinessType(wrapper, type) {
 }
 
 async function saveBusinessSetup(wrapper) {
+  const form = wrapper.find('form')
+  if (form.exists()) {
+    await form.trigger('submit')
+    return
+  }
+
   const button = wrapper.findAll('button').find((item) => item.text().includes('Lanjut Setup PIN'))
 
   expect(button).toBeTruthy()

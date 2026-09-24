@@ -107,7 +107,9 @@ function normalizeTransactionForBackup(transaction) {
     subtotal: Number.isFinite(transaction.subtotal) ? transaction.subtotal : 0,
     tax: Number.isFinite(transaction.tax) ? transaction.tax : 0,
     ...(typeof transaction.taxEnabled === 'boolean' ? { taxEnabled: transaction.taxEnabled } : {}),
-    ...(isValidTaxRate(transaction.taxRate) ? { taxRate: Number(transaction.taxRate) } : {}),
+    ...(transaction.taxRate !== undefined
+      ? { taxRate: isValidTaxRate(transaction.taxRate) ? Number(transaction.taxRate) : null }
+      : {}),
     total: Number.isFinite(transaction.total) ? transaction.total : 0,
     grossProfit,
     paymentMethod: typeof transaction.paymentMethod === 'string' ? transaction.paymentMethod : '',

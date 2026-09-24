@@ -54,8 +54,11 @@ const businessModes = [
 
 const canContinue = computed(() => Boolean(form.name.trim()) && Boolean(form.type))
 
+let isSubmitting = false
+
 function saveBusinessProfile() {
-  if (!canContinue.value) return
+  if (!canContinue.value || isSubmitting) return
+  isSubmitting = true
 
   const isInitialSetup = !businessStore.isSetup
 
