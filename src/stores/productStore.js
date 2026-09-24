@@ -408,16 +408,12 @@ export const useProductStore = defineStore('product', {
           }
         }
 
-        if ((product.kind ?? 'product') === 'service') {
-          continue
-        }
+        const quantity = Number(item.qty ?? item.quantity)
 
-        const quantity = normalizeNumber(item.qty)
-
-        if (quantity > normalizeNumber(product.stock)) {
+        if (!Number.isFinite(quantity) || quantity <= 0) {
           return {
             success: false,
-            error: `Stok ${product.name} tidak mencukupi.`,
+            error: `Kuantitas ${product.name} tidak valid.`,
             product,
           }
         }
@@ -456,13 +452,6 @@ export const useProductStore = defineStore('product', {
 
       const stockBefore = normalizeNumber(product.stock)
       const stockAfter = stockBefore + quantityChange
-
-      if (stockAfter < 0) {
-        return {
-          success: false,
-          error: 'Stok tidak boleh kurang dari 0.',
-        }
-      }
 
       product.stock = stockAfter
       const movement = recordMovement(this.stockMovements, {

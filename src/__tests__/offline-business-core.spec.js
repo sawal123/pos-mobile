@@ -238,17 +238,23 @@ describe('offline business core', () => {
     expect(result.error).toContain('tidak aktif')
   })
 
-  it('insufficient stock tetap gagal checkout', () => {
+  it('stok negatif diizinkan saat checkout dan kuantitas tidak valid ditolak', () => {
     const { productStore } = createContext()
     productStore.applyBusinessTemplate('Grosir / Toko Kelontong')
     const product = createRetailProduct(productStore, { stock: 1 })
 
-    const result = productStore.canFulfillSale([
+    // Qty 2 saat stock 1 -> diizinkan untuk kebutuhan offline
+    const resultAllowed = productStore.canFulfillSale([
       { id: product.id, name: product.name, kind: 'product', price: product.price, qty: 2 },
     ])
+    expect(resultAllowed.success).toBe(true)
 
-    expect(result.success).toBe(false)
-    expect(result.error).toContain('tidak mencukupi')
+    // Kuantitas tidak valid (0 atau negatif) tetap ditolak
+    const resultInvalidQty = productStore.canFulfillSale([
+      { id: product.id, name: product.name, kind: 'product', price: product.price, qty: 0 },
+    ])
+    expect(resultInvalidQty.success).toBe(false)
+    expect(resultInvalidQty.error).toContain('tidak valid')
   })
 
   it('deleted Laundry service di stale cart gagal checkout', () => {

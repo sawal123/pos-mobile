@@ -183,6 +183,12 @@ function createPersistenceContexts(pinia) {
           isOpen: shiftStore.isOpen,
           openingBalance: shiftStore.openingBalance,
           openedAt: shiftStore.openedAt,
+          id: shiftStore.id,
+          shiftNumber: shiftStore.shiftNumber,
+          status: shiftStore.status,
+          closingBalance: shiftStore.closingBalance,
+          closedAt: shiftStore.closedAt,
+          notes: shiftStore.notes,
         }
       },
       async load(adapter) {
