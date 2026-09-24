@@ -1115,4 +1115,64 @@ describe('P0 backup/restore offline business core', () => {
       expect(context.transactionStore.items[0].customerSnapshot.email).toBe('budi@example.com')
     })
   })
+
+  describe('Transaction taxRate metadata backup and restore compatibility', () => {
+    it('preserves null taxRate on non-taxed transaction after round-trip backup and restore', () => {
+      const context = createContext()
+      makeBusinessReady(context.businessStore)
+      context.transactionStore.$patch({ items: [], lastTransaction: null })
+
+      context.transactionStore.createTransaction({
+        items: [{ id: 'p1', name: 'Barang A', price: 50000, qty: 1 }],
+        subtotal: 50000,
+        tax: 0,
+        total: 50000,
+        paymentMethod: 'cash',
+      })
+
+      expect(context.transactionStore.items[0].taxRate).toBeNull()
+      expect(context.transactionStore.items[0].taxEnabled).toBe(false)
+
+      const backup = createBackupPayload(context)
+      expect(validateBackupPayload(backup).valid).toBe(true)
+      expect(backup.data.transactions[0].taxRate).toBeNull()
+
+      context.transactionStore.$patch({ items: [], lastTransaction: null })
+      const restoreResult = restoreBackupPayload(backup, context)
+      expect(restoreResult.success).toBe(true)
+
+      expect(context.transactionStore.items[0].taxRate).toBeNull()
+      expect(context.transactionStore.items[0].taxEnabled).toBe(false)
+    })
+
+    it('preserves explicit numeric taxRate on taxed transaction after round-trip backup and restore', () => {
+      const context = createContext()
+      makeBusinessReady(context.businessStore)
+      context.transactionStore.$patch({ items: [], lastTransaction: null })
+
+      context.transactionStore.createTransaction({
+        items: [{ id: 'p2', name: 'Barang B', price: 100000, qty: 1 }],
+        subtotal: 100000,
+        tax: 11000,
+        taxRate: 11,
+        taxEnabled: true,
+        total: 111000,
+        paymentMethod: 'cash',
+      })
+
+      expect(context.transactionStore.items[0].taxRate).toBe(11)
+      expect(context.transactionStore.items[0].taxEnabled).toBe(true)
+
+      const backup = createBackupPayload(context)
+      expect(validateBackupPayload(backup).valid).toBe(true)
+      expect(backup.data.transactions[0].taxRate).toBe(11)
+
+      context.transactionStore.$patch({ items: [], lastTransaction: null })
+      const restoreResult = restoreBackupPayload(backup, context)
+      expect(restoreResult.success).toBe(true)
+
+      expect(context.transactionStore.items[0].taxRate).toBe(11)
+      expect(context.transactionStore.items[0].taxEnabled).toBe(true)
+    })
+  })
 })

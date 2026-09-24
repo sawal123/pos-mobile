@@ -81,4 +81,19 @@ describe('business setup mobile-first UI', () => {
     expect(businessStore.type).toBe('Grosir / Toko Kelontong')
     expect(routerMock.push).toHaveBeenCalledWith('/setup/pin')
   })
+
+  it('prevents double submission and navigates exactly once when clicked multiple times or submitted via form', async () => {
+    const { wrapper } = setupView()
+
+    await getInput(wrapper, 'Nama Toko').find('input').setValue('Toko Aman')
+    await wrapper.findAll('[role="radio"]').find((item) => item.text().includes('Laundry')).trigger('click')
+
+    const button = getNextButton(wrapper)
+    await button.trigger('click')
+    await wrapper.find('form').trigger('submit')
+    await button.trigger('click')
+
+    expect(routerMock.push).toHaveBeenCalledTimes(1)
+    expect(routerMock.push).toHaveBeenCalledWith('/setup/pin')
+  })
 })

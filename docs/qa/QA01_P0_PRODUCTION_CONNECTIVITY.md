@@ -9,15 +9,26 @@
 
 ---
 
-## 1. Konfigurasi Environment & URL Audit
+## 1. Konfigurasi Environment & Audit URL Target
 
-| Item | Pemeriksaan | Status | Catatan |
-|---|---|---|---|
-| Target Base URL | `VITE_API_BASE_URL=https://pos.eradig.my.id` | PASS | Sesuai spesifikasi produksi |
-| URL Sanitization | Penanganan trailing slash (`/`) & `/api` suffix | PASS | `resolveBaseUrl()` & `buildApiUrl()` mencegah duplikasi slash atau `/api/api/` |
-| Localhost Fallback | Tidak ada fallback diam-diam ke localhost | PASS | Base URL digunakan murni tanpa fallback; `syncPullService` memvalidasi production config |
-| Repository Credential Check | `.env` / credentials tidak ter-commit ke git | PASS | Hanya `.env.example` yang ter-track di git |
-| `.gitignore` Safety | Pengecualian file environment lokal | PASS (Warning) | `.gitignore` mengecualikan `*.local`; disarankan menambahkan eksplisit `.env` |
+### A. Perbedaan Konfigurasi URL Secara Kode vs Production Build Riil
+
+| Dimensi | Penjelasan & Mekanisme | Status |
+|---|---|---|
+| **Konfigurasi Secara Kode** | Modul `src/services/cloud/apiClient.js` membaca `import.meta.env.VITE_API_BASE_URL` secara dinamis. Fungsi `resolveBaseUrl()` dan `buildApiUrl()` menjamin bahwa jika base URL memiliki trailing slash (`/`) atau akhiran redundant (`/api`), URL akan dibersihkan secara defensif sebelum digabungkan dengan path endpoint, sehingga **tidak akan pernah menghasilkan duplikasi slash ganda (`//`) atau `/api/api/`**. | PASS |
+| **Production Build Riil** | Bundler Vite membekukan (inlines) variabel lingkungan `import.meta.env.*` ke dalam file JavaScript statis pada waktu build (`vite build`).<br>• Jika build dijalankan **tanpa** variabel lingkungan, bundle `dist/` akan menggunakan fallback string kosong `""`, yang pada web browser biasa menghasilkan relative path, namun pada **Capacitor native (Android/iOS) akan gagal** karena request akan mengarah ke `http://localhost/api/...`.<br>• Verifikasi build riil dilakukan dengan menyuplai `VITE_API_BASE_URL=https://pos.eradig.my.id npm run build`. String URL target terverifikasi ter-inline langsung di dalam artefak chunk `dist/assets/index-*.js`. | PASS (Terverifikasi) |
+
+### B. Audit Keamanan Repository & `.gitignore`
+
+- **Status `.gitignore`:** Diperbarui secara eksplisit untuk mengabaikan seluruh file environment lokal:
+  ```gitignore
+  *.local
+  .env
+  .env.*
+  !.env.example
+  ```
+- **Verifikasi Git:** Pengujian `git check-ignore` membuktikan `.env`, `.env.local`, `.env.production` terabaikan secara andal, sementara template `.env.example` tetap ter-track di git.
+- **Repository Safety:** Tidak ada credential, token, password, atau file `.env` lokal yang ter-stage atau ter-commit ke git repository.
 
 ---
 
@@ -25,7 +36,7 @@
 
 | Parameter | Hasil Pengujian | Status |
 |---|---|---|
-| Domain Resolution | Resolved ke `185.124.137.137`, `88.223.91.33` (IPv4) & `2a02:4780:...` (IPv6) | PASS |
+| Domain Resolution | Resolved ke IP `185.124.137.137`, `88.223.91.33` (IPv4) & `2a02:4780:...` (IPv6) | PASS |
 | TLS Handshake | Valid SSL certificate (Hostinger CDN / hcdn) | PASS |
 | HTTP → HTTPS Redirect | `http://pos.eradig.my.id/api/auth/me` mengembalikan `301 Moved Permanently` ke `https://...` | PASS |
 | Content Security Policy | Header `Content-Security-Policy: upgrade-insecure-requests` aktif | PASS |
@@ -35,7 +46,7 @@
 
 ## 3. Hasil Audit Endpoint Production (READ-ONLY)
 
-Sesuai aturan keamanan audit P0, tidak ada request `POST` atau `DELETE` yang dikirim ke production dan tidak ada autentikasi akun nyata sebelum akun QA dialokasikan.
+Sesuai batasan scope P0, tidak ada request `POST` atau `DELETE` yang dikirim ke production dan tidak ada autentikasi akun nyata sebelum akun QA dialokasikan.
 
 | Endpoint | Method | Pengujian Dilakukan | Status HTTP | Respons Body / Header | Status |
 |---|---|---|---|---|---|
@@ -78,11 +89,31 @@ Preflight `OPTIONS` diuji dengan origin yang relevan untuk ekosistem POS Mobile:
 
 ---
 
-## 6. Hasil Automated Test
+## 6. Dokumentasi Revisi & Regression Testing
+
+### A. Pencegahan Double Submit pada Onboarding (`BusinessSetupView.vue`)
+- **Masalah:** Komponen menggunakan `<form @submit.prevent="saveBusinessProfile">`, sementara tombol submit sebelumnya memiliki atribut `type="submit"` sekaligus `@click="saveBusinessProfile"`. Pada browser biasa, satu klik tombol memicu event `click` dan event `submit` form secara berurutan, menyebabkan `saveBusinessProfile()` (dan `router.push('/setup/pin')`) dieksekusi 2 kali.
+- **Perbaikan:**
+  1. Tombol onboarding diubah menjadi `type="button"` sehingga klik hanya memicu handler `@click` tanpa menduplikasi event submit form HTML.
+  2. Fungsi `saveBusinessProfile()` diberikan state guard `isSubmitting = true` yang fail-closed jika dipanggil ulang.
+  3. Penekanan tombol Enter pada keyboard mobile/desktop tetap diakomodasi oleh `@submit.prevent` pada elemen form.
+- **Pengujian:** Ditambahkan regression test pada `src/__tests__/business-setup-ui.spec.js` yang memverifikasi bahwa pengiriman form berulang (kombinasi klik dan form submit) hanya memicu `router.push('/setup/pin')` tepat 1 kali (`toHaveBeenCalledTimes(1)`).
+
+### B. Dokumentasi Kebutuhan dan Pengujian Serialisasi `taxRate` pada `backupService.js`
+- **Konteks & Kebutuhan:** PR #41 (`feat/dynamic-pos-tax-settings`) memodifikasi store transaksi (`src/stores/transactionStore.js`) dengan menyimpan properti `taxRate: payload.taxRate ?? null`. Pada transaksi tanpa pajak, `taxRate` bernilai `null`. Namun fungsi serialisasi backup sebelumnya (`normalizeTransactionForBackup` di `backupService.js`) hanya menyertakan `taxRate` jika `isValidTaxRate(transaction.taxRate)` bernilai `true` (hanya angka positif), sehingga nilai `taxRate: null` dibuang dari file backup JSON. Akibatnya, saat restore dilakukan, transaksi kehilangan properti `taxRate`, menyebabkan snapshot verification `expect(snapshotCore(context)).toBe(before)` pada regression test backup core gagal.
+- **Perbaikan:** `normalizeTransactionForBackup` diperbarui agar menyertakan `taxRate: null` jika nilainya didefinisikan sebagai `null`, dan `normalizeTransactionForRestore` memastikan properti `taxRate` dikembalikan secara simetris.
+- **Pengujian:** Ditambahkan suite pengujian regresi khusus pada `src/__tests__/local-backup.spec.js`:
+  1. `preserves null taxRate on non-taxed transaction after round-trip backup and restore`
+  2. `preserves explicit numeric taxRate on taxed transaction after round-trip backup and restore`
+  Hasil: 65/65 pengujian pada `local-backup.spec.js` passed.
+
+---
+
+## 7. Hasil Automated Test
 
 | Suite | Perintah | Hasil | Status |
 |---|---|---|---|
-| Unit Test Suite | `npm run test:unit -- --run` | 44 test files passed, 1161 tests passed, 3 skipped, 0 failed | PASS |
+| Unit Test Suite | `npm run test:unit -- --run` | 44 test files passed, 1163 tests passed, 3 skipped, 0 failed | PASS |
 | Client Build | `npm run build` | Sukses (`dist/` ter-generate tanpa error) | PASS |
 | Git Formatting & Diff | `git diff --check` | Bersih tanpa whitespace/conflict errors | PASS |
 | Browser Smoke Test | Manual visual run | Belum dijalankan (fase audit P0 read-only) | NOT TESTED |
@@ -90,17 +121,17 @@ Preflight `OPTIONS` diuji dengan origin yang relevan untuk ekosistem POS Mobile:
 
 ---
 
-## 7. Temuan & Tingkat Prioritas
+## 8. Temuan & Tingkat Prioritas
 
 | ID | Prioritas | Temuan | Dampak | Rekomendasi |
 |---|---|---|---|---|
 | **REC-01** | **P1 (High)** | Response HTTP 405 dari backend production mengembalikan exception stack trace detail JSON (`Illuminate\Routing\Exceptions\MethodNotAllowedHttpException` lengkap dengan file path server). | Indikasi variabel lingkungan `APP_DEBUG=true` aktif di server produksi `pos.eradig.my.id`, berisiko membocorkan struktur internal direktori server. | Nonaktifkan `APP_DEBUG=false` pada environment backend Laravel production. |
-| **REC-02** | **P2 (Medium)** | File `.gitignore` saat ini menggunakan aturan `*.local`, namun belum secara eksplisit mencantumkan `.env`. | Pengembang berpotensi membuat file `.env` (tanpa ekstensi `.local`) yang dapat terbaca sebagai file untracked oleh git. | Tambahkan `.env` secara eksplisit pada `.gitignore`. |
+| **REC-02** | **P2 (Medium)** | File `.gitignore` sebelumnya hanya mengecualikan `*.local`. | Pengembang berpotensi membuat file `.env` tanpa akhiran `.local` yang ter-stage ke git. | **Terselesaikan:** Telah ditambahkan `.env` dan `.env.*` (dengan exception `!.env.example`) pada `.gitignore`. |
 | **REC-03** | **P3 (Low)** | URL konfigurasi `VITE_API_BASE_URL` berpotensi menimbulkan `/api/api/` jika diakhiri dengan `/api`. | Routing client gagal menuju endpoint backend. | **Terselesaikan:** Telah ditambahkan sanitasi defensif `resolveBaseUrl()` di `apiClient.js` beserta regression tests. |
 
 ---
 
-## 8. Blocker Sebelum QA-01 / P1 (Login & Device Registration)
+## 9. Blocker Sebelum QA-01 / P1 (Login & Device Registration)
 
 1. **Akun QA Khusus:** Dibutuhkan akun testing khusus (email + password) di server produksi `https://pos.eradig.my.id` dengan peran kasir/outlet yang valid agar pengujian login dan device registration dapat dilakukan tanpa menyentuh akun operasional riil.
 2. **Review `APP_DEBUG`:** Disarankan menonaktifkan `APP_DEBUG` di environment backend produksi sebelum pengujian transaksi dan token exchange intensif.
