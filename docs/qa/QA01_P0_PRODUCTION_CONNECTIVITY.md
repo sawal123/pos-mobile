@@ -92,12 +92,20 @@ Preflight `OPTIONS` diuji dengan origin yang relevan untuk ekosistem POS Mobile:
 ## 6. Dokumentasi Revisi & Regression Testing
 
 ### A. Pencegahan Double Submit pada Onboarding (`BusinessSetupView.vue`)
-- **Masalah:** Komponen menggunakan `<form @submit.prevent="saveBusinessProfile">`, sementara tombol submit sebelumnya memiliki atribut `type="submit"` sekaligus `@click="saveBusinessProfile"`. Pada browser biasa, satu klik tombol memicu event `click` dan event `submit` form secara berurutan, menyebabkan `saveBusinessProfile()` (dan `router.push('/setup/pin')`) dieksekusi 2 kali.
-- **Perbaikan:**
-  1. Tombol onboarding diubah menjadi `type="button"` sehingga klik hanya memicu handler `@click` tanpa menduplikasi event submit form HTML.
-  2. Fungsi `saveBusinessProfile()` diberikan state guard `isSubmitting = true` yang fail-closed jika dipanggil ulang.
-  3. Penekanan tombol Enter pada keyboard mobile/desktop tetap diakomodasi oleh `@submit.prevent` pada elemen form.
-- **Pengujian:** Ditambahkan regression test pada `src/__tests__/business-setup-ui.spec.js` yang memverifikasi bahwa pengiriman form berulang (kombinasi klik dan form submit) hanya memicu `router.push('/setup/pin')` tepat 1 kali (`toHaveBeenCalledTimes(1)`).
+- **Implementasi Final:**
+  1. **Mekanisme Submit Tunggal:** Elemen form menggunakan satu mekanisme submit utama `<form @submit.prevent="saveBusinessProfile">`.
+  2. **Tombol Submit Standar:** Tombol lanjut menggunakan `<BaseButton type="submit">`, tanpa handler `@click="saveBusinessProfile"` tambahan.
+  3. **Proteksi Idempoten:** State guard `isSubmitting = true` aktif di dalam `saveBusinessProfile()`, memastikan jika submit dipicu berulang kali, penyimpanan store dan navigasi `router.push('/setup/pin')` hanya dieksekusi tepat 1 kali.
+  4. **Dukungan Enter:** Mendukung submit form native saat pengguna menekan tombol Enter pada keyboard fisik/mobile.
+- **Pengujian Regresi:** Diperbarui dan diperluas pada `src/__tests__/business-setup-ui.spec.js` (poin A–G):
+  - A. Memastikan tombol utama memiliki atribut `type="submit"`.
+  - B. Submit form valid menyimpan nama toko, jenis bisnis, owner, telepon, dan outlet ke store.
+  - C. Simulasi submit berulang memastikan `router.push('/setup/pin')` hanya dipanggil tepat satu kali.
+  - D. Template produk (`applyBusinessTemplate`) hanya diaplikasikan tepat satu kali pada onboarding pertama.
+  - E. Form dengan nama bisnis kosong atau whitespace memblokir submit dan tidak memicu navigasi.
+  - F. Form tanpa jenis bisnis memblokir submit dan tidak memicu navigasi.
+  - G. Memastikan tidak ada handler `@click` tambahan pada `BaseButton` submit yang dapat memicu double execution.
+  - *Catatan Kepatuhan QA:* Pengujian event submit via Vue Test Utils diakui secara transparan pada level unit/component dan **tidak diklaim sebagai bukti pengujian fisik tombol Enter pada browser sebenarnya**.
 
 ### B. Dokumentasi Kebutuhan dan Pengujian Serialisasi `taxRate` pada `backupService.js`
 - **Konteks & Kebutuhan:** PR #41 (`feat/dynamic-pos-tax-settings`) memodifikasi store transaksi (`src/stores/transactionStore.js`) dengan menyimpan properti `taxRate: payload.taxRate ?? null`. Pada transaksi tanpa pajak, `taxRate` bernilai `null`. Namun fungsi serialisasi backup sebelumnya (`normalizeTransactionForBackup` di `backupService.js`) hanya menyertakan `taxRate` jika `isValidTaxRate(transaction.taxRate)` bernilai `true` (hanya angka positif), sehingga nilai `taxRate: null` dibuang dari file backup JSON. Akibatnya, saat restore dilakukan, transaksi kehilangan properti `taxRate`, menyebabkan snapshot verification `expect(snapshotCore(context)).toBe(before)` pada regression test backup core gagal.
@@ -113,7 +121,7 @@ Preflight `OPTIONS` diuji dengan origin yang relevan untuk ekosistem POS Mobile:
 
 | Suite | Perintah | Hasil | Status |
 |---|---|---|---|
-| Unit Test Suite | `npm run test:unit -- --run` | 44 test files passed, 1163 tests passed, 3 skipped, 0 failed | PASS |
+| Unit Test Suite | `npm run test:unit -- --run` | 44 test files passed, 1169 tests passed, 3 skipped, 0 failed | PASS |
 | Client Build | `npm run build` | Sukses (`dist/` ter-generate tanpa error) | PASS |
 | Git Formatting & Diff | `git diff --check` | Bersih tanpa whitespace/conflict errors | PASS |
 | Browser Smoke Test | Manual visual run | Belum dijalankan (fase audit P0 read-only) | NOT TESTED |
