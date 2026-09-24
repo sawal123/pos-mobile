@@ -13,7 +13,16 @@
  * - No network polling
  */
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
+export function resolveBaseUrl(customBase) {
+  const raw = (customBase !== undefined ? customBase : (import.meta.env?.VITE_API_BASE_URL ?? '')).trim()
+  return raw.replace(/\/+$/, '').replace(/\/api$/, '')
+}
+
+export function buildApiUrl(path, customBase) {
+  const base = resolveBaseUrl(customBase)
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`
+  return `${base}${normalizedPath}`
+}
 
 /**
  * @typedef {Object} ApiError
@@ -70,7 +79,7 @@ export async function apiRequest(path, { method = 'GET', body, token } = {}) {
   let response
 
   try {
-    response = await fetch(`${BASE_URL}${path}`, {
+    response = await fetch(buildApiUrl(path), {
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
