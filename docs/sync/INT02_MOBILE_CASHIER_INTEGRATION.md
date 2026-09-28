@@ -251,14 +251,24 @@ simply re-plans on the next run.
 
 **Uncertain acceptance is reconciled, never deleted.** A transport error, a
 malformed `2xx` or a `5xx` leaves the server outcome unknown. The envelope is
-**kept**, the result reports `acceptance: 'unknown'` with
-`reconciliationRequired: true`, and the retry reuses the **same `request_id`**
-so the server deduplicates it (`duplicate: true`); the local outbox is only then
-cleared. `LOCAL_SYNC_CLEANUP_FAILED` (server accepted, local cleanup failed)
-likewise keeps the envelope and reports `acceptance: 'accepted'` +
-`reconciliationRequired: true`. A retained envelope surfaces in Sync Status as
-`SYNC_UI_RECOVERY_REQUIRED` with the "Coba Ulang Push" recovery action, so the
-outcome is never silent.
+**kept**, marked `acceptanceUnknown` on disk, the result reports
+`acceptance: 'unknown'` with `reconciliationRequired: true`, and the retry reuses
+the **same `request_id`** so the server deduplicates it (`duplicate: true`); the
+local outbox is only then cleared. `LOCAL_SYNC_CLEANUP_FAILED` (server accepted,
+local cleanup failed) likewise keeps the envelope and reports
+`acceptance: 'accepted'` + `reconciliationRequired: true`. A retained envelope
+surfaces in Sync Status as `SYNC_UI_RECOVERY_REQUIRED`, so the outcome is never
+silent.
+
+**A 403 does not prove the first request failed.** The backend authorizes
+_before_ it deduplicates, so once the role changes, a retry of an already
+committed `request_id` returns `403`. When an `acceptanceUnknown` envelope is
+retried and 403s, the client therefore does **not** treat it as a rejection: it
+persists `reconciliationRequired = true` (no `rejectionCode`) and returns
+`SYNC_RECONCILIATION_REQUIRED` (`acceptance: 'unknown'`). The envelope and every
+local row are preserved, it is **never re-planned**, and no further identical
+HTTP request is sent automatically. The outcome must be resolved externally
+(§12) before the client re-plans.
 
 Preserved error semantics (unchanged): `409 SYNC_CONFLICT`,
 `409 SYNC_RETRYABLE_CONFLICT`, `409 SYNC_DATA_CONFLICT`,
@@ -320,7 +330,7 @@ Backward compatibility:
 | File                                              | Change                                                                                                                                                                                                                                              |
 | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/services/sync/syncCapabilityPolicy.js`       | **new** — pure role/capability resolution, outbox classification, dependency gate.                                                                                                                                                                  |
-| `src/services/sync/syncPushService.js`            | capability-aware partitioning, cashier candidate ordering, dependency gate, 403 handling, rejected-envelope fingerprint + safe re-plan, `restricted`/`deferred`/`policy` in results; policy resolved from the verified snapshot when the caller omits role/capabilities (orchestrator/auto-sync).                                                                |
+| `src/services/sync/syncPushService.js`            | capability-aware partitioning, cashier candidate ordering, dependency gate, 403 handling, rejected-envelope fingerprint + safe re-plan, `restricted`/`deferred`/`policy` in results; policy resolved from the verified snapshot when the caller omits role/capabilities (orchestrator/auto-sync); uncertain outcomes persist `acceptanceUnknown`/`reconciliationRequired` and are never re-planned (`SYNC_RECONCILIATION_REQUIRED`).                                                                |
 | `src/services/sync/syncOrchestratorService.js`    | pull despite restricted/deferred rows; `SYNC_ALL_COMPLETED_WITH_RESTRICTED` + `partial`.                                                                                                                                                            |
 | `src/services/sync/syncStatusService.js`          | `SYNC_UI_RESTRICTED`, additive `restrictedCount`, optional `capabilityProvider`.                                                                                                                                                                    |
 | `src/services/sync/index.js`                      | exports for the policy module and the new UI status; wires `capabilityProvider`.                                                                                                                                                                    |
@@ -328,7 +338,7 @@ Backward compatibility:
 | `src/stores/syncPushStore.js`                     | passes capability context; pre-push re-verification; wires the capability verifier into its fallback push service; post-403 context refresh.                                                                                                                                                    |
 | `src/stores/syncStatusStore.js`                   | exposes `restrictedCount`.                                                                                                                                                                                                                          |
 | `src/services/cloud/authService.js`               | `fetchMobileContext(token, { deviceIdentifier })`.                                                                                                                                                                                                  |
-| `src/__tests__/sync-cashier-capabilities.spec.js` | **new** — 61 regression tests (incl. fail-closed context, revoked membership, cashier onboarding UI, restricted product dependency, 403 role-change recovery).                                                                                                                                                                                                                      |
+| `src/__tests__/sync-cashier-capabilities.spec.js` | **new** — 62 regression tests (incl. fail-closed context, revoked membership, cashier onboarding UI, restricted product dependency, 403 role-change recovery, uncertain-acceptance reconciliation).                                                                                                                                                                                                                      |
 | `docs/sync/INT02_MOBILE_CASHIER_INTEGRATION.md`   | **new** — this document.                                                                                                                                                                                                                            |
 
 No database schema migration was required: the cloud context and the in-flight
@@ -342,13 +352,13 @@ additional fields.
 ```
 npx vitest run
   Test Files  46 passed | 2 skipped (48)
-  Tests      1250 passed | 3 skipped (1253)
+  Tests      1251 passed | 3 skipped (1254)
 
 npm run build
   ✓ built in ~1s   (155 modules; chunk-size warning is informational)
 ```
 
-`src/__tests__/sync-cashier-capabilities.spec.js` (41 tests) covers:
+`src/__tests__/sync-cashier-capabilities.spec.js` (62 tests) covers:
 
 1. role + capabilities per business;
 2. business/outlet switching;
@@ -381,11 +391,16 @@ npm run build
 22. the freshly verified snapshot overrides a stale caller context;
 23. a 403 permission change refreshes role/capabilities on all three push paths
     (manual push, Sync Semua and auto-sync);
-24. member → cashier recovery when an in-flight envelope still contains product
-    + transaction changes (reconcile, then re-plan safely);
+24. member → cashier with an in-flight, already-attempted envelope carrying
+    product + transaction changes: the retry `403` is **not** read as
+    non-acceptance — the envelope is kept as `SYNC_RECONCILIATION_REQUIRED`, is
+    never re-planned and no repeated identical HTTP request is sent;
 25. uncertain-acceptance reconciliation (same `request_id` retry) and
     `LOCAL_SYNC_CLEANUP_FAILED` envelope preservation — no envelope is deleted
-    while its server acceptance is unknown.
+    while its server acceptance is unknown;
+26. rejection-fingerprint consistency: a skipped restricted row alone never
+    changes the fingerprint (so there is no repeated identical request and no
+    endless identical re-plan), while a genuine outbox change re-plans.
 
 `oxlint` reports no new findings; the three remaining `no-unused-vars` items in
 `syncPushService.js` and the unused re-export imports in `sync/index.js` are
@@ -420,3 +435,41 @@ These cannot be fully verified from the mobile repository and need a live
 7. **Subscription / device deactivation timing.** That the backend rejects a
    push after a mid-session deactivation is assumed from the contract, not
    reproduced live.
+
+---
+
+## 12. Backend contract needed — sync request status (separate `pos_dashboard` PR)
+
+The reconciliation state (§7) cannot be resolved from the mobile client alone,
+because the backend evaluates authorization **before** the
+`(business_id, device_id, request_id)` idempotency lookup. A role downgrade can
+therefore `403` a retry of a request that was already committed, and the client
+cannot tell "committed, then 403" apart from "never committed". Closing this gap
+needs a small backend endpoint, delivered as a **separate PR** in
+`pos_dashboard` (this repository never modifies the backend).
+
+**`GET /api/sync/requests/{request_id}`**
+
+| Aspect | Contract |
+| --- | --- |
+| Auth | Sanctum mobile token with the `mobile` ability, same as the other sync endpoints. |
+| Tenancy | Scoped to the caller's membership `business_id`; never leaks another tenant's request. |
+| Query | `business_id` (required), `device_identifier` (required). |
+| Ordering | The status lookup **must run before** any role/capability preflight, so a downgraded role can never hide an already-processed request. |
+| Response 200 (found) | `{ "data": { "request_id": "<uuid>", "processed": true, "processed_at": "<iso8601>", "business_id": <int>, "device_id": <int> } }` |
+| Response 200 (not found) | `{ "data": { "request_id": "<uuid>", "processed": false } }` — never committed, so the client may safely re-plan under the current policy. |
+| Response 403 | Only for a genuinely invalid token/device; **not** because the current role is restricted. |
+| Side effects | Read-only: never mutates `sync_requests` or any domain table. |
+
+**Client usage once available.** When an envelope is `reconciliationRequired`,
+the client calls this endpoint and either:
+
+- `processed: true` → treat the first request as accepted, clear the matching
+  outbox rows (idempotently, by `request_id`) and clear the envelope — no
+  re-plan; or
+- `processed: false` → the first request was never committed, so discard the
+  envelope and re-plan under the current policy.
+
+Until the endpoint ships, a `reconciliationRequired` envelope is **kept with all
+local data** and reported as `SYNC_RECONCILIATION_REQUIRED`; the client neither
+re-plans nor repeats the identical request.

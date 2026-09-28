@@ -2644,55 +2644,119 @@ describe('INT-02 — 403 authorization refresh across push paths', () => {
 // ════════════════════════════════════════════════════════════════════════════
 
 describe('INT-02 — role downgrade with an in-flight envelope', () => {
-  it('recovers an in-flight member envelope after a downgrade to cashier', async () => {
+  it('requires reconciliation instead of re-planning when the first outcome is unknown', async () => {
     let mode = 'lost'
     const harness = await createPushHarness({
       context: ownerContext(),
-      transportImpl: (args) => {
+      transportImpl: () => {
         if (mode === 'lost') return networkErrorResponse()
-        if (mode === 'forbidden') return forbiddenResponse()
-        return successResponse(args)
+        return forbiddenResponse()
       },
     })
     await bindKnownProduct(harness.registry, harness.adapter, 'known-product')
     await enqueueCashierMixedOutbox(harness.queueService)
 
-    // Member attempt whose response is lost: the envelope is persisted with
-    // product + transaction changes and its acceptance is unknown.
+    // Member request may already have been committed by the server; the
+    // response is lost, so its acceptance is unknown.
     const lost = await harness.pushService.pushNow({ context: ownerContext() })
-    expect(lost.ok).toBe(false)
     expect(lost.acceptance).toBe('unknown')
     expect(lost.reconciliationRequired).toBe(true)
 
     const memberEnvelope = await harness.adapter.loadSyncPushInflight()
     expect(memberEnvelope).not.toBeNull()
     expect(memberEnvelope.changes.products.length).toBeGreaterThan(0)
-    expect(memberEnvelope.conditionFingerprint).toBeTruthy()
+    expect(memberEnvelope.acceptanceUnknown).toBe(true)
 
-    // Downgrade to cashier. The reconciliation retry hits the server with the
-    // now-forbidden payload and is rejected; the envelope is preserved.
+    // Role downgrades to cashier. The idempotent retry hits the authorization
+    // preflight first and 403s — which must NOT be read as "never processed".
     mode = 'forbidden'
     const denied = await harness.pushService.pushNow({ context: cashierContext() })
-    expect(denied.code).toBe('SYNC_OPERATION_NOT_ALLOWED')
-    expect(denied.acceptance).toBe('rejected')
-    expect(await harness.adapter.loadSyncPushInflight()).not.toBeNull()
+    expect(denied.code).toBe('SYNC_RECONCILIATION_REQUIRED')
+    expect(denied.acceptance).toBe('unknown')
+    expect(denied.reconciliationRequired).toBe(true)
 
-    // The authorization changed since the envelope was built, so the next
-    // attempt re-plans a cashier-safe envelope instead of looping.
-    mode = 'ok'
-    const recovered = await harness.pushService.pushNow({ context: cashierContext() })
-    expect(recovered.ok).toBe(true)
+    const envelopeAfter403 = await harness.adapter.loadSyncPushInflight()
+    expect(envelopeAfter403).not.toBeNull()
+    expect(envelopeAfter403.reconciliationRequired).toBe(true)
+    // Crucially NOT a rejection, so it can never be re-planned away.
+    expect(envelopeAfter403.rejectionCode).toBeUndefined()
+    expect(envelopeAfter403.changes.products.length).toBeGreaterThan(0)
 
-    const body = harness.requests.at(-1).body
-    expect(body.changes.products).toEqual([])
-    expect(body.changes.customers).toHaveLength(1)
-    expect(body.changes.sales).toHaveLength(1)
+    // No re-plan and no repeated identical HTTP request.
+    const third = await harness.pushService.pushNow({ context: cashierContext() })
+    expect(third.code).toBe('SYNC_RECONCILIATION_REQUIRED')
+    expect(harness.requests).toHaveLength(2)
 
-    // Durable outbox: restricted rows are never deleted.
+    // Durable outbox: every local row is preserved.
     const pendingTypes = (await harness.queueService.listPending({ limit: 100 })).map(
       (item) => item.entityType,
     )
     expect(pendingTypes).toContain(SYNC_ENTITY_TYPES.PRODUCT)
+    expect(pendingTypes).toContain(SYNC_ENTITY_TYPES.CUSTOMER)
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// Finding 2 — fingerprint consistency for a restricted outbox
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('INT-02 — rejection fingerprint stays stable for a restricted outbox', () => {
+  it('never repeats an identical request and re-plans only after a real change', async () => {
+    let mode = 'forbidden'
+    const harness = await createPushHarness({
+      context: cashierContext(),
+      transportImpl: (args) => (mode === 'forbidden' ? forbiddenResponse() : successResponse(args)),
+    })
+    await enqueueCustomer(harness.queueService)
+    // A role-restricted row that is simply skipped must not perturb the
+    // fingerprint on its own.
+    await harness.queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'local-product', {
+      id: 'local-product',
+      name: 'Produk Baru',
+      category: 'Minuman',
+      price: 1000,
+      isActive: true,
+    })
+
+    const first = await harness.pushService.pushNow({ context: cashierContext() })
+    expect(first.code).toBe('SYNC_OPERATION_NOT_ALLOWED')
+    expect(harness.requests).toHaveLength(1)
+
+    // Identical conditions (same role, same outbox, restricted row unchanged):
+    // short-circuit with NO repeated identical HTTP request.
+    const second = await harness.pushService.pushNow({ context: cashierContext() })
+    expect(second.code).toBe('SYNC_ENVELOPE_REJECTED_PENDING_CONTEXT_CHANGE')
+    expect(harness.requests).toHaveLength(1)
+
+    // Role and data are unchanged.
+    const pendingBefore = (await harness.queueService.listPending({ limit: 100 }))
+      .map((item) => item.entityType)
+      .sort()
+    expect(pendingBefore).toEqual([SYNC_ENTITY_TYPES.CUSTOMER, SYNC_ENTITY_TYPES.PRODUCT].sort())
+
+    // A legitimate local change triggers a re-plan.
+    mode = 'ok'
+    await harness.queueService.enqueueUpsert(SYNC_ENTITY_TYPES.SHIFT, 'shift-1', {
+      id: 'shift-1',
+      shiftNumber: 'SH-1',
+      status: 'open',
+      openedAt: NOW,
+      openingCash: 100000,
+    })
+
+    const third = await harness.pushService.pushNow({ context: cashierContext() })
+    expect(third.ok).toBe(true)
+    expect(harness.requests).toHaveLength(2)
+
+    const body = harness.requests[1].body
+    expect(body.changes.products).toEqual([])
+    expect(body.changes.customers).toHaveLength(1)
+
+    // The restricted row is still durable after a successful partial push.
+    const pendingAfter = (await harness.queueService.listPending({ limit: 100 })).map(
+      (item) => item.entityType,
+    )
+    expect(pendingAfter).toContain(SYNC_ENTITY_TYPES.PRODUCT)
   })
 })
 

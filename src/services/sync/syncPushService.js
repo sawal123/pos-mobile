@@ -688,6 +688,43 @@ export function createSyncPushService({
           ? await adapter.loadSyncPushInflight()
           : null
 
+      // An envelope flagged for reconciliation must never be re-planned and
+      // must never be resent automatically: its first outcome is still unknown
+      // (the server may have committed it before the response was lost), and
+      // the backend authorizes before it dedupes, so an identical retry cannot
+      // resolve it. The envelope + every local row are preserved and surfaced
+      // as SYNC_RECONCILIATION_REQUIRED until the outcome is known (see the
+      // documented backend request-status endpoint).
+      if (existingEnvelope && existingEnvelope.reconciliationRequired === true) {
+        const remaining = await activeQueueService.countPending()
+
+        return {
+          ok: false,
+          code: 'SYNC_RECONCILIATION_REQUIRED',
+          message:
+            'Pengiriman sebelumnya mungkin sudah diterima server. Rekonsiliasi diperlukan sebelum mencoba lagi; data lokal tetap aman.',
+          requestId: existingEnvelope.requestId,
+          policy,
+          acceptance: 'unknown',
+          reconciliationRequired: true,
+          reconciliationCode:
+            existingEnvelope.reconciliationCode ?? 'SYNC_RECONCILIATION_REQUIRED',
+          sentQueueIds: [],
+          removedQueueIds: [],
+          preservedQueueIds: [],
+          blocked: [],
+          restricted: [],
+          deferred: [],
+          warnings: [],
+          remaining,
+          error: {
+            code: 'SYNC_RECONCILIATION_REQUIRED',
+            message:
+              'Pengiriman sebelumnya mungkin sudah diterima server. Rekonsiliasi diperlukan sebelum mencoba lagi.',
+          },
+        }
+      }
+
       let requestId
       let envelope
       let isReusedEnvelope = false
@@ -1370,11 +1407,14 @@ export function createSyncPushService({
           registeredDeviceId,
           createdAt: new Date().toISOString(),
           // The authorization + outbox conditions this plan was built under.
-          // A later rejection may only be short-circuited when the conditions
-          // are still byte-identical; otherwise it is safely re-planned.
+          // Uses the SAME basis as the rejection comparison (the full pending
+          // outbox) so a restricted row that is simply skipped can never change
+          // the fingerprint on its own. A later rejection is only
+          // short-circuited when the conditions are still byte-identical;
+          // otherwise it is safely re-planned.
           conditionFingerprint: buildPushConditionFingerprint({
             policy,
-            pendingItems: batchSnapshots,
+            pendingItems,
           }),
           queueSnapshots: batchSnapshots,
           supersededSnapshots,
@@ -1865,9 +1905,88 @@ export function createSyncPushService({
             response.error?.message ??
             'Akses sinkronisasi ditolak oleh server.')
 
+        const requiresContextRefresh =
+          isOperationNotAllowed ||
+          responseCode === 'CLOUD_SUBSCRIPTION_REQUIRED' ||
+          responseCode === 'BUSINESS_ACCESS_DENIED'
+
+        // Every push path (manual, orchestrator "Sync Semua" and auto-sync)
+        // shares this single hook, so a permission change refreshes role +
+        // sync_capabilities consistently no matter which path reached the 403.
+        // A refresh failure is swallowed: the rejection is already surfaced.
+        if (requiresContextRefresh && typeof onAuthorizationRejected === 'function') {
+          try {
+            await onAuthorizationRejected({
+              code: responseCode,
+              roleMismatch: isOperationNotAllowed,
+            })
+          } catch {
+            // Non-blocking.
+          }
+        }
+
+        // A 403 on a *retried* request whose first outcome is unknown is NOT
+        // proof the original was never processed. The backend checks
+        // authorization BEFORE idempotency, so a now-restricted role can 403 a
+        // request that was already committed server-side. Keep the envelope and
+        // every local row and require reconciliation instead of re-planning.
+        if (isOperationNotAllowed && existingEnvelope?.acceptanceUnknown === true) {
+          const reconciliationMessage =
+            'Pengiriman sebelumnya mungkin sudah diterima server. Rekonsiliasi diperlukan sebelum mencoba lagi; data lokal tetap aman.'
+
+          if (adapter && typeof adapter.saveSyncPushInflight === 'function') {
+            try {
+              await adapter.saveSyncPushInflight({
+                ...envelope,
+                acceptanceUnknown: true,
+                reconciliationRequired: true,
+                reconciliationCode: 'SYNC_RECONCILIATION_REQUIRED',
+                reconciliationAt: new Date().toISOString(),
+              })
+            } catch {
+              // Best effort: the returned status still blocks an automatic re-plan.
+            }
+          }
+
+          for (const snapshot of envelope.queueSnapshots) {
+            await activeQueueService.markFailedIfUnchanged(snapshot, reconciliationMessage)
+          }
+
+          const remaining = await activeQueueService.countPending()
+
+          return {
+            ok: false,
+            code: 'SYNC_RECONCILIATION_REQUIRED',
+            message: reconciliationMessage,
+            requestId,
+            policy,
+            violations,
+            roleMismatch: true,
+            requiresContextRefresh,
+            acceptance: 'unknown',
+            reconciliationRequired: true,
+            deviceBlocked: false,
+            sentQueueIds,
+            removedQueueIds: [],
+            preservedQueueIds: [],
+            blocked,
+            restricted,
+            deferred,
+            warnings,
+            remaining,
+            error: {
+              code: 'SYNC_RECONCILIATION_REQUIRED',
+              message: reconciliationMessage,
+              status: 403,
+              data: response.data ?? response.error?.data ?? null,
+            },
+          }
+        }
+
         // Persist an idempotent rejection marker so the identical envelope is
-        // never resent. A 403 preflight writes nothing server-side, so keeping
-        // the envelope is safe and re-planning can never lose acknowledged data.
+        // never resent. A first-attempt 403 preflight writes nothing
+        // server-side, so keeping the envelope is safe and re-planning can
+        // never lose acknowledged data.
         if (
           isOperationNotAllowed &&
           adapter &&
@@ -1893,26 +2012,6 @@ export function createSyncPushService({
 
         for (const snapshot of envelope.queueSnapshots) {
           await activeQueueService.markFailedIfUnchanged(snapshot, rejectionMessage)
-        }
-
-        const requiresContextRefresh =
-          isOperationNotAllowed ||
-          responseCode === 'CLOUD_SUBSCRIPTION_REQUIRED' ||
-          responseCode === 'BUSINESS_ACCESS_DENIED'
-
-        // Every push path (manual, orchestrator "Sync All" and auto-sync)
-        // shares this single hook, so a permission change refreshes role +
-        // sync_capabilities consistently no matter which path reached the 403.
-        // A refresh failure is swallowed: the rejection is already surfaced.
-        if (requiresContextRefresh && typeof onAuthorizationRejected === 'function') {
-          try {
-            await onAuthorizationRejected({
-              code: responseCode,
-              roleMismatch: isOperationNotAllowed,
-            })
-          } catch {
-            // Non-blocking.
-          }
         }
 
         const remaining = await activeQueueService.countPending()
@@ -1993,6 +2092,22 @@ export function createSyncPushService({
         !hasHttpResponse ||
         (response.ok === true && !isServerSuccess) ||
         (typeof response.status === 'number' && response.status >= 500)
+
+      // Persist the unknown outcome on the envelope itself. A later push must
+      // be able to tell that this request may already have been committed —
+      // otherwise a subsequent 403 (which the backend returns before it
+      // dedupes) would be misread as proof of non-acceptance.
+      if (acceptanceUnknown && adapter && typeof adapter.saveSyncPushInflight === 'function') {
+        try {
+          await adapter.saveSyncPushInflight({
+            ...envelope,
+            acceptanceUnknown: true,
+            acceptanceUnknownAt: new Date().toISOString(),
+          })
+        } catch {
+          // Best effort: the returned status still marks the uncertainty.
+        }
+      }
 
       return {
         ok: false,
