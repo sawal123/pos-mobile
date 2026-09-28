@@ -25,6 +25,7 @@ export const useSyncPushStore = defineStore('syncPush', () => {
         scheduler,
         cloudStore,
         capabilityVerifier: () => cloudStore.ensureVerifiedContext(),
+        onAuthorizationRejected: () => cloudStore.refreshContext().catch(() => {}),
       })
     }
   }
@@ -47,6 +48,7 @@ export const useSyncPushStore = defineStore('syncPush', () => {
           scheduler: _scheduler,
           cloudStore,
           capabilityVerifier: () => cloudStore.ensureVerifiedContext(),
+          onAuthorizationRejected: () => cloudStore.refreshContext().catch(() => {}),
         })
       } else {
         return {
@@ -109,12 +111,9 @@ export const useSyncPushStore = defineStore('syncPush', () => {
         context: resolvedContext,
       })
 
-      // INT-02: a 403 means the cached role/capabilities are stale. Refresh
-      // online so the next attempt uses fresh authorization. Data is preserved.
-      if (result && result.requiresContextRefresh && cloudStore.isAuthenticated) {
-        await cloudStore.refreshContext().catch(() => {})
-      }
-
+      // INT-02: the push service itself refreshes role + sync_capabilities via
+      // its shared `onAuthorizationRejected` hook when a 403 requires it, so
+      // manual push, "Sync Semua" and auto-sync all recover identically.
       lastResult.value = result
       if (!result.ok) {
         lastError.value = result.error?.message ?? result.message ?? 'Sync push failed'

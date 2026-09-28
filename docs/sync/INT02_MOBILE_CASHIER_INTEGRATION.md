@@ -221,25 +221,44 @@ On `403`:
 
 1. the outbox is **not** cleared and the push is **not** treated as successful;
 2. the in-flight envelope is **kept** and annotated with
-   `rejectionCode` / `rejectionAt` / `rejectionFingerprint`;
+   `rejectionCode` / `rejectionAt` / `rejectionFingerprint`, and the result
+   reports `acceptance: 'rejected'` / `reconciliationRequired: false`;
 3. the affected rows only have `attempt_count` incremented (data preserved);
 4. the result carries `roleMismatch`, `requiresContextRefresh` and
-   `deviceBlocked` so the store can react;
-5. `syncPushStore` refreshes `role` + `sync_capabilities` when online and
-   re-verifies before the next attempt.
+   `deviceBlocked` so the caller can react;
+5. a **single shared `onAuthorizationRejected` hook** refreshes `role` +
+   `sync_capabilities` online, so manual push, "Sync Semua" (orchestrator) and
+   auto-sync recover identically — a refresh failure is swallowed.
 
-Repeated retries of the _same_ envelope are prevented by the fingerprint:
-`pushMode | source | role | contractVersion` plus the outbox
-`id:updatedAt:operation` list. While the fingerprint is unchanged the push
-short-circuits with `SYNC_ENVELOPE_REJECTED_PENDING_CONTEXT_CHANGE` and performs
-**no HTTP request**.
+**Authorization authority.** A freshly verified `role`/`sync_capabilities`
+snapshot always outranks a caller-supplied `options.context`. A stale context
+captured before the online verification can never downgrade the effective
+policy.
 
-Once a condition changes (role/capabilities refreshed, or the outbox changed),
-the rejected envelope is discarded and rebuilt from the durable outbox. This is
-safe because a `403` preflight is all-or-nothing — the rejected envelope was
-never applied server-side, so nothing acknowledged can be lost. The new envelope
-is persisted **before** the HTTP request, so a crash between discard and send
+**Re-plan safety uses the envelope's build-time conditions.** Every envelope
+stores a `conditionFingerprint` (`pushMode | source | role | contractVersion`
+plus the outbox `id:updatedAt:operation` list). After a rejection the server is
+only short-circuited (`SYNC_ENVELOPE_REJECTED_PENDING_CONTEXT_CHANGE`, no HTTP)
+when the _current_ conditions are byte-identical to the conditions the envelope
+was **planned** under. A role/capability change since the build — for example
+`member` → `cashier` while an envelope containing product + transaction changes
+is in flight — or an outbox change means a fresh plan would differ, so the
+rejected envelope is discarded and rebuilt from the durable outbox. This is safe
+because a `403` preflight is all-or-nothing: the rejected envelope was never
+applied server-side, so nothing acknowledged can be lost. The new envelope is
+persisted **before** the HTTP request, so a crash between discard and send
 simply re-plans on the next run.
+
+**Uncertain acceptance is reconciled, never deleted.** A transport error, a
+malformed `2xx` or a `5xx` leaves the server outcome unknown. The envelope is
+**kept**, the result reports `acceptance: 'unknown'` with
+`reconciliationRequired: true`, and the retry reuses the **same `request_id`**
+so the server deduplicates it (`duplicate: true`); the local outbox is only then
+cleared. `LOCAL_SYNC_CLEANUP_FAILED` (server accepted, local cleanup failed)
+likewise keeps the envelope and reports `acceptance: 'accepted'` +
+`reconciliationRequired: true`. A retained envelope surfaces in Sync Status as
+`SYNC_UI_RECOVERY_REQUIRED` with the "Coba Ulang Push" recovery action, so the
+outcome is never silent.
 
 Preserved error semantics (unchanged): `409 SYNC_CONFLICT`,
 `409 SYNC_RETRYABLE_CONFLICT`, `409 SYNC_DATA_CONFLICT`,
@@ -309,7 +328,7 @@ Backward compatibility:
 | `src/stores/syncPushStore.js`                     | passes capability context; pre-push re-verification; wires the capability verifier into its fallback push service; post-403 context refresh.                                                                                                                                                    |
 | `src/stores/syncStatusStore.js`                   | exposes `restrictedCount`.                                                                                                                                                                                                                          |
 | `src/services/cloud/authService.js`               | `fetchMobileContext(token, { deviceIdentifier })`.                                                                                                                                                                                                  |
-| `src/__tests__/sync-cashier-capabilities.spec.js` | **new** — 54 regression tests (incl. fail-closed context, revoked membership, cashier onboarding UI, restricted product dependency).                                                                                                                                                                                                                      |
+| `src/__tests__/sync-cashier-capabilities.spec.js` | **new** — 61 regression tests (incl. fail-closed context, revoked membership, cashier onboarding UI, restricted product dependency, 403 role-change recovery).                                                                                                                                                                                                                      |
 | `docs/sync/INT02_MOBILE_CASHIER_INTEGRATION.md`   | **new** — this document.                                                                                                                                                                                                                            |
 
 No database schema migration was required: the cloud context and the in-flight
@@ -323,7 +342,7 @@ additional fields.
 ```
 npx vitest run
   Test Files  46 passed | 2 skipped (48)
-  Tests      1243 passed | 3 skipped (1246)
+  Tests      1250 passed | 3 skipped (1253)
 
 npm run build
   ✓ built in ~1s   (155 modules; chunk-size warning is informational)
@@ -358,7 +377,15 @@ npm run build
     mismatch rejection;
 21. restricted product dependency: a server-known product lets the sale through
     while the product mutation is never sent, an unknown product stays
-    dependency-blocked.
+    dependency-blocked;
+22. the freshly verified snapshot overrides a stale caller context;
+23. a 403 permission change refreshes role/capabilities on all three push paths
+    (manual push, Sync Semua and auto-sync);
+24. member → cashier recovery when an in-flight envelope still contains product
+    + transaction changes (reconcile, then re-plan safely);
+25. uncertain-acceptance reconciliation (same `request_id` retry) and
+    `LOCAL_SYNC_CLEANUP_FAILED` envelope preservation — no envelope is deleted
+    while its server acceptance is unknown.
 
 `oxlint` reports no new findings; the three remaining `no-unused-vars` items in
 `syncPushService.js` and the unused re-export imports in `sync/index.js` are

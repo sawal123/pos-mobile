@@ -279,6 +279,7 @@ async function createPushHarness({
   context = ownerContext(),
   transportImpl = null,
   adapter = null,
+  onAuthorizationRejected = null,
 } = {}) {
   const pinia = createPinia()
   setActivePinia(pinia)
@@ -312,6 +313,7 @@ async function createPushHarness({
     registry,
     tokenFetcher: async () => 'test-token',
     transport,
+    onAuthorizationRejected,
   })
 
   return {
@@ -1866,7 +1868,7 @@ function contextEnvelope(businesses) {
 }
 
 /** Push service wired with a real cloud store verifier (no live backend). */
-async function createVerifyingHarness({ transportImpl = null } = {}) {
+async function createVerifyingHarness({ transportImpl = null, onAuthorizationRejected = null } = {}) {
   const pinia = createPinia()
   setActivePinia(pinia)
   const adapter = createMemoryAdapter()
@@ -1900,6 +1902,7 @@ async function createVerifyingHarness({ transportImpl = null } = {}) {
     tokenFetcher: async () => 'test-token',
     transport,
     capabilityVerifier: () => cloudStore.ensureVerifiedContext(),
+    onAuthorizationRejected,
   })
 
   return {
@@ -2440,5 +2443,313 @@ describe('INT-02 — restricted product dependency', () => {
     const pending = await harness.queueService.listPending({ limit: 100 })
     const pendingTypes = pending.map((item) => item.entityType).sort()
     expect(pendingTypes).toEqual([SYNC_ENTITY_TYPES.PRODUCT, SYNC_ENTITY_TYPES.TRANSACTION])
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// Final role-change recovery — helpers
+// ════════════════════════════════════════════════════════════════════════════
+
+function forbiddenResponse() {
+  return {
+    ok: false,
+    status: 403,
+    data: {
+      message: 'Sync operation is not allowed for this role.',
+      code: 'SYNC_OPERATION_NOT_ALLOWED',
+      violations: [{ entity: 'products', operation: 'upsert', reason: 'cashier_entity_not_allowed' }],
+    },
+    error: null,
+  }
+}
+
+function networkErrorResponse() {
+  return {
+    ok: false,
+    status: 0,
+    data: null,
+    error: { code: 'NETWORK_ERROR', message: 'Connection lost' },
+  }
+}
+
+function successResponse(args) {
+  return {
+    ok: true,
+    status: 200,
+    data: { data: { request_id: args.body.request_id, duplicate: false } },
+    error: null,
+  }
+}
+
+async function enqueueCustomer(queueService) {
+  return queueService.enqueueUpsert(SYNC_ENTITY_TYPES.CUSTOMER, 'cust-1', {
+    id: 'cust-1',
+    name: 'Budi',
+    phone: '0812',
+    email: null,
+  })
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Finding 2 — the freshly verified snapshot is authoritative
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('INT-02 — verified snapshot overrides a stale context', () => {
+  beforeEach(() => {
+    _resetTokenStore()
+    vi.clearAllMocks()
+  })
+
+  it('never lets a stale options.context outrank the freshly verified snapshot', async () => {
+    const harness = await createVerifyingHarness()
+    // Persisted cache still claims a full member membership...
+    harness.cloudStore.$patch({
+      user: { id: 1, name: 'Anggota', email: 'member@example.com' },
+      selectedBusiness: { id: 10, name: 'Toko Kopi' },
+      selectedOutlet: { id: 101, name: 'Outlet Pusat' },
+      cloudAccess: true,
+      deviceIdentifier: DEVICE_IDENTIFIER,
+      registeredDeviceId: 55,
+      role: 'member',
+      syncCapabilities: makeCapabilities(SYNC_PUSH_MODE_FULL),
+      capabilityState: 'unverified',
+    })
+    await bindKnownProduct(harness.registry, harness.adapter, 'known-product')
+    await enqueueCashierMixedOutbox(harness.queueService)
+    await saveToken('old-token')
+
+    // ...but the online refresh reveals a cashier membership.
+    apiRequest.mockResolvedValueOnce(contextEnvelope([contextBusiness()]))
+
+    // The caller passes the stale member context explicitly.
+    const staleContext = {
+      ...rolelessPushContext(),
+      role: 'member',
+      syncCapabilities: makeCapabilities(SYNC_PUSH_MODE_FULL),
+      capabilityState: 'verified',
+    }
+
+    const result = await harness.pushService.pushNow({ context: staleContext })
+
+    expect(result.policy.pushMode).toBe(SYNC_PUSH_MODE_CASHIER_SAFE)
+    expect(harness.requests[0].body.changes.products).toEqual([])
+    expect(result.restricted.map((item) => item.entityType)).toContain(
+      SYNC_ENTITY_TYPES.PRODUCT,
+    )
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// Finding 1 — every push path refreshes role/capabilities on a 403
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('INT-02 — 403 authorization refresh across push paths', () => {
+  beforeEach(() => {
+    _resetTokenStore()
+    vi.clearAllMocks()
+  })
+
+  it('refreshes authorization on the manual push path', async () => {
+    const onRejected = vi.fn(async () => {})
+    const harness = await createVerifyingHarness({
+      transportImpl: () => forbiddenResponse(),
+      onAuthorizationRejected: onRejected,
+    })
+    patchCashierCapabilityState(harness.cloudStore, 'verified')
+    await enqueueCustomer(harness.queueService)
+
+    const result = await harness.pushService.pushNow({ context: rolelessPushContext() })
+
+    expect(result.code).toBe('SYNC_OPERATION_NOT_ALLOWED')
+    expect(result.acceptance).toBe('rejected')
+    expect(result.reconciliationRequired).toBe(false)
+    expect(onRejected).toHaveBeenCalledTimes(1)
+  })
+
+  it('refreshes authorization on the Sync Semua (orchestrator) path', async () => {
+    const onRejected = vi.fn(async () => {})
+    const harness = await createVerifyingHarness({
+      transportImpl: () => forbiddenResponse(),
+      onAuthorizationRejected: onRejected,
+    })
+    patchCashierCapabilityState(harness.cloudStore, 'verified')
+    await enqueueCustomer(harness.queueService)
+
+    const orchestrator = createSyncOrchestratorService({
+      pushService: harness.pushService,
+      pullService: { pullNow: async () => ({ ok: true, applied: 0 }) },
+      conflictService: { countOpenConflicts: async () => 0 },
+    })
+
+    const result = await orchestrator.syncAll({ context: rolelessPushContext() })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_OPERATION_NOT_ALLOWED')
+    expect(onRejected).toHaveBeenCalledTimes(1)
+  })
+
+  it('refreshes authorization on the auto-sync path', async () => {
+    const onRejected = vi.fn(async () => {})
+    const harness = await createVerifyingHarness({
+      transportImpl: () => forbiddenResponse(),
+      onAuthorizationRejected: onRejected,
+    })
+    patchCashierCapabilityState(harness.cloudStore, 'verified')
+    await enqueueCustomer(harness.queueService)
+
+    const orchestrator = createSyncOrchestratorService({
+      pushService: harness.pushService,
+      pullService: { pullNow: async () => ({ ok: true, applied: 0 }) },
+      conflictService: { countOpenConflicts: async () => 0 },
+    })
+
+    const autoSync = createSyncAutoSyncService({
+      adapter: harness.adapter,
+      healthService: {
+        checkHealth: async () => ({
+          ok: true,
+          status: 'ready',
+          code: 'SYNC_HEALTH_READY',
+          issues: [],
+        }),
+      },
+      orchestratorService: orchestrator,
+      activityLogService: { record: async () => {} },
+    })
+
+    const context = {
+      user: { id: 1 },
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: DEVICE_IDENTIFIER,
+      registeredDeviceId: 55,
+      cloudAccess: true,
+    }
+    await autoSync.setEnabled({ context, enabled: true })
+
+    const result = await autoSync.runOnce({
+      context,
+      trigger: 'online',
+      online: true,
+      isForeground: true,
+    })
+
+    expect(result.ok).toBe(false)
+    expect(onRejected).toHaveBeenCalledTimes(1)
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// Finding 3 — member -> cashier with an in-flight envelope
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('INT-02 — role downgrade with an in-flight envelope', () => {
+  it('recovers an in-flight member envelope after a downgrade to cashier', async () => {
+    let mode = 'lost'
+    const harness = await createPushHarness({
+      context: ownerContext(),
+      transportImpl: (args) => {
+        if (mode === 'lost') return networkErrorResponse()
+        if (mode === 'forbidden') return forbiddenResponse()
+        return successResponse(args)
+      },
+    })
+    await bindKnownProduct(harness.registry, harness.adapter, 'known-product')
+    await enqueueCashierMixedOutbox(harness.queueService)
+
+    // Member attempt whose response is lost: the envelope is persisted with
+    // product + transaction changes and its acceptance is unknown.
+    const lost = await harness.pushService.pushNow({ context: ownerContext() })
+    expect(lost.ok).toBe(false)
+    expect(lost.acceptance).toBe('unknown')
+    expect(lost.reconciliationRequired).toBe(true)
+
+    const memberEnvelope = await harness.adapter.loadSyncPushInflight()
+    expect(memberEnvelope).not.toBeNull()
+    expect(memberEnvelope.changes.products.length).toBeGreaterThan(0)
+    expect(memberEnvelope.conditionFingerprint).toBeTruthy()
+
+    // Downgrade to cashier. The reconciliation retry hits the server with the
+    // now-forbidden payload and is rejected; the envelope is preserved.
+    mode = 'forbidden'
+    const denied = await harness.pushService.pushNow({ context: cashierContext() })
+    expect(denied.code).toBe('SYNC_OPERATION_NOT_ALLOWED')
+    expect(denied.acceptance).toBe('rejected')
+    expect(await harness.adapter.loadSyncPushInflight()).not.toBeNull()
+
+    // The authorization changed since the envelope was built, so the next
+    // attempt re-plans a cashier-safe envelope instead of looping.
+    mode = 'ok'
+    const recovered = await harness.pushService.pushNow({ context: cashierContext() })
+    expect(recovered.ok).toBe(true)
+
+    const body = harness.requests.at(-1).body
+    expect(body.changes.products).toEqual([])
+    expect(body.changes.customers).toHaveLength(1)
+    expect(body.changes.sales).toHaveLength(1)
+
+    // Durable outbox: restricted rows are never deleted.
+    const pendingTypes = (await harness.queueService.listPending({ limit: 100 })).map(
+      (item) => item.entityType,
+    )
+    expect(pendingTypes).toContain(SYNC_ENTITY_TYPES.PRODUCT)
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// Finding 4 — reconciliation for uncertain acceptance
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('INT-02 — uncertain acceptance is reconciled, never deleted', () => {
+  it('keeps an uncertain envelope and reconciles it with the same request id', async () => {
+    let mode = 'lost'
+    const harness = await createPushHarness({
+      context: cashierContext(),
+      transportImpl: (args) => (mode === 'lost' ? networkErrorResponse() : successResponse(args)),
+    })
+    await enqueueCustomer(harness.queueService)
+
+    const first = await harness.pushService.pushNow({ context: cashierContext() })
+    expect(first.ok).toBe(false)
+    expect(first.acceptance).toBe('unknown')
+    expect(first.reconciliationRequired).toBe(true)
+
+    const inflight = await harness.adapter.loadSyncPushInflight()
+    expect(inflight).not.toBeNull()
+
+    // Reconcile: retry the SAME request_id so the server can deduplicate.
+    mode = 'ok'
+    const second = await harness.pushService.pushNow({ context: cashierContext() })
+    expect(second.ok).toBe(true)
+    expect(harness.requests).toHaveLength(2)
+    expect(harness.requests[1].body.request_id).toBe(inflight.requestId)
+    expect(await harness.adapter.loadSyncPushInflight()).toBeNull()
+    expect(await harness.queueService.countPending()).toBe(0)
+  })
+
+  it('marks a local cleanup failure as reconciliation-required and preserves the envelope', async () => {
+    const harness = await createPushHarness({ context: cashierContext() })
+    const queued = await enqueueCustomer(harness.queueService)
+
+    // Make the conditional removal fail: the server accepted, but cleanup did not.
+    const originalDelete = harness.adapter.deleteSyncQueueItemIfUnchanged
+    harness.adapter.deleteSyncQueueItemIfUnchanged = vi
+      .fn()
+      .mockRejectedValue(new Error('SQLite disk I/O error'))
+
+    try {
+      const result = await harness.pushService.pushNow({ context: cashierContext() })
+
+      expect(result.ok).toBe(false)
+      expect(result.code).toBe('LOCAL_SYNC_CLEANUP_FAILED')
+      expect(result.acceptance).toBe('accepted')
+      expect(result.reconciliationRequired).toBe(true)
+      expect(await harness.adapter.loadSyncPushInflight()).not.toBeNull()
+      expect(await harness.queueService.countPending()).toBe(1)
+    } finally {
+      harness.adapter.deleteSyncQueueItemIfUnchanged = originalDelete
+    }
+
+    expect(queued.entry.id).toBeTruthy()
   })
 })

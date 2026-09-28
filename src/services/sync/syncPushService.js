@@ -376,6 +376,7 @@ export function createSyncPushService({
   cloudStore = null,
   contextGuardService = null,
   capabilityVerifier = null,
+  onAuthorizationRejected = null,
 } = {}) {
   const activeQueueService = queueService ?? createSyncQueueService({ adapter, scheduler })
   const activeRegistry = registry ?? createSyncIdentityRegistry({ adapter, scheduler })
@@ -637,23 +638,27 @@ export function createSyncPushService({
 
       // Deny-by-default. An unrecognised role or capability contract never
       // authorises a cloud mutation, but restricted data is never deleted.
-      // Authorization context resolution order (first present wins):
-      //   1. an explicit caller context (manual push passes the fresh store
-      //      snapshot after its own verification);
-      //   2. the freshly *verified* snapshot (orchestrator and auto-sync callers
-      //      omit role/capabilities, so without this they would fall back to the
-      //      legacy owner/member contract and send restricted entities);
-      //   3. the live store, when one is wired in.
-      const policy = resolveSyncPushPolicy({
-        role: options.context?.role ?? verifiedCapability?.role ?? cloudStore?.role ?? null,
-        syncCapabilities:
-          options.context?.syncCapabilities ??
-          verifiedCapability?.syncCapabilities ??
-          cloudStore?.syncCapabilities ??
-          null,
-        capabilityState:
-          options.context?.capabilityState ?? verifiedCapability?.capabilityState ?? null,
-      })
+      // Authorization authority: a freshly *verified* snapshot always wins. A
+      // caller-supplied `options.context` is often older (it can be captured
+      // before the online verification, or omitted entirely by the orchestrator
+      // and auto-sync callers), so it must never override the verified result.
+      // Only when no verification ran (skipped / unauthenticated) do we fall
+      // back to the caller context and the live store — which keeps direct
+      // service callers and owner/member legacy flows working.
+      const policy = resolveSyncPushPolicy(
+        verifiedCapability
+          ? {
+              role: verifiedCapability.role,
+              syncCapabilities: verifiedCapability.syncCapabilities,
+              capabilityState: verifiedCapability.capabilityState,
+            }
+          : {
+              role: options.context?.role ?? cloudStore?.role ?? null,
+              syncCapabilities:
+                options.context?.syncCapabilities ?? cloudStore?.syncCapabilities ?? null,
+              capabilityState: options.context?.capabilityState ?? null,
+            },
+      )
 
       if (!isPushEnabled(policy)) {
         const remaining = await activeQueueService.countPending()
@@ -707,7 +712,16 @@ export function createSyncPushService({
           pendingItems: pendingForFingerprint,
         })
 
-        if (currentFingerprint === existingEnvelope.rejectionFingerprint) {
+        // Compare against the conditions the envelope was *planned* under (the
+        // fingerprint captured when it was built), not merely the conditions at
+        // rejection time. A role/capability change (for example member ->
+        // cashier) or an outbox change since the build means a fresh plan would
+        // differ, so re-planning is safe and a rejected envelope can never wedge
+        // the app. Only a byte-identical re-plan is short-circuited.
+        const plannedFingerprint =
+          existingEnvelope.conditionFingerprint ?? existingEnvelope.rejectionFingerprint ?? null
+
+        if (plannedFingerprint !== null && currentFingerprint === plannedFingerprint) {
           const remaining = await activeQueueService.countPending()
           return {
             ok: false,
@@ -1355,6 +1369,13 @@ export function createSyncPushService({
           deviceIdentifier: String(deviceIdentifier),
           registeredDeviceId,
           createdAt: new Date().toISOString(),
+          // The authorization + outbox conditions this plan was built under.
+          // A later rejection may only be short-circuited when the conditions
+          // are still byte-identical; otherwise it is safely re-planned.
+          conditionFingerprint: buildPushConditionFingerprint({
+            policy,
+            pendingItems: batchSnapshots,
+          }),
           queueSnapshots: batchSnapshots,
           supersededSnapshots,
           changes: accumulatedChanges,
@@ -1551,6 +1572,11 @@ export function createSyncPushService({
             code: 'LOCAL_SYNC_CLEANUP_FAILED',
             requestId,
             duplicate,
+            // The server accepted the request but local cleanup failed. The
+            // envelope is preserved, so the retry reuses the same request_id
+            // and the server deduplicates it: no acknowledged data can be lost.
+            acceptance: 'accepted',
+            reconciliationRequired: true,
             sentQueueIds,
             removedQueueIds,
             preservedQueueIds,
@@ -1869,6 +1895,26 @@ export function createSyncPushService({
           await activeQueueService.markFailedIfUnchanged(snapshot, rejectionMessage)
         }
 
+        const requiresContextRefresh =
+          isOperationNotAllowed ||
+          responseCode === 'CLOUD_SUBSCRIPTION_REQUIRED' ||
+          responseCode === 'BUSINESS_ACCESS_DENIED'
+
+        // Every push path (manual, orchestrator "Sync All" and auto-sync)
+        // shares this single hook, so a permission change refreshes role +
+        // sync_capabilities consistently no matter which path reached the 403.
+        // A refresh failure is swallowed: the rejection is already surfaced.
+        if (requiresContextRefresh && typeof onAuthorizationRejected === 'function') {
+          try {
+            await onAuthorizationRejected({
+              code: responseCode,
+              roleMismatch: isOperationNotAllowed,
+            })
+          } catch {
+            // Non-blocking.
+          }
+        }
+
         const remaining = await activeQueueService.countPending()
 
         return {
@@ -1881,10 +1927,12 @@ export function createSyncPushService({
           policy,
           violations,
           roleMismatch: isOperationNotAllowed,
-          requiresContextRefresh:
-            isOperationNotAllowed ||
-            responseCode === 'CLOUD_SUBSCRIPTION_REQUIRED' ||
-            responseCode === 'BUSINESS_ACCESS_DENIED',
+          requiresContextRefresh,
+          // A 403 is a definitive server preflight rejection: nothing was
+          // applied, so the envelope is not accepted and no reconciliation is
+          // pending. It is retained only so a changed condition can re-plan.
+          acceptance: 'rejected',
+          reconciliationRequired: false,
           deviceBlocked:
             responseCode === 'DEVICE_INACTIVE' || responseCode === 'SYNC_DEVICE_INVALID',
           sentQueueIds,
@@ -1934,11 +1982,25 @@ export function createSyncPushService({
 
       const remaining = await activeQueueService.countPending()
 
+      // INT-02 review: never delete an envelope whose acceptance is uncertain.
+      // A transport error, a malformed 2xx or a 5xx leaves the server outcome
+      // unknown; the envelope is kept and MUST be retried with the same
+      // request_id (server idempotency) — that is the reconciliation. Only a
+      // definite client-side rejection (4xx with a parsed body) is treated as
+      // "rejected" rather than "unknown".
+      const hasHttpResponse = typeof response.status === 'number' && response.status > 0
+      const acceptanceUnknown =
+        !hasHttpResponse ||
+        (response.ok === true && !isServerSuccess) ||
+        (typeof response.status === 'number' && response.status >= 500)
+
       return {
         ok: false,
         code: failureError?.code ?? 'SYNC_PUSH_FAILED',
         requestId,
         duplicate: false,
+        acceptance: acceptanceUnknown ? 'unknown' : 'rejected',
+        reconciliationRequired: acceptanceUnknown,
         sentQueueIds,
         removedQueueIds: [],
         preservedQueueIds: [],

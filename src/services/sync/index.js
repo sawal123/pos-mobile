@@ -120,6 +120,11 @@ export function initializeSyncFoundation({ pinia, adapter, scheduler }) {
     // authorization re-verification lives here and covers manual push, the
     // orchestrator and auto-sync with a single implementation.
     capabilityVerifier: pinia ? () => useCloudSessionStore(pinia).ensureVerifiedContext() : null,
+    // After a 403 caused by a permission change, refresh role +
+    // sync_capabilities through the same store for every push path.
+    onAuthorizationRejected: pinia
+      ? () => useCloudSessionStore(pinia).refreshContext().catch(() => {})
+      : null,
   })
   const pullService = createSyncPullService({
     adapter,
