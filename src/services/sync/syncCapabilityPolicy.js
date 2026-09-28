@@ -343,8 +343,9 @@ export function resolveSyncPushPolicy(context = {}) {
 
   // 2b. A caller may explicitly declare the context as unverified (a cache
   // written after INT-02 whose role/capabilities have not been re-confirmed
-  // online yet). Fail closed for mutation until the context is refreshed.
-  if (declaredState === 'unverified') {
+  // online yet) or revoked (the selected business is no longer reachable).
+  // Fail closed for mutation in both cases until the context is refreshed.
+  if (declaredState === 'unverified' || declaredState === 'revoked') {
     return {
       source: CAPABILITY_SOURCE_INVALID,
       role: null,
@@ -354,7 +355,7 @@ export function resolveSyncPushPolicy(context = {}) {
       allowedEntities: {},
       deniedEntities: [],
       failClosed: true,
-      reason: 'CAPABILITY_UNVERIFIED',
+      reason: declaredState === 'revoked' ? 'MEMBERSHIP_REVOKED' : 'CAPABILITY_UNVERIFIED',
     }
   }
 
@@ -420,12 +421,34 @@ function isProductServerKnown(serverVersions, productSyncId) {
   return serverVersions[key] !== undefined && serverVersions[key] !== null
 }
 
+/**
+ * Public identity check: is this product sync id already known to the server?
+ *
+ * Backed by the `sync_server_versions_v1` metadata written by both push and
+ * pull, so a product that exists server-side is recognised even when it also
+ * has a pending local outbox row (a cashier product mutation is always
+ * restricted, yet the existing server product may still be used by sales).
+ *
+ * @param {object} serverVersions
+ * @param {string|null|undefined} productSyncId
+ * @returns {boolean}
+ */
+export function isProductKnownOnServer(serverVersions, productSyncId) {
+  return isProductServerKnown(serverVersions, productSyncId)
+}
+
 function restriction(category, code, message) {
   return { action: OUTBOX_ACTION_RESTRICT, category, code, message }
 }
 
 function deferral(code, message, missing = []) {
-  return { action: OUTBOX_ACTION_DEFER, category: RESTRICTION_CATEGORY_DEPENDENCY, code, message, missing }
+  return {
+    action: OUTBOX_ACTION_DEFER,
+    category: RESTRICTION_CATEGORY_DEPENDENCY,
+    code,
+    message,
+    missing,
+  }
 }
 
 function allow() {

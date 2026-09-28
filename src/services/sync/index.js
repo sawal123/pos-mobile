@@ -28,7 +28,12 @@ import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 export { SYNC_ENTITY_TYPES, SYNC_OPERATIONS, SYNC_RESERVED_CATEGORY } from './syncConstants'
 export { createSyncChangeTracker } from './syncTracker'
 export { createSyncQueueService } from './syncQueueService'
-export { createSyncIdentityRegistry, buildProductSyncSku, isUuid, generateUuid } from './syncIdentityRegistry'
+export {
+  createSyncIdentityRegistry,
+  buildProductSyncSku,
+  isUuid,
+  generateUuid,
+} from './syncIdentityRegistry'
 export { createContractMapper, mapOutboxEntries } from './contractMapper'
 export { pushSyncRequest } from './syncPushTransport'
 export { createSyncPushService } from './syncPushService'
@@ -111,6 +116,10 @@ export function initializeSyncFoundation({ pinia, adapter, scheduler }) {
     queueService,
     registry,
     contextGuardService,
+    // INT-02: every push path funnels through the push service, so the
+    // authorization re-verification lives here and covers manual push, the
+    // orchestrator and auto-sync with a single implementation.
+    capabilityVerifier: pinia ? () => useCloudSessionStore(pinia).ensureVerifiedContext() : null,
   })
   const pullService = createSyncPullService({
     adapter,

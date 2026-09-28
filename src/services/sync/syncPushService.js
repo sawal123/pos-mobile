@@ -11,6 +11,7 @@ import {
   SYNC_PUSH_MODE_CASHIER_SAFE,
   classifyOutboxEntryForPolicy,
   evaluateCashierDependency,
+  isProductKnownOnServer,
   isPushEnabled,
   resolveSyncPushPolicy,
 } from './syncCapabilityPolicy'
@@ -155,9 +156,10 @@ async function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegist
     for (const snap of queueSnapshots) {
       if (snap.entityType !== SYNC_ENTITY_TYPES.TRANSACTION) continue
       const trxId = snap.payload?.id ?? snap.entityId
-      const snapSyncId = activeRegistry && typeof activeRegistry.peekSyncId === 'function'
-        ? activeRegistry.peekSyncId(SYNC_ENTITY_TYPES.TRANSACTION, trxId)
-        : null
+      const snapSyncId =
+        activeRegistry && typeof activeRegistry.peekSyncId === 'function'
+          ? activeRegistry.peekSyncId(SYNC_ENTITY_TYPES.TRANSACTION, trxId)
+          : null
       if (
         (snapSyncId && snapSyncId.toLowerCase() === targetSaleSyncId.toLowerCase()) ||
         String(snap.entityId).toLowerCase() === targetSaleSyncId.toLowerCase() ||
@@ -185,9 +187,10 @@ async function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegist
     for (const snap of queueSnapshots) {
       if (snap.entityType !== SYNC_ENTITY_TYPES.PRODUCT) continue
       const prodId = snap.payload?.id ?? snap.entityId
-      const snapSyncId = activeRegistry && typeof activeRegistry.peekSyncId === 'function'
-        ? activeRegistry.peekSyncId(SYNC_ENTITY_TYPES.PRODUCT, prodId)
-        : null
+      const snapSyncId =
+        activeRegistry && typeof activeRegistry.peekSyncId === 'function'
+          ? activeRegistry.peekSyncId(SYNC_ENTITY_TYPES.PRODUCT, prodId)
+          : null
       if (
         (snapSyncId && snapSyncId.toLowerCase() === sync_id.toLowerCase()) ||
         String(snap.entityId).toLowerCase() === sync_id.toLowerCase() ||
@@ -215,9 +218,10 @@ async function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegist
     for (const snap of queueSnapshots) {
       if (snap.entityType !== SYNC_ENTITY_TYPES.CUSTOMER) continue
       const custId = snap.payload?.id ?? snap.entityId
-      const snapSyncId = activeRegistry && typeof activeRegistry.peekSyncId === 'function'
-        ? activeRegistry.peekSyncId(SYNC_ENTITY_TYPES.CUSTOMER, custId)
-        : null
+      const snapSyncId =
+        activeRegistry && typeof activeRegistry.peekSyncId === 'function'
+          ? activeRegistry.peekSyncId(SYNC_ENTITY_TYPES.CUSTOMER, custId)
+          : null
       if (
         (snapSyncId && snapSyncId.toLowerCase() === sync_id.toLowerCase()) ||
         String(snap.entityId).toLowerCase() === sync_id.toLowerCase() ||
@@ -245,9 +249,10 @@ async function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegist
     for (const snap of queueSnapshots) {
       if (snap.entityType !== SYNC_ENTITY_TYPES.CATEGORY) continue
       const catName = snap.payload?.name || snap.entityId
-      const snapSyncId = activeRegistry && typeof activeRegistry.peekSyncId === 'function'
-        ? activeRegistry.peekSyncId(SYNC_ENTITY_TYPES.CATEGORY, catName)
-        : null
+      const snapSyncId =
+        activeRegistry && typeof activeRegistry.peekSyncId === 'function'
+          ? activeRegistry.peekSyncId(SYNC_ENTITY_TYPES.CATEGORY, catName)
+          : null
       if (
         (snapSyncId && snapSyncId.toLowerCase() === sync_id.toLowerCase()) ||
         String(snap.entityId).toLowerCase() === sync_id.toLowerCase() ||
@@ -275,9 +280,10 @@ async function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegist
     for (const snap of queueSnapshots) {
       if (snap.entityType !== SYNC_ENTITY_TYPES.EXPENSE) continue
       const expId = snap.payload?.id ?? snap.entityId
-      const snapSyncId = activeRegistry && typeof activeRegistry.peekSyncId === 'function'
-        ? activeRegistry.peekSyncId(SYNC_ENTITY_TYPES.EXPENSE, expId)
-        : null
+      const snapSyncId =
+        activeRegistry && typeof activeRegistry.peekSyncId === 'function'
+          ? activeRegistry.peekSyncId(SYNC_ENTITY_TYPES.EXPENSE, expId)
+          : null
       if (
         (snapSyncId && snapSyncId.toLowerCase() === sync_id.toLowerCase()) ||
         String(snap.entityId).toLowerCase() === sync_id.toLowerCase() ||
@@ -312,9 +318,10 @@ async function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegist
     for (const snap of queueSnapshots) {
       if (snap.entityType !== targetType) continue
       const localId = snap.payload?.id ?? snap.entityId
-      const snapSyncId = activeRegistry && typeof activeRegistry.peekSyncId === 'function'
-        ? activeRegistry.peekSyncId(targetType, localId)
-        : null
+      const snapSyncId =
+        activeRegistry && typeof activeRegistry.peekSyncId === 'function'
+          ? activeRegistry.peekSyncId(targetType, localId)
+          : null
       if (
         (snapSyncId && snapSyncId.toLowerCase() === sync_id.toLowerCase()) ||
         String(snap.entityId).toLowerCase() === sync_id.toLowerCase() ||
@@ -368,6 +375,7 @@ export function createSyncPushService({
   transport = pushSyncRequest,
   cloudStore = null,
   contextGuardService = null,
+  capabilityVerifier = null,
 } = {}) {
   const activeQueueService = queueService ?? createSyncQueueService({ adapter, scheduler })
   const activeRegistry = registry ?? createSyncIdentityRegistry({ adapter, scheduler })
@@ -417,7 +425,10 @@ export function createSyncPushService({
         ok: false,
         code: 'PUSH_ALREADY_IN_PROGRESS',
         message: 'A sync push operation is already in progress.',
-        error: { code: 'PUSH_ALREADY_IN_PROGRESS', message: 'A sync push operation is already in progress.' },
+        error: {
+          code: 'PUSH_ALREADY_IN_PROGRESS',
+          message: 'A sync push operation is already in progress.',
+        },
         remaining: await activeQueueService.countPending(),
         sentQueueIds: [],
         removedQueueIds: [],
@@ -443,10 +454,15 @@ export function createSyncPushService({
 
       const hasValidUser = user !== null && user !== undefined
       const hasToken = typeof token === 'string' && token.trim().length > 0
-      const hasBusiness = selectedBusiness !== null && selectedBusiness !== undefined && selectedBusiness.id !== undefined
+      const hasBusiness =
+        selectedBusiness !== null &&
+        selectedBusiness !== undefined &&
+        selectedBusiness.id !== undefined
       const hasCloudAccess = cloudAccess === true
-      const hasOutlet = selectedOutlet !== null && selectedOutlet !== undefined && selectedOutlet.id !== undefined
-      const hasDeviceIdentifier = typeof deviceIdentifier === 'string' && deviceIdentifier.trim().length > 0
+      const hasOutlet =
+        selectedOutlet !== null && selectedOutlet !== undefined && selectedOutlet.id !== undefined
+      const hasDeviceIdentifier =
+        typeof deviceIdentifier === 'string' && deviceIdentifier.trim().length > 0
       const hasRegisteredDeviceId = registeredDeviceId !== null && registeredDeviceId !== undefined
 
       if (
@@ -462,10 +478,12 @@ export function createSyncPushService({
         return {
           ok: false,
           code: 'PRECONDITION_FAILED',
-          message: 'Cloud authentication, business, outlet, and registered device are required for sync push.',
+          message:
+            'Cloud authentication, business, outlet, and registered device are required for sync push.',
           error: {
             code: 'PRECONDITION_FAILED',
-            message: 'Cloud authentication, business, outlet, and registered device are required for sync push.',
+            message:
+              'Cloud authentication, business, outlet, and registered device are required for sync push.',
           },
           remaining,
           sentQueueIds: [],
@@ -511,9 +529,10 @@ export function createSyncPushService({
 
       // ── 2. Business binding validation (anti-cross-tenant leakage) ───────────
       const currentBusinessId = Number(selectedBusiness.id)
-      const existingBinding = adapter && typeof adapter.loadSyncPushBinding === 'function'
-        ? await adapter.loadSyncPushBinding()
-        : null
+      const existingBinding =
+        adapter && typeof adapter.loadSyncPushBinding === 'function'
+          ? await adapter.loadSyncPushBinding()
+          : null
 
       if (existingBinding && existingBinding.businessId !== currentBusinessId) {
         const remaining = await activeQueueService.countPending()
@@ -535,11 +554,15 @@ export function createSyncPushService({
       }
 
       // ── 2.5. Bootstrap context validation (always enforced if staged/completed) ──
-      const bootstrapState = adapter && typeof adapter.loadSyncBootstrapState === 'function'
-        ? await adapter.loadSyncBootstrapState()
-        : null
+      const bootstrapState =
+        adapter && typeof adapter.loadSyncBootstrapState === 'function'
+          ? await adapter.loadSyncBootstrapState()
+          : null
 
-      if (bootstrapState && (bootstrapState.status === 'staged' || bootstrapState.status === 'completed')) {
+      if (
+        bootstrapState &&
+        (bootstrapState.status === 'staged' || bootstrapState.status === 'completed')
+      ) {
         const isMatch = isBootstrapContextMatch(bootstrapState, {
           businessId: currentBusinessId,
           outletId: selectedOutlet.id,
@@ -565,13 +588,71 @@ export function createSyncPushService({
 
       // ── 3. Check for in-flight envelope (idempotent retry) ────────────────────
       // ── 2.6. INT-02 capability policy ───────────────────────────────────────
+      // Every push path (manual, orchestrator and auto-sync) must operate on a
+      // *verified* authorization context. A cached legacy/unverified contract is
+      // re-confirmed online first; when that fails the push is postponed and
+      // every local row is preserved. Free/local-only sessions are skipped by
+      // the verifier — they cannot push anyway.
+      let verifiedCapability = null
+
+      if (typeof capabilityVerifier === 'function') {
+        let verification = null
+        try {
+          verification = await capabilityVerifier()
+        } catch {
+          verification = { ok: false, code: 'CONTEXT_VERIFY_FAILED' }
+        }
+
+        if (verification && verification.ok === true && verification.skipped !== true) {
+          verifiedCapability = {
+            role: verification.role ?? null,
+            syncCapabilities: verification.syncCapabilities ?? null,
+            capabilityState: verification.capabilityState ?? null,
+          }
+        }
+
+        if (verification && verification.ok === false && verification.skipped !== true) {
+          const remaining = await activeQueueService.countPending()
+          return {
+            ok: false,
+            code: 'SYNC_CAPABILITIES_UNVERIFIED',
+            message:
+              'Izin sinkronisasi belum dapat diverifikasi secara online. Data lokal tetap aman dan menunggu koneksi.',
+            authorizationCode: verification.code ?? 'CONTEXT_REFRESH_FAILED',
+            remaining,
+            sentQueueIds: [],
+            removedQueueIds: [],
+            preservedQueueIds: [],
+            blocked: [],
+            restricted: [],
+            deferred: [],
+            warnings: [],
+            error: {
+              code: 'SYNC_CAPABILITIES_UNVERIFIED',
+              message: 'Izin sinkronisasi belum dapat diverifikasi secara online.',
+            },
+          }
+        }
+      }
+
       // Deny-by-default. An unrecognised role or capability contract never
       // authorises a cloud mutation, but restricted data is never deleted.
+      // Authorization context resolution order (first present wins):
+      //   1. an explicit caller context (manual push passes the fresh store
+      //      snapshot after its own verification);
+      //   2. the freshly *verified* snapshot (orchestrator and auto-sync callers
+      //      omit role/capabilities, so without this they would fall back to the
+      //      legacy owner/member contract and send restricted entities);
+      //   3. the live store, when one is wired in.
       const policy = resolveSyncPushPolicy({
-        role: options.context?.role ?? cloudStore?.role ?? null,
+        role: options.context?.role ?? verifiedCapability?.role ?? cloudStore?.role ?? null,
         syncCapabilities:
-          options.context?.syncCapabilities ?? cloudStore?.syncCapabilities ?? null,
-        capabilityState: options.context?.capabilityState ?? null,
+          options.context?.syncCapabilities ??
+          verifiedCapability?.syncCapabilities ??
+          cloudStore?.syncCapabilities ??
+          null,
+        capabilityState:
+          options.context?.capabilityState ?? verifiedCapability?.capabilityState ?? null,
       })
 
       if (!isPushEnabled(policy)) {
@@ -597,9 +678,10 @@ export function createSyncPushService({
         }
       }
 
-      const existingEnvelope = adapter && typeof adapter.loadSyncPushInflight === 'function'
-        ? await adapter.loadSyncPushInflight()
-        : null
+      const existingEnvelope =
+        adapter && typeof adapter.loadSyncPushInflight === 'function'
+          ? await adapter.loadSyncPushInflight()
+          : null
 
       let requestId
       let envelope
@@ -737,7 +819,10 @@ export function createSyncPushService({
 
         // When envelope exists but push binding is missing, validate that bootstrap state exists
         if (!existingBinding) {
-          if (!bootstrapState || (bootstrapState.status !== 'staged' && bootstrapState.status !== 'completed')) {
+          if (
+            !bootstrapState ||
+            (bootstrapState.status !== 'staged' && bootstrapState.status !== 'completed')
+          ) {
             const remaining = await activeQueueService.countPending()
             return {
               ok: false,
@@ -930,7 +1015,11 @@ export function createSyncPushService({
           // snapshot travels and the push-success cleanup clears both ids.
           const rowKey = `${entry.entityType} ${entry.entityId} ${entry.operation}`
           const latestForRow = orderedCandidates
-            .filter((c) => `${c.entityType} ${c.entityId} ${c.operation}` === rowKey && !openConflictQueueIds.has(c.id))
+            .filter(
+              (c) =>
+                `${c.entityType} ${c.entityId} ${c.operation}` === rowKey &&
+                !openConflictQueueIds.has(c.id),
+            )
             .at(-1)
           if (latestForRow && latestForRow.id !== entry.id) {
             const latestSnapshot = {
@@ -959,7 +1048,11 @@ export function createSyncPushService({
             }
           } else if (entry.entityType === SYNC_ENTITY_TYPES.TRANSACTION) {
             const custId = entry.payload?.customerId ?? entry.payload?.customer_id
-            if (custId && pendingCustKeys.has(String(custId)) && !selectedCustKeys.has(String(custId))) {
+            if (
+              custId &&
+              pendingCustKeys.has(String(custId)) &&
+              !selectedCustKeys.has(String(custId))
+            ) {
               // Parent Customer is pending in queue but not selected in this batch -> defer
               if (isCashierSafe) {
                 deferred.push({
@@ -976,17 +1069,45 @@ export function createSyncPushService({
               continue
             }
 
+            // INT-02: a pending *product* row must not block a sale by itself.
+            // For a cashier, product mutations are always restricted and
+            // therefore permanently pending, yet an item whose product already
+            // exists on the server is explicitly allowed by INT-01. Only a
+            // product that is NOT known on the server makes the sale
+            // dependency-blocked. Product mutations are never sent.
             const trxItems = Array.isArray(entry.payload?.items) ? entry.payload.items : []
-            let hasUnselectedPendingProduct = false
+            const blockingProductIds = []
+
             for (const it of trxItems) {
               const pId = it.id ?? it.productId ?? it.product_id
-              if (pId && pendingProdKeys.has(String(pId)) && !selectedProdKeys.has(String(pId))) {
-                hasUnselectedPendingProduct = true
-                break
+              if (!pId) continue
+
+              const productKey = String(pId)
+              const pendingInQueue = pendingProdKeys.has(productKey) && !selectedProdKeys.has(productKey)
+
+              if (!pendingInQueue) continue
+
+              if (isCashierSafe) {
+                // Canonical identity check against the server.
+                let knownOnServer = false
+                try {
+                  const productSyncId = await activeRegistry.peekSyncId(
+                    SYNC_ENTITY_TYPES.PRODUCT,
+                    productKey,
+                  )
+                  knownOnServer = isProductKnownOnServer(serverVersions, productSyncId)
+                } catch {
+                  knownOnServer = false
+                }
+
+                if (knownOnServer) continue
               }
+
+              blockingProductIds.push(productKey)
             }
-            if (hasUnselectedPendingProduct) {
-              // Parent Product is pending in queue but not selected in this batch -> defer
+
+            if (blockingProductIds.length > 0) {
+              // Parent Product is pending in queue and not available on the server -> defer
               if (isCashierSafe) {
                 deferred.push({
                   queueId: entry.id,
@@ -996,7 +1117,7 @@ export function createSyncPushService({
                   code: 'SALE_PRODUCT_NOT_AVAILABLE_ON_SERVER',
                   category: 'dependency_blocked',
                   message: 'Transaksi menunggu karena produk terkait belum tersedia di server.',
-                  missing: [],
+                  missing: blockingProductIds,
                 })
               }
               continue
@@ -1181,7 +1302,10 @@ export function createSyncPushService({
 
         // ── 4.5. Verify Bootstrap State when no existing push binding
         if (!existingBinding) {
-          if (!bootstrapState || (bootstrapState.status !== 'staged' && bootstrapState.status !== 'completed')) {
+          if (
+            !bootstrapState ||
+            (bootstrapState.status !== 'staged' && bootstrapState.status !== 'completed')
+          ) {
             const remaining = await activeQueueService.countPending()
             return {
               ok: false,
@@ -1314,10 +1438,14 @@ export function createSyncPushService({
         // duplicate row can never be sent on the next push. New server
         // versions learned from this push are persisted so the next push
         // carries fresh base_sync_version values.
-        for (const snapshot of [...(envelope.supersededSnapshots ?? []), ...envelope.queueSnapshots]) {
-          const casResult = snapshot?.id && (envelope.supersededSnapshots ?? []).some((s) => s.id === snapshot.id)
-            ? await activeQueueService.remove(snapshot.id)
-            : await activeQueueService.removeIfUnchanged(snapshot)
+        for (const snapshot of [
+          ...(envelope.supersededSnapshots ?? []),
+          ...envelope.queueSnapshots,
+        ]) {
+          const casResult =
+            snapshot?.id && (envelope.supersededSnapshots ?? []).some((s) => s.id === snapshot.id)
+              ? await activeQueueService.remove(snapshot.id)
+              : await activeQueueService.removeIfUnchanged(snapshot)
           if (casResult.ok) {
             if (casResult.removed ?? true) {
               removedQueueIds.push(snapshot.id)
@@ -1340,7 +1468,12 @@ export function createSyncPushService({
         // Learn fresh server versions for every travelled row: the push just
         // created version 1 for new rows, so a follow-up mutation of the same
         // entity must carry base_sync_version 1 instead of replaying null.
-        if (!hasStorageError && adapter && typeof adapter.loadSyncServerVersions === 'function' && typeof adapter.saveSyncServerVersions === 'function') {
+        if (
+          !hasStorageError &&
+          adapter &&
+          typeof adapter.loadSyncServerVersions === 'function' &&
+          typeof adapter.saveSyncServerVersions === 'function'
+        ) {
           try {
             const existingVersions = (await adapter.loadSyncServerVersions()) || {}
             const nextVersions = { ...existingVersions }
@@ -1356,15 +1489,23 @@ export function createSyncPushService({
               if (!syncId) continue
               const lower = `${syncId}`.toLowerCase()
               const serverKey =
-                snapshot.entityType === 'category' ? `categories:${lower}`
-                : snapshot.entityType === 'product' ? `products:${lower}`
-                : snapshot.entityType === 'customer' ? `customers:${lower}`
-                : snapshot.entityType === 'expense' ? `expenses:${lower}`
-                : snapshot.entityType === 'shift' ? `shifts:${lower}`
-                : snapshot.entityType === 'transaction' ? `sales:${lower}`
-                : snapshot.entityType === 'cash_entry' ? `cash_ledger:${lower}`
-                : snapshot.entityType === 'stock_movement' ? `stock_movements:${lower}`
-                : null
+                snapshot.entityType === 'category'
+                  ? `categories:${lower}`
+                  : snapshot.entityType === 'product'
+                    ? `products:${lower}`
+                    : snapshot.entityType === 'customer'
+                      ? `customers:${lower}`
+                      : snapshot.entityType === 'expense'
+                        ? `expenses:${lower}`
+                        : snapshot.entityType === 'shift'
+                          ? `shifts:${lower}`
+                          : snapshot.entityType === 'transaction'
+                            ? `sales:${lower}`
+                            : snapshot.entityType === 'cash_entry'
+                              ? `cash_ledger:${lower}`
+                              : snapshot.entityType === 'stock_movement'
+                                ? `stock_movements:${lower}`
+                                : null
               if (serverKey && nextVersions[serverKey] === undefined) {
                 nextVersions[serverKey] = { syncVersion: 1, syncSequence: 0 }
               }
@@ -1372,12 +1513,17 @@ export function createSyncPushService({
               // transaction row: learn their versions too so a follow-up
               // transaction mutation carries fresh item base versions.
               if (snapshot.entityType === 'transaction') {
-                const payloadItems = Array.isArray(snapshot.payload?.items) ? snapshot.payload.items : []
+                const payloadItems = Array.isArray(snapshot.payload?.items)
+                  ? snapshot.payload.items
+                  : []
                 for (let i = 0; i < payloadItems.length; i++) {
                   const item = payloadItems[i]
                   const prodLocalId = item?.id ?? item?.productId ?? item?.product_id ?? item?.name
                   try {
-                    const itemSyncId = await activeRegistry.peekSyncId('sale_item', `${snapshot.entityId}:${i}:${prodLocalId}`)
+                    const itemSyncId = await activeRegistry.peekSyncId(
+                      'sale_item',
+                      `${snapshot.entityId}:${i}:${prodLocalId}`,
+                    )
                     if (itemSyncId) {
                       const itemKey = `sale_items:${`${itemSyncId}`.toLowerCase()}`
                       if (nextVersions[itemKey] === undefined) {
@@ -1583,10 +1729,7 @@ export function createSyncPushService({
           conflicts: mergedConflicts,
         }
 
-        if (
-          adapter &&
-          typeof adapter.persistSyncConflictsAndClearInflightAtomic === 'function'
-        ) {
+        if (adapter && typeof adapter.persistSyncConflictsAndClearInflightAtomic === 'function') {
           try {
             const atomicResult = await adapter.persistSyncConflictsAndClearInflightAtomic({
               expectedRequestId: envelope.requestId,
@@ -1601,7 +1744,8 @@ export function createSyncPushService({
                 message: atomicResult?.message || 'Failed to persist durable sync conflict state.',
                 error: {
                   code: atomicResult?.code || 'SYNC_CONFLICT_PERSIST_FAILED',
-                  message: atomicResult?.message || 'Failed to persist durable sync conflict state.',
+                  message:
+                    atomicResult?.message || 'Failed to persist durable sync conflict state.',
                 },
                 remaining,
                 sentQueueIds,
@@ -1691,14 +1835,18 @@ export function createSyncPushService({
 
         const rejectionMessage = isOperationNotAllowed
           ? 'Server menolak sebagian operasi untuk peran ini. Data lokal tetap aman dan akan dikirim ulang setelah izin diperbarui.'
-          : response.data?.message ??
+          : (response.data?.message ??
             response.error?.message ??
-            'Akses sinkronisasi ditolak oleh server.'
+            'Akses sinkronisasi ditolak oleh server.')
 
         // Persist an idempotent rejection marker so the identical envelope is
         // never resent. A 403 preflight writes nothing server-side, so keeping
         // the envelope is safe and re-planning can never lose acknowledged data.
-        if (isOperationNotAllowed && adapter && typeof adapter.saveSyncPushInflight === 'function') {
+        if (
+          isOperationNotAllowed &&
+          adapter &&
+          typeof adapter.saveSyncPushInflight === 'function'
+        ) {
           try {
             const pendingForFingerprint = await activeQueueService.listPending({
               limit: Math.max(await activeQueueService.countPending(), 1),
@@ -1727,7 +1875,7 @@ export function createSyncPushService({
           ok: false,
           code: isOperationNotAllowed
             ? 'SYNC_OPERATION_NOT_ALLOWED'
-            : responseCode ?? 'SYNC_FORBIDDEN',
+            : (responseCode ?? 'SYNC_FORBIDDEN'),
           message: rejectionMessage,
           requestId,
           policy,
@@ -1750,7 +1898,7 @@ export function createSyncPushService({
           error: {
             code: isOperationNotAllowed
               ? 'SYNC_OPERATION_NOT_ALLOWED'
-              : responseCode ?? 'SYNC_FORBIDDEN',
+              : (responseCode ?? 'SYNC_FORBIDDEN'),
             message: rejectionMessage,
             status: 403,
             data: response.data ?? response.error?.data ?? null,

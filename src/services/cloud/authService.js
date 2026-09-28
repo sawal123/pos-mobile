@@ -41,7 +41,12 @@ export async function cloudLogin(email, password) {
   if (!token) {
     return {
       ok: false,
-      error: { status: 0, code: 'MISSING_TOKEN', message: 'Token not returned by server', data: null },
+      error: {
+        status: 0,
+        code: 'MISSING_TOKEN',
+        message: 'Token not returned by server',
+        data: null,
+      },
     }
   }
 
@@ -85,8 +90,16 @@ export async function fetchMobileContext(token, { deviceIdentifier = null } = {}
 
   const result = await apiRequest(`/api/mobile/context${query}`, { token })
 
-  if (!result.ok) {
-    return { ok: false, error: result.error }
+  if (!result || result.ok !== true) {
+    return {
+      ok: false,
+      error: result?.error ?? {
+        status: 0,
+        code: 'CONTEXT_REQUEST_FAILED',
+        message: 'Mobile context request failed',
+        data: null,
+      },
+    }
   }
 
   return { ok: true, data: result.data?.data ?? result.data }

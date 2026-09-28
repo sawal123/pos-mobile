@@ -67,10 +67,7 @@ export function isValidInflightEnvelope(value) {
     return false
   }
 
-  if (
-    typeof value.deviceIdentifier !== 'string' ||
-    value.deviceIdentifier.trim().length === 0
-  ) {
+  if (typeof value.deviceIdentifier !== 'string' || value.deviceIdentifier.trim().length === 0) {
     return false
   }
 
@@ -284,11 +281,7 @@ export function createSyncStatusService({
       }
     }
 
-    if (
-      typeof pendingCount !== 'number' ||
-      !Number.isInteger(pendingCount) ||
-      pendingCount < 0
-    ) {
+    if (typeof pendingCount !== 'number' || !Number.isInteger(pendingCount) || pendingCount < 0) {
       return {
         ok: false,
         code: 'SYNC_STATUS_READ_FAILED',

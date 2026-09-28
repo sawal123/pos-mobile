@@ -24,6 +24,7 @@ export const useSyncPushStore = defineStore('syncPush', () => {
         adapter,
         scheduler,
         cloudStore,
+        capabilityVerifier: () => cloudStore.ensureVerifiedContext(),
       })
     }
   }
@@ -45,13 +46,17 @@ export const useSyncPushStore = defineStore('syncPush', () => {
           adapter: _adapter,
           scheduler: _scheduler,
           cloudStore,
+          capabilityVerifier: () => cloudStore.ensureVerifiedContext(),
         })
       } else {
         return {
           ok: false,
           code: 'SERVICE_NOT_INITIALIZED',
           message: 'Sync push service is not initialized.',
-          error: { code: 'SERVICE_NOT_INITIALIZED', message: 'Sync push service is not initialized.' },
+          error: {
+            code: 'SERVICE_NOT_INITIALIZED',
+            message: 'Sync push service is not initialized.',
+          },
         }
       }
     }
@@ -63,17 +68,18 @@ export const useSyncPushStore = defineStore('syncPush', () => {
       // INT-02: a cached capability contract is never permanent authorization.
       // Re-confirm it online before an authorization-sensitive push. A failed
       // re-confirmation fails closed for mutation without deleting any data.
-      if (
-        options.refreshContext !== false &&
-        cloudStore.isAuthenticated &&
-        cloudStore.capabilityState === 'unverified'
-      ) {
-        const refreshed = await cloudStore.refreshContext()
-        if (!refreshed.ok) {
+      // `ensureVerifiedContext` covers the `legacy`, `unverified` and `revoked`
+      // states and short-circuits once the contract is verified.
+      if (options.refreshContext !== false && cloudStore.isAuthenticated) {
+        const verification = await cloudStore.ensureVerifiedContext()
+
+        if (!verification.ok && verification.skipped !== true) {
           const unverified = {
             ok: false,
             code: 'SYNC_CAPABILITIES_UNVERIFIED',
+            authorizationCode: verification.code ?? 'CONTEXT_REFRESH_FAILED',
             message:
+              verification.message ??
               'Izin sinkronisasi belum dapat diverifikasi ulang. Data lokal tetap aman dan menunggu koneksi.',
             error: {
               code: 'SYNC_CAPABILITIES_UNVERIFIED',

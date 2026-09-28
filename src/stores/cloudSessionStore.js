@@ -1,8 +1,14 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 
-import { cloudLogin, fetchMobileContext, registerDevice, cloudLogout } from '@/services/cloud/authService'
+import {
+  cloudLogin,
+  fetchMobileContext,
+  registerDevice,
+  cloudLogout,
+} from '@/services/cloud/authService'
 import { saveToken, getToken, removeToken } from '@/services/cloud/tokenRepository'
+import { resolveDeviceIdentifier } from '@/services/cloud/deviceIdentifier'
 import {
   ROLE_CASHIER,
   isPushEnabled,
@@ -163,6 +169,44 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     _adapter = adapter
   }
 
+  /**
+   * INT-02: guarantee a stable device identifier is available before talking to
+   * the backend, so `GET /api/mobile/context` can carry `device_identifier`.
+   *
+   * @returns {Promise<string|null>}
+   */
+  async function ensureDeviceIdentifier() {
+    if (typeof deviceIdentifier.value === 'string' && deviceIdentifier.value.trim().length > 0) {
+      return deviceIdentifier.value.trim()
+    }
+
+    if (!_adapter) {
+      return null
+    }
+
+    try {
+      const stored = await _adapter.loadDeviceIdentifier()
+      if (typeof stored === 'string' && stored.trim().length > 0) {
+        deviceIdentifier.value = stored.trim()
+        return deviceIdentifier.value
+      }
+    } catch {
+      // fall through to creation
+    }
+
+    try {
+      const created = await resolveDeviceIdentifier(_adapter)
+      if (typeof created === 'string' && created.trim().length > 0) {
+        deviceIdentifier.value = created.trim()
+        return deviceIdentifier.value
+      }
+    } catch {
+      // non-blocking: context is simply requested without an identifier
+    }
+
+    return null
+  }
+
   function clearSession() {
     user.value = null
     selectedBusiness.value = null
@@ -260,8 +304,12 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
           }
         : null
 
-      // Fetch context immediately after login
-      const contextResult = await fetchMobileContext(loginResult.token)
+      // INT-02: the context request must carry this device's stable identifier
+      // so the backend can return the owner-pre-registered `device_context`.
+      const contextDeviceId = await ensureDeviceIdentifier()
+      const contextResult = await fetchMobileContext(loginResult.token, {
+        deviceIdentifier: contextDeviceId,
+      })
 
       if (!contextResult.ok) {
         // Rollback token – context is required
@@ -338,9 +386,16 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     selectedOutlet.value = { id: match.id, name: match.name }
     registeredDeviceId.value = null
 
-    // INT-02: a cashier cannot register a device; the owner pre-registers it in
-    // the Dashboard, so we only *resolve* the existing device_context here.
-    const deviceResolution = resolveDeviceFromContext()
+    // INT-02: a cashier cannot register a device. The owner pre-registers it in
+    // the Dashboard, so right after an outlet is chosen we refresh the context
+    // with this device's stable identifier and resolve the existing
+    // `device_context` from the authoritative response. Owner/member keep the
+    // existing registration flow, which runs after this selection.
+    let deviceResolution = resolveDeviceFromContext()
+
+    if (pushPolicy.value.role === ROLE_CASHIER) {
+      deviceResolution = await resolveCashierDevice()
+    }
 
     await persistCloudContext()
 
@@ -503,8 +558,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
             // INT-02: a restored cache is never an authorization. It is either
             // a genuine pre-INT-02 legacy cache, or an unverified snapshot that
             // must be re-confirmed online before any cloud mutation.
-            capabilityState.value =
-              role.value || syncCapabilities.value ? 'unverified' : 'legacy'
+            capabilityState.value = role.value || syncCapabilities.value ? 'unverified' : 'legacy'
             capabilitiesVerifiedAt.value = null
           }
         } catch {
@@ -537,15 +591,13 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
    * @returns {{ok: boolean, code?: string, message?: string, deviceId?: number|string}}
    */
   function resolveDeviceFromContext() {
-    const business =
-      businesses.value.find((b) => b.id === selectedBusiness.value?.id) ?? null
+    const business = businesses.value.find((b) => b.id === selectedBusiness.value?.id) ?? null
     const context = business?.device_context ?? deviceContext.value ?? null
 
     const notRegistered = {
       ok: false,
       code: 'DEVICE_NOT_REGISTERED',
-      message:
-        'Perangkat ini belum terdaftar. Minta pemilik mendaftarkannya melalui Dashboard.',
+      message: 'Perangkat ini belum terdaftar. Minta pemilik mendaftarkannya melalui Dashboard.',
     }
 
     if (!context || typeof context !== 'object' || Array.isArray(context)) {
@@ -573,6 +625,27 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         ok: false,
         code: 'DEVICE_INACTIVE',
         message: 'Perangkat ini dinonaktifkan. Hubungi pemilik untuk mengaktifkannya kembali.',
+      }
+    }
+
+    // The resolved device must be *this* installation. A `device_context` that
+    // belongs to a different stable identifier must never be bound to this
+    // session, even when the outlet and status match.
+    const rawIdentifier =
+      context.identifier ?? context.device_identifier ?? context.deviceIdentifier ?? null
+    if (
+      typeof rawIdentifier === 'string' &&
+      rawIdentifier.trim() !== '' &&
+      typeof deviceIdentifier.value === 'string' &&
+      deviceIdentifier.value.trim() !== '' &&
+      rawIdentifier.trim() !== deviceIdentifier.value.trim()
+    ) {
+      registeredDeviceId.value = null
+      return {
+        ok: false,
+        code: 'DEVICE_IDENTIFIER_MISMATCH',
+        message:
+          'Perangkat terdaftar tidak cocok dengan perangkat ini. Minta pemilik mendaftarkan ulang melalui Dashboard.',
       }
     }
 
@@ -627,7 +700,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     loading.value = true
 
     try {
-      const deviceIdUsed = deviceIdentifierOverride ?? deviceIdentifier.value
+      const deviceIdUsed = deviceIdentifierOverride ?? (await ensureDeviceIdentifier())
       const result = await fetchMobileContext(token, { deviceIdentifier: deviceIdUsed })
 
       if (!result.ok) {
@@ -649,8 +722,36 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       hasResolvedBusinessContext.value = true
       hasResolvedZeroBusiness.value = businesses.value.length === 0
 
-      const match =
-        businesses.value.find((b) => b.id === selectedBusiness.value?.id) ?? null
+      const previousBusinessId = selectedBusiness.value?.id ?? null
+      const match = businesses.value.find((b) => b.id === previousBusinessId) ?? null
+
+      if (previousBusinessId !== null && !match) {
+        // INT-02: the refresh succeeded but the previously selected business is
+        // gone (membership revoked or removed). Cancel the cloud context for
+        // that business, revoke the device binding from the active session, and
+        // NEVER mark the old permissions as verified. Every piece of local POS
+        // data is preserved.
+        selectedBusiness.value = null
+        selectedOutlet.value = null
+        registeredDeviceId.value = null
+        role.value = null
+        syncCapabilities.value = null
+        deviceContext.value = null
+        cloudAccess.value = false
+        capabilityState.value = 'revoked'
+        capabilitiesVerifiedAt.value = null
+        error.value =
+          'Akses cloud untuk bisnis ini sudah tidak tersedia. Pilih bisnis lain atau hubungi pemilik.'
+
+        await persistCloudContext()
+
+        return {
+          ok: false,
+          code: 'BUSINESS_ACCESS_REVOKED',
+          message: error.value,
+          businesses: businesses.value,
+        }
+      }
 
       let deviceResolution = null
 
@@ -692,6 +793,100 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     }
   }
 
+  /**
+   * INT-02: resolve the owner-pre-registered device for a cashier.
+   *
+   * Refreshes `GET /api/mobile/context` with this device's stable identifier and
+   * resolves `device_context` from the authoritative response. NEVER calls
+   * `POST /api/mobile/devices` and never creates a device secret.
+   *
+   * @returns {Promise<{ok: boolean, code?: string, message?: string, deviceId?: number|string}>}
+   */
+  async function resolveCashierDevice() {
+    if (pushPolicy.value.role !== ROLE_CASHIER) {
+      return { ok: false, code: 'NOT_A_CASHIER_CONTEXT' }
+    }
+
+    const refreshed = await refreshContext()
+
+    if (!refreshed.ok) {
+      if (refreshed.code === 'BUSINESS_ACCESS_REVOKED') {
+        return { ok: false, code: refreshed.code, message: refreshed.message }
+      }
+
+      const message = refreshed.error?.message ?? 'Gagal menyegarkan konteks cloud.'
+      error.value = message
+      return { ok: false, code: refreshed.code ?? 'CONTEXT_REFRESH_FAILED', message }
+    }
+
+    const device = refreshed.device ?? resolveDeviceFromContext()
+
+    error.value = device.ok ? null : (device.message ?? 'Perangkat belum terdaftar.')
+
+    return device
+  }
+
+  /**
+   * INT-02: guarantee a *verified* capability contract before a cloud mutation.
+   *
+   * A cached contract (`legacy` / `unverified`) is never authoritative: it must
+   * be re-confirmed online first. Free/local-only sessions are skipped — they
+   * cannot push anyway. A failed re-confirmation never deletes any local data;
+   * it only postpones the cloud mutation.
+   *
+   * @param {object} [options]
+   * @param {boolean} [options.force=false]
+   * @returns {Promise<{ok: boolean, code?: string, skipped?: boolean, cached?: boolean}>}
+   */
+  async function ensureVerifiedContext({ force = false } = {}) {
+    if (!isAuthenticated.value) {
+      return { ok: false, code: 'NOT_AUTHENTICATED', skipped: true }
+    }
+
+    // The verified snapshot is returned to every caller so an authorization
+    // decision never depends on a stale caller-supplied context (the
+    // orchestrator and auto-sync callers omit role/capabilities entirely).
+    const snapshot = () => ({
+      role: role.value,
+      syncCapabilities: syncCapabilities.value,
+      capabilityState: capabilityState.value,
+    })
+
+    if (!force && capabilityState.value === 'verified') {
+      return { ok: true, cached: true, ...snapshot() }
+    }
+
+    // `unknown` means no capability information was ever obtained for this
+    // session (for example a context that never returned a role). There is
+    // nothing stale to distrust, so the legacy owner/member contract applies.
+    // Only a genuinely cached (`legacy`), unre-verified (`unverified`) or
+    // revoked contract forces an online re-confirmation.
+    if (!force && capabilityState.value === 'unknown') {
+      return { ok: true, cached: true, unknown: true, ...snapshot() }
+    }
+
+    const refreshed = await refreshContext()
+
+    if (!refreshed.ok) {
+      return {
+        ok: false,
+        code: refreshed.code ?? 'CONTEXT_REFRESH_FAILED',
+        message:
+          refreshed.message ??
+          refreshed.error?.message ??
+          'Izin sinkronisasi belum dapat diverifikasi.',
+      }
+    }
+
+    return {
+      ok: true,
+      cached: false,
+      role: refreshed.role ?? role.value,
+      syncCapabilities: refreshed.syncCapabilities ?? syncCapabilities.value,
+      capabilityState: refreshed.capabilityState ?? capabilityState.value,
+    }
+  }
+
   return {
     // state
     user,
@@ -728,6 +923,8 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     hydrateFromStorage,
     refreshContext,
     resolveDeviceFromContext,
+    resolveCashierDevice,
+    ensureVerifiedContext,
     persistCloudContext,
     clearSession,
   }

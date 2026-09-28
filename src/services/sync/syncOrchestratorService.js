@@ -170,11 +170,7 @@ export function createSyncOrchestratorService({
       const deferredEntries = Array.isArray(pushResult.deferred) ? pushResult.deferred : []
       const hasUnsendablePending = restrictedEntries.length > 0 || deferredEntries.length > 0
 
-      if (
-        remaining > 0 &&
-        Array.isArray(pushResult.blocked) &&
-        pushResult.blocked.length > 0
-      ) {
+      if (remaining > 0 && Array.isArray(pushResult.blocked) && pushResult.blocked.length > 0) {
         return {
           ok: false,
           code: 'SYNC_PUSH_BLOCKED_PENDING',
@@ -226,10 +222,7 @@ export function createSyncOrchestratorService({
           ok: false,
           code: pullResult?.code ?? 'SYNC_PULL_FAILED',
           stage: 'pull',
-          message:
-            pullResult?.message ??
-            pullResult?.error?.message ??
-            'Gagal menarik data cloud.',
+          message: pullResult?.message ?? pullResult?.error?.message ?? 'Gagal menarik data cloud.',
           push: pushResult,
           pull: pullResult ?? null,
           error: pullResult?.error ?? null,
