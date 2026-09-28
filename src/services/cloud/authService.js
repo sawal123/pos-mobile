@@ -41,7 +41,12 @@ export async function cloudLogin(email, password) {
   if (!token) {
     return {
       ok: false,
-      error: { status: 0, code: 'MISSING_TOKEN', message: 'Token not returned by server', data: null },
+      error: {
+        status: 0,
+        code: 'MISSING_TOKEN',
+        message: 'Token not returned by server',
+        data: null,
+      },
     }
   }
 
@@ -65,16 +70,36 @@ export async function fetchMe(token) {
 }
 
 /**
- * Fetch mobile context (business / outlet / subscription data).
+ * Fetch mobile context (business / outlet / subscription / role /
+ * sync_capabilities data).
+ *
+ * INT-02: passing the stable `device_identifier` lets the backend return a
+ * `device_context` for owner-pre-registered cashier devices. The request is
+ * otherwise unchanged, so a legacy backend simply ignores the query parameter.
  *
  * @param {string} token
+ * @param {object} [options]
+ * @param {string|null} [options.deviceIdentifier]
  * @returns {Promise<{ok: boolean, data?: object, error?: object}>}
  */
-export async function fetchMobileContext(token) {
-  const result = await apiRequest('/api/mobile/context', { token })
+export async function fetchMobileContext(token, { deviceIdentifier = null } = {}) {
+  const query =
+    typeof deviceIdentifier === 'string' && deviceIdentifier.trim().length > 0
+      ? `?device_identifier=${encodeURIComponent(deviceIdentifier.trim())}`
+      : ''
 
-  if (!result.ok) {
-    return { ok: false, error: result.error }
+  const result = await apiRequest(`/api/mobile/context${query}`, { token })
+
+  if (!result || result.ok !== true) {
+    return {
+      ok: false,
+      error: result?.error ?? {
+        status: 0,
+        code: 'CONTEXT_REQUEST_FAILED',
+        message: 'Mobile context request failed',
+        data: null,
+      },
+    }
   }
 
   return { ok: true, data: result.data?.data ?? result.data }

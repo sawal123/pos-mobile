@@ -36,7 +36,10 @@ export async function setupBoundCloudState(scenario, overrides = {}) {
   await saveToken('mock-bearer-token-123')
   await scenario.adapter.saveDeviceIdentifier(ctx.deviceIdentifier)
   await scenario.adapter.saveCloudContext(ctx)
-  scenario.cloudStore.$patch(ctx)
+  // INT-02: a real client refreshes role/capabilities (after login and during
+  // session recovery) before any authorization-sensitive push. The harness has
+  // no live backend, so it represents that completed refresh directly.
+  scenario.cloudStore.$patch({ ...ctx, capabilityState: 'verified' })
 
   scenario.businessStore.setBusiness({
     name: 'Kedai Kopi Utama',
@@ -275,6 +278,10 @@ export async function restartAppScenario(prevScenario, options = {}) {
   const cloudStore = useCloudSessionStore(pinia)
   cloudStore.deviceIdentifier = devId
   await cloudStore.hydrateFromStorage(durableAdapter)
+  // INT-02: represent the capability re-verification that the real app performs
+  // during session recovery. Without it the restored cache is `legacy` and every
+  // authorization-sensitive push correctly fails closed.
+  cloudStore.$patch({ capabilityState: 'verified' })
 
   const businessStore = useBusinessStore(pinia)
 

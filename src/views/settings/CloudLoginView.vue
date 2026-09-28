@@ -898,7 +898,7 @@ async function advanceAfterBusiness(biz) {
   if (actOutlets.length === 1) {
     const outletResult = await cloudStore.selectOutlet(actOutlets[0].id)
     if (!outletResult.ok) return
-    await tryRegisterDevice()
+    await finishDeviceStep(outletResult)
     return
   }
 
@@ -908,10 +908,33 @@ async function advanceAfterBusiness(biz) {
 async function handleSelectOutlet(outletId) {
   const result = await cloudStore.selectOutlet(outletId)
   if (!result.ok) return
-  await tryRegisterDevice()
+  await finishDeviceStep(result)
 }
 
-async function tryRegisterDevice() {
+/**
+ * INT-02: an `owner`/`member` registers the device through the existing flow.
+ * A `cashier` must never call `POST /api/mobile/devices` — the owner
+ * pre-registers the device in the Dashboard, so the cashier only *resolves*
+ * the `device_context` returned for this device's stable identifier (already
+ * refreshed by `selectOutlet`).
+ *
+ * @param {object|null} outletResult Result of `cloudStore.selectOutlet(...)`.
+ */
+async function finishDeviceStep(outletResult = null) {
+  if (cloudStore.pushPolicy.role === 'cashier') {
+    const device = outletResult?.device ?? (await cloudStore.resolveCashierDevice())
+
+    if (!device.ok) {
+      // Guidance is surfaced through cloudStore.error; stay on the outlet step
+      // so the cashier can retry once the owner registers the device.
+      step.value = 'select-outlet'
+      return
+    }
+
+    step.value = 'done'
+    return
+  }
+
   await cloudStore.doRegisterDevice({ platform: getPlatform() })
   step.value = 'done'
 }

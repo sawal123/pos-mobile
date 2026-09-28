@@ -6,6 +6,7 @@ export const useSyncStatusStore = defineStore('syncStatus', () => {
   const refreshing = ref(false)
   const pendingCount = ref(0)
   const openConflictCount = ref(0)
+  const restrictedCount = ref(0)
   const hasInflight = ref(false)
   const lastCheckedAt = ref(null)
   const lastError = ref(null)
@@ -38,6 +39,7 @@ export const useSyncStatusStore = defineStore('syncStatus', () => {
       if (res.ok) {
         pendingCount.value = res.pendingCount
         openConflictCount.value = res.openConflictCount
+        restrictedCount.value = Number.isInteger(res.restrictedCount) ? res.restrictedCount : 0
         hasInflight.value = res.hasInflight
         lastCheckedAt.value = res.checkedAt
         lastError.value = null
@@ -84,6 +86,7 @@ export const useSyncStatusStore = defineStore('syncStatus', () => {
     refreshing,
     pendingCount,
     openConflictCount,
+    restrictedCount,
     hasInflight,
     lastCheckedAt,
     lastError,

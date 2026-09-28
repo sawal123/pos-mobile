@@ -23,11 +23,17 @@ import {
 } from './syncAutoSyncService'
 import { createSyncStatusService } from './syncStatusService'
 import { createSyncContextGuardService } from './syncContextGuardService'
+import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 
 export { SYNC_ENTITY_TYPES, SYNC_OPERATIONS, SYNC_RESERVED_CATEGORY } from './syncConstants'
 export { createSyncChangeTracker } from './syncTracker'
 export { createSyncQueueService } from './syncQueueService'
-export { createSyncIdentityRegistry, buildProductSyncSku, isUuid, generateUuid } from './syncIdentityRegistry'
+export {
+  createSyncIdentityRegistry,
+  buildProductSyncSku,
+  isUuid,
+  generateUuid,
+} from './syncIdentityRegistry'
 export { createContractMapper, mapOutboxEntries } from './contractMapper'
 export { pushSyncRequest } from './syncPushTransport'
 export { createSyncPushService } from './syncPushService'
@@ -60,12 +66,34 @@ export {
   SYNC_UI_CONFLICT,
   SYNC_UI_RECOVERY_REQUIRED,
   SYNC_UI_OFFLINE,
+  SYNC_UI_RESTRICTED,
   SYNC_UI_PENDING,
   SYNC_UI_UNKNOWN,
   SYNC_UI_CLEAR,
   SYNC_UI_STATUSES,
 } from './syncStatusService'
 export { createSyncContextGuardService } from './syncContextGuardService'
+export {
+  SYNC_PUSH_MODE_FULL,
+  SYNC_PUSH_MODE_CASHIER_SAFE,
+  SYNC_PUSH_MODE_NONE,
+  CASHIER_SYNC_CONTRACT_VERSION,
+  ROLE_OWNER,
+  ROLE_MEMBER,
+  ROLE_CASHIER,
+  OUTBOX_ACTION_ALLOW,
+  OUTBOX_ACTION_RESTRICT,
+  OUTBOX_ACTION_DEFER,
+  RESTRICTION_CATEGORY_ROLE,
+  RESTRICTION_CATEGORY_DEPENDENCY,
+  normalizeSyncCapabilities,
+  resolveSyncPushPolicy,
+  isPushEnabled,
+  classifyOutboxEntryForPolicy,
+  evaluateCashierDependency,
+  describeRestrictionCategory,
+  localEntityToServerEntity,
+} from './syncCapabilityPolicy'
 
 /**
  * Initializes the P9-P23 sync foundation after SQLite persistence is ready.
@@ -88,6 +116,15 @@ export function initializeSyncFoundation({ pinia, adapter, scheduler }) {
     queueService,
     registry,
     contextGuardService,
+    // INT-02: every push path funnels through the push service, so the
+    // authorization re-verification lives here and covers manual push, the
+    // orchestrator and auto-sync with a single implementation.
+    capabilityVerifier: pinia ? () => useCloudSessionStore(pinia).ensureVerifiedContext() : null,
+    // After a 403 caused by a permission change, refresh role +
+    // sync_capabilities through the same store for every push path.
+    onAuthorizationRejected: pinia
+      ? () => useCloudSessionStore(pinia).refreshContext().catch(() => {})
+      : null,
   })
   const pullService = createSyncPullService({
     adapter,
@@ -142,6 +179,7 @@ export function initializeSyncFoundation({ pinia, adapter, scheduler }) {
     queueService,
     conflictService,
     adapter,
+    capabilityProvider: pinia ? () => useCloudSessionStore(pinia).pushPolicy : null,
   })
 
   return {
