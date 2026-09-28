@@ -65,13 +65,25 @@ export async function fetchMe(token) {
 }
 
 /**
- * Fetch mobile context (business / outlet / subscription data).
+ * Fetch mobile context (business / outlet / subscription / role /
+ * sync_capabilities data).
+ *
+ * INT-02: passing the stable `device_identifier` lets the backend return a
+ * `device_context` for owner-pre-registered cashier devices. The request is
+ * otherwise unchanged, so a legacy backend simply ignores the query parameter.
  *
  * @param {string} token
+ * @param {object} [options]
+ * @param {string|null} [options.deviceIdentifier]
  * @returns {Promise<{ok: boolean, data?: object, error?: object}>}
  */
-export async function fetchMobileContext(token) {
-  const result = await apiRequest('/api/mobile/context', { token })
+export async function fetchMobileContext(token, { deviceIdentifier = null } = {}) {
+  const query =
+    typeof deviceIdentifier === 'string' && deviceIdentifier.trim().length > 0
+      ? `?device_identifier=${encodeURIComponent(deviceIdentifier.trim())}`
+      : ''
+
+  const result = await apiRequest(`/api/mobile/context${query}`, { token })
 
   if (!result.ok) {
     return { ok: false, error: result.error }

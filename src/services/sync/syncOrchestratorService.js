@@ -162,6 +162,14 @@ export function createSyncOrchestratorService({
       const remaining = Number(pushResult.remaining)
 
       // ── Step 5: Check Blocked Pending ────────────────────────────────────
+      // INT-02: role-restricted and dependency-deferred rows are durable and
+      // visible, but they must not stop a pull: pulling can supply a missing
+      // dependency (for example an owner-created product) and keeps the local
+      // dataset converging without ever dropping data.
+      const restrictedEntries = Array.isArray(pushResult.restricted) ? pushResult.restricted : []
+      const deferredEntries = Array.isArray(pushResult.deferred) ? pushResult.deferred : []
+      const hasUnsendablePending = restrictedEntries.length > 0 || deferredEntries.length > 0
+
       if (
         remaining > 0 &&
         Array.isArray(pushResult.blocked) &&
@@ -175,12 +183,14 @@ export function createSyncOrchestratorService({
           push: pushResult,
           pull: null,
           blocked: pushResult.blocked,
+          restricted: restrictedEntries,
+          deferred: deferredEntries,
           remaining,
         }
       }
 
       // ── Step 6: Check Normal More Pending ────────────────────────────────
-      if (remaining > 0) {
+      if (remaining > 0 && !hasUnsendablePending) {
         return {
           ok: false,
           code: 'SYNC_MORE_PUSH_PENDING',
@@ -229,9 +239,14 @@ export function createSyncOrchestratorService({
       // ── Step 8: Both Push & Pull Completed Successfully ───────────────────
       return {
         ok: true,
-        code: 'SYNC_ALL_COMPLETED',
+        code: hasUnsendablePending ? 'SYNC_ALL_COMPLETED_WITH_RESTRICTED' : 'SYNC_ALL_COMPLETED',
         stage: 'completed',
-        message: 'Sinkronisasi selesai.',
+        message: hasUnsendablePending
+          ? 'Sinkronisasi selesai, namun sebagian data belum dapat dikirim karena izin peran atau dependensi.'
+          : 'Sinkronisasi selesai.',
+        restricted: restrictedEntries,
+        deferred: deferredEntries,
+        partial: hasUnsendablePending,
         push: pushResult,
         pull: pullResult,
       }

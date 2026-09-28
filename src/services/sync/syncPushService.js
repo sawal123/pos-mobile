@@ -4,6 +4,16 @@ import { createSyncIdentityRegistry, generateUuid } from './syncIdentityRegistry
 import { mapOutboxEntries } from './contractMapper'
 import { SYNC_ENTITY_TYPES, SYNC_RESERVED_CATEGORY } from './syncConstants'
 import { getToken } from '@/services/cloud/tokenRepository'
+import {
+  OUTBOX_ACTION_ALLOW,
+  OUTBOX_ACTION_DEFER,
+  OUTBOX_ACTION_RESTRICT,
+  SYNC_PUSH_MODE_CASHIER_SAFE,
+  classifyOutboxEntryForPolicy,
+  evaluateCashierDependency,
+  isPushEnabled,
+  resolveSyncPushPolicy,
+} from './syncCapabilityPolicy'
 
 const MAX_ENTITY_PER_TYPE = 100
 
@@ -17,6 +27,82 @@ function isBootstrapContextMatch(
     String(bootstrapState.deviceIdentifier) === String(deviceIdentifier) &&
     String(bootstrapState.registeredDeviceId) === String(registeredDeviceId)
   )
+}
+
+/**
+ * INT-02: deterministic fingerprint of the conditions that produced a push
+ * envelope. Used to decide whether a previously rejected envelope may be safely
+ * re-planned (role/capabilities changed, or the local outbox changed).
+ *
+ * @param {object} params
+ * @param {object|null} params.policy Resolved capability policy.
+ * @param {Array<object>} params.pendingItems Current outbox snapshot.
+ * @returns {string}
+ */
+function buildPushConditionFingerprint({ policy, pendingItems }) {
+  const policyKey = policy
+    ? `${policy.pushMode}|${policy.source}|${policy.role ?? ''}|${policy.contractVersion ?? ''}`
+    : 'none'
+  const outboxKey = (Array.isArray(pendingItems) ? pendingItems : [])
+    .map((item) => `${item.id}:${item.updatedAt}:${item.operation}`)
+    .join(',')
+  return `${policyKey}#${outboxKey}`
+}
+
+/**
+ * INT-02: resolve cashier dependency chains from the already-mapped changes so
+ * canonical sync ids (never human reference strings) drive the gate.
+ *
+ * @param {object} params
+ * @returns {object} `allow` / `defer` descriptor.
+ */
+function evaluateMappedDependency({
+  entry,
+  policy,
+  mappedChanges,
+  serverVersions,
+  isSaleInEnvelope,
+  lookupTransaction,
+}) {
+  const changes = mappedChanges || {}
+
+  if (entry.entityType === SYNC_ENTITY_TYPES.TRANSACTION) {
+    const saleItems = Array.isArray(changes.sale_items) ? changes.sale_items : []
+    return evaluateCashierDependency({
+      entry,
+      policy,
+      serverVersions,
+      itemProductSyncIds: saleItems.map((item) => item.product_sync_id ?? null),
+    })
+  }
+
+  if (entry.entityType === SYNC_ENTITY_TYPES.CASH_ENTRY) {
+    const cashRows = Array.isArray(changes.cash_ledger) ? changes.cash_ledger : []
+    const transactionId = entry.payload?.transactionId ?? null
+    return evaluateCashierDependency({
+      entry,
+      policy,
+      serverVersions,
+      linkedSaleSyncId: cashRows[0]?.sale_sync_id ?? null,
+      saleInEnvelope: Boolean(transactionId) && isSaleInEnvelope(transactionId),
+      linkedTransaction: lookupTransaction(transactionId),
+    })
+  }
+
+  if (entry.entityType === SYNC_ENTITY_TYPES.STOCK_MOVEMENT) {
+    const movementRows = Array.isArray(changes.stock_movements) ? changes.stock_movements : []
+    const transactionId = entry.payload?.transactionId ?? null
+    return evaluateCashierDependency({
+      entry,
+      policy,
+      serverVersions,
+      linkedSaleSyncId: movementRows[0]?.sale_sync_id ?? null,
+      linkedProductSyncId: movementRows[0]?.product_sync_id ?? null,
+      saleInEnvelope: Boolean(transactionId) && isSaleInEnvelope(transactionId),
+    })
+  }
+
+  return { action: OUTBOX_ACTION_ALLOW }
 }
 
 async function mapServerConflictToQueueSnapshot(conflict, envelope, activeRegistry) {
@@ -478,6 +564,39 @@ export function createSyncPushService({
       }
 
       // ── 3. Check for in-flight envelope (idempotent retry) ────────────────────
+      // ── 2.6. INT-02 capability policy ───────────────────────────────────────
+      // Deny-by-default. An unrecognised role or capability contract never
+      // authorises a cloud mutation, but restricted data is never deleted.
+      const policy = resolveSyncPushPolicy({
+        role: options.context?.role ?? cloudStore?.role ?? null,
+        syncCapabilities:
+          options.context?.syncCapabilities ?? cloudStore?.syncCapabilities ?? null,
+        capabilityState: options.context?.capabilityState ?? null,
+      })
+
+      if (!isPushEnabled(policy)) {
+        const remaining = await activeQueueService.countPending()
+        return {
+          ok: false,
+          code: 'SYNC_PUSH_ROLE_DENIED',
+          message:
+            'Peran pengguna ini tidak diizinkan mengirim perubahan ke cloud. Data lokal tetap aman.',
+          policy,
+          remaining,
+          sentQueueIds: [],
+          removedQueueIds: [],
+          preservedQueueIds: [],
+          blocked: [],
+          restricted: [],
+          deferred: [],
+          warnings: [],
+          error: {
+            code: 'SYNC_PUSH_ROLE_DENIED',
+            message: 'Peran pengguna ini tidak diizinkan mengirim perubahan ke cloud.',
+          },
+        }
+      }
+
       const existingEnvelope = adapter && typeof adapter.loadSyncPushInflight === 'function'
         ? await adapter.loadSyncPushInflight()
         : null
@@ -487,8 +606,57 @@ export function createSyncPushService({
       let isReusedEnvelope = false
       const blocked = []
       const warnings = []
+      const restricted = []
+      const deferred = []
 
-      if (existingEnvelope) {
+      // INT-02: a rejected envelope must never be resent unchanged. The backend
+      // preflight (403 SYNC_OPERATION_NOT_ALLOWED) is all-or-nothing, so a
+      // rejected envelope was never applied server-side and re-planning cannot
+      // lose acknowledged data. Re-plan only when a condition changed.
+      let useExistingEnvelope = Boolean(existingEnvelope)
+
+      if (existingEnvelope && existingEnvelope.rejectionCode) {
+        const remainingForFingerprint = await activeQueueService.countPending()
+        const pendingForFingerprint = await activeQueueService.listPending({
+          limit: Math.max(remainingForFingerprint, 1),
+        })
+        const currentFingerprint = buildPushConditionFingerprint({
+          policy,
+          pendingItems: pendingForFingerprint,
+        })
+
+        if (currentFingerprint === existingEnvelope.rejectionFingerprint) {
+          const remaining = await activeQueueService.countPending()
+          return {
+            ok: false,
+            code: 'SYNC_ENVELOPE_REJECTED_PENDING_CONTEXT_CHANGE',
+            message:
+              'Pengiriman sebelumnya ditolak server. Menunggu perubahan peran/izin atau data lokal sebelum mencoba lagi.',
+            policy,
+            rejectionCode: existingEnvelope.rejectionCode,
+            remaining,
+            sentQueueIds: [],
+            removedQueueIds: [],
+            preservedQueueIds: [],
+            blocked: [],
+            restricted: [],
+            deferred: [],
+            warnings: [],
+            error: {
+              code: 'SYNC_ENVELOPE_REJECTED_PENDING_CONTEXT_CHANGE',
+              message:
+                'Pengiriman sebelumnya ditolak server. Menunggu perubahan peran/izin atau data lokal.',
+            },
+          }
+        }
+
+        if (adapter && typeof adapter.clearSyncPushInflight === 'function') {
+          await adapter.clearSyncPushInflight()
+        }
+        useExistingEnvelope = false
+      }
+
+      if (useExistingEnvelope) {
         const isBusinessMatch = Number(existingEnvelope.businessId) === currentBusinessId
         const isOutletMatch = Number(existingEnvelope.outletId) === Number(selectedOutlet.id)
         const isDeviceMatch = String(existingEnvelope.deviceIdentifier) === String(deviceIdentifier)
@@ -602,8 +770,11 @@ export function createSyncPushService({
             removedQueueIds: [],
             preservedQueueIds: [],
             blocked: [],
+            restricted: [],
+            deferred: [],
             warnings: [],
             remaining: 0,
+            policy,
             error: null,
           }
         }
@@ -619,8 +790,11 @@ export function createSyncPushService({
             removedQueueIds: [],
             preservedQueueIds: [],
             blocked: [],
+            restricted: [],
+            deferred: [],
             warnings: [],
             remaining: 0,
+            policy,
             error: null,
           }
         }
@@ -655,22 +829,60 @@ export function createSyncPushService({
         const selectedCatKeys = new Set()
         const selectedCustKeys = new Set()
         const selectedProdKeys = new Set()
+        const selectedTransactionIds = new Set()
+
+        // INT-02: canonical sale-relation lookups for the cashier dependency
+        // gate. Only explicit ids are used; reference strings are never parsed.
+        const pendingTransactionsById = new Map()
+        for (const item of pendingItems) {
+          if (item.entityType === SYNC_ENTITY_TYPES.TRANSACTION) {
+            const localId = item.payload?.id ?? item.entityId
+            if (localId !== undefined && localId !== null) {
+              pendingTransactionsById.set(String(localId), item.payload ?? null)
+            }
+          }
+        }
+
+        const isSaleInEnvelope = (transactionId) =>
+          selectedTransactionIds.has(String(transactionId))
+        const lookupTransaction = (transactionId) => {
+          if (transactionId === undefined || transactionId === null) return null
+          return pendingTransactionsById.get(String(transactionId)) ?? null
+        }
+
+        const serverVersions =
+          adapter && typeof adapter.loadSyncServerVersions === 'function'
+            ? (await adapter.loadSyncServerVersions()) || {}
+            : {}
+
+        const isCashierSafe = policy.pushMode === SYNC_PUSH_MODE_CASHIER_SAFE
 
         const phase1 = []
         const phase2 = []
         const phase3 = []
+        const phase4 = []
 
         for (const item of pendingItems) {
           if (item.entityType === SYNC_ENTITY_TYPES.CATEGORY) {
             phase1.push(item)
           } else if (item.entityType === SYNC_ENTITY_TYPES.TRANSACTION) {
             phase3.push(item)
+          } else if (
+            isCashierSafe &&
+            (item.entityType === SYNC_ENTITY_TYPES.CASH_ENTRY ||
+              item.entityType === SYNC_ENTITY_TYPES.STOCK_MOVEMENT)
+          ) {
+            // Cash and stock rows depend on their sale: evaluate them after the
+            // transactions carried by the same envelope.
+            phase4.push(item)
           } else {
             phase2.push(item)
           }
         }
 
-        const orderedCandidates = [...phase1, ...phase2, ...phase3]
+        const orderedCandidates = isCashierSafe
+          ? [...phase1, ...phase2, ...phase3, ...phase4]
+          : [...phase1, ...phase2, ...phase3]
 
         const accumulatedChanges = {
           categories: [],
@@ -691,6 +903,23 @@ export function createSyncPushService({
         for (const entry of orderedCandidates) {
           // Filter out candidates with open conflict
           if (openConflictQueueIds.has(entry.id)) {
+            continue
+          }
+
+          // INT-02: role / capability filter. Restricted entries are never
+          // sent, never acknowledged and never deleted: they stay durable and
+          // surface in Sync Status as "not allowed by role".
+          const policyDecision = classifyOutboxEntryForPolicy(entry, policy)
+          if (policyDecision.action === OUTBOX_ACTION_RESTRICT) {
+            restricted.push({
+              queueId: entry.id,
+              entityType: entry.entityType,
+              entityId: entry.entityId,
+              operation: entry.operation,
+              code: policyDecision.code,
+              category: policyDecision.category,
+              message: policyDecision.message,
+            })
             continue
           }
 
@@ -732,6 +961,18 @@ export function createSyncPushService({
             const custId = entry.payload?.customerId ?? entry.payload?.customer_id
             if (custId && pendingCustKeys.has(String(custId)) && !selectedCustKeys.has(String(custId))) {
               // Parent Customer is pending in queue but not selected in this batch -> defer
+              if (isCashierSafe) {
+                deferred.push({
+                  queueId: entry.id,
+                  entityType: entry.entityType,
+                  entityId: entry.entityId,
+                  operation: entry.operation,
+                  code: 'SALE_CUSTOMER_NOT_AVAILABLE_ON_SERVER',
+                  category: 'dependency_blocked',
+                  message: 'Transaksi menunggu karena pelanggan terkait belum tersedia di server.',
+                  missing: [String(custId)],
+                })
+              }
               continue
             }
 
@@ -746,6 +987,18 @@ export function createSyncPushService({
             }
             if (hasUnselectedPendingProduct) {
               // Parent Product is pending in queue but not selected in this batch -> defer
+              if (isCashierSafe) {
+                deferred.push({
+                  queueId: entry.id,
+                  entityType: entry.entityType,
+                  entityId: entry.entityId,
+                  operation: entry.operation,
+                  code: 'SALE_PRODUCT_NOT_AVAILABLE_ON_SERVER',
+                  category: 'dependency_blocked',
+                  message: 'Transaksi menunggu karena produk terkait belum tersedia di server.',
+                  missing: [],
+                })
+              }
               continue
             }
           }
@@ -813,6 +1066,34 @@ export function createSyncPushService({
             continue
           }
 
+          // INT-02: cashier dependency gate. Applied only in cashier_safe mode,
+          // after mapping so canonical sync ids are available. Deferred entries
+          // are preserved and retried once their dependency exists server-side.
+          if (isCashierSafe) {
+            const dependency = evaluateMappedDependency({
+              entry,
+              policy,
+              mappedChanges: mapped.changes,
+              serverVersions,
+              isSaleInEnvelope,
+              lookupTransaction,
+            })
+
+            if (dependency.action === OUTBOX_ACTION_DEFER) {
+              deferred.push({
+                queueId: entry.id,
+                entityType: entry.entityType,
+                entityId: entry.entityId,
+                operation: entry.operation,
+                code: dependency.code,
+                category: dependency.category,
+                message: dependency.message,
+                missing: dependency.missing ?? [],
+              })
+              continue
+            }
+          }
+
           if (wouldExceedLimit(accumulatedChanges, mapped.changes)) {
             // Batch limit for this entity type reached, defer candidate for next push batch
             continue
@@ -837,6 +1118,11 @@ export function createSyncPushService({
             if (entry.entityId) selectedCustKeys.add(String(entry.entityId))
           } else if (entry.entityType === SYNC_ENTITY_TYPES.PRODUCT) {
             if (entry.entityId) selectedProdKeys.add(String(entry.entityId))
+          } else if (entry.entityType === SYNC_ENTITY_TYPES.TRANSACTION) {
+            const localId = entry.payload?.id ?? entry.entityId
+            if (localId !== undefined && localId !== null) {
+              selectedTransactionIds.add(String(localId))
+            }
           }
 
           batchSnapshots.push({
@@ -869,6 +1155,8 @@ export function createSyncPushService({
               removedQueueIds: [],
               preservedQueueIds: [],
               blocked,
+              restricted,
+              deferred,
               warnings,
             }
           }
@@ -882,8 +1170,11 @@ export function createSyncPushService({
             removedQueueIds: [],
             preservedQueueIds: [],
             blocked,
+            restricted,
+            deferred,
             warnings,
             remaining,
+            policy,
             error: null,
           }
         }
@@ -1119,8 +1410,11 @@ export function createSyncPushService({
             preservedQueueIds,
             cleanupFailedQueueIds,
             blocked,
+            restricted,
+            deferred,
             warnings,
             remaining,
+            policy,
             error: {
               code: 'LOCAL_SYNC_CLEANUP_FAILED',
               message: `Server accepted the request (requestId: ${requestId}) but local queue cleanup failed for ${cleanupFailedQueueIds.length} item(s). Retry will reuse the same requestId.`,
@@ -1137,8 +1431,11 @@ export function createSyncPushService({
           preservedQueueIds,
           cleanupFailedQueueIds: [],
           blocked,
+          restricted,
+          deferred,
           warnings,
           remaining,
+          policy,
           error: null,
         }
       }
@@ -1381,6 +1678,86 @@ export function createSyncPushService({
       }
 
       // ── 8. Handle failures (network, HTTP errors, or malformed 2xx) ───────────
+      // INT-02: authorization failures are NOT data failures. Never delete the
+      // outbox, never treat the push as acknowledged, and never loop on the same
+      // envelope without a condition change.
+      if (responseStatus === 403) {
+        const isOperationNotAllowed = responseCode === 'SYNC_OPERATION_NOT_ALLOWED'
+        const violations =
+          response.data?.violations ??
+          response.data?.data?.violations ??
+          response.error?.data?.violations ??
+          []
+
+        const rejectionMessage = isOperationNotAllowed
+          ? 'Server menolak sebagian operasi untuk peran ini. Data lokal tetap aman dan akan dikirim ulang setelah izin diperbarui.'
+          : response.data?.message ??
+            response.error?.message ??
+            'Akses sinkronisasi ditolak oleh server.'
+
+        // Persist an idempotent rejection marker so the identical envelope is
+        // never resent. A 403 preflight writes nothing server-side, so keeping
+        // the envelope is safe and re-planning can never lose acknowledged data.
+        if (isOperationNotAllowed && adapter && typeof adapter.saveSyncPushInflight === 'function') {
+          try {
+            const pendingForFingerprint = await activeQueueService.listPending({
+              limit: Math.max(await activeQueueService.countPending(), 1),
+            })
+            await adapter.saveSyncPushInflight({
+              ...envelope,
+              rejectionCode: responseCode,
+              rejectionAt: new Date().toISOString(),
+              rejectionFingerprint: buildPushConditionFingerprint({
+                policy,
+                pendingItems: pendingForFingerprint,
+              }),
+            })
+          } catch {
+            // Best effort: losing the marker only risks one extra guarded retry.
+          }
+        }
+
+        for (const snapshot of envelope.queueSnapshots) {
+          await activeQueueService.markFailedIfUnchanged(snapshot, rejectionMessage)
+        }
+
+        const remaining = await activeQueueService.countPending()
+
+        return {
+          ok: false,
+          code: isOperationNotAllowed
+            ? 'SYNC_OPERATION_NOT_ALLOWED'
+            : responseCode ?? 'SYNC_FORBIDDEN',
+          message: rejectionMessage,
+          requestId,
+          policy,
+          violations,
+          roleMismatch: isOperationNotAllowed,
+          requiresContextRefresh:
+            isOperationNotAllowed ||
+            responseCode === 'CLOUD_SUBSCRIPTION_REQUIRED' ||
+            responseCode === 'BUSINESS_ACCESS_DENIED',
+          deviceBlocked:
+            responseCode === 'DEVICE_INACTIVE' || responseCode === 'SYNC_DEVICE_INVALID',
+          sentQueueIds,
+          removedQueueIds: [],
+          preservedQueueIds: [],
+          blocked,
+          restricted,
+          deferred,
+          warnings,
+          remaining,
+          error: {
+            code: isOperationNotAllowed
+              ? 'SYNC_OPERATION_NOT_ALLOWED'
+              : responseCode ?? 'SYNC_FORBIDDEN',
+            message: rejectionMessage,
+            status: 403,
+            data: response.data ?? response.error?.data ?? null,
+          },
+        }
+      }
+
       let failureError = response.error
 
       if (response.ok && !isServerSuccess) {
@@ -1418,8 +1795,11 @@ export function createSyncPushService({
         removedQueueIds: [],
         preservedQueueIds: [],
         blocked,
+        restricted,
+        deferred,
         warnings,
         remaining,
+        policy,
         error: failureError,
       }
     } finally {

@@ -59,20 +59,56 @@ export const useSyncPushStore = defineStore('syncPush', () => {
     loading.value = true
     lastError.value = null
 
-    const resolvedContext = options.context ?? {
-      user: cloudStore.user,
-      selectedBusiness: cloudStore.selectedBusiness,
-      selectedOutlet: cloudStore.selectedOutlet,
-      cloudAccess: cloudStore.cloudAccess,
-      deviceIdentifier: cloudStore.deviceIdentifier,
-      registeredDeviceId: cloudStore.registeredDeviceId,
-    }
-
     try {
+      // INT-02: a cached capability contract is never permanent authorization.
+      // Re-confirm it online before an authorization-sensitive push. A failed
+      // re-confirmation fails closed for mutation without deleting any data.
+      if (
+        options.refreshContext !== false &&
+        cloudStore.isAuthenticated &&
+        cloudStore.capabilityState === 'unverified'
+      ) {
+        const refreshed = await cloudStore.refreshContext()
+        if (!refreshed.ok) {
+          const unverified = {
+            ok: false,
+            code: 'SYNC_CAPABILITIES_UNVERIFIED',
+            message:
+              'Izin sinkronisasi belum dapat diverifikasi ulang. Data lokal tetap aman dan menunggu koneksi.',
+            error: {
+              code: 'SYNC_CAPABILITIES_UNVERIFIED',
+              message: 'Izin sinkronisasi belum dapat diverifikasi ulang.',
+            },
+          }
+          lastResult.value = unverified
+          lastError.value = unverified.message
+          return unverified
+        }
+      }
+
+      const resolvedContext = options.context ?? {
+        user: cloudStore.user,
+        selectedBusiness: cloudStore.selectedBusiness,
+        selectedOutlet: cloudStore.selectedOutlet,
+        cloudAccess: cloudStore.cloudAccess,
+        deviceIdentifier: cloudStore.deviceIdentifier,
+        registeredDeviceId: cloudStore.registeredDeviceId,
+        role: cloudStore.role,
+        syncCapabilities: cloudStore.syncCapabilities,
+        capabilityState: cloudStore.capabilityState,
+      }
+
       const result = await _pushService.pushNow({
         ...options,
         context: resolvedContext,
       })
+
+      // INT-02: a 403 means the cached role/capabilities are stale. Refresh
+      // online so the next attempt uses fresh authorization. Data is preserved.
+      if (result && result.requiresContextRefresh && cloudStore.isAuthenticated) {
+        await cloudStore.refreshContext().catch(() => {})
+      }
+
       lastResult.value = result
       if (!result.ok) {
         lastError.value = result.error?.message ?? result.message ?? 'Sync push failed'

@@ -1,8 +1,11 @@
+import { classifyOutboxEntryForPolicy } from './syncCapabilityPolicy'
+
 export const SYNC_UI_LOCAL = 'SYNC_UI_LOCAL'
 export const SYNC_UI_SYNCING = 'SYNC_UI_SYNCING'
 export const SYNC_UI_CONFLICT = 'SYNC_UI_CONFLICT'
 export const SYNC_UI_RECOVERY_REQUIRED = 'SYNC_UI_RECOVERY_REQUIRED'
 export const SYNC_UI_OFFLINE = 'SYNC_UI_OFFLINE'
+export const SYNC_UI_RESTRICTED = 'SYNC_UI_RESTRICTED'
 export const SYNC_UI_PENDING = 'SYNC_UI_PENDING'
 export const SYNC_UI_UNKNOWN = 'SYNC_UI_UNKNOWN'
 export const SYNC_UI_CLEAR = 'SYNC_UI_CLEAR'
@@ -13,6 +16,7 @@ export const SYNC_UI_STATUSES = Object.freeze([
   SYNC_UI_CONFLICT,
   SYNC_UI_RECOVERY_REQUIRED,
   SYNC_UI_OFFLINE,
+  SYNC_UI_RESTRICTED,
   SYNC_UI_PENDING,
   SYNC_UI_UNKNOWN,
   SYNC_UI_CLEAR,
@@ -146,6 +150,7 @@ export function deriveSyncUiStatus({
   online = false,
   pendingCount = 0,
   openConflictCount = 0,
+  restrictedCount = 0,
   hasInflight = false,
   readError = false,
 } = {}) {
@@ -189,6 +194,17 @@ export function deriveSyncUiStatus({
     }
   }
 
+  // INT-02: role-restricted rows are durable but can never be sent by the
+  // current role. Surface that distinctly instead of implying a clean sync.
+  if (typeof restrictedCount === 'number' && restrictedCount > 0) {
+    return {
+      status: SYNC_UI_RESTRICTED,
+      label: 'Tidak diizinkan',
+      detail: `${restrictedCount} perubahan tidak dapat dikirim untuk peran ini`,
+      restrictedCount,
+    }
+  }
+
   if (typeof pendingCount === 'number' && pendingCount > 0) {
     return {
       status: SYNC_UI_PENDING,
@@ -220,6 +236,7 @@ export function createSyncStatusService({
   queueService,
   conflictService,
   adapter,
+  capabilityProvider = null,
 } = {}) {
   /**
    * Reads current local sync metrics from database without modifying sync state.
@@ -304,11 +321,31 @@ export function createSyncStatusService({
       }
     }
 
+    // INT-02: additive restricted-row count. Only computed for a cashier-safe
+    // policy, and any reader failure degrades to 0 rather than breaking status.
+    let restrictedCount = 0
+    if (typeof capabilityProvider === 'function') {
+      try {
+        const policy = capabilityProvider()
+        if (policy && policy.pushMode === 'cashier_safe') {
+          const items = await queueService.listPending({ limit: Math.max(pendingCount, 1) })
+          for (const item of items) {
+            if (classifyOutboxEntryForPolicy(item, policy).action === 'restrict') {
+              restrictedCount += 1
+            }
+          }
+        }
+      } catch {
+        restrictedCount = 0
+      }
+    }
+
     return {
       ok: true,
       code: 'SYNC_STATUS_READ_OK',
       pendingCount,
       openConflictCount,
+      restrictedCount,
       hasInflight,
       checkedAt: new Date().toISOString(),
     }
