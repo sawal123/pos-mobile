@@ -197,6 +197,11 @@ export async function bootstrapApp({
       // untouched for manual recovery.
       try {
         const legacyRepair = await localOperations.repairLegacySaleStockMovementLinks()
+        if (legacyRepair.failedMovementIds.length > 0) {
+          console.warn(
+            `Legacy stock movement repair deferred after a queue write failure: ${legacyRepair.failedMovementIds.length}`,
+          )
+        }
         if (legacyRepair.manualRecoveryRequiredIds.length > 0) {
           console.warn(
             `Legacy stock movements require manual recovery: ${legacyRepair.manualRecoveryRequiredIds.length}`,

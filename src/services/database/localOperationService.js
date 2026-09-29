@@ -139,11 +139,16 @@ function resolveLegacySaleId(movement, transactionStore) {
  * with `missing_sale_relation`.
  *
  * Safety rules:
+ * - in-flight protection is evaluated BEFORE any store mutation: a queue
+ *   snapshot referenced by the in-flight envelope is never rewritten and the
+ *   store movement is left untouched (deferred recovery);
  * - never creates a replacement movement and never touches stock;
  * - never changes an existing movement id (in place repair only);
  * - only repairs a movement whose relation is provable by an exact id match;
- * - never modifies a queue snapshot that may already have been accepted by the
- *   server — any queue row referenced by the in-flight envelope is skipped;
+ * - the queue payload is persisted BEFORE the store is mutated, so a queue
+ *   write failure can never leave the store looking repaired;
+ * - the item scan ceiling is sized from the real queue count, and a truncated
+ *   scan never treats a missing row as "already repaired" (it defers);
  * - ambiguous movements are left untouched and reported for manual recovery.
  *
  * @param {object} params
@@ -151,7 +156,15 @@ function resolveLegacySaleId(movement, transactionStore) {
  * @param {object} [params.scheduler]
  * @param {object} params.productStore
  * @param {object} params.transactionStore
- * @returns {Promise<{repairedMovementIds: string[], repairedQueueIds: string[], skippedInflightQueueIds: string[], manualRecoveryRequiredIds: string[]}>}
+ * @returns {Promise<{
+ *   repairedMovementIds: string[],
+ *   repairedQueueIds: string[],
+ *   deferredMovementIds: string[],
+ *   deferredQueueIds: string[],
+ *   failedMovementIds: string[],
+ *   failedQueueIds: string[],
+ *   manualRecoveryRequiredIds: string[],
+ * }>}
  */
 export async function repairLegacySaleStockMovementLinks({
   adapter = null,
@@ -162,7 +175,10 @@ export async function repairLegacySaleStockMovementLinks({
   const report = {
     repairedMovementIds: [],
     repairedQueueIds: [],
-    skippedInflightQueueIds: [],
+    deferredMovementIds: [],
+    deferredQueueIds: [],
+    failedMovementIds: [],
+    failedQueueIds: [],
     manualRecoveryRequiredIds: [],
   }
 
@@ -196,10 +212,30 @@ export async function repairLegacySaleStockMovementLinks({
     if (snapshot?.id) protectedQueueIds.add(snapshot.id)
   }
 
+  // Size the scan from the real queue count so the 5.000-item ceiling can never
+  // hide a row. If the count is unavailable and the scan returns a full page, a
+  // missing row is ambiguous and must be deferred, never recorded as repaired.
+  const totalQueue =
+    typeof adapter.countSyncQueueItems === 'function' ? await adapter.countSyncQueueItems() : null
+  const hasTotal = typeof totalQueue === 'number' && Number.isFinite(totalQueue)
+  const queueLimit = hasTotal ? Math.max(totalQueue, 1) : LEGACY_QUEUE_SCAN_LIMIT
+
   const queueItems =
     typeof adapter.listSyncQueueItems === 'function'
-      ? await adapter.listSyncQueueItems({ limit: LEGACY_QUEUE_SCAN_LIMIT })
+      ? await adapter.listSyncQueueItems({ limit: queueLimit })
       : []
+
+  const queueScanTruncated =
+    typeof adapter.listSyncQueueItems === 'function' &&
+    queueItems.length >= queueLimit &&
+    (!hasTotal || queueItems.length < totalQueue)
+
+  const findQueueRow = (movementId) =>
+    queueItems.find(
+      (item) =>
+        item.entityType === SYNC_ENTITY_TYPES.STOCK_MOVEMENT &&
+        String(item.entityId) === String(movementId),
+    )
 
   for (const movement of candidates) {
     const saleId = resolveLegacySaleId(movement, transactionStore)
@@ -209,33 +245,48 @@ export async function repairLegacySaleStockMovementLinks({
       continue
     }
 
-    // In-place repair: same movement id, stock untouched.
-    movement.transactionId = saleId
-    report.repairedMovementIds.push(movement.id)
+    const queueRow = findQueueRow(movement.id)
 
-    const queueRow = queueItems.find(
-      (item) =>
-        item.entityType === SYNC_ENTITY_TYPES.STOCK_MOVEMENT &&
-        String(item.entityId) === String(movement.id),
-    )
-    if (!queueRow) continue
-
-    if (protectedQueueIds.has(queueRow.id)) {
-      // The envelope may already have reached the server: never rewrite its snapshot.
-      report.skippedInflightQueueIds.push(queueRow.id)
+    // 1. In-flight protection is checked BEFORE touching the store: a snapshot
+    //    that may already have reached the server is never rewritten, and the
+    //    movement is left untouched too (deferred recovery).
+    if (queueRow && protectedQueueIds.has(queueRow.id)) {
+      report.deferredMovementIds.push(movement.id)
+      report.deferredQueueIds.push(queueRow.id)
       continue
     }
 
-    await runSerialized(() =>
-      adapter.upsertSyncQueueItem({
-        ...queueRow,
-        payload: { ...(queueRow.payload ?? {}), transactionId: saleId },
-        attemptCount: 0,
-        lastError: null,
-        updatedAt: new Date().toISOString(),
-      }),
-    )
-    report.repairedQueueIds.push(queueRow.id)
+    // 2. A missing row is only "no queue row" when the scan was exhaustive.
+    if (!queueRow && queueScanTruncated) {
+      report.deferredMovementIds.push(movement.id)
+      continue
+    }
+
+    // 3. Persist the queue payload FIRST. On failure the store is not mutated,
+    //    so a later retry / restart can still repair it safely.
+    if (queueRow) {
+      try {
+        await runSerialized(() =>
+          adapter.upsertSyncQueueItem({
+            ...queueRow,
+            payload: { ...(queueRow.payload ?? {}), transactionId: saleId },
+            attemptCount: 0,
+            lastError: null,
+            updatedAt: new Date().toISOString(),
+          }),
+        )
+      } catch {
+        report.failedMovementIds.push(movement.id)
+        report.failedQueueIds.push(queueRow.id)
+        continue
+      }
+
+      report.repairedQueueIds.push(queueRow.id)
+    }
+
+    // 4. In-place store repair: same movement id, stock untouched.
+    movement.transactionId = saleId
+    report.repairedMovementIds.push(movement.id)
   }
 
   return report

@@ -7,10 +7,13 @@
  * by the capability policy (`CASHIER_MANUAL_STOCK_DENIED`).
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 
 import { createMemoryAdapter } from '@/services/database/memoryAdapter'
-import { createLocalOperationService } from '@/services/database/localOperationService'
+import {
+  createLocalOperationService,
+  repairLegacySaleStockMovementLinks,
+} from '@/services/database/localOperationService'
 import { createSyncIdentityRegistry, isUuid } from '@/services/sync/syncIdentityRegistry'
 import { mapOutboxEntries } from '@/services/sync/contractMapper'
 import {
@@ -385,28 +388,209 @@ describe('FIX cashier sale stock movement — legacy recovery', () => {
     await scenario.cleanup()
   })
 
-  it('E. never rewrites a queue snapshot referenced by an in-flight envelope', async () => {
-    const { scenario, runtime, legacy } = await buildLegacyState()
-    const localOperations = makeLocalOperations(scenario)
-
-    const queueBefore = await scenario.adapter.listSyncQueueItems({ limit: 5000 })
-    const legacyRow = queueBefore.find(
-      (q) => q.entityType === SYNC_ENTITY_TYPES.STOCK_MOVEMENT && q.entityId === legacy.movement.id,
-    )
-
-    // Simulate an envelope that may already have reached the server.
+  async function protectQueueRowInInflightEnvelope(scenario, queueRowId) {
     await scenario.adapter.saveSyncPushInflight({
       version: 1,
       requestId: 'req-inflight-legacy',
-      queueSnapshots: [{ id: legacyRow.id }],
+      queueSnapshots: [{ id: queueRowId }],
     })
+  }
+
+  function findLegacyQueueRow(queue, movementId) {
+    return queue.find(
+      (q) => q.entityType === SYNC_ENTITY_TYPES.STOCK_MOVEMENT && q.entityId === movementId,
+    )
+  }
+
+  it('E. defers an in-flight-protected movement without touching store or queue', async () => {
+    const { scenario, runtime, legacy } = await buildLegacyState()
+    const localOperations = makeLocalOperations(scenario)
+
+    const legacyId = legacy.movement.id
+    const stockBefore = runtime.productStore.products.find((p) => p.id === legacy.movement.productId)
+      .stock
+    const queueBefore = await scenario.adapter.listSyncQueueItems({ limit: 5000 })
+    const legacyRow = findLegacyQueueRow(queueBefore, legacyId)
+
+    await protectQueueRowInInflightEnvelope(scenario, legacyRow.id)
 
     const report = await localOperations.repairLegacySaleStockMovementLinks()
 
-    expect(report.skippedInflightQueueIds).toContain(legacyRow.id)
+    // Deferred, not repaired: neither the store nor the queue payload changes.
+    expect(report.deferredMovementIds).toContain(legacyId)
+    expect(report.deferredQueueIds).toContain(legacyRow.id)
+    expect(report.repairedMovementIds).not.toContain(legacyId)
+    expect(report.repairedQueueIds).not.toContain(legacyRow.id)
+
+    const movement = runtime.productStore.stockMovements.find((m) => m.id === legacyId)
+    expect(movement.transactionId ?? null).toBe(null)
+    expect(runtime.productStore.products.find((p) => p.id === legacy.movement.productId).stock).toBe(
+      stockBefore,
+    )
+
     const queueAfter = await scenario.adapter.listSyncQueueItems({ limit: 5000 })
-    const untouchedRow = queueAfter.find((q) => q.id === legacyRow.id)
-    expect(untouchedRow.payload.transactionId ?? null).toBe(null)
+    expect(findLegacyQueueRow(queueAfter, legacyId).payload.transactionId ?? null).toBe(null)
+
+    await scenario.cleanup()
+  })
+
+  it('E. repairs the queue on the next recovery once the in-flight envelope is finished', async () => {
+    const { scenario, runtime, sale, legacy } = await buildLegacyState()
+    const localOperations = makeLocalOperations(scenario)
+
+    const legacyId = legacy.movement.id
+    const queueBefore = await scenario.adapter.listSyncQueueItems({ limit: 5000 })
+    const legacyRow = findLegacyQueueRow(queueBefore, legacyId)
+    await protectQueueRowInInflightEnvelope(scenario, legacyRow.id)
+
+    const first = await localOperations.repairLegacySaleStockMovementLinks()
+    expect(first.deferredMovementIds).toContain(legacyId)
+
+    // The envelope is gone (accepted/cleared), so the same repair now succeeds.
+    await scenario.adapter.clearSyncPushInflight()
+    const second = await localOperations.repairLegacySaleStockMovementLinks()
+
+    expect(second.repairedMovementIds).toContain(legacyId)
+    expect(second.repairedQueueIds).toContain(legacyRow.id)
+
+    const movement = runtime.productStore.stockMovements.find((m) => m.id === legacyId)
+    expect(movement.transactionId).toBe(sale.id)
+    const queueAfter = await scenario.adapter.listSyncQueueItems({ limit: 5000 })
+    expect(findLegacyQueueRow(queueAfter, legacyId).payload.transactionId).toBe(sale.id)
+
+    await scenario.cleanup()
+  })
+
+  it('E. keeps the store un-repaired when the queue write fails, then repairs after a restart', async () => {
+    const { scenario, runtime, sale, legacy } = await buildLegacyState()
+    const localOperations = makeLocalOperations(scenario)
+
+    const legacyId = legacy.movement.id
+    const stockBefore = runtime.productStore.products.find(
+      (p) => p.id === legacy.movement.productId,
+    ).stock
+    const queueBefore = await scenario.adapter.listSyncQueueItems({ limit: 5000 })
+    const legacyRow = findLegacyQueueRow(queueBefore, legacyId)
+
+    const originalUpsert = scenario.adapter.upsertSyncQueueItem
+    scenario.adapter.upsertSyncQueueItem = vi
+      .fn()
+      .mockRejectedValue(new Error('SQLite disk I/O error'))
+
+    let failedReport
+    try {
+      failedReport = await localOperations.repairLegacySaleStockMovementLinks()
+    } finally {
+      scenario.adapter.upsertSyncQueueItem = originalUpsert
+    }
+
+    // The queue write failed: nothing is reported as repaired and the store is
+    // still untouched, so a retry/restart can repair it safely.
+    expect(failedReport.failedMovementIds).toContain(legacyId)
+    expect(failedReport.failedQueueIds).toContain(legacyRow.id)
+    expect(failedReport.repairedMovementIds).not.toContain(legacyId)
+
+    const afterFailure = runtime.productStore.stockMovements.find((m) => m.id === legacyId)
+    expect(afterFailure.transactionId ?? null).toBe(null)
+    expect(runtime.productStore.products.find((p) => p.id === legacy.movement.productId).stock).toBe(
+      stockBefore,
+    )
+
+    // Restart: fresh app graph over the same durable adapter.
+    const restarted = await restartAppScenario(scenario, { online: false })
+    const recoveredOps = createLocalOperationService({
+      adapter: restarted.adapter,
+      scheduler: restarted.scheduler,
+      pinia: restarted.pinia,
+    })
+    const report = await recoveredOps.repairLegacySaleStockMovementLinks()
+    await restarted.scheduler.flush()
+
+    expect(report.repairedMovementIds).toContain(legacyId)
+
+    const recoveredRuntime = makeRuntime(restarted)
+    const repaired = recoveredRuntime.productStore.stockMovements.find((m) => m.id === legacyId)
+    expect(repaired.id).toBe(legacyId)
+    expect(repaired.transactionId).toBe(sale.id)
+    expect(
+      recoveredRuntime.productStore.products.find((p) => p.id === legacy.movement.productId).stock,
+    ).toBe(stockBefore)
+
+    const queueAfter = await restarted.adapter.listSyncQueueItems({ limit: 5000 })
+    expect(findLegacyQueueRow(queueAfter, legacyId).payload.transactionId).toBe(sale.id)
+
+    // No duplicate stock movement row was enqueued for the same identity.
+    const movementRows = queueAfter.filter(
+      (q) => q.entityType === SYNC_ENTITY_TYPES.STOCK_MOVEMENT,
+    )
+    const identityKeys = movementRows.map((q) => `${q.entityType}:${q.entityId}`)
+    expect(new Set(identityKeys).size).toBe(identityKeys.length)
+
+    await restarted.cleanup()
+  })
+
+  async function addFillerQueueRows(scenario, count) {
+    const fillers = Array.from({ length: count }, (_, i) => ({
+      id: `filler-${i}`,
+      entityType: 'customer',
+      entityId: `filler-cust-${i}`,
+      operation: SYNC_OPERATIONS.UPSERT,
+      payload: { id: `filler-cust-${i}`, name: `Filler ${i}` },
+      createdAt: '2020-01-01T00:00:00.000Z',
+      updatedAt: '2020-01-01T00:00:00.000Z',
+      attemptCount: 0,
+      lastError: null,
+    }))
+    await scenario.adapter.upsertSyncQueueItems(fillers)
+  }
+
+  it('E. scans past the 5.000-item ceiling so a queued movement is not silently skipped', async () => {
+    const { scenario, runtime, sale, legacy } = await buildLegacyState()
+    const localOperations = makeLocalOperations(scenario)
+
+    const legacyId = legacy.movement.id
+    await addFillerQueueRows(scenario, 5001)
+    expect(await scenario.adapter.countSyncQueueItems()).toBeGreaterThan(5000)
+
+    const report = await localOperations.repairLegacySaleStockMovementLinks()
+
+    expect(report.repairedMovementIds).toContain(legacyId)
+    const queueAfter = await scenario.adapter.listSyncQueueItems({ limit: 6000 })
+    expect(findLegacyQueueRow(queueAfter, legacyId).payload.transactionId).toBe(sale.id)
+    expect(runtime.productStore.stockMovements.find((m) => m.id === legacyId).transactionId).toBe(
+      sale.id,
+    )
+
+    await scenario.cleanup()
+  })
+
+  it('E. defers (never silently repairs) when the scan is truncated and the row is not seen', async () => {
+    const { scenario, runtime, legacy } = await buildLegacyState()
+
+    const legacyId = legacy.movement.id
+    await addFillerQueueRows(scenario, 5001)
+
+    // Adapter without a usable queue count: the scan is capped at 5.000 rows.
+    const noCountAdapter = new Proxy(scenario.adapter, {
+      get(target, prop) {
+        if (prop === 'countSyncQueueItems') return undefined
+        const value = target[prop]
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+
+    const report = await repairLegacySaleStockMovementLinks({
+      adapter: noCountAdapter,
+      scheduler: scenario.scheduler,
+      productStore: runtime.productStore,
+      transactionStore: runtime.transactionStore,
+    })
+
+    expect(report.deferredMovementIds).toContain(legacyId)
+    expect(report.repairedMovementIds).not.toContain(legacyId)
+    expect(runtime.productStore.stockMovements.find((m) => m.id === legacyId).transactionId ?? null).toBe(
+      null,
+    )
 
     await scenario.cleanup()
   })
