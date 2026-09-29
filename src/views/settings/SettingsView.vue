@@ -2,11 +2,12 @@
 import { computed, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
+import AppIcon from '@/components/base/AppIcon.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
-import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseSheet from '@/components/base/BaseSheet.vue'
+import SettingsMenuItem from '@/components/settings/SettingsMenuItem.vue'
 import {
   RESTORE_CONFIRMATION_MESSAGE,
   createBackupPayload,
@@ -23,24 +24,26 @@ import { SUPPORTED_PAPER_WIDTHS } from '@/services/printer/escposReceiptBuilder'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCartStore } from '@/stores/cartStore'
 import { useCashStore } from '@/stores/cashStore'
-import { useCashierStore } from '@/stores/cashierStore'
+import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useCustomerStore } from '@/stores/customerStore'
 import { useExpenseStore } from '@/stores/expenseStore'
 import { usePrinterStore } from '@/stores/printerStore'
 import { useProductStore } from '@/stores/productStore'
 import { useShiftStore } from '@/stores/shiftStore'
+import { useSubscriptionStore } from '@/stores/subscriptionStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import { isValidTaxRate, useTaxStore } from '@/stores/taxStore'
 
 const businessStore = useBusinessStore()
 const cartStore = useCartStore()
 const cashStore = useCashStore()
-const cashierStore = useCashierStore()
+const cloudStore = useCloudSessionStore()
 const customerStore = useCustomerStore()
 const expenseStore = useExpenseStore()
 const printerStore = usePrinterStore()
 const productStore = useProductStore()
 const shiftStore = useShiftStore()
+const subscriptionStore = useSubscriptionStore()
 const transactionStore = useTransactionStore()
 const taxStore = useTaxStore()
 const router = useRouter()
@@ -66,8 +69,7 @@ function saveTaxSettings() {
   taxFeedback.value = result.success ? 'Pengaturan pajak berhasil disimpan.' : result.error
 }
 
-const showProfileModal = ref(false)
-const showActionSheet = ref(false)
+const lockedFeature = ref(null)
 const showPrinterSheet = ref(false)
 const backupInputRef = ref(null)
 const feedbackType = ref('success')
@@ -86,15 +88,164 @@ const printerStatusText = computed(() => (
     : 'Belum memilih printer'
 ))
 
-const businessSummary = computed(() => [
-  { label: 'Nama Toko', value: businessStore.name || '-' },
-  { label: 'Jenis Bisnis', value: businessStore.normalizedType || '-' },
-  { label: 'Owner', value: businessStore.owner || '-' },
-  { label: 'Nomor Telepon', value: businessStore.phone || '-' },
-  { label: 'Outlet', value: businessStore.outlet || '-' },
-  { label: 'Mode', value: businessStore.mode === 'cloud' ? 'Cloud' : 'Free' },
-  { label: 'PIN Kasir', value: cashierStore.activeCashier.pinConfigured ? 'Sudah diatur' : 'Belum diatur' },
+// ── Subscription / entitlement presentation ─────────────────────────────────
+
+const subscriptionStatus = computed(() => subscriptionStore.status)
+const isPremium = computed(() => subscriptionStore.isPremium)
+const showSubscriptionSkeleton = computed(
+  () => subscriptionStore.isLoading && !subscriptionStore.entitlement.plan,
+)
+
+const cloudConnected = computed(
+  () => cloudStore.isAuthenticated === true && cloudStore.hasCloudAccess === true,
+)
+const syncStatusText = computed(() =>
+  cloudConnected.value ? 'Sinkronisasi cloud aktif' : 'Belum terhubung ke cloud',
+)
+
+const expiresAtLabel = computed(() => {
+  if (!subscriptionStore.expiresAt) return ''
+  const date = new Date(subscriptionStore.expiresAt)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })
+})
+
+const subscriptionView = computed(() => {
+  switch (subscriptionStatus.value) {
+    case 'premium':
+      return {
+        badge: 'PREMIUM',
+        subtitle: 'Kelola langganan dan sinkronisasi Anda.',
+        cardClass: 'border-emerald-300 bg-gradient-to-br from-emerald-50 to-white',
+        badgeClass: 'bg-emerald-100 text-emerald-700',
+        crownClass: 'bg-emerald-100 text-emerald-600',
+      }
+    case 'expired':
+      return {
+        badge: 'EXPIRED',
+        subtitle: 'Langganan Premium berakhir. Perbarui untuk mengaktifkan sinkronisasi cloud.',
+        cardClass: 'border-red-200 bg-gradient-to-br from-red-50 to-white',
+        badgeClass: 'bg-red-100 text-red-700',
+        crownClass: 'bg-red-100 text-red-600',
+      }
+    case 'pending':
+      return {
+        badge: 'MENUNGGU',
+        subtitle: 'Pembayaran langganan belum selesai. Selesaikan untuk mengaktifkan Premium.',
+        cardClass: 'border-amber-300 bg-gradient-to-br from-amber-50 to-white',
+        badgeClass: 'bg-amber-100 text-amber-700',
+        crownClass: 'bg-amber-100 text-amber-600',
+      }
+    case 'error':
+      return {
+        badge: 'TIDAK DIKETAHUI',
+        subtitle: 'Status langganan belum dapat dipastikan. Periksa koneksi lalu coba lagi.',
+        cardClass: 'border-zinc-200 bg-white',
+        badgeClass: 'bg-zinc-100 text-zinc-600',
+        crownClass: 'bg-zinc-100 text-zinc-500',
+      }
+    default:
+      return {
+        badge: 'FREE',
+        subtitle: 'Upgrade ke Premium untuk sinkronisasi data dan dashboard.',
+        cardClass: 'border-amber-300 bg-gradient-to-br from-amber-50 to-white',
+        badgeClass: 'bg-amber-100 text-amber-700',
+        crownClass: 'bg-amber-100 text-amber-600',
+      }
+  }
+})
+
+const cloudAccountSubtitle = computed(() => {
+  if (!cloudStore.isAuthenticated) return 'Belum terhubung'
+  return cloudStore.user?.email || cloudStore.selectedBusiness?.name || 'Terhubung'
+})
+
+const settingsMenu = computed(() => [
+  {
+    key: 'cloud',
+    icon: 'cloud',
+    title: 'Akun Cloud',
+    subtitle: cloudAccountSubtitle.value,
+    testid: 'settings-menu-cloud',
+    to: { name: 'cloud' },
+  },
+  {
+    key: 'customers',
+    icon: 'customers',
+    title: 'Kelola Pelanggan',
+    subtitle: 'Data pelanggan dan riwayat',
+    testid: 'settings-menu-customers',
+    to: { name: 'customers' },
+  },
+  {
+    key: 'expenses',
+    icon: 'expenses',
+    title: 'Kelola Pengeluaran',
+    subtitle: 'Biaya operasional toko',
+    testid: 'settings-menu-expenses',
+    to: { name: 'expenses' },
+  },
+  {
+    key: 'backup',
+    icon: 'backup',
+    title: 'Backup Data',
+    subtitle: 'Simpan salinan data ke file lokal',
+    testid: 'settings-menu-backup',
+    action: 'backup',
+  },
+  {
+    key: 'restore',
+    icon: 'restore',
+    title: 'Restore Backup',
+    subtitle: 'Pulihkan data dari file backup',
+    testid: 'settings-menu-restore',
+    action: 'restore',
+  },
+  {
+    key: 'sync',
+    icon: 'sync',
+    title: 'Sinkronisasi',
+    subtitle: isPremium.value ? 'Sinkronkan data ke cloud' : 'Memerlukan Premium',
+    testid: 'settings-menu-sync',
+    locked: !isPremium.value,
+    to: { name: 'cloud' },
+  },
 ])
+
+const lockedFeatureMessage = computed(() => {
+  const label = lockedFeature.value?.title ?? 'Fitur ini'
+  return `${label} memerlukan langganan Premium untuk menyinkronkan data antar perangkat.`
+})
+
+function goToSubscription() {
+  lockedFeature.value = null
+  router.push({ name: 'subscription' })
+}
+
+function handleBack() {
+  router.back()
+}
+
+function handleMenuSelect(item) {
+  if (item.locked) {
+    lockedFeature.value = item
+    return
+  }
+
+  if (item.action === 'backup') {
+    handleBackup()
+    return
+  }
+
+  if (item.action === 'restore') {
+    handleRestoreClick()
+    return
+  }
+
+  if (item.to) {
+    router.push(item.to)
+  }
+}
 
 function getStoreContext() {
   return {
@@ -270,10 +421,165 @@ async function handleRestoreFileChange(event) {
       @change="handleRestoreFileChange"
     />
 
-    <div>
-      <p class="text-sm font-medium uppercase tracking-[0.18em] text-primary">Settings</p>
-      <h2 class="mt-2 text-2xl font-semibold text-ink-primary">Pengaturan aplikasi</h2>
+    <div class="flex items-center gap-3">
+      <button
+        type="button"
+        data-testid="settings-back-btn"
+        class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-zinc-200 bg-white text-ink-primary transition active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+        aria-label="Kembali"
+        @click="handleBack"
+      >
+        <AppIcon name="chevron-left" />
+      </button>
+      <div class="min-w-0">
+        <p class="text-xs font-medium uppercase tracking-[0.18em] text-primary">Pengaturan</p>
+        <h2 class="truncate text-2xl font-semibold text-ink-primary">Pengaturan aplikasi</h2>
+      </div>
     </div>
+
+    <!-- Active business -->
+    <BaseCard v-if="businessStore.name" class="space-y-3" data-testid="active-business-card">
+      <div class="flex items-center gap-3">
+        <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+          <AppIcon name="store" />
+        </span>
+        <div class="min-w-0">
+          <p class="text-xs uppercase tracking-[0.16em] text-ink-secondary">Bisnis Aktif</p>
+          <h3 class="truncate text-base font-semibold text-ink-primary" data-testid="business-name">
+            {{ businessStore.name }}
+          </h3>
+        </div>
+      </div>
+      <div class="flex flex-wrap gap-2">
+        <span
+          class="inline-flex items-center rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary"
+          data-testid="business-type"
+        >
+          {{ businessStore.normalizedType || '-' }}
+        </span>
+        <span
+          class="inline-flex items-center rounded-full bg-surface px-3 py-1 text-xs font-medium text-ink-secondary"
+          data-testid="business-outlet"
+        >
+          {{ businessStore.outlet || '-' }}
+        </span>
+      </div>
+    </BaseCard>
+
+    <div
+      v-else
+      class="animate-pulse rounded-3xl border border-zinc-200 bg-white p-4"
+      data-testid="active-business-skeleton"
+    >
+      <div class="flex items-center gap-3">
+        <div class="h-11 w-11 rounded-2xl bg-zinc-100" />
+        <div class="flex-1 space-y-2">
+          <div class="h-3 w-24 rounded bg-zinc-100" />
+          <div class="h-3 w-40 rounded bg-zinc-100" />
+        </div>
+      </div>
+    </div>
+
+    <!-- Subscription -->
+    <div
+      v-if="showSubscriptionSkeleton"
+      class="animate-pulse rounded-3xl border border-zinc-200 bg-white p-4"
+      data-testid="subscription-skeleton"
+    >
+      <div class="flex items-center gap-3">
+        <div class="h-11 w-11 rounded-2xl bg-zinc-100" />
+        <div class="flex-1 space-y-2">
+          <div class="h-3 w-20 rounded bg-zinc-100" />
+          <div class="h-3 w-52 rounded bg-zinc-100" />
+        </div>
+      </div>
+    </div>
+
+    <button
+      v-else
+      type="button"
+      data-testid="subscription-card"
+      class="w-full rounded-3xl border-2 p-4 text-left shadow-soft transition active:scale-[0.99] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+      :class="subscriptionView.cardClass"
+      aria-label="Kelola langganan"
+      @click="goToSubscription"
+    >
+      <div class="flex items-center gap-3">
+        <span
+          class="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl"
+          :class="subscriptionView.crownClass"
+        >
+          <AppIcon name="crown" />
+        </span>
+
+        <div class="min-w-0 flex-1">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-sm font-semibold text-ink-primary">Langganan</span>
+            <span
+              class="rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide"
+              :class="subscriptionView.badgeClass"
+              data-testid="subscription-badge"
+            >
+              {{ subscriptionView.badge }}
+            </span>
+          </div>
+
+          <p class="mt-1 text-xs leading-relaxed text-ink-secondary" data-testid="subscription-subtitle">
+            {{ subscriptionView.subtitle }}
+          </p>
+
+          <p
+            v-if="isPremium"
+            class="mt-1 text-xs font-semibold text-emerald-700"
+            data-testid="subscription-plan"
+          >
+            Paket {{ subscriptionStore.planLabel }}
+          </p>
+
+          <p
+            v-if="isPremium && expiresAtLabel"
+            class="text-xs text-ink-secondary"
+            data-testid="subscription-expiry"
+          >
+            Berakhir pada {{ expiresAtLabel }}
+          </p>
+
+          <p
+            v-if="isPremium"
+            class="mt-1 text-xs text-ink-secondary"
+            data-testid="subscription-sync-status"
+          >
+            {{ syncStatusText }}
+          </p>
+        </div>
+
+        <AppIcon name="chevron-right" class="text-ink-secondary" />
+      </div>
+    </button>
+
+    <!-- Settings menu -->
+    <BaseCard class="space-y-1" data-testid="settings-menu">
+      <SettingsMenuItem
+        v-for="item in settingsMenu"
+        :key="item.key"
+        :icon="item.icon"
+        :title="item.title"
+        :subtitle="item.subtitle"
+        :testid="item.testid"
+        :locked="item.locked"
+        @select="handleMenuSelect(item)"
+      />
+    </BaseCard>
+
+    <p
+      v-if="feedbackMessage"
+      class="rounded-2xl px-4 py-3 text-sm"
+      :class="feedbackType === 'error' ? 'bg-danger/10 text-danger' : 'bg-emerald-100 text-emerald-700'"
+      role="status"
+      data-testid="settings-feedback"
+    >
+      {{ feedbackMessage }}
+    </p>
 
     <BaseCard class="space-y-5" data-testid="tax-settings-card">
       <div>
@@ -353,25 +659,6 @@ async function handleRestoreFileChange(event) {
           </span>
         </div>
       </form>
-    </BaseCard>
-
-    <BaseCard class="space-y-4">
-      <div
-        v-for="item in businessSummary"
-        :key="item.label"
-        class="flex items-center justify-between rounded-2xl bg-surface px-4 py-3"
-      >
-        <span class="text-sm text-ink-secondary">{{ item.label }}</span>
-        <span class="font-medium text-ink-primary">{{ item.value }}</span>
-      </div>
-
-      <div class="flex flex-wrap gap-3">
-        <BaseButton variant="secondary" @click="showProfileModal = true">Edit Profil</BaseButton>
-        <BaseButton variant="secondary" @click="router.push('/customers')">Kelola Pelanggan</BaseButton>
-        <BaseButton variant="secondary" @click="router.push('/expenses')">Kelola Pengeluaran</BaseButton>
-        <BaseButton id="settings-cloud-btn" variant="secondary" @click="router.push('/cloud')">Cloud Login</BaseButton>
-        <BaseButton variant="ghost" @click="showActionSheet = true">Aksi Lainnya</BaseButton>
-      </div>
     </BaseCard>
 
     <BaseCard class="space-y-4" data-testid="printer-settings-card">
@@ -454,12 +741,33 @@ async function handleRestoreFileChange(event) {
       </p>
     </BaseCard>
 
-    <BaseModal :open="showProfileModal" title="Preview Input Pengaturan" @close="showProfileModal = false">
-      <div class="space-y-4">
-        <BaseInput :model-value="businessStore.name" label="Nama Toko" />
-        <BaseInput :model-value="businessStore.normalizedType" label="Jenis Bisnis" />
-        <BaseInput :model-value="businessStore.owner" label="Owner" />
-        <BaseInput :model-value="businessStore.outlet" label="Outlet" />
+    <BaseButton
+      block
+      variant="secondary"
+      data-testid="settings-close-btn"
+      @click="handleBack"
+    >
+      Tutup
+    </BaseButton>
+
+    <BaseModal
+      :open="Boolean(lockedFeature)"
+      title="Fitur Premium"
+      @close="lockedFeature = null"
+    >
+      <div class="space-y-4" data-testid="locked-feature-modal">
+        <div class="flex items-center gap-3">
+          <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-amber-100 text-amber-600">
+            <AppIcon name="lock" />
+          </span>
+          <p class="text-sm text-ink-secondary" data-testid="locked-feature-message">
+            {{ lockedFeatureMessage }}
+          </p>
+        </div>
+
+        <BaseButton block data-testid="locked-feature-cta" @click="goToSubscription">
+          Lihat Paket Premium
+        </BaseButton>
       </div>
     </BaseModal>
 
@@ -487,24 +795,6 @@ async function handleRestoreFileChange(event) {
             Pair printer melalui pengaturan Bluetooth Android terlebih dahulu.
           </p>
         </template>
-      </div>
-    </BaseSheet>
-
-    <BaseSheet :open="showActionSheet" title="Shortcut Pengaturan" @close="showActionSheet = false">
-      <div class="grid gap-3">
-        <p
-          v-if="feedbackMessage"
-          class="rounded-2xl px-4 py-3 text-sm"
-          :class="feedbackType === 'error' ? 'bg-danger/10 text-danger' : 'bg-emerald-100 text-emerald-700'"
-        >
-          {{ feedbackMessage }}
-        </p>
-        <BaseButton block variant="secondary" @click="router.push('/customers')">Kelola Pelanggan</BaseButton>
-        <BaseButton block variant="secondary" @click="router.push('/expenses')">Kelola Pengeluaran</BaseButton>
-        <BaseButton block variant="secondary" @click="handleBackup">Backup Data</BaseButton>
-        <BaseButton block variant="secondary" @click="handleRestoreClick">Restore Backup</BaseButton>
-        <BaseButton block variant="secondary">Sinkronisasi</BaseButton>
-        <BaseButton block variant="danger" @click="showActionSheet = false">Tutup</BaseButton>
       </div>
     </BaseSheet>
   </div>

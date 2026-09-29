@@ -42,6 +42,7 @@ const pageTitle = computed(() => {
     'laundry-order-detail': 'Detail Order Laundry',
     reports: 'Laporan',
     settings: 'Pengaturan',
+    subscription: 'Langganan',
     cloud: 'Cloud Login',
   }
 

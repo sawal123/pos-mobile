@@ -247,6 +247,10 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
           ? {
               id: selectedBusiness.value.id,
               name: selectedBusiness.value.name,
+              // PREM-M01: server-provided subscription snapshot so the Settings
+              // screen can show the last known plan across an app restart. It is
+              // display data only and never authorizes access.
+              subscription: selectedBusiness.value.subscription ?? null,
             }
           : null,
         selectedOutlet: selectedOutlet.value
@@ -349,7 +353,11 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       return { ok: false }
     }
 
-    selectedBusiness.value = { id: match.id, name: match.name }
+    selectedBusiness.value = {
+      id: match.id,
+      name: match.name,
+      subscription: match.subscription ?? null,
+    }
     cloudAccess.value = match.cloud_access === true
     selectedOutlet.value = null
     registeredDeviceId.value = null
@@ -756,7 +764,11 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       let deviceResolution = null
 
       if (match) {
-        selectedBusiness.value = { id: match.id, name: match.name }
+        selectedBusiness.value = {
+          id: match.id,
+          name: match.name,
+          subscription: match.subscription ?? null,
+        }
         cloudAccess.value = match.cloud_access === true
         applyBusinessContext(match)
 

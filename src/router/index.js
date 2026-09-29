@@ -26,6 +26,7 @@ import CloseShiftView from '../views/shift/CloseShiftView.vue'
 import OpenShiftView from '../views/shift/OpenShiftView.vue'
 import ShiftView from '../views/shift/ShiftView.vue'
 import SettingsView from '../views/settings/SettingsView.vue'
+import SubscriptionView from '../views/subscription/SubscriptionView.vue'
 import StockView from '../views/stock/StockView.vue'
 import CloudLoginView from '../views/settings/CloudLoginView.vue'
 import ReceiptView from '../views/transactions/ReceiptView.vue'
@@ -201,6 +202,11 @@ const routes = [
         component: SettingsView,
       },
       {
+        path: 'subscription',
+        name: 'subscription',
+        component: SubscriptionView,
+      },
+      {
         path: 'cloud',
         name: 'cloud',
         component: CloudLoginView,
@@ -253,6 +259,7 @@ const businessRequiredRoutes = new Set([
   'transaction-receipt',
   'reports',
   'settings',
+  'subscription',
 ])
 
 const pinRequiredRoutes = new Set([
@@ -283,6 +290,7 @@ const pinRequiredRoutes = new Set([
   'transaction-receipt',
   'reports',
   'settings',
+  'subscription',
 ])
 
 const shiftRequiredRoutes = new Set([
