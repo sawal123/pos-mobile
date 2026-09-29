@@ -5,6 +5,8 @@ import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useProductStore } from '@/stores/productStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 
+import { SYNC_ENTITY_TYPES } from '@/services/sync/syncConstants'
+
 import { createOperationJournal } from './operationJournalService'
 
 export const LOCAL_OPERATION_TYPES = {
@@ -84,6 +86,10 @@ export function applySaleStockIdempotently(productStore, transaction) {
       quantityChange: -missing,
       type: 'sale',
       referenceId: transaction.id,
+      // The backend requires the sale relation for a cashier. `contractMapper`
+      // only derives `sale_sync_id` from `transactionId`, so it must be carried
+      // explicitly (never inferred from the human `referenceId`).
+      transactionId: transaction.id,
       category: 'Penjualan',
       note: `Penjualan ${productStore.getProductById(productId)?.name ?? ''}`.trim(),
     })
@@ -94,6 +100,196 @@ export function applySaleStockIdempotently(productStore, transaction) {
   }
 
   return recorded
+}
+
+const LEGACY_QUEUE_SCAN_LIMIT = 5000
+
+function isSaleStockMovement(movement) {
+  const type = movement?.movementType ?? movement?.type
+  return type != null && String(type).trim().toLowerCase() === 'sale'
+}
+
+function hasSaleRelation(movement) {
+  const transactionId = movement?.transactionId
+  return transactionId !== null && transactionId !== undefined && String(transactionId).trim() !== ''
+}
+
+/**
+ * Deterministically resolves the sale id a legacy stock movement belongs to.
+ *
+ * Only an exact `movement.referenceId === transaction.id` match is accepted —
+ * never the human note, the amount or the timestamp. Returns null when the
+ * relation cannot be proven locally.
+ */
+function resolveLegacySaleId(movement, transactionStore) {
+  const referenceId = movement?.referenceId
+  if (referenceId === null || referenceId === undefined || String(referenceId).trim() === '') {
+    return null
+  }
+
+  const ref = String(referenceId).trim()
+  const transaction = (transactionStore?.items ?? []).find((item) => String(item.id) === ref)
+
+  return transaction ? String(transaction.id) : null
+}
+
+/**
+ * Repairs the missing sale relation (`transactionId`) of stock movements that
+ * were created before the cashier fix, so the backend no longer rejects them
+ * with `missing_sale_relation`.
+ *
+ * Safety rules:
+ * - in-flight protection is evaluated BEFORE any store mutation: a queue
+ *   snapshot referenced by the in-flight envelope is never rewritten and the
+ *   store movement is left untouched (deferred recovery);
+ * - never creates a replacement movement and never touches stock;
+ * - never changes an existing movement id (in place repair only);
+ * - only repairs a movement whose relation is provable by an exact id match;
+ * - the queue payload is persisted BEFORE the store is mutated, so a queue
+ *   write failure can never leave the store looking repaired;
+ * - the item scan ceiling is sized from the real queue count, and a truncated
+ *   scan never treats a missing row as "already repaired" (it defers);
+ * - ambiguous movements are left untouched and reported for manual recovery.
+ *
+ * @param {object} params
+ * @param {object} params.adapter
+ * @param {object} [params.scheduler]
+ * @param {object} params.productStore
+ * @param {object} params.transactionStore
+ * @returns {Promise<{
+ *   repairedMovementIds: string[],
+ *   repairedQueueIds: string[],
+ *   deferredMovementIds: string[],
+ *   deferredQueueIds: string[],
+ *   failedMovementIds: string[],
+ *   failedQueueIds: string[],
+ *   manualRecoveryRequiredIds: string[],
+ * }>}
+ */
+export async function repairLegacySaleStockMovementLinks({
+  adapter = null,
+  scheduler = null,
+  productStore = null,
+  transactionStore = null,
+} = {}) {
+  const report = {
+    repairedMovementIds: [],
+    repairedQueueIds: [],
+    deferredMovementIds: [],
+    deferredQueueIds: [],
+    failedMovementIds: [],
+    failedQueueIds: [],
+    manualRecoveryRequiredIds: [],
+  }
+
+  if (!adapter || !productStore || !transactionStore) {
+    return report
+  }
+
+  const movements = Array.isArray(productStore.stockMovements) ? productStore.stockMovements : []
+  const candidates = movements.filter(
+    (movement) => isSaleStockMovement(movement) && !hasSaleRelation(movement),
+  )
+
+  if (candidates.length === 0) {
+    return report
+  }
+
+  const runSerialized = async (task) => {
+    if (scheduler && typeof scheduler.runSerialized === 'function') {
+      return scheduler.runSerialized(task, 'legacy:repair-sale-stock')
+    }
+    return task()
+  }
+
+  const inflight =
+    typeof adapter.loadSyncPushInflight === 'function' ? await adapter.loadSyncPushInflight() : null
+  const protectedQueueIds = new Set()
+  for (const snapshot of [
+    ...(Array.isArray(inflight?.queueSnapshots) ? inflight.queueSnapshots : []),
+    ...(Array.isArray(inflight?.supersededSnapshots) ? inflight.supersededSnapshots : []),
+  ]) {
+    if (snapshot?.id) protectedQueueIds.add(snapshot.id)
+  }
+
+  // Size the scan from the real queue count so the 5.000-item ceiling can never
+  // hide a row. If the count is unavailable and the scan returns a full page, a
+  // missing row is ambiguous and must be deferred, never recorded as repaired.
+  const totalQueue =
+    typeof adapter.countSyncQueueItems === 'function' ? await adapter.countSyncQueueItems() : null
+  const hasTotal = typeof totalQueue === 'number' && Number.isFinite(totalQueue)
+  const queueLimit = hasTotal ? Math.max(totalQueue, 1) : LEGACY_QUEUE_SCAN_LIMIT
+
+  const queueItems =
+    typeof adapter.listSyncQueueItems === 'function'
+      ? await adapter.listSyncQueueItems({ limit: queueLimit })
+      : []
+
+  const queueScanTruncated =
+    typeof adapter.listSyncQueueItems === 'function' &&
+    queueItems.length >= queueLimit &&
+    (!hasTotal || queueItems.length < totalQueue)
+
+  const findQueueRow = (movementId) =>
+    queueItems.find(
+      (item) =>
+        item.entityType === SYNC_ENTITY_TYPES.STOCK_MOVEMENT &&
+        String(item.entityId) === String(movementId),
+    )
+
+  for (const movement of candidates) {
+    const saleId = resolveLegacySaleId(movement, transactionStore)
+    if (!saleId) {
+      // The relation cannot be proven: keep the data untouched for manual recovery.
+      report.manualRecoveryRequiredIds.push(movement.id)
+      continue
+    }
+
+    const queueRow = findQueueRow(movement.id)
+
+    // 1. In-flight protection is checked BEFORE touching the store: a snapshot
+    //    that may already have reached the server is never rewritten, and the
+    //    movement is left untouched too (deferred recovery).
+    if (queueRow && protectedQueueIds.has(queueRow.id)) {
+      report.deferredMovementIds.push(movement.id)
+      report.deferredQueueIds.push(queueRow.id)
+      continue
+    }
+
+    // 2. A missing row is only "no queue row" when the scan was exhaustive.
+    if (!queueRow && queueScanTruncated) {
+      report.deferredMovementIds.push(movement.id)
+      continue
+    }
+
+    // 3. Persist the queue payload FIRST. On failure the store is not mutated,
+    //    so a later retry / restart can still repair it safely.
+    if (queueRow) {
+      try {
+        await runSerialized(() =>
+          adapter.upsertSyncQueueItem({
+            ...queueRow,
+            payload: { ...(queueRow.payload ?? {}), transactionId: saleId },
+            attemptCount: 0,
+            lastError: null,
+            updatedAt: new Date().toISOString(),
+          }),
+        )
+      } catch {
+        report.failedMovementIds.push(movement.id)
+        report.failedQueueIds.push(queueRow.id)
+        continue
+      }
+
+      report.repairedQueueIds.push(queueRow.id)
+    }
+
+    // 4. In-place store repair: same movement id, stock untouched.
+    movement.transactionId = saleId
+    report.repairedMovementIds.push(movement.id)
+  }
+
+  return report
 }
 
 export function createLocalOperationService({ adapter = null, scheduler = null, pinia = null } = {}) {
@@ -312,11 +508,25 @@ export function createLocalOperationService({ adapter = null, scheduler = null, 
     return results
   }
 
+  async function repairLegacySaleStockMovementLinksNow() {
+    const active = activePinia()
+    const productStore = active ? useProductStore(active) : null
+    const transactionStore = active ? useTransactionStore(active) : null
+
+    return repairLegacySaleStockMovementLinks({
+      adapter,
+      scheduler,
+      productStore,
+      transactionStore,
+    })
+  }
+
   return {
     journal,
     commitRetailSale,
     settleLaundryOrder,
     recoverPendingOperations,
+    repairLegacySaleStockMovementLinks: repairLegacySaleStockMovementLinksNow,
     resolveContext,
   }
 }

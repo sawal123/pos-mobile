@@ -191,6 +191,26 @@ export async function bootstrapApp({
         console.error('Failed to recover interrupted local operations.', error)
       }
 
+      // FIX: repair the missing sale relation on legacy stock movements created
+      // before the cashier fix. Movements are repaired in place (same id, stock
+      // untouched, queue payload updated) and any unprovable relation is left
+      // untouched for manual recovery.
+      try {
+        const legacyRepair = await localOperations.repairLegacySaleStockMovementLinks()
+        if (legacyRepair.failedMovementIds.length > 0) {
+          console.warn(
+            `Legacy stock movement repair deferred after a queue write failure: ${legacyRepair.failedMovementIds.length}`,
+          )
+        }
+        if (legacyRepair.manualRecoveryRequiredIds.length > 0) {
+          console.warn(
+            `Legacy stock movements require manual recovery: ${legacyRepair.manualRecoveryRequiredIds.length}`,
+          )
+        }
+      } catch (error) {
+        console.error('Failed to repair legacy sale stock movements.', error)
+      }
+
       // P22: Single shared runtime signal bridge for native & browser events
       runtimeSignalService = runtimeSignalFactory()
       runtimeSignalService.subscribe((event) => {
