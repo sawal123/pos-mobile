@@ -35,6 +35,7 @@ import {
   SYNC_UI_ACCESS_DENIED,
   SYNC_UI_CLEANUP_FAILED,
   SYNC_UI_CLEAR,
+  SYNC_UI_LOCAL,
   SYNC_UI_RECONCILIATION_COMMITTED,
   SYNC_UI_RECONCILIATION_REQUIRED,
   SYNC_UI_RECONCILIATION_WAITING,
@@ -307,9 +308,25 @@ async function createReconHarness({ adapter = null, token = 'test-token' } = {})
 
   let statusMode = 'committed'
   const statusCalls = []
+  // Mirrors the real Laravel INT-03 contract: the status body is an API
+  // Resource (`{ data: { … } }`) and always echoes the original `request_id`.
   const statusTransport = vi.fn(async (args) => {
     statusCalls.push(args)
     if (statusMode === 'committed') {
+      return {
+        ok: true,
+        status: 200,
+        data: {
+          data: {
+            request_id: args.requestId,
+            status: SYNC_REQUEST_STATUS_COMMITTED,
+            processed_at: NOW,
+          },
+        },
+        error: null,
+      }
+    }
+    if (statusMode === 'committed_missing_id') {
       return {
         ok: true,
         status: 200,
@@ -317,11 +334,31 @@ async function createReconHarness({ adapter = null, token = 'test-token' } = {})
         error: null,
       }
     }
+    if (statusMode === 'committed_wrong_id') {
+      return {
+        ok: true,
+        status: 200,
+        data: {
+          data: {
+            request_id: 'some-other-request-id',
+            status: SYNC_REQUEST_STATUS_COMMITTED,
+            processed_at: NOW,
+          },
+        },
+        error: null,
+      }
+    }
     if (statusMode === 'not_found') {
       return {
         ok: true,
         status: 200,
-        data: { data: { status: SYNC_REQUEST_STATUS_NOT_FOUND, processed_at: null } },
+        data: {
+          data: {
+            request_id: args.requestId,
+            status: SYNC_REQUEST_STATUS_NOT_FOUND,
+            processed_at: null,
+          },
+        },
         error: null,
       }
     }
@@ -427,7 +464,13 @@ describe('INT-04 — status transport', () => {
     apiRequest.mockResolvedValueOnce({
       ok: true,
       status: 200,
-      data: { data: { status: SYNC_REQUEST_STATUS_COMMITTED, processed_at: NOW } },
+      data: {
+        data: {
+          request_id: 'req-123',
+          status: SYNC_REQUEST_STATUS_COMMITTED,
+          processed_at: NOW,
+        },
+      },
       error: null,
     })
 
@@ -789,17 +832,39 @@ describe('INT-04 — owner/member backward compatibility', () => {
     expect(await harness.queueService.countPending()).toBe(0)
   })
 
-  it('does not reconcile for a plain in-flight envelope (normal retry path)', async () => {
+  it('reconciles a network-loss envelope immediately, without resending the push', async () => {
     const harness = await createReconHarness()
     await enqueueCustomer(harness.queueService)
     harness.setPushMode('network')
-    await harness.pushService.pushNow({ context: ownerContext() })
+    const lost = await harness.pushService.pushNow({ context: ownerContext() })
+    expect(lost.acceptance).toBe('unknown')
 
     const envelope = await harness.adapter.loadSyncPushInflight()
+    expect(envelope.acceptanceUnknown).toBe(true)
     expect(envelope.reconciliationRequired).toBeUndefined()
 
+    const pushCallsBefore = harness.pushCalls.length
+    harness.setStatusMode('committed')
     const result = await harness.reconcile()
-    expect(result.code).toBe(SYNC_RECONCILIATION_RESULTS.NOT_REQUIRED)
+
+    expect(result.code).toBe(SYNC_RECONCILIATION_RESULTS.COMMITTED)
+    // The status endpoint was consulted directly; nothing was pushed again.
+    expect(harness.pushCalls.length).toBe(pushCallsBefore)
+    expect(await harness.adapter.loadSyncPushInflight()).toBeNull()
+  })
+
+  it('still allows the idempotent retry with the same request id after a network loss', async () => {
+    const harness = await createReconHarness()
+    await enqueueCustomer(harness.queueService)
+    harness.setPushMode('network')
+    const lost = await harness.pushService.pushNow({ context: ownerContext() })
+
+    harness.setPushMode('ok')
+    const retry = await harness.pushService.pushNow({ context: ownerContext() })
+
+    expect(retry.ok).toBe(true)
+    expect(retry.requestId).toBe(lost.requestId)
+    expect(harness.pushCalls[1].body.request_id).toBe(lost.requestId)
   })
 
   it('never writes the bearer token into durable storage', async () => {
@@ -998,5 +1063,208 @@ describe('INT-04 — SQLite / memory parity', () => {
     expect(memoryNotFound.envelope).not.toBeNull()
     expect(typeof sqliteNotFound.envelope.requestId).toBe('string')
     expect(typeof memoryNotFound.envelope.requestId).toBe('string')
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// 12. Acceptance unknown (network error) reconciliation
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('INT-04 — acceptance unknown (network error) reconciliation', () => {
+  it('reconciles a network-loss envelope to committed without any resend', async () => {
+    const harness = await createReconHarness()
+    await enqueueCustomer(harness.queueService)
+    harness.setPushMode('network')
+    await harness.pushService.pushNow({ context: ownerContext() })
+
+    const pushCallsBefore = harness.pushCalls.length
+    harness.setStatusMode('committed')
+    const result = await harness.reconcile()
+
+    expect(result.code).toBe(SYNC_RECONCILIATION_RESULTS.COMMITTED)
+    expect(result.acceptance).toBe('accepted')
+    expect(harness.pushCalls.length).toBe(pushCallsBefore)
+    expect(await harness.adapter.loadSyncPushInflight()).toBeNull()
+    expect(await harness.queueService.countPending()).toBe(0)
+  })
+
+  it('reconciles a network-loss envelope to not_found keeping the outbox and request id', async () => {
+    const harness = await createReconHarness()
+    await enqueueCustomer(harness.queueService)
+    harness.setPushMode('network')
+    const lost = await harness.pushService.pushNow({ context: ownerContext() })
+
+    harness.setStatusMode('not_found')
+    const result = await harness.reconcile()
+
+    expect(result.code).toBe(SYNC_RECONCILIATION_RESULTS.NOT_FOUND)
+    expect(result.requestId).toBe(lost.requestId)
+    expect(result.interventionRequired).toBe(true)
+
+    const after = await harness.adapter.loadSyncPushInflight()
+    expect(after).not.toBeNull()
+    expect(after.requestId).toBe(lost.requestId)
+    expect(after.reconciliationOutcome).toBe('not_found')
+    expect(await harness.queueService.countPending()).toBe(1)
+  })
+
+  it('reconciles a network-loss envelope after a restart over the durable adapter', async () => {
+    const durableAdapter = createMemoryAdapter()
+    const first = await createReconHarness({ adapter: durableAdapter })
+    await enqueueCustomer(first.queueService)
+    first.setPushMode('network')
+    const lost = await first.pushService.pushNow({ context: ownerContext() })
+    await first.scheduler.close()
+
+    // Fresh app graph — only durable state survives.
+    const second = await createReconHarness({ adapter: durableAdapter })
+    second.setStatusMode('committed')
+    const result = await second.reconcile()
+
+    expect(result.code).toBe(SYNC_RECONCILIATION_RESULTS.COMMITTED)
+    expect(result.requestId).toBe(lost.requestId)
+    expect(await second.adapter.loadSyncPushInflight()).toBeNull()
+    expect(await second.queueService.countPending()).toBe(0)
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// 13. request_id validation before committing
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('INT-04 — request_id validation before committed acknowledgment', () => {
+  it('rejects a committed body without request_id and performs no local cleanup', async () => {
+    const harness = await createReconHarness()
+    await enqueueCustomer(harness.queueService)
+    await buildReconciliationRequiredEnvelope(harness)
+
+    harness.setStatusMode('committed_missing_id')
+    const result = await harness.reconcile()
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe(SYNC_RECONCILIATION_RESULTS.UNREACHABLE)
+    expect(result.error.reason).toBe('REQUEST_ID_MISSING')
+
+    // Nothing was cleaned up and no proven result was accepted.
+    const envelope = await harness.adapter.loadSyncPushInflight()
+    expect(envelope).not.toBeNull()
+    expect(envelope.reconciliationRequired).toBe(true)
+    expect(await harness.queueService.countPending()).toBe(1)
+  })
+
+  it('rejects a committed body with a mismatched request_id and performs no local cleanup', async () => {
+    const harness = await createReconHarness()
+    await enqueueCustomer(harness.queueService)
+    await buildReconciliationRequiredEnvelope(harness)
+
+    harness.setStatusMode('committed_wrong_id')
+    const result = await harness.reconcile()
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe(SYNC_RECONCILIATION_RESULTS.UNREACHABLE)
+    expect(result.error.reason).toBe('REQUEST_ID_MISMATCH')
+    expect(await harness.adapter.loadSyncPushInflight()).not.toBeNull()
+    expect(await harness.queueService.countPending()).toBe(1)
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// 14. Version metadata durability
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('INT-04 — version metadata durability', () => {
+  it('keeps the envelope and outbox when saving server versions fails', async () => {
+    const harness = await createReconHarness()
+    await enqueueCustomer(harness.queueService)
+    await buildReconciliationRequiredEnvelope(harness)
+
+    const originalSave = harness.adapter.saveSyncServerVersions
+    harness.adapter.saveSyncServerVersions = vi
+      .fn()
+      .mockRejectedValue(new Error('app_meta write failed'))
+
+    try {
+      harness.setStatusMode('committed')
+      const result = await harness.reconcile()
+
+      expect(result.ok).toBe(false)
+      expect(result.code).toBe(SYNC_RECONCILIATION_RESULTS.CLEANUP_FAILED)
+
+      const envelope = await harness.adapter.loadSyncPushInflight()
+      expect(envelope).not.toBeNull()
+      expect(envelope.reconciliationOutcome).toBe('cleanup_failed')
+      // The queue was preserved, so the durable recovery information survives.
+      expect(await harness.queueService.countPending()).toBe(1)
+      expect(await harness.adapter.loadSyncServerVersions()).toBeNull()
+    } finally {
+      harness.adapter.saveSyncServerVersions = originalSave
+    }
+  })
+
+  it('persists versions for a travelled row even when that row changed in-flight (CAS preserved)', async () => {
+    const harness = await createReconHarness()
+    await enqueueCustomer(harness.queueService)
+    await buildReconciliationRequiredEnvelope(harness)
+
+    // The cashier edits the same customer locally while the request is retained.
+    await harness.queueService.enqueueUpsert(SYNC_ENTITY_TYPES.CUSTOMER, 'cust-1', {
+      id: 'cust-1',
+      name: 'Budi Updated',
+      phone: '0813',
+      email: null,
+    })
+
+    harness.setStatusMode('committed')
+    const result = await harness.reconcile()
+
+    expect(result.preservedQueueIds).toHaveLength(1)
+    const versions = (await harness.adapter.loadSyncServerVersions()) || {}
+    expect(Object.keys(versions).some((key) => key.startsWith('customers:'))).toBe(true)
+    expect(await harness.queueService.countPending()).toBe(1)
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
+// 15. UI access revoked
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('INT-04 — pending envelope stays visible when cloud access is revoked', () => {
+  it('never masks a retained envelope as LOCAL or CLEAR when membership/subscription is revoked', () => {
+    const revoked = deriveSyncUiStatus({
+      cloudAvailable: false,
+      syncing: false,
+      hasInflight: true,
+      online: true,
+      acceptance: 'unknown',
+      reconciliationRequired: true,
+    })
+
+    expect(revoked.status).toBe(SYNC_UI_ACCESS_DENIED)
+    expect(revoked.status).not.toBe(SYNC_UI_LOCAL)
+    expect(revoked.status).not.toBe(SYNC_UI_CLEAR)
+  })
+
+  it('still reports an accepted envelope (cleanup pending) while access is revoked', () => {
+    const accepted = deriveSyncUiStatus({
+      cloudAvailable: false,
+      syncing: false,
+      hasInflight: true,
+      online: true,
+      acceptance: 'accepted',
+    })
+
+    expect(accepted.status).toBe(SYNC_UI_RECONCILIATION_COMMITTED)
+    expect(accepted.status).not.toBe(SYNC_UI_CLEAR)
+  })
+
+  it('keeps plain LOCAL when no envelope is outstanding', () => {
+    const local = deriveSyncUiStatus({
+      cloudAvailable: false,
+      syncing: false,
+      hasInflight: false,
+      pendingCount: 3,
+    })
+
+    expect(local.status).toBe(SYNC_UI_LOCAL)
   })
 })

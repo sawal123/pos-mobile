@@ -141,12 +141,19 @@ export function createSyncReconciliationService({
       }
 
       // Nothing to reconcile: no retained envelope, or an envelope whose
-      // acceptance a normal push retry already handles safely. A cleanup
-      // failure is included because the status endpoint can finish the cleanup
-      // idempotently, while its ordinary retry path stays available too.
+      // acceptance a normal push retry already handles safely. The status
+      // endpoint is consulted whenever the outcome is genuinely uncertain:
+      //  - `reconciliationRequired` (e.g. a 403 on a retried unknown outcome);
+      //  - `acceptanceUnknown` (a transport loss / malformed 2xx / 5xx leaves
+      //    `acceptanceUnknown` on the envelope) so the user can check the
+      //    request status immediately, without resending the push first;
+      //  - `cleanup_failed` (server accepted, local cleanup did not finish).
+      // The ordinary idempotent retry path stays available in all these cases.
       const needsReconciliation =
         envelope &&
-        (envelope.reconciliationRequired === true || envelope.reconciliationOutcome === 'cleanup_failed')
+        (envelope.reconciliationRequired === true ||
+          envelope.acceptanceUnknown === true ||
+          envelope.reconciliationOutcome === 'cleanup_failed')
 
       if (!needsReconciliation) {
         return {
@@ -299,6 +306,47 @@ export function createSyncReconciliationService({
 
       // ── committed: reuse the existing acknowledgment mechanism ──────────────
       if (body?.status === SYNC_REQUEST_STATUS_COMMITTED) {
+        // INT-04 hardening: never trust a `committed` body on its own. The
+        // backend must echo the original request_id; a missing or mismatched id
+        // means this response cannot be proven to describe our request, so no
+        // local cleanup is performed and the durable outbox is kept intact.
+        const responseRequestId =
+          body?.request_id ?? response?.data?.request_id ?? response?.error?.data?.request_id ?? null
+
+        const isRequestIdValid =
+          responseRequestId !== null &&
+          responseRequestId !== undefined &&
+          String(responseRequestId) === String(envelope.requestId)
+
+        if (!isRequestIdValid) {
+          const reason =
+            responseRequestId === null || responseRequestId === undefined
+              ? 'REQUEST_ID_MISSING'
+              : 'REQUEST_ID_MISMATCH'
+
+          await persistEnvelopeMarker(envelope, {
+            acceptance: envelope.acceptance ?? 'unknown',
+            reconciliationRequired: true,
+            reconciliationCode: 'SYNC_RECONCILIATION_UNREACHABLE',
+            reconciliationOutcome: 'unreachable',
+          })
+
+          return {
+            ok: false,
+            code: SYNC_RECONCILIATION_RESULTS.UNREACHABLE,
+            requestId: envelope.requestId,
+            acceptance: envelope.acceptance ?? 'unknown',
+            reconciliationRequired: true,
+            pendingConnection: false,
+            message:
+              'Respons status pengiriman tidak valid (request_id tidak cocok). Tidak ada pembersihan lokal yang dilakukan; data tetap aman.',
+            error: {
+              code: SYNC_RECONCILIATION_RESULTS.UNREACHABLE,
+              reason,
+            },
+          }
+        }
+
         const processedAt = body?.processed_at ?? null
         const {
           removedQueueIds,

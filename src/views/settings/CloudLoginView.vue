@@ -147,6 +147,15 @@ const reconciliationPresentation = computed(() => {
       message: 'Pengiriman sudah diterima server. Selesaikan pembersihan lokal dengan rekonsiliasi.',
     }
   }
+  // Membership/subscription revoked while a request is outstanding: keep the
+  // pending envelope visible instead of hiding it behind a synced-looking UI.
+  if (!cloudStore.hasCloudAccess || !cloudStore.isAuthenticated) {
+    return {
+      tone: 'danger',
+      message:
+        'Akses cloud (membership/langganan) tidak aktif. Pengiriman yang tertunda tetap tersimpan lokal dan belum tersinkron; hubungi owner/support.',
+    }
+  }
   if (!syncStatusStore.online) {
     return {
       tone: 'muted',
@@ -189,6 +198,9 @@ watch(
     reconciliationMessage.value = ''
     showClearConfirm.value = false
     syncContextGuardStore.resetPresentation()
+    // INT-04: re-read local sync state so a retained envelope stays visible
+    // even after a membership/subscription revocation flips cloud access off.
+    await syncStatusStore.refresh()
     if (canSync.value) {
       await syncContextGuardStore.check()
     }
@@ -1426,7 +1438,7 @@ onMounted(async () => {
 
       <!-- INT-04: Sync Request Reconciliation -->
       <div
-        v-if="canSync && reconciliationPresentation"
+        v-if="reconciliationPresentation"
         id="cloud-reconciliation-section"
         class="space-y-3 rounded-2xl border p-4"
         :class="

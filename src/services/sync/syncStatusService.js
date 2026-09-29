@@ -168,7 +168,10 @@ export function deriveSyncUiStatus({
   reconciliationRequired = false,
   reconciliationOutcome = null,
 } = {}) {
-  if (!cloudAvailable) {
+  // A retained envelope is never masked by a missing/revoked cloud context: if
+  // membership/subscription is revoked while a request is outstanding, the
+  // pending data must stay visible instead of silently reading as "Lokal".
+  if (!cloudAvailable && hasInflight !== true) {
     return {
       status: SYNC_UI_LOCAL,
       label: 'Lokal',
@@ -216,6 +219,18 @@ export function deriveSyncUiStatus({
         status: SYNC_UI_RECONCILIATION_COMMITTED,
         label: 'Diterima server',
         detail: 'Pengiriman sudah diterima server dan sedang diselesaikan secara lokal.',
+      }
+    }
+
+    // Membership/subscription revoked while a request is still outstanding:
+    // the pending envelope stays visible as an access problem, never as a
+    // successful/synced state and never as plain "Lokal".
+    if (!cloudAvailable) {
+      return {
+        status: SYNC_UI_ACCESS_DENIED,
+        label: 'Akses cloud ditolak',
+        detail:
+          'Pengiriman tertunda karena akses cloud (membership/langganan) tidak aktif. Data lokal tetap aman.',
       }
     }
 

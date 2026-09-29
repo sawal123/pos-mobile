@@ -41,14 +41,18 @@ Query:  business_id        (required)
 Auth:   Sanctum mobile token (Authorization: Bearer …), same as other sync calls
 ```
 
-Response:
+Response (Laravel API Resource — wrapped in `data`):
 
-| Status            | Body                                          | Meaning                                  |
-| ----------------- | --------------------------------------------- | ---------------------------------------- |
-| `200 committed`   | `{ status: 'committed', processed_at: ISO }`  | the request was applied server-side      |
-| `200 not_found`   | `{ status: 'not_found', processed_at: null }` | no committed record for this request     |
-| `401/403`         | error body                                    | access denied (token/device/membership)  |
-| `5xx` / timeout   | —                                             | outcome still undetermined               |
+| Status            | Body                                                          | Meaning                                  |
+| ----------------- | ------------------------------------------------------------- | ---------------------------------------- |
+| `200 committed`   | `{ request_id, status: 'committed', processed_at: ISO }`      | the request was applied server-side      |
+| `200 not_found`   | `{ request_id, status: 'not_found', processed_at: null }`     | no committed record for this request     |
+| `401/403`         | error body                                                    | access denied (token/device/membership)  |
+| `5xx` / timeout   | —                                                             | outcome still undetermined               |
+
+The client only treats a body as `committed` when the echoed `request_id`
+equals `envelope.requestId`; a missing or mismatched id is rejected and no
+local cleanup is performed (see §3.7).
 
 The client never stores the bearer token: it is read from the existing secure
 token repository (`tokenRepository`) per call, attached as an `Authorization`
@@ -128,7 +132,7 @@ surfaces "waiting reconciliation", offers a controlled re-check, and flags
 
 | Situation                                  | Persisted on the envelope                                                     |
 | ------------------------------------------ | ----------------------------------------------------------------------------- |
-| Transport loss / malformed `2xx` / `5xx`   | `acceptanceUnknown: true`, `acceptance: 'unknown'`, `reconciliationOutcome: 'unreachable'` |
+| Transport loss / malformed `2xx` / `5xx`   | `acceptanceUnknown: true`, `acceptance: 'unknown'`, `reconciliationOutcome: 'unreachable'` (directly reconcilable — see §3.7) |
 | `403` on a retry whose acceptance is unknown | `acceptanceUnknown: true`, `acceptance: 'unknown'`, `reconciliationRequired: true`, `reconciliationCode: 'SYNC_RECONCILIATION_REQUIRED'`, `reconciliationOutcome: 'unknown'` |
 | Server accepted but local cleanup failed   | `acceptance: 'accepted'`, `reconciliationOutcome: 'cleanup_failed'`, `reconciliationCode: 'LOCAL_SYNC_CLEANUP_FAILED'` |
 
@@ -168,6 +172,15 @@ requires reconciliation the misleading "Coba Ulang Push" recovery button is
 suppressed (`recoveryActions`), so the user is not offered a no-op resend.
 Activity-log type `reconciliation` / action `RECONCILE_REQUEST` was added.
 
+### 3.7 Final reconciliation hardening
+
+| # | Finding | Fix |
+| - | ------- | --- |
+| 1 | A network-error envelope only carried `acceptanceUnknown` and was therefore **not** reconcilable (`SYNC_RECONCILIATION_NOT_REQUIRED`) — the user had to resend before they could check the status. | `needsReconciliation` now also accepts `acceptanceUnknown === true`, so the INT-03 status lookup is offered **immediately**, without resending. The safe idempotent retry (same `request_id`, server dedupe) is untouched and still available. |
+| 2 | A `committed` body was trusted without checking `request_id`. | The client now requires `response.request_id === envelope.requestId`. A missing or mismatched id is rejected as `UNREACHABLE` (`REQUEST_ID_MISSING` / `REQUEST_ID_MISMATCH`) and **no CAS cleanup / envelope clear** happens. All INT-03 mocks were updated to the real Laravel contract (Resource body echoing `request_id`). |
+| 3 | `applyCommittedAcknowledgment` cleared the envelope **before** saving `sync_server_versions_v1` and swallowed a version-save failure — the recovery information could be lost. | Server versions are now persisted **before** any destructive cleanup; if that write fails, nothing is removed and the envelope is kept (`CLEANUP_FAILED`). The return value exposes `versionMetadataPersisted`. A regression asserts a failing `saveSyncServerVersions()` keeps the envelope + outbox, and that versions are still learned when a row was mutated in-flight (CAS preserved). |
+| 4 | A pending envelope was hidden behind `SYNC_UI_LOCAL` when membership/subscription was revoked, so the UI looked fully synced. | `deriveSyncUiStatus` never masks a retained envelope: with `cloudAvailable === false` and `hasInflight === true` it reports `SYNC_UI_ACCESS_DENIED`. The reconciliation card in `CloudLoginView` is now shown regardless of `canSync`, uses a dedicated "access revoked" message, and status is re-read on context change. `SYNC_UI_CLEAR` is still impossible while an envelope/queue row is outstanding. |
+
 ---
 
 ## 4. Files changed
@@ -186,7 +199,7 @@ Activity-log type `reconciliation` / action `RECONCILE_REQUEST` was added.
 | `src/services/sync/syncActivityLogService.js`       | additive `reconciliation` type / `RECONCILE_REQUEST` action.                                                                   |
 | `src/services/sync/index.js`                        | exports + foundation wiring.                                                                                                  |
 | `src/main.js`                                       | store initialization.                                                                                                         |
-| `src/__tests__/sync-reconciliation.spec.js`         | **new** — 26 regression tests.                                                                                                 |
+| `src/__tests__/sync-reconciliation.spec.js`         | **new** — 37 regression tests (incl. the §3.7 hardening regressions).                                                          |
 | `docs/sync/INT04_REQUEST_RECONCILIATION.md`         | **new** — this document.                                                                                                       |
 
 No database schema migration was required: the envelope and cloud context are
@@ -196,7 +209,7 @@ stored as opaque JSON, and the inflight validator tolerates additional fields.
 
 ## 5. Tests
 
-`src/__tests__/sync-reconciliation.spec.js` (26 tests) covers the required
+`src/__tests__/sync-reconciliation.spec.js` (37 tests) covers the required
 regression list:
 
 - response lost after the server committed → reconciled `committed`, drained, no resend;
@@ -215,6 +228,13 @@ regression list:
 - no retry storm (in-progress guard, single status call per attempt);
 - granular sync-status derivation and "never CLEAR while outstanding".
 
+§3.7 hardening regressions:
+
+- network error → status `committed` / `not_found` / restart → reconcile, without resending, while the idempotent retry path stays available;
+- committed body with missing / mismatched `request_id` → rejected with no local cleanup;
+- failing `saveSyncServerVersions()` keeps the envelope + outbox; versions are still learned when a row was mutated in-flight (CAS preserved);
+- a pending envelope stays visible (`SYNC_UI_ACCESS_DENIED`, never `LOCAL`/`CLEAR`) while membership/subscription is revoked.
+
 These are **mock-based unit tests only** — they do not prove the real backend
 integration.
 
@@ -228,11 +248,13 @@ npm run build         # 159 modules transformed, built successfully
 git diff --check      # clean (no whitespace/conflict markers)
 ```
 
-Lint (non-mutating, changed files only): the new files are clean. The remaining
+Lint (non-mutating, changed files only): the new/changed files are clean. The
+only lint error surfaced on the touched files is a `no-useless-assignment`
+(`hasInflight = false`) in `syncStatusService.js`, which is **pre-existing on
+`main`** (identical at `HEAD`) and was intentionally left untouched. The
 `no-unused-vars` findings in `syncPushService.js` (`isReusedEnvelope`, two unused
-`catch` params) and the unused re-exports in `sync/index.js` are **pre-existing
-on `main`** (already reported in the INT-02 document) and were intentionally left
-untouched.
+`catch` params) and the unused re-exports in `sync/index.js` are likewise
+**pre-existing on `main`** (already reported in the INT-02 document).
 
 ---
 
@@ -258,16 +280,17 @@ untouched.
 
 ## 8. Test run log
 
-(Recorded during this branch's validation.)
+(Recorded during this branch's validation, including the §3.7 hardening.)
 
 - Targeted — `npx vitest run src/__tests__/sync-reconciliation.spec.js`
-  - run #1: 26 passed
-  - run #2: 26 passed
+  - run #1: 37 passed
+  - run #2: 37 passed
 - Full — `npx vitest run`
-  - run #1: 1277 passed | 3 skipped (pre-existing skips) — see note
-  - run #2: 1277 passed | 3 skipped
+  - run #1: 1288 passed | 3 skipped (pre-existing skips) — exit 0
+  - run #2: 1288 passed | 3 skipped
+- Build — `npm run build`: 159 modules transformed, built successfully.
+- Hygiene — `git diff --check`: clean.
 
-Note: an intermediate full run showed 2 failures in `sync-push-outbox.spec.js`
-caused by an early draft that marked cleanup failures as non-retryable; the
-implementation was corrected so the existing safe retry stays intact (no test was
-modified). The final two full runs are green.
+The 37 reconciliation tests include the §3.7 hardening regressions (acceptance
+unknown → committed/not_found/restart, `request_id` validation, version-metadata
+failure, revoked-access UI visibility).
