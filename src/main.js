@@ -23,6 +23,7 @@ import { useSyncRecoveryStore } from './stores/syncRecoveryStore'
 import { useSyncActivityLogStore } from './stores/syncActivityLogStore'
 import { useSyncAutoSyncStore } from './stores/syncAutoSyncStore'
 import { useSyncStatusStore } from './stores/syncStatusStore'
+import { useSyncReconciliationStore } from './stores/syncReconciliationStore'
 import { useSyncContextGuardStore } from './stores/syncContextGuardStore'
 import { createRuntimeSignalService } from './services/runtime/runtimeSignalService'
 
@@ -162,6 +163,12 @@ export async function bootstrapApp({
       if (syncFoundation?.recoveryService) {
         const syncRecoveryStore = useSyncRecoveryStore(pinia)
         syncRecoveryStore.init({ recoveryService: syncFoundation.recoveryService })
+      }
+      if (syncFoundation?.reconciliationService) {
+        const syncReconciliationStore = useSyncReconciliationStore(pinia)
+        syncReconciliationStore.init({
+          reconciliationService: syncFoundation.reconciliationService,
+        })
       }
       if (syncFoundation?.activityLogService) {
         const syncActivityLogStore = useSyncActivityLogStore(pinia)

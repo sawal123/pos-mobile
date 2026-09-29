@@ -16,6 +16,8 @@ import { useSyncRecoveryStore } from '@/stores/syncRecoveryStore'
 import { useSyncActivityLogStore } from '@/stores/syncActivityLogStore'
 import { useSyncAutoSyncStore } from '@/stores/syncAutoSyncStore'
 import { useSyncContextGuardStore } from '@/stores/syncContextGuardStore'
+import { useSyncStatusStore } from '@/stores/syncStatusStore'
+import { useSyncReconciliationStore } from '@/stores/syncReconciliationStore'
 
 const cloudStore = useCloudSessionStore()
 const syncPushStore = useSyncPushStore()
@@ -28,6 +30,8 @@ const syncRecoveryStore = useSyncRecoveryStore()
 const syncActivityLogStore = useSyncActivityLogStore()
 const syncAutoSyncStore = useSyncAutoSyncStore()
 const syncContextGuardStore = useSyncContextGuardStore()
+const syncStatusStore = useSyncStatusStore()
+const syncReconciliationStore = useSyncReconciliationStore()
 
 // ── Form state ──────────────────────────────────────────────────────────────
 const email = ref('')
@@ -45,6 +49,8 @@ const conflictMessage = ref('')
 const conflictSuccess = ref(false)
 const recoveryMessage = ref('')
 const recoverySuccess = ref(false)
+const reconciliationMessage = ref('')
+const reconciliationSuccess = ref(false)
 const autoSyncMessage = ref('')
 const autoSyncSuccess = ref(false)
 const showClearConfirm = ref(false)
@@ -76,6 +82,7 @@ const isAnySyncOperationBusy = computed(
     syncConflictStore.loading ||
     syncHealthStore.loading ||
     syncRecoveryStore.loading ||
+    syncReconciliationStore.loading ||
     syncActivityLogStore.loading ||
     syncAutoSyncStore.running ||
     cloudStore.loading,
@@ -103,6 +110,71 @@ const recoveryPlan = computed(() => {
   return syncRecoveryStore.getRecoveryPlan(syncHealthStore.lastResult)
 })
 
+// INT-04: when an envelope is awaiting reconciliation, re-sending ("Coba Ulang
+// Push") would be a misleading no-op — the dedicated reconciliation section
+// provides the controlled action instead.
+const recoveryActions = computed(() => {
+  const actions = recoveryPlan.value?.availableActions ?? []
+  if (syncStatusStore.reconciliationRequired) {
+    return actions.filter((action) => action !== 'RETRY_INFLIGHT')
+  }
+  return actions
+})
+
+// INT-04: granular acceptance presentation for a retained in-flight envelope.
+const reconciliationPresentation = computed(() => {
+  if (!syncStatusStore.hasInflight) return null
+
+  const outcome = syncStatusStore.reconciliationOutcome
+  const acceptance = syncStatusStore.acceptance
+
+  if (outcome === 'access_denied') {
+    return {
+      tone: 'danger',
+      message:
+        'Akses cloud ditolak. Data lokal tetap aman. Hubungi owner/support sebelum mencoba rekonsiliasi lagi.',
+    }
+  }
+  if (outcome === 'cleanup_failed') {
+    return {
+      tone: 'danger',
+      message: 'Server sudah menerima pengiriman, tetapi pembersihan antrean lokal gagal.',
+    }
+  }
+  if (acceptance === 'accepted') {
+    return {
+      tone: 'info',
+      message: 'Pengiriman sudah diterima server. Selesaikan pembersihan lokal dengan rekonsiliasi.',
+    }
+  }
+  // Membership/subscription revoked while a request is outstanding: keep the
+  // pending envelope visible instead of hiding it behind a synced-looking UI.
+  if (!cloudStore.hasCloudAccess || !cloudStore.isAuthenticated) {
+    return {
+      tone: 'danger',
+      message:
+        'Akses cloud (membership/langganan) tidak aktif. Pengiriman yang tertunda tetap tersimpan lokal dan belum tersinkron; hubungi owner/support.',
+    }
+  }
+  if (!syncStatusStore.online) {
+    return {
+      tone: 'muted',
+      message: 'Status pengiriman belum pasti dan menunggu koneksi internet.',
+    }
+  }
+  if (acceptance === 'unknown' || syncStatusStore.reconciliationRequired) {
+    return {
+      tone: 'warning',
+      message:
+        'Status penerimaan pengiriman belum pasti. Lakukan rekonsiliasi terkontrol dan jangan mengirim ulang paksa.',
+    }
+  }
+  return {
+    tone: 'warning',
+    message: 'Terdapat pengiriman yang belum selesai dan perlu diperiksa.',
+  }
+})
+
 watch(canSync, async (isReady) => {
   if (isReady) {
     await syncPushStore.refreshPendingCount()
@@ -122,8 +194,13 @@ watch(
   async () => {
     syncHealthStore.resetResult()
     resetRecoveryPresentation()
+    syncReconciliationStore.resetResult()
+    reconciliationMessage.value = ''
     showClearConfirm.value = false
     syncContextGuardStore.resetPresentation()
+    // INT-04: re-read local sync state so a retained envelope stays visible
+    // even after a membership/subscription revocation flips cloud access off.
+    await syncStatusStore.refresh()
     if (canSync.value) {
       await syncContextGuardStore.check()
     }
@@ -136,6 +213,7 @@ onMounted(async () => {
   } else {
     syncContextGuardStore.resetPresentation()
   }
+  void syncStatusStore.refresh()
 })
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -208,6 +286,7 @@ function formatActivityAction(action) {
     CONTINUE_PENDING: 'Lanjutkan Sinkronisasi',
     PREPARE_BOOTSTRAP: 'Siapkan Data Lokal',
     CONTINUE_BOOTSTRAP: 'Lanjutkan Data Bootstrap',
+    RECONCILE_REQUEST: 'Periksa Rekonsiliasi',
   }
   return map[action] || action || 'Sinkronisasi'
 }
@@ -231,6 +310,9 @@ function formatActivitySummary(entry) {
   }
   if (entry.type === 'recovery') {
     return `Pemulihan: ${formatActivityAction(entry.action)}`
+  }
+  if (entry.type === 'reconciliation') {
+    return `Rekonsiliasi: ${entry.code || 'Selesai'}`
   }
   if (entry.type === 'conflict') {
     return `Penyelesaian: ${formatActivityAction(entry.action)}`
@@ -486,6 +568,56 @@ async function handleRecovery(action) {
   } else {
     recoverySuccess.value = false
     recoveryMessage.value = result.message || result.error?.message || 'Pemulihan gagal.'
+  }
+}
+
+// INT-04: controlled, single-shot re-check of a retained envelope's server
+// outcome. Never loops, never auto-generates a new request_id.
+async function handleReconcileRequests() {
+  if (isAnySyncOperationBusy.value) return
+  reconciliationMessage.value = ''
+  const startedAt = new Date().toISOString()
+  const ctx = snapshotCloudContext()
+  let result
+  try {
+    result = await syncReconciliationStore.reconcile()
+  } catch (err) {
+    result = { ok: false, code: 'EXCEPTION', message: err.message }
+  }
+
+  const finishedAt = new Date().toISOString()
+  const status = result.ok
+    ? result.code === 'SYNC_RECONCILIATION_NOT_FOUND'
+      ? 'attention'
+      : 'success'
+    : result.code === 'SYNC_RECONCILIATION_ACCESS_DENIED'
+      ? 'blocked'
+      : 'failed'
+
+  void syncActivityLogStore.record({
+    type: 'reconciliation',
+    action: 'RECONCILE_REQUEST',
+    status,
+    code: result.code || 'SYNC_RECONCILIATION_COMPLETED',
+    startedAt,
+    finishedAt,
+    ...ctx,
+    summary: { stage: result.code || null },
+  })
+
+  reconciliationSuccess.value =
+    result.ok === true && result.code !== 'SYNC_RECONCILIATION_NOT_FOUND'
+  reconciliationMessage.value = result.message || result.error?.message || 'Rekonsiliasi selesai.'
+
+  try {
+    await syncPushStore.refreshPendingCount()
+  } catch {
+    // Non-blocking best-effort refresh
+  }
+  try {
+    await syncStatusStore.refresh()
+  } catch {
+    // Non-blocking best-effort refresh
   }
 }
 
@@ -1246,7 +1378,7 @@ onMounted(async () => {
           class="flex flex-wrap gap-2"
         >
           <BaseButton
-            v-if="recoveryPlan.availableActions.includes('RETRY_INFLIGHT')"
+            v-if="recoveryActions.includes('RETRY_INFLIGHT')"
             id="recovery-retry-inflight-btn"
             variant="primary"
             size="sm"
@@ -1301,6 +1433,45 @@ onMounted(async () => {
           :class="recoverySuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'"
         >
           {{ recoveryMessage }}
+        </p>
+      </div>
+
+      <!-- INT-04: Sync Request Reconciliation -->
+      <div
+        v-if="reconciliationPresentation"
+        id="cloud-reconciliation-section"
+        class="space-y-3 rounded-2xl border p-4"
+        :class="
+          reconciliationPresentation.tone === 'danger'
+            ? 'border-danger/30 bg-danger/5'
+            : 'border-amber-500/30 bg-amber-500/5'
+        "
+      >
+        <div>
+          <p class="text-sm font-semibold text-ink-primary">Rekonsiliasi Pengiriman</p>
+          <p id="reconciliation-message" class="text-xs text-ink-secondary">
+            {{ reconciliationPresentation.message }}
+          </p>
+        </div>
+
+        <BaseButton
+          id="reconciliation-recheck-btn"
+          variant="secondary"
+          size="sm"
+          :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
+          :loading="syncReconciliationStore.loading"
+          @click="handleReconcileRequests"
+        >
+          Periksa Ulang Status Pengiriman
+        </BaseButton>
+
+        <p
+          v-if="reconciliationMessage"
+          id="reconciliation-result-message"
+          class="rounded-xl px-3 py-2 text-xs font-medium"
+          :class="reconciliationSuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'"
+        >
+          {{ reconciliationMessage }}
         </p>
       </div>
 

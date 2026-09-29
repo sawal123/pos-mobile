@@ -6,6 +6,7 @@ export const SYNC_ACTIVITY_TYPES = Object.freeze([
   'conflict',
   'health',
   'recovery',
+  'reconciliation',
 ])
 
 export const SYNC_ACTIVITY_STATUSES = Object.freeze([
@@ -28,6 +29,7 @@ export const SYNC_ACTIVITY_ACTIONS = Object.freeze({
   CONTINUE_PENDING: 'CONTINUE_PENDING',
   PREPARE_BOOTSTRAP: 'PREPARE_BOOTSTRAP',
   CONTINUE_BOOTSTRAP: 'CONTINUE_BOOTSTRAP',
+  RECONCILE_REQUEST: 'RECONCILE_REQUEST',
 })
 
 export const TYPE_ACTION_MAP = Object.freeze({
@@ -43,6 +45,7 @@ export const TYPE_ACTION_MAP = Object.freeze({
     'PREPARE_BOOTSTRAP',
     'CONTINUE_BOOTSTRAP',
   ],
+  reconciliation: ['RECONCILE_REQUEST'],
 })
 
 export const ALLOWED_TOP_LEVEL_KEYS = Object.freeze(

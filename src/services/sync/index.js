@@ -23,6 +23,7 @@ import {
 } from './syncAutoSyncService'
 import { createSyncStatusService } from './syncStatusService'
 import { createSyncContextGuardService } from './syncContextGuardService'
+import { createSyncReconciliationService } from './syncReconciliationService'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 
 export { SYNC_ENTITY_TYPES, SYNC_OPERATIONS, SYNC_RESERVED_CATEGORY } from './syncConstants'
@@ -65,6 +66,11 @@ export {
   SYNC_UI_SYNCING,
   SYNC_UI_CONFLICT,
   SYNC_UI_RECOVERY_REQUIRED,
+  SYNC_UI_RECONCILIATION_COMMITTED,
+  SYNC_UI_RECONCILIATION_REQUIRED,
+  SYNC_UI_RECONCILIATION_WAITING,
+  SYNC_UI_ACCESS_DENIED,
+  SYNC_UI_CLEANUP_FAILED,
   SYNC_UI_OFFLINE,
   SYNC_UI_RESTRICTED,
   SYNC_UI_PENDING,
@@ -73,6 +79,15 @@ export {
   SYNC_UI_STATUSES,
 } from './syncStatusService'
 export { createSyncContextGuardService } from './syncContextGuardService'
+export {
+  fetchSyncRequestStatus,
+  SYNC_REQUEST_STATUS_COMMITTED,
+  SYNC_REQUEST_STATUS_NOT_FOUND,
+} from './syncRequestStatusTransport'
+export {
+  createSyncReconciliationService,
+  SYNC_RECONCILIATION_RESULTS,
+} from './syncReconciliationService'
 export {
   SYNC_PUSH_MODE_FULL,
   SYNC_PUSH_MODE_CASHIER_SAFE,
@@ -181,6 +196,17 @@ export function initializeSyncFoundation({ pinia, adapter, scheduler }) {
     adapter,
     capabilityProvider: pinia ? () => useCloudSessionStore(pinia).pushPolicy : null,
   })
+  // INT-04: reconciles a retained push envelope whose server acceptance is
+  // unknown (transport loss, 403-on-retry, or a failed local cleanup) against
+  // the INT-03 request-status endpoint. Context guard is shared so a
+  // cross-tenant envelope can never be resolved.
+  const reconciliationService = createSyncReconciliationService({
+    adapter,
+    scheduler,
+    queueService,
+    registry,
+    contextGuardService,
+  })
 
   return {
     contextGuardService,
@@ -197,5 +223,6 @@ export function initializeSyncFoundation({ pinia, adapter, scheduler }) {
     activityLogService,
     autoSyncService,
     statusService,
+    reconciliationService,
   }
 }

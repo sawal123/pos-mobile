@@ -8,6 +8,9 @@ export const useSyncStatusStore = defineStore('syncStatus', () => {
   const openConflictCount = ref(0)
   const restrictedCount = ref(0)
   const hasInflight = ref(false)
+  const acceptance = ref(null)
+  const reconciliationRequired = ref(false)
+  const reconciliationOutcome = ref(null)
   const lastCheckedAt = ref(null)
   const lastError = ref(null)
 
@@ -41,6 +44,10 @@ export const useSyncStatusStore = defineStore('syncStatus', () => {
         openConflictCount.value = res.openConflictCount
         restrictedCount.value = Number.isInteger(res.restrictedCount) ? res.restrictedCount : 0
         hasInflight.value = res.hasInflight
+        acceptance.value = typeof res.acceptance === 'string' ? res.acceptance : null
+        reconciliationRequired.value = res.reconciliationRequired === true
+        reconciliationOutcome.value =
+          typeof res.reconciliationOutcome === 'string' ? res.reconciliationOutcome : null
         lastCheckedAt.value = res.checkedAt
         lastError.value = null
       } else {
@@ -88,6 +95,9 @@ export const useSyncStatusStore = defineStore('syncStatus', () => {
     openConflictCount,
     restrictedCount,
     hasInflight,
+    acceptance,
+    reconciliationRequired,
+    reconciliationOutcome,
     lastCheckedAt,
     lastError,
     init,
