@@ -86,6 +86,44 @@ const icons = {
     'M4 15h7v3H4v-3Z',
     'M13 15h7v3h-7v-3Z',
   ],
+  crown: [
+    'M4 8l4 4 4-7 4 7 4-4-2 11H6L4 8Z',
+    'M6 20h12',
+  ],
+  cloud: [
+    'M7 18a4 4 0 0 1 0-8 5.5 5.5 0 0 1 10.6 1.6A3.5 3.5 0 0 1 17 18H7Z',
+  ],
+  sync: [
+    'M20 11a8 8 0 0 0-14.1-5',
+    'M4 5v5h5',
+    'M4 13a8 8 0 0 0 14.1 5',
+    'M20 19v-5h-5',
+  ],
+  backup: [
+    'M12 4v10',
+    'M8 10l4 4 4-4',
+    'M4 19h16',
+  ],
+  restore: [
+    'M12 20V10',
+    'M8 14l4-4 4 4',
+    'M4 5h16',
+  ],
+  lock: [
+    'M6 11h12v9H6v-9Z',
+    'M9 11V8a3 3 0 0 1 6 0v3',
+  ],
+  'chevron-left': [
+    'M15 5l-7 7 7 7',
+  ],
+  'chevron-right': [
+    'M9 5l7 7-7 7',
+  ],
+  store: [
+    'M4 9h16v11H4V9Z',
+    'M4 9l1.5-5h13L20 9',
+    'M9 20v-6h6v6',
+  ],
 }
 
 const iconPaths = computed(() => icons[props.name] ?? icons.more)

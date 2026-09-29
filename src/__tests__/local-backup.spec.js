@@ -307,11 +307,6 @@ function getButtonByText(wrapper, label) {
   return wrapper.findAll('button').find((button) => button.text().includes(label))
 }
 
-async function openSettingsSheet(wrapper) {
-  await getButtonByText(wrapper, 'Aksi Lainnya').trigger('click')
-  await flushPromises()
-}
-
 async function uploadBackupFile(wrapper, fileLike) {
   const input = wrapper.find('input[type="file"]')
   Object.defineProperty(input.element, 'files', {
@@ -488,7 +483,6 @@ describe('P7 local backup & restore JSON', () => {
     const { wrapper, productStore } = await mountSettings()
     const initialProducts = JSON.stringify(productStore.products)
 
-    await openSettingsSheet(wrapper)
     await uploadBackupFile(wrapper, {
       name: 'broken.json',
       text: async () => '{ invalid json',
@@ -841,7 +835,6 @@ describe('P7 local backup & restore JSON', () => {
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
     const before = JSON.stringify(productStore.products)
 
-    await openSettingsSheet(wrapper)
     await uploadBackupFile(wrapper, {
       name: 'backup.json',
       text: async () => JSON.stringify(makeValidBackup()),
@@ -879,7 +872,6 @@ describe('P7 local backup & restore JSON', () => {
     })
 
     const { wrapper } = await mountSettings()
-    await openSettingsSheet(wrapper)
     await getButtonByText(wrapper, 'Backup Data').trigger('click')
 
     expect(createObjectURLSpy).toHaveBeenCalledTimes(1)
