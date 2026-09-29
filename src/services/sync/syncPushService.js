@@ -2,6 +2,7 @@ import { pushSyncRequest } from './syncPushTransport'
 import { createSyncQueueService } from './syncQueueService'
 import { createSyncIdentityRegistry, generateUuid } from './syncIdentityRegistry'
 import { mapOutboxEntries } from './contractMapper'
+import { applyCommittedAcknowledgment } from './syncCommittedAck'
 import { SYNC_ENTITY_TYPES, SYNC_RESERVED_CATEGORY } from './syncConstants'
 import { getToken } from '@/services/cloud/tokenRepository'
 import {
@@ -705,10 +706,11 @@ export function createSyncPushService({
             'Pengiriman sebelumnya mungkin sudah diterima server. Rekonsiliasi diperlukan sebelum mencoba lagi; data lokal tetap aman.',
           requestId: existingEnvelope.requestId,
           policy,
-          acceptance: 'unknown',
+          acceptance: existingEnvelope.acceptance ?? 'unknown',
           reconciliationRequired: true,
           reconciliationCode:
             existingEnvelope.reconciliationCode ?? 'SYNC_RECONCILIATION_REQUIRED',
+          reconciliationOutcome: existingEnvelope.reconciliationOutcome ?? null,
           sentQueueIds: [],
           removedQueueIds: [],
           preservedQueueIds: [],
@@ -1490,123 +1492,43 @@ export function createSyncPushService({
 
       if (isServerSuccess) {
         const duplicate = Boolean(respData.duplicate)
-        const removedQueueIds = []
-        const preservedQueueIds = []
-        const cleanupFailedQueueIds = []
-
-        // Superseded snapshots never travelled, but their entity row did via
-        // the newest snapshot: clear them unconditionally by id so a stale
-        // duplicate row can never be sent on the next push. New server
-        // versions learned from this push are persisted so the next push
-        // carries fresh base_sync_version values.
-        for (const snapshot of [
-          ...(envelope.supersededSnapshots ?? []),
-          ...envelope.queueSnapshots,
-        ]) {
-          const casResult =
-            snapshot?.id && (envelope.supersededSnapshots ?? []).some((s) => s.id === snapshot.id)
-              ? await activeQueueService.remove(snapshot.id)
-              : await activeQueueService.removeIfUnchanged(snapshot)
-          if (casResult.ok) {
-            if (casResult.removed ?? true) {
-              removedQueueIds.push(snapshot.id)
-            } else {
-              // CAS mismatch: entity mutated locally while request was in-flight — normal, preserve it
-              preservedQueueIds.push(snapshot.id)
-            }
-          } else {
-            // Storage/SQLite error: not a CAS mismatch, local cleanup genuinely failed
-            cleanupFailedQueueIds.push(snapshot.id)
-          }
-        }
-
-        const hasStorageError = cleanupFailedQueueIds.length > 0
-
-        if (!hasStorageError && adapter && typeof adapter.clearSyncPushInflight === 'function') {
-          await adapter.clearSyncPushInflight()
-        }
-
-        // Learn fresh server versions for every travelled row: the push just
-        // created version 1 for new rows, so a follow-up mutation of the same
-        // entity must carry base_sync_version 1 instead of replaying null.
-        if (
-          !hasStorageError &&
-          adapter &&
-          typeof adapter.loadSyncServerVersions === 'function' &&
-          typeof adapter.saveSyncServerVersions === 'function'
-        ) {
-          try {
-            const existingVersions = (await adapter.loadSyncServerVersions()) || {}
-            const nextVersions = { ...existingVersions }
-            const queueSyncId = async (entityType, entityId) => {
-              try {
-                return await activeRegistry.peekSyncId(entityType, entityId)
-              } catch {
-                return null
-              }
-            }
-            for (const snapshot of envelope.queueSnapshots) {
-              const syncId = await queueSyncId(snapshot.entityType, snapshot.entityId)
-              if (!syncId) continue
-              const lower = `${syncId}`.toLowerCase()
-              const serverKey =
-                snapshot.entityType === 'category'
-                  ? `categories:${lower}`
-                  : snapshot.entityType === 'product'
-                    ? `products:${lower}`
-                    : snapshot.entityType === 'customer'
-                      ? `customers:${lower}`
-                      : snapshot.entityType === 'expense'
-                        ? `expenses:${lower}`
-                        : snapshot.entityType === 'shift'
-                          ? `shifts:${lower}`
-                          : snapshot.entityType === 'transaction'
-                            ? `sales:${lower}`
-                            : snapshot.entityType === 'cash_entry'
-                              ? `cash_ledger:${lower}`
-                              : snapshot.entityType === 'stock_movement'
-                                ? `stock_movements:${lower}`
-                                : null
-              if (serverKey && nextVersions[serverKey] === undefined) {
-                nextVersions[serverKey] = { syncVersion: 1, syncSequence: 0 }
-              }
-              // Sale-item rows are derived deterministically from the parent
-              // transaction row: learn their versions too so a follow-up
-              // transaction mutation carries fresh item base versions.
-              if (snapshot.entityType === 'transaction') {
-                const payloadItems = Array.isArray(snapshot.payload?.items)
-                  ? snapshot.payload.items
-                  : []
-                for (let i = 0; i < payloadItems.length; i++) {
-                  const item = payloadItems[i]
-                  const prodLocalId = item?.id ?? item?.productId ?? item?.product_id ?? item?.name
-                  try {
-                    const itemSyncId = await activeRegistry.peekSyncId(
-                      'sale_item',
-                      `${snapshot.entityId}:${i}:${prodLocalId}`,
-                    )
-                    if (itemSyncId) {
-                      const itemKey = `sale_items:${`${itemSyncId}`.toLowerCase()}`
-                      if (nextVersions[itemKey] === undefined) {
-                        nextVersions[itemKey] = { syncVersion: 1, syncSequence: 0 }
-                      }
-                    }
-                  } catch {
-                    // best-effort only
-                  }
-                }
-              }
-            }
-            await adapter.saveSyncServerVersions(nextVersions)
-          } catch {
-            // Version learning is best-effort: the next push still works,
-            // it just replays a create-style payload on conflict.
-          }
-        }
+        // Existing acknowledgment mechanism, shared with INT-04 reconciliation:
+        // CAS-remove only the snapshots still identical to the original,
+        // preserve rows mutated while the request was in-flight, learn fresh
+        // server versions, and clear the envelope only when cleanup was safe.
+        const {
+          removedQueueIds,
+          preservedQueueIds,
+          cleanupFailedQueueIds,
+          hasStorageError,
+        } = await applyCommittedAcknowledgment({
+          adapter,
+          queueService: activeQueueService,
+          registry: activeRegistry,
+          envelope,
+        })
 
         const remaining = await activeQueueService.countPending()
 
         if (hasStorageError) {
+          // INT-04: durably mark that the server accepted this request but the
+          // local cleanup failed, so the UI can surface a distinct state while
+          // the existing idempotent retry (same request_id, server dedupe)
+          // remains available and unobstructed.
+          if (adapter && typeof adapter.saveSyncPushInflight === 'function') {
+            try {
+              await adapter.saveSyncPushInflight({
+                ...envelope,
+                acceptance: 'accepted',
+                reconciliationOutcome: 'cleanup_failed',
+                reconciliationCode: 'LOCAL_SYNC_CLEANUP_FAILED',
+                reconciliationAt: new Date().toISOString(),
+              })
+            } catch {
+              // Best effort: the returned status still marks the failure.
+            }
+          }
+
           return {
             ok: false,
             code: 'LOCAL_SYNC_CLEANUP_FAILED',
@@ -1939,8 +1861,10 @@ export function createSyncPushService({
               await adapter.saveSyncPushInflight({
                 ...envelope,
                 acceptanceUnknown: true,
+                acceptance: 'unknown',
                 reconciliationRequired: true,
                 reconciliationCode: 'SYNC_RECONCILIATION_REQUIRED',
+                reconciliationOutcome: 'unknown',
                 reconciliationAt: new Date().toISOString(),
               })
             } catch {
@@ -2102,6 +2026,8 @@ export function createSyncPushService({
           await adapter.saveSyncPushInflight({
             ...envelope,
             acceptanceUnknown: true,
+            acceptance: 'unknown',
+            reconciliationOutcome: 'unreachable',
             acceptanceUnknownAt: new Date().toISOString(),
           })
         } catch {

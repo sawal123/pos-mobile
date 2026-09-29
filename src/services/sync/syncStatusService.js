@@ -10,11 +10,25 @@ export const SYNC_UI_PENDING = 'SYNC_UI_PENDING'
 export const SYNC_UI_UNKNOWN = 'SYNC_UI_UNKNOWN'
 export const SYNC_UI_CLEAR = 'SYNC_UI_CLEAR'
 
+// INT-04: granular acceptance outcomes for a retained in-flight envelope, so a
+// pending request is never presented as a generic failure and a fully synced
+// state is never shown while the envelope/queue is still outstanding.
+export const SYNC_UI_RECONCILIATION_COMMITTED = 'SYNC_UI_RECONCILIATION_COMMITTED'
+export const SYNC_UI_RECONCILIATION_REQUIRED = 'SYNC_UI_RECONCILIATION_REQUIRED'
+export const SYNC_UI_RECONCILIATION_WAITING = 'SYNC_UI_RECONCILIATION_WAITING'
+export const SYNC_UI_ACCESS_DENIED = 'SYNC_UI_ACCESS_DENIED'
+export const SYNC_UI_CLEANUP_FAILED = 'SYNC_UI_CLEANUP_FAILED'
+
 export const SYNC_UI_STATUSES = Object.freeze([
   SYNC_UI_LOCAL,
   SYNC_UI_SYNCING,
   SYNC_UI_CONFLICT,
   SYNC_UI_RECOVERY_REQUIRED,
+  SYNC_UI_RECONCILIATION_COMMITTED,
+  SYNC_UI_RECONCILIATION_REQUIRED,
+  SYNC_UI_RECONCILIATION_WAITING,
+  SYNC_UI_ACCESS_DENIED,
+  SYNC_UI_CLEANUP_FAILED,
   SYNC_UI_OFFLINE,
   SYNC_UI_RESTRICTED,
   SYNC_UI_PENDING,
@@ -150,6 +164,9 @@ export function deriveSyncUiStatus({
   restrictedCount = 0,
   hasInflight = false,
   readError = false,
+  acceptance = null,
+  reconciliationRequired = false,
+  reconciliationOutcome = null,
 } = {}) {
   if (!cloudAvailable) {
     return {
@@ -176,6 +193,48 @@ export function deriveSyncUiStatus({
   }
 
   if (hasInflight === true) {
+    // INT-04: a retained envelope is never presented as a generic recovery
+    // state. The acceptance outcome decides the distinct UI status.
+    if (reconciliationOutcome === 'access_denied') {
+      return {
+        status: SYNC_UI_ACCESS_DENIED,
+        label: 'Akses cloud ditolak',
+        detail: 'Pengiriman tertunda karena akses cloud ditolak. Hubungi owner/support.',
+      }
+    }
+
+    if (reconciliationOutcome === 'cleanup_failed') {
+      return {
+        status: SYNC_UI_CLEANUP_FAILED,
+        label: 'Pembersihan lokal gagal',
+        detail: 'Server sudah menerima pengiriman, tetapi pembersihan lokal gagal.',
+      }
+    }
+
+    if (acceptance === 'accepted') {
+      return {
+        status: SYNC_UI_RECONCILIATION_COMMITTED,
+        label: 'Diterima server',
+        detail: 'Pengiriman sudah diterima server dan sedang diselesaikan secara lokal.',
+      }
+    }
+
+    if (online === false) {
+      return {
+        status: SYNC_UI_RECONCILIATION_WAITING,
+        label: 'Menunggu koneksi',
+        detail: 'Status pengiriman belum pasti dan menunggu koneksi untuk diperiksa.',
+      }
+    }
+
+    if (acceptance === 'unknown' || reconciliationRequired === true) {
+      return {
+        status: SYNC_UI_RECONCILIATION_REQUIRED,
+        label: 'Rekonsiliasi diperlukan',
+        detail: 'Status penerimaan pengiriman belum pasti dan perlu direkonsiliasi.',
+      }
+    }
+
     return {
       status: SYNC_UI_RECOVERY_REQUIRED,
       label: 'Perlu Pemulihan',
@@ -302,10 +361,20 @@ export function createSyncStatusService({
     }
 
     let hasInflight = false
+    let acceptance = null
+    let reconciliationRequired = false
+    let reconciliationOutcome = null
+
     if (rawInflight === null || rawInflight === undefined) {
       hasInflight = false
     } else if (isValidInflightEnvelope(rawInflight)) {
       hasInflight = true
+      acceptance = typeof rawInflight.acceptance === 'string' ? rawInflight.acceptance : null
+      reconciliationRequired = rawInflight.reconciliationRequired === true
+      reconciliationOutcome =
+        typeof rawInflight.reconciliationOutcome === 'string'
+          ? rawInflight.reconciliationOutcome
+          : null
     } else {
       return {
         ok: false,
@@ -340,6 +409,9 @@ export function createSyncStatusService({
       openConflictCount,
       restrictedCount,
       hasInflight,
+      acceptance,
+      reconciliationRequired,
+      reconciliationOutcome,
       checkedAt: new Date().toISOString(),
     }
   }

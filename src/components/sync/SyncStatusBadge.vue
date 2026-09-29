@@ -16,6 +16,11 @@ import {
   SYNC_UI_SYNCING,
   SYNC_UI_CONFLICT,
   SYNC_UI_RECOVERY_REQUIRED,
+  SYNC_UI_RECONCILIATION_COMMITTED,
+  SYNC_UI_RECONCILIATION_REQUIRED,
+  SYNC_UI_RECONCILIATION_WAITING,
+  SYNC_UI_ACCESS_DENIED,
+  SYNC_UI_CLEANUP_FAILED,
   SYNC_UI_OFFLINE,
   SYNC_UI_PENDING,
   SYNC_UI_UNKNOWN,
@@ -67,6 +72,9 @@ const uiStatus = computed(() =>
     pendingCount: statusStore.pendingCount,
     openConflictCount: statusStore.openConflictCount,
     hasInflight: statusStore.hasInflight,
+    acceptance: statusStore.acceptance,
+    reconciliationRequired: statusStore.reconciliationRequired,
+    reconciliationOutcome: statusStore.reconciliationOutcome,
     readError: Boolean(statusStore.lastError),
   }),
 )
@@ -84,9 +92,26 @@ const badgeStyles = computed(() => {
         dot: 'bg-danger animate-pulse',
       }
     case SYNC_UI_RECOVERY_REQUIRED:
+    case SYNC_UI_RECONCILIATION_REQUIRED:
+    case SYNC_UI_CLEANUP_FAILED:
       return {
         container: 'bg-amber-500/10 text-amber-600 border-amber-500/20 hover:bg-amber-500/15',
         dot: 'bg-amber-500',
+      }
+    case SYNC_UI_ACCESS_DENIED:
+      return {
+        container: 'bg-danger/10 text-danger border-danger/20 hover:bg-danger/15',
+        dot: 'bg-danger',
+      }
+    case SYNC_UI_RECONCILIATION_COMMITTED:
+      return {
+        container: 'bg-sky-500/10 text-sky-600 border-sky-500/20 hover:bg-sky-500/15',
+        dot: 'bg-sky-500',
+      }
+    case SYNC_UI_RECONCILIATION_WAITING:
+      return {
+        container: 'bg-zinc-100 text-zinc-600 border-zinc-200 hover:bg-zinc-200/70',
+        dot: 'bg-zinc-400',
       }
     case SYNC_UI_OFFLINE:
       return {
