@@ -31,6 +31,7 @@ import { usePrinterStore } from '@/stores/printerStore'
 import { useProductStore } from '@/stores/productStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import { useSubscriptionStore } from '@/stores/subscriptionStore'
+import { useSyncStatusStore } from '@/stores/syncStatusStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import { isValidTaxRate, useTaxStore } from '@/stores/taxStore'
 
@@ -44,6 +45,7 @@ const printerStore = usePrinterStore()
 const productStore = useProductStore()
 const shiftStore = useShiftStore()
 const subscriptionStore = useSubscriptionStore()
+const syncStatusStore = useSyncStatusStore()
 const transactionStore = useTransactionStore()
 const taxStore = useTaxStore()
 const router = useRouter()
@@ -92,16 +94,32 @@ const printerStatusText = computed(() => (
 
 const subscriptionStatus = computed(() => subscriptionStore.status)
 const isPremium = computed(() => subscriptionStore.isPremium)
+const showCloudDetails = computed(
+  () => isPremium.value || subscriptionStatus.value === 'unverified',
+)
 const showSubscriptionSkeleton = computed(
   () => subscriptionStore.isLoading && !subscriptionStore.entitlement.plan,
 )
 
-const cloudConnected = computed(
-  () => cloudStore.isAuthenticated === true && cloudStore.hasCloudAccess === true,
-)
-const syncStatusText = computed(() =>
-  cloudConnected.value ? 'Sinkronisasi cloud aktif' : 'Belum terhubung ke cloud',
-)
+// Cloud access and the last sync run are separate signals; neither is derived
+// from the subscription, so Premium alone never claims an active sync.
+const cloudAccessLabel = computed(() => {
+  if (cloudStore.isAuthenticated !== true) return 'Belum ada akun'
+  return subscriptionStore.hasCloudAccess ? 'Aktif' : 'Tidak aktif'
+})
+
+const lastSyncLabel = computed(() => {
+  const checkedAt = syncStatusStore.lastCheckedAt
+  if (!checkedAt) return 'Belum ada riwayat'
+  const date = new Date(checkedAt)
+  if (Number.isNaN(date.getTime())) return 'Belum ada riwayat'
+  return date.toLocaleString('id-ID', {
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+})
 
 const expiresAtLabel = computed(() => {
   if (!subscriptionStore.expiresAt) return ''
@@ -135,6 +153,14 @@ const subscriptionView = computed(() => {
         cardClass: 'border-amber-300 bg-gradient-to-br from-amber-50 to-white',
         badgeClass: 'bg-amber-100 text-amber-700',
         crownClass: 'bg-amber-100 text-amber-600',
+      }
+    case 'unverified':
+      return {
+        badge: 'BELUM TERVERIFIKASI',
+        subtitle: 'Data terakhir yang diketahui. Status langganan belum dikonfirmasi ulang.',
+        cardClass: 'border-zinc-300 bg-gradient-to-br from-zinc-50 to-white',
+        badgeClass: 'bg-zinc-200 text-zinc-700',
+        crownClass: 'bg-zinc-100 text-zinc-500',
       }
     case 'error':
       return {
@@ -545,12 +571,21 @@ async function handleRestoreFileChange(event) {
           </p>
 
           <p
-            v-if="isPremium"
+            v-if="subscriptionStatus === 'unverified' && subscriptionStore.entitlement.plan"
             class="mt-1 text-xs text-ink-secondary"
-            data-testid="subscription-sync-status"
+            data-testid="subscription-last-known-plan"
           >
-            {{ syncStatusText }}
+            Paket terakhir: {{ subscriptionStore.planLabel }}
           </p>
+
+          <div v-if="showCloudDetails" class="mt-2 space-y-0.5">
+            <p class="text-xs text-ink-secondary" data-testid="cloud-access-status">
+              Akses cloud: <span class="font-medium text-ink-primary">{{ cloudAccessLabel }}</span>
+            </p>
+            <p class="text-xs text-ink-secondary" data-testid="last-sync-status">
+              Sinkronisasi terakhir: <span class="font-medium text-ink-primary">{{ lastSyncLabel }}</span>
+            </p>
+          </div>
         </div>
 
         <AppIcon name="chevron-right" class="text-ink-secondary" />

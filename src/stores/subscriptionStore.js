@@ -9,8 +9,9 @@ import { useCloudSessionStore } from './cloudSessionStore'
  *
  * Bridges the authoritative server context held by `useCloudSessionStore` into
  * a small, stable entitlement contract for the UI. It adds no authorization:
- * the backend keeps deciding what is actually allowed. When the context is
- * unknown (loading / error / no selected business) it fails closed to Free.
+ * the backend keeps deciding what is actually allowed. Active Premium is only
+ * derived from a *verified* context; a cached snapshot is surfaced as
+ * `unverified` ("last known data"), never as a fresh Premium grant.
  */
 export const useSubscriptionStore = defineStore('subscription', () => {
   const cloudStore = useCloudSessionStore()
@@ -33,11 +34,15 @@ export const useSubscriptionStore = defineStore('subscription', () => {
     return cloudStore.selectedBusiness?.subscription ?? null
   })
 
+  /** Context is only authoritative after a refresh in this session. */
+  const isVerified = computed(() => cloudStore.capabilityState === 'verified')
+
   const entitlement = computed(() =>
     resolveEntitlement({
       subscription: selectedSubscription.value,
       loading: cloudStore.loading,
       error: cloudStore.error,
+      verified: isVerified.value,
     }),
   )
 
@@ -48,6 +53,11 @@ export const useSubscriptionStore = defineStore('subscription', () => {
   const expiresAt = computed(() => entitlement.value.expiresAt)
   const isLoading = computed(() => status.value === ENTITLEMENT_STATUS.LOADING)
 
+  /** Cloud access is a separate concern from the subscription status. */
+  const hasCloudAccess = computed(
+    () => cloudStore.isAuthenticated === true && cloudStore.hasCloudAccess === true,
+  )
+
   return {
     selectedSubscription,
     entitlement,
@@ -57,5 +67,7 @@ export const useSubscriptionStore = defineStore('subscription', () => {
     planLabel,
     expiresAt,
     isLoading,
+    isVerified,
+    hasCloudAccess,
   }
 })
