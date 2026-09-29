@@ -37,6 +37,7 @@ export const ENTITLEMENT_STATUS = Object.freeze({
 
 /** Plans the app explicitly recognises as paid. Only these may be Premium. */
 export const KNOWN_PAID_PLANS = Object.freeze([
+  'cloud',
   'pro',
   'premium',
   'business',
@@ -75,6 +76,7 @@ const PENDING_STATUSES = Object.freeze([
 ])
 
 const PLAN_LABELS = Object.freeze({
+  cloud: 'Cloud',
   pro: 'Pro',
   premium: 'Premium',
   business: 'Business',

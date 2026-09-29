@@ -120,6 +120,44 @@ describe('entitlement resolution', () => {
     expect(result.planLabel).toBe('Pro')
   })
 
+  it('a Cloud plan with status active in a verified context is Premium', () => {
+    const result = resolveEntitlement({
+      subscription: { plan: 'cloud', status: 'active' },
+      verified: true,
+    })
+    expect(result.status).toBe(ENTITLEMENT_STATUS.PREMIUM)
+    expect(result.isPremium).toBe(true)
+    expect(result.planLabel).toBe('Cloud')
+  })
+
+  it('a Cloud plan with an expired status is never Premium', () => {
+    const result = resolveEntitlement({
+      subscription: { plan: 'cloud', status: 'expired' },
+      verified: true,
+    })
+    expect(result.status).toBe(ENTITLEMENT_STATUS.EXPIRED)
+    expect(result.isPremium).toBe(false)
+  })
+
+  it('a Cloud plan with pending payment is never Premium', () => {
+    const result = resolveEntitlement({
+      subscription: { plan: 'cloud', status: 'pending' },
+      verified: true,
+    })
+    expect(result.status).toBe(ENTITLEMENT_STATUS.PENDING)
+    expect(result.isPremium).toBe(false)
+  })
+
+  it('a Cloud plan is NOT Premium when the context is unverified', () => {
+    const result = resolveEntitlement({
+      subscription: { plan: 'cloud', status: 'active' },
+      verified: false,
+    })
+    expect(result.status).toBe(ENTITLEMENT_STATUS.UNVERIFIED)
+    expect(result.isPremium).toBe(false)
+    expect(result.stale).toBe(true)
+  })
+
   it('an active paid plan is NOT Premium when the context is unverified', () => {
     const result = resolveEntitlement({
       subscription: { plan: 'pro', status: 'active' },
@@ -312,6 +350,8 @@ describe('Settings — Premium state', () => {
 
     expect(wrapper.find('[data-testid="cloud-access-status"]').text()).toContain('Aktif')
     expect(wrapper.find('[data-testid="last-sync-status"]').text()).toContain('Belum ada riwayat')
+    expect(wrapper.find('[data-testid="last-sync-status"]').text()).toContain('Status diperiksa')
+    expect(wrapper.text()).not.toContain('Sinkronisasi terakhir')
     expect(wrapper.text()).not.toContain('Sinkronisasi cloud aktif')
   })
 

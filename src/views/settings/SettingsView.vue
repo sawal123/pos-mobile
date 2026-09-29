@@ -583,7 +583,7 @@ async function handleRestoreFileChange(event) {
               Akses cloud: <span class="font-medium text-ink-primary">{{ cloudAccessLabel }}</span>
             </p>
             <p class="text-xs text-ink-secondary" data-testid="last-sync-status">
-              Sinkronisasi terakhir: <span class="font-medium text-ink-primary">{{ lastSyncLabel }}</span>
+              Status diperiksa: <span class="font-medium text-ink-primary">{{ lastSyncLabel }}</span>
             </p>
           </div>
         </div>

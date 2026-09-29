@@ -38,7 +38,7 @@ Field yang benar-benar dipakai (tidak ada data yang dikarang):
 **Premium aktif** hanya bila **semua** terpenuhi:
 
 1. `plan` termasuk paket berbayar yang dikenal (`pro`, `premium`, `business`,
-   `enterprise`, `starter`, `growth`, `plus`, `team`);
+   `enterprise`, `starter`, `growth`, `plus`, `team`, `cloud`);
 2. `status` persis `active`;
 3. tanggal kedaluwarsa — bila API memberikannya — valid dan belum lewat;
 4. konteks cloud **terverifikasi** pada sesi ini (`capabilityState === 'verified'`).
@@ -73,7 +73,7 @@ Kartu Premium menampilkan dua sinyal yang **terpisah** dan tidak diturunkan dari
 langganan:
 
 - **Akses cloud** — dari `cloud_access` / sesi cloud (`Aktif` / `Tidak aktif`).
-- **Sinkronisasi terakhir** — waktu pemeriksaan status sync terakhir
+- **Status diperiksa** — waktu pemeriksaan status sync terakhir
   (`Belum ada riwayat` bila belum pernah). UI tidak pernah menampilkan
   "Sinkronisasi aktif" hanya karena pengguna berlangganan.
 
@@ -97,4 +97,5 @@ integrasi pembayaran adalah lingkup PREM-M02 dan belum diimplementasikan di sini
 kosong, plan tidak dikenal, tanggal kedaluwarsa lewat/tidak valid, subscription
 kedaluwarsa, kegagalan refresh, konteks belum terverifikasi, isolasi entitlement
 antar business, akses cloud terpisah dari sinkronisasi, badge & CTA Free, detail
-Premium, penguncian fitur cloud-only, dan backup lokal tetap dapat diakses.
+Premium, kontrak plan `cloud` aktif/kedaluwarsa/pending/belum terverifikasi,
+penguncian fitur cloud-only, dan backup lokal tetap dapat diakses.
