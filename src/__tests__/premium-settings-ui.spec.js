@@ -489,20 +489,24 @@ describe('Settings — business context isolation', () => {
 })
 
 // ════════════════════════════════════════════════════════════════════════════
-// Subscription placeholder view
+// Subscription page (PREM-M02 replaced the placeholder)
 // ════════════════════════════════════════════════════════════════════════════
 
-describe('Subscription placeholder view', () => {
-  it('renders as an explicit PREM-M02 placeholder', async () => {
+describe('Subscription view', () => {
+  it('renders the Premium page and no longer the PREM-M02 placeholder', async () => {
     const context = prepareContext()
+    setCloudContext(context, { subscription: { plan: 'free' } })
     await context.router.push('/subscription')
     await flushPromises()
 
     const wrapper = mount(SubscriptionView, {
       global: { plugins: [context.pinia, context.router] },
     })
+    await flushPromises()
 
-    expect(wrapper.find('[data-testid="subscription-placeholder"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="subscription-placeholder-note"]').text()).toContain('PREM-M02')
+    expect(wrapper.find('[data-testid="subscription-view"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="subscription-placeholder"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="premium-benefits"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="subscription-badge"]').text()).toBe('FREE')
   })
 })
