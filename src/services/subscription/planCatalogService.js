@@ -1,24 +1,46 @@
 /**
  * PREM-M02 — Premium plan catalog adapter (isolated).
  *
- * The Laravel backend does **not** expose a plan catalog or a checkout endpoint
- * yet (`routes/api.php` only serves `/api/auth/*`, `/api/mobile/context`,
- * `/api/mobile/devices` and `/api/sync/*`). This module is the single place that
- * knows about the *proposed* catalog contract, so the rest of the app never
- * depends on an endpoint that does not exist.
+ * Speaks the **authoritative backend contract** shipped by PREM-D01/PREM-D02A:
+ *
+ *   GET /api/mobile/subscription/plans?business_id={activeBusinessId}
+ *
+ *   {
+ *     "data": {
+ *       "business_id": 1,
+ *       "plans": [
+ *         {
+ *           "code": "cloud",
+ *           "name": "Cloud",
+ *           "billing_periods": [
+ *             { "period": "monthly", "currency": "IDR", "price_minor": 123 },
+ *             { "period": "yearly",  "currency": "IDR", "price_minor": 1234 }
+ *           ],
+ *           "benefits": ["Sinkronisasi cloud"],
+ *           "available": true,
+ *           "purchasable": false
+ *         }
+ *       ],
+ *       "checkout_available": false
+ *     }
+ *   }
+ *
+ * One plan carries **all** its billing periods, so a single `cloud` plan with
+ * `monthly` + `yearly` is enough to drive the Bulanan/Tahunan choice; the backend
+ * never has to send two entries with the same code.
  *
  * Guarantees
  * ----------
- * - **No invented endpoint is ever called.** The path must be configured
- *   explicitly (`VITE_SUBSCRIPTION_PLANS_PATH`). When it is absent the adapter
- *   resolves to `unavailable` without performing any network request.
- * - **No invented price.** A plan without a usable numeric price is still listed
- *   but is explicitly *not purchasable*.
- * - Read-only: this service never charges, never retries in the background and
- *   never writes to local storage.
+ * - **No invented price.** The only price source is the backend's `price_minor`,
+ *   taken exactly as sent (no mockup numbers, no conversion). A missing/invalid
+ *   price makes the option non-purchasable and the UI honest.
+ * - **`business_id` is never hardcoded.** It comes from the active business
+ *   context; without one the adapter refuses to call the endpoint.
+ * - Read-only: no charging, no background retry, no storage writes.
  *
- * Required backend contract (handoff to PREM-D01) is documented in
- * `docs/premium/PREM_M02_PLAN_SELECTION.md`.
+ * Legacy aliases (`price`, `period`, `features`, `features`-style single-period
+ * entries) are still accepted for backward compatibility, but they are strictly
+ * subordinate: the canonical fields always win when present.
  */
 
 import { apiRequest } from '@/services/cloud/apiClient'
@@ -32,8 +54,8 @@ export const PLAN_CATALOG_STATUS = Object.freeze({
 })
 
 export const PLAN_CATALOG_REASON = Object.freeze({
-  NOT_CONFIGURED: 'not_configured',
   NOT_AUTHENTICATED: 'not_authenticated',
+  NO_BUSINESS: 'no_business',
   ENDPOINT_MISSING: 'endpoint_missing',
   REQUEST_FAILED: 'request_failed',
 })
@@ -43,19 +65,24 @@ export const PLAN_PERIOD = Object.freeze({
   YEARLY: 'yearly',
 })
 
+/** Canonical period order used for the Bulanan/Tahunan toggle. */
+export const PLAN_PERIOD_ORDER = Object.freeze([PLAN_PERIOD.MONTHLY, PLAN_PERIOD.YEARLY])
+
 export const PLAN_PERIOD_LABELS = Object.freeze({
   monthly: 'Bulanan',
   yearly: 'Tahunan',
 })
 
-/** Environment variable that must be set once PREM-D01 ships the endpoint. */
+/** Environment override for the catalog endpoint (used by tests / staging). */
 export const PLAN_CATALOG_PATH_ENV = 'VITE_SUBSCRIPTION_PLANS_PATH'
 
-/**
- * Proposed endpoint for the plan catalog (PREM-D01). Only used when explicitly
- * configured through `PLAN_CATALOG_PATH_ENV`; never assumed.
- */
-export const PROPOSED_PLAN_CATALOG_PATH = '/api/mobile/subscription/plans'
+/** Authoritative catalog endpoint (PREM-D01). */
+export const DEFAULT_PLAN_CATALOG_PATH = '/api/mobile/subscription/plans'
+
+/** Only currency the Premium product is priced in today. */
+export const DEFAULT_PLAN_CURRENCY = 'IDR'
+
+const CURRENCY_PREFIXES = Object.freeze({ IDR: 'Rp' })
 
 const PERIOD_ALIASES = Object.freeze({
   monthly: PLAN_PERIOD.MONTHLY,
@@ -70,10 +97,11 @@ const PERIOD_ALIASES = Object.freeze({
 
 const PLAN_CODE_FIELDS = Object.freeze(['code', 'plan', 'key', 'slug', 'id'])
 const PLAN_NAME_FIELDS = Object.freeze(['name', 'title', 'label'])
-const PLAN_PRICE_FIELDS = Object.freeze(['price', 'amount', 'price_idr', 'amount_idr'])
-const PLAN_PERIOD_FIELDS = Object.freeze(['period', 'interval', 'billing_period'])
-const PLAN_FEATURE_FIELDS = Object.freeze(['features', 'benefits', 'feature_list'])
+const PLAN_BENEFIT_FIELDS = Object.freeze(['benefits', 'features', 'feature_list'])
 const PLAN_TERM_FIELDS = Object.freeze(['terms', 'term', 'notes', 'note'])
+const PERIOD_PRICE_FIELDS = Object.freeze(['price_minor', 'price', 'amount', 'price_idr'])
+const PERIOD_CURRENCY_FIELDS = Object.freeze(['currency', 'currency_code'])
+const PLAN_PERIOD_FIELDS = Object.freeze(['period', 'interval', 'billing_period'])
 
 function firstDefined(source, fields) {
   for (const field of fields) {
@@ -93,16 +121,30 @@ function unwrapPayload(payload) {
 }
 
 /**
- * Configured catalog path, or `null` when the backend has not shipped one yet.
+ * Catalog endpoint, overridable through the environment. The backend path is a
+ * shipped contract, so this always resolves to a usable path.
  *
  * @param {Record<string, any>} [env]
- * @returns {string|null}
+ * @returns {string}
  */
 export function resolvePlanCatalogPath(env = import.meta.env) {
   const raw = env?.[PLAN_CATALOG_PATH_ENV]
-  if (typeof raw !== 'string') return null
-  const trimmed = raw.trim()
-  return trimmed.length > 0 ? trimmed : null
+  if (typeof raw === 'string' && raw.trim().length > 0) return raw.trim()
+  return DEFAULT_PLAN_CATALOG_PATH
+}
+
+/**
+ * Append the active `business_id` to the catalog path, preserving any query the
+ * path already carries. The id is encoded, never interpolated raw.
+ *
+ * @param {string} path
+ * @param {number|string} businessId
+ * @returns {string}
+ */
+export function buildPlanCatalogPath(path, businessId) {
+  const base = String(path ?? '').trim()
+  const separator = base.includes('?') ? '&' : '?'
+  return `${base}${separator}business_id=${encodeURIComponent(String(businessId))}`
 }
 
 /**
@@ -128,7 +170,7 @@ export function normalizePlanPeriod(raw) {
  * @param {*} raw
  * @returns {number|null}
  */
-function parsePrice(raw) {
+function parseAmount(raw) {
   if (typeof raw === 'number') {
     return Number.isFinite(raw) && raw >= 0 ? raw : null
   }
@@ -144,29 +186,33 @@ function parsePrice(raw) {
 }
 
 /**
- * Rupiah label for a validated numeric price.
+ * Currency label for a validated amount. `price_minor` is rendered exactly as
+ * the backend sent it — no conversion, no derived production price. IDR uses the
+ * Rupiah prefix; any other currency keeps its ISO code verbatim.
  *
- * @param {number} price
+ * @param {number} amount
+ * @param {string} currency
  * @returns {string}
  */
-export function formatPlanPrice(price) {
-  return `Rp ${price.toLocaleString('id-ID')}`
+export function formatPlanPrice(amount, currency = DEFAULT_PLAN_CURRENCY) {
+  const digits = Number(amount).toLocaleString('id-ID')
+  return `${CURRENCY_PREFIXES[currency] ?? currency} ${digits}`
 }
 
-function normalizeFeatures(raw) {
+function normalizeBenefitList(raw) {
   if (!Array.isArray(raw)) return []
   return raw
-    .map((feature) => {
-      if (typeof feature === 'string') return feature.trim()
-      if (feature && typeof feature === 'object' && typeof feature.name === 'string') {
-        return feature.name.trim()
+    .map((benefit) => {
+      if (typeof benefit === 'string') return benefit.trim()
+      if (benefit && typeof benefit === 'object' && typeof benefit.name === 'string') {
+        return benefit.name.trim()
       }
-      if (feature && typeof feature === 'object' && typeof feature.title === 'string') {
-        return feature.title.trim()
+      if (benefit && typeof benefit === 'object' && typeof benefit.title === 'string') {
+        return benefit.title.trim()
       }
       return ''
     })
-    .filter((feature) => feature.length > 0)
+    .filter((benefit) => benefit.length > 0)
 }
 
 function normalizeTerms(raw) {
@@ -175,15 +221,72 @@ function normalizeTerms(raw) {
     return trimmed.length > 0 ? trimmed : null
   }
   if (Array.isArray(raw)) {
-    const joined = normalizeFeatures(raw)
+    const joined = normalizeBenefitList(raw)
     return joined.length > 0 ? joined.join(' ') : null
   }
   return null
 }
 
 /**
- * Normalise one catalog entry. Returns `null` when the entry has no usable plan
- * code — a nameless/unkeyable plan can never be selected or purchased.
+ * One priced billing period of a plan. Returns `null` for a period the product
+ * does not support, so an unknown period can never reach the UI.
+ *
+ * @param {object} raw
+ * @returns {object|null}
+ */
+function normalizeBillingPeriod(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+
+  const period = normalizePlanPeriod(firstDefined(raw, PLAN_PERIOD_FIELDS))
+  if (!period) return null
+
+  const currencyRaw = firstDefined(raw, PERIOD_CURRENCY_FIELDS)
+  const currency =
+    typeof currencyRaw === 'string' && currencyRaw.trim().length > 0
+      ? currencyRaw.trim()
+      : DEFAULT_PLAN_CURRENCY
+
+  // Canonical `price_minor`, or a legacy single-period price when absent.
+  const priceMinor = parseAmount(firstDefined(raw, PERIOD_PRICE_FIELDS))
+
+  return {
+    period,
+    periodLabel: PLAN_PERIOD_LABELS[period],
+    currency,
+    priceMinor,
+    priceLabel: priceMinor === null ? null : formatPlanPrice(priceMinor, currency),
+    hasPrice: priceMinor !== null,
+  }
+}
+
+function billingPeriodsOf(raw) {
+  const canonical = Array.isArray(raw.billing_periods) ? raw.billing_periods : []
+  const periods = canonical.map(normalizeBillingPeriod).filter((period) => period !== null)
+
+  if (periods.length > 0) return dedupePeriods(periods)
+
+  // Legacy shape: a single flat `period` (+ price) on the plan itself.
+  const legacy = normalizeBillingPeriod(raw)
+
+  return legacy ? [legacy] : []
+}
+
+function dedupePeriods(periods) {
+  const seen = new Set()
+  const unique = periods.filter((period) => {
+    if (seen.has(period.period)) return false
+    seen.add(period.period)
+    return true
+  })
+
+  return unique.sort(
+    (a, b) => PLAN_PERIOD_ORDER.indexOf(a.period) - PLAN_PERIOD_ORDER.indexOf(b.period),
+  )
+}
+
+/**
+ * Normalise one catalog plan. Returns `null` when the entry has no usable plan
+ * code — a plan that cannot be identified can never be selected or purchased.
  *
  * @param {object} raw
  * @returns {object|null}
@@ -194,30 +297,53 @@ export function normalizePlan(raw) {
   const code = normalizePlanKey(firstDefined(raw, PLAN_CODE_FIELDS))
   if (!code) return null
 
-  const price = parsePrice(firstDefined(raw, PLAN_PRICE_FIELDS))
-  const period = normalizePlanPeriod(firstDefined(raw, PLAN_PERIOD_FIELDS))
   const rawName = firstDefined(raw, PLAN_NAME_FIELDS)
 
   return {
     code,
     name: typeof rawName === 'string' && rawName.trim().length > 0 ? rawName.trim() : code,
-    price,
-    priceLabel: price === null ? null : formatPlanPrice(price),
-    currency: typeof raw.currency === 'string' && raw.currency.trim() ? raw.currency.trim() : 'IDR',
-    period,
-    periodLabel: period ? PLAN_PERIOD_LABELS[period] : null,
-    features: normalizeFeatures(firstDefined(raw, PLAN_FEATURE_FIELDS)),
+    /** Backend gate, taken verbatim. A local price check is applied on top. */
+    purchasable: raw.purchasable === true,
+    /** `available: false` means the backend does not offer the plan right now. */
+    available: raw.available !== false,
+    benefits: normalizeBenefitList(firstDefined(raw, PLAN_BENEFIT_FIELDS)),
     terms: normalizeTerms(firstDefined(raw, PLAN_TERM_FIELDS)),
-    /** A price the API actually returned is the only way to be purchasable. */
-    purchasable: price !== null,
+    billingPeriods: billingPeriodsOf(raw),
   }
 }
 
 /**
- * Normalise a full catalog response.
+ * Flatten one plan into one selectable option per priced billing period, so the
+ * UI can offer Bulanan/Tahunan from a single plan entry.
+ *
+ * @param {object} plan
+ * @returns {object[]}
+ */
+function optionsOf(plan) {
+  return plan.billingPeriods.map((period) => ({
+    key: `${plan.code}::${period.period}`,
+    code: plan.code,
+    name: plan.name,
+    period: period.period,
+    periodLabel: period.periodLabel,
+    currency: period.currency,
+    priceMinor: period.priceMinor,
+    priceLabel: period.priceLabel,
+    hasPrice: period.hasPrice,
+    benefits: plan.benefits,
+    terms: plan.terms,
+    available: plan.available,
+    purchasable: plan.purchasable,
+  }))
+}
+
+/**
+ * Normalise a full catalog response into canonical plans, the flattened
+ * selectable options, and the periods that are genuinely offered.
  *
  * @param {*} payload
- * @returns {{plans: object[], checkoutAvailable: boolean, supportsBothPeriods: boolean}}
+ * @returns {{plans: object[], options: object[], periods: string[],
+ *   supportsBothPeriods: boolean, checkoutAvailable: boolean}}
  */
 export function normalizePlanCatalog(payload) {
   const source = unwrapPayload(payload)
@@ -232,26 +358,29 @@ export function normalizePlanCatalog(payload) {
           ? source.items
           : []
 
-  const normalized = rawPlans.map(normalizePlan).filter((plan) => plan !== null)
-
-  // Keep the first entry per (code, period) so a duplicate never renders twice.
-  const seen = new Set()
-  const plans = normalized.filter((plan) => {
-    const key = `${plan.code}|${plan.period ?? ''}`
-    if (seen.has(key)) return false
-    seen.add(key)
+  const seenCodes = new Set()
+  const plans = rawPlans.map(normalizePlan).filter((plan) => {
+    if (plan === null) return false
+    if (seenCodes.has(plan.code)) return false
+    seenCodes.add(plan.code)
     return true
   })
 
-  const checkoutAvailable =
-    source?.checkout_available === true || source?.checkout?.available === true
+  const options = plans
+    .filter((plan) => plan.available)
+    .flatMap(optionsOf)
+    .filter((option) => option.hasPrice)
+
+  const periods = PLAN_PERIOD_ORDER.filter((period) =>
+    options.some((option) => option.period === period),
+  )
 
   return {
     plans,
-    checkoutAvailable,
-    supportsBothPeriods:
-      plans.some((plan) => plan.period === PLAN_PERIOD.MONTHLY) &&
-      plans.some((plan) => plan.period === PLAN_PERIOD.YEARLY),
+    options,
+    periods: [...periods],
+    supportsBothPeriods: periods.length > 1,
+    checkoutAvailable: source?.checkout_available === true || source?.checkout?.available === true,
   }
 }
 
@@ -262,6 +391,8 @@ function unavailable(reason) {
     status: PLAN_CATALOG_STATUS.UNAVAILABLE,
     reason,
     plans: [],
+    options: [],
+    periods: [],
     checkoutAvailable: false,
     supportsBothPeriods: false,
     error: null,
@@ -269,23 +400,30 @@ function unavailable(reason) {
 }
 
 /**
- * Fetch and normalise the plan catalog.
+ * Fetch and normalise the plan catalog for the active business.
  *
  * @param {object} [options]
- * @param {string|null} [options.path] Explicit path; defaults to the configured one.
+ * @param {string|null} [options.path] Override the catalog endpoint.
  * @param {string|null} [options.token] Bearer token.
+ * @param {number|string|null} [options.businessId] Active business id.
  * @returns {Promise<object>}
  */
-export async function fetchPlanCatalog({ path = resolvePlanCatalogPath(), token = null } = {}) {
-  // No configured endpoint → the backend simply does not offer a catalog yet.
-  if (typeof path !== 'string' || path.trim().length === 0) {
-    return unavailable(PLAN_CATALOG_REASON.NOT_CONFIGURED)
+export async function fetchPlanCatalog({
+  path = resolvePlanCatalogPath(),
+  token = null,
+  businessId = null,
+} = {}) {
+  // The backend contract requires `business_id`; never guess one.
+  if (businessId === null || businessId === undefined || `${businessId}`.trim() === '') {
+    return unavailable(PLAN_CATALOG_REASON.NO_BUSINESS)
   }
+
+  const requestPath = buildPlanCatalogPath(path, businessId)
 
   let result
 
   try {
-    result = await apiRequest(path.trim(), { token })
+    result = await apiRequest(requestPath, { token })
   } catch (err) {
     return {
       ok: false,
@@ -293,6 +431,8 @@ export async function fetchPlanCatalog({ path = resolvePlanCatalogPath(), token 
       status: PLAN_CATALOG_STATUS.ERROR,
       reason: PLAN_CATALOG_REASON.REQUEST_FAILED,
       plans: [],
+      options: [],
+      periods: [],
       checkoutAvailable: false,
       supportsBothPeriods: false,
       error: { message: err instanceof Error ? err.message : 'Katalog paket gagal dimuat.' },
@@ -301,7 +441,7 @@ export async function fetchPlanCatalog({ path = resolvePlanCatalogPath(), token 
 
   if (!result?.ok) {
     const status = result?.error?.status ?? 0
-    // A missing route means the catalog does not exist yet — not a broken app.
+    // A missing route means the catalog is not deployed yet — not a broken app.
     const missing = status === 404 || status === 405 || status === 501
 
     if (missing) return unavailable(PLAN_CATALOG_REASON.ENDPOINT_MISSING)
@@ -312,6 +452,8 @@ export async function fetchPlanCatalog({ path = resolvePlanCatalogPath(), token 
       status: PLAN_CATALOG_STATUS.ERROR,
       reason: PLAN_CATALOG_REASON.REQUEST_FAILED,
       plans: [],
+      options: [],
+      periods: [],
       checkoutAvailable: false,
       supportsBothPeriods: false,
       error: result?.error ?? {
@@ -327,7 +469,8 @@ export async function fetchPlanCatalog({ path = resolvePlanCatalogPath(), token 
   return {
     ok: true,
     requested: true,
-    status: catalog.plans.length > 0 ? PLAN_CATALOG_STATUS.READY : PLAN_CATALOG_STATUS.EMPTY,
+    path: requestPath,
+    status: catalog.options.length > 0 ? PLAN_CATALOG_STATUS.READY : PLAN_CATALOG_STATUS.EMPTY,
     reason: null,
     ...catalog,
     error: null,

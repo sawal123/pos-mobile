@@ -14,14 +14,16 @@ import { useSubscriptionStore } from './subscriptionStore'
 /**
  * PREM-M02 — plan selection store (UI only).
  *
- * Owns the catalog fetch lifecycle (loading / ready / empty / unavailable /
- * error + retry) and the user's plan + period selection. It grants nothing:
- * entitlement stays derivable only from the authoritative server context through
- * `useSubscriptionStore` (PREM-M01 fail-closed rules unchanged).
+ * Consumes the canonical backend catalog (a plan carries its own
+ * `billing_periods`, so one `cloud` plan drives the Bulanan/Tahunan choice) and
+ * owns the fetch lifecycle (loading / ready / empty / unavailable / error +
+ * retry) plus the user's period/option selection.
  *
- * No checkout is performed here. When the backend does not advertise checkout,
- * `canContinue` stays `false` and the UI reports "belum tersedia" instead of
- * simulating a payment.
+ * It grants nothing: entitlement stays derivable only from the authoritative
+ * server context through `useSubscriptionStore` (PREM-M01 fail-closed rules
+ * unchanged). No checkout is performed; `canContinue` additionally requires the
+ * backend's own `purchasable` and `checkout_available` gates, so the UI can
+ * never simulate a payment.
  */
 /** Local state before the first load attempt; distinct from a confirmed empty catalog. */
 export const PLAN_CATALOG_IDLE = 'idle'
@@ -31,11 +33,14 @@ export const useSubscriptionPlanStore = defineStore('subscriptionPlan', () => {
   const subscriptionStore = useSubscriptionStore()
 
   const state = ref(PLAN_CATALOG_IDLE)
-  const plans = ref([])
+  /** Selectable options: one per (plan, priced billing period). */
+  const options = ref([])
+  /** Billing periods the catalog genuinely offers. */
+  const periods = ref([])
   const checkoutAvailable = ref(false)
   const supportsBothPeriods = ref(false)
   const selectedPeriod = ref(null)
-  const selectedPlanCode = ref(null)
+  const selectedOptionKey = ref(null)
   const error = ref(null)
   const reason = ref(null)
 
@@ -47,105 +52,114 @@ export const useSubscriptionPlanStore = defineStore('subscriptionPlan', () => {
   const isUnavailable = computed(() => state.value === PLAN_CATALOG_STATUS.UNAVAILABLE)
   const hasError = computed(() => state.value === PLAN_CATALOG_STATUS.ERROR)
 
-  const availablePeriods = computed(() => {
-    const seen = []
-    for (const plan of plans.value) {
-      if (plan.period && !seen.includes(plan.period)) seen.push(plan.period)
-    }
-    return seen
+  const availablePeriods = computed(() => periods.value)
+
+  /** Options shown for the active period; without a toggle every option shows. */
+  const visibleOptions = computed(() => {
+    if (!supportsBothPeriods.value) return options.value
+    return options.value.filter((option) => option.period === selectedPeriod.value)
   })
 
-  /** Plans shown for the active period; period-less plans are always shown. */
-  const visiblePlans = computed(() => {
-    if (!supportsBothPeriods.value) return plans.value
-    return plans.value.filter(
-      (plan) => plan.period === null || plan.period === selectedPeriod.value,
-    )
-  })
-
-  const selectedPlan = computed(
-    () => plans.value.find((plan) => plan.code === selectedPlanCode.value) ?? null,
+  const selectedOption = computed(
+    () => options.value.find((option) => option.key === selectedOptionKey.value) ?? null,
   )
 
   /** True only for a plan the current subscription already grants. */
-  function isCurrentPlan(plan) {
-    if (!plan || !subscriptionStore.isPremium) return false
-    return plan.code === subscriptionStore.plan
+  function isCurrentPlan(option) {
+    if (!option || !subscriptionStore.isPremium) return false
+    return option.code === subscriptionStore.plan
   }
 
-  /** A plan may only be acted upon when it has a real price and is not owned. */
-  function isSelectable(plan) {
-    if (!plan) return false
-    return plan.purchasable && !isCurrentPlan(plan)
+  /**
+   * An option may only be acted upon when the backend offered it, priced it and
+   * marked it purchasable — and when the business does not own it already.
+   */
+  function isSelectable(option) {
+    if (!option) return false
+    if (option.available === false) return false
+    if (option.hasPrice !== true) return false
+    if (option.purchasable !== true) return false
+    return !isCurrentPlan(option)
   }
 
-  /** The continue action stays inert until a validated, purchasable plan exists. */
+  /** Both gates are honoured: the plan's `purchasable` and `checkout_available`. */
   const canContinue = computed(
     () =>
       checkoutAvailable.value === true &&
       !isLoading.value &&
-      isSelectable(selectedPlan.value) === true,
+      isSelectable(selectedOption.value) === true,
   )
 
-  /** True when a plan is chosen but checkout itself is not offered yet. */
+  /** True when an option is chosen but checkout itself is not offered yet. */
   const checkoutBlocked = computed(
-    () => selectedPlan.value !== null && checkoutAvailable.value !== true,
+    () => selectedOption.value !== null && checkoutAvailable.value !== true,
+  )
+
+  /** True when the chosen option is not purchasable (no price and/or backend gate). */
+  const selectionNotPurchasable = computed(
+    () => selectedOption.value !== null && !isSelectable(selectedOption.value),
   )
 
   function clearSelection() {
-    selectedPlanCode.value = null
+    selectedOptionKey.value = null
+  }
+
+  function clearCatalog() {
+    options.value = []
+    periods.value = []
+    checkoutAvailable.value = false
+    supportsBothPeriods.value = false
+    selectedPeriod.value = null
+    clearSelection()
   }
 
   function reconcileSelection() {
-    const periods = availablePeriods.value
-
-    if (supportsBothPeriods.value) {
-      if (!periods.includes(selectedPeriod.value)) {
-        selectedPeriod.value = periods[0] ?? null
-      }
-    } else {
+    if (!supportsBothPeriods.value) {
       selectedPeriod.value = null
+    } else if (!periods.value.includes(selectedPeriod.value)) {
+      selectedPeriod.value = periods.value[0] ?? null
     }
 
-    if (selectedPlanCode.value === null) return
+    if (selectedOptionKey.value === null) return
 
-    const stillVisible = visiblePlans.value.some((plan) => plan.code === selectedPlanCode.value)
-    if (!stillVisible) clearSelection()
+    if (!options.value.some((option) => option.key === selectedOptionKey.value)) {
+      clearSelection()
+    }
   }
 
   /**
-   * Load the plan catalog. Safe to call repeatedly; the last call wins.
+   * Load the catalog for the active business. Safe to call repeatedly.
    *
    * @param {object} [options]
-   * @param {string|null} [options.path] Override the configured endpoint.
+   * @param {string|null} [options.path] Override the catalog endpoint.
+   * @param {number|string|null} [options.businessId] Override the active business.
    * @returns {Promise<{status: string, reason: string|null}>}
    */
-  async function loadCatalog({ path } = {}) {
+  async function loadCatalog({ path, businessId } = {}) {
     isLoading.value = true
     error.value = null
     reason.value = null
     state.value = PLAN_CATALOG_STATUS.EMPTY
 
     try {
-      const resolvedPath = path ?? resolvePlanCatalogPath()
-
-      if (!resolvedPath) {
-        plans.value = []
-        supportsBothPeriods.value = false
-        checkoutAvailable.value = false
-        reason.value = PLAN_CATALOG_REASON.NOT_CONFIGURED
+      if (!cloudStore.isAuthenticated) {
+        clearCatalog()
+        reason.value = PLAN_CATALOG_REASON.NOT_AUTHENTICATED
         state.value = PLAN_CATALOG_STATUS.UNAVAILABLE
-        clearSelection()
         return { status: state.value, reason: reason.value }
       }
 
-      if (!cloudStore.isAuthenticated) {
-        plans.value = []
-        supportsBothPeriods.value = false
-        checkoutAvailable.value = false
-        reason.value = PLAN_CATALOG_REASON.NOT_AUTHENTICATED
+      // The backend requires the active business; never use another tenant.
+      const activeBusinessId = businessId ?? cloudStore.selectedBusiness?.id ?? null
+
+      if (
+        activeBusinessId === null ||
+        activeBusinessId === undefined ||
+        `${activeBusinessId}`.trim() === ''
+      ) {
+        clearCatalog()
+        reason.value = PLAN_CATALOG_REASON.NO_BUSINESS
         state.value = PLAN_CATALOG_STATUS.UNAVAILABLE
-        clearSelection()
         return { status: state.value, reason: reason.value }
       }
 
@@ -157,44 +171,37 @@ export const useSubscriptionPlanStore = defineStore('subscriptionPlan', () => {
       }
 
       if (!token) {
-        plans.value = []
-        supportsBothPeriods.value = false
-        checkoutAvailable.value = false
+        clearCatalog()
         reason.value = PLAN_CATALOG_REASON.NOT_AUTHENTICATED
         state.value = PLAN_CATALOG_STATUS.UNAVAILABLE
-        clearSelection()
         return { status: state.value, reason: reason.value }
       }
 
-      const result = await fetchPlanCatalog({ path: resolvedPath, token })
+      const result = await fetchPlanCatalog({
+        path: path ?? resolvePlanCatalogPath(),
+        token,
+        businessId: activeBusinessId,
+      })
 
       if (result.status === PLAN_CATALOG_STATUS.READY) {
-        plans.value = result.plans
+        options.value = result.options
+        periods.value = result.periods
         checkoutAvailable.value = result.checkoutAvailable === true
         supportsBothPeriods.value = result.supportsBothPeriods === true
         state.value = PLAN_CATALOG_STATUS.READY
         reconcileSelection()
       } else if (result.status === PLAN_CATALOG_STATUS.EMPTY) {
-        plans.value = []
-        checkoutAvailable.value = false
-        supportsBothPeriods.value = false
+        clearCatalog()
         state.value = PLAN_CATALOG_STATUS.EMPTY
-        clearSelection()
       } else if (result.status === PLAN_CATALOG_STATUS.UNAVAILABLE) {
-        plans.value = []
-        checkoutAvailable.value = false
-        supportsBothPeriods.value = false
+        clearCatalog()
         reason.value = result.reason ?? PLAN_CATALOG_REASON.ENDPOINT_MISSING
         state.value = PLAN_CATALOG_STATUS.UNAVAILABLE
-        clearSelection()
       } else {
-        plans.value = []
-        checkoutAvailable.value = false
-        supportsBothPeriods.value = false
+        clearCatalog()
         reason.value = result.reason ?? PLAN_CATALOG_REASON.REQUEST_FAILED
         state.value = PLAN_CATALOG_STATUS.ERROR
         error.value = result.error?.message ?? 'Katalog paket gagal dimuat.'
-        clearSelection()
       }
 
       return { status: state.value, reason: reason.value }
@@ -208,52 +215,58 @@ export const useSubscriptionPlanStore = defineStore('subscriptionPlan', () => {
   }
 
   /**
-   * Select a billing period. Only a period actually present in the catalog is
-   * accepted; a selection that no longer fits the period is dropped.
+   * Select a billing period. Only a period the catalog offers is accepted; a
+   * selection is carried over to the same plan's other period when it exists.
    *
    * @param {string} period
    * @returns {boolean}
    */
   function selectPeriod(period) {
-    if (!availablePeriods.value.includes(period)) return false
+    if (!periods.value.includes(period)) return false
 
     selectedPeriod.value = period
 
-    const plan = selectedPlan.value
-    if (plan && plan.period !== null && plan.period !== period) clearSelection()
+    if (selectedOptionKey.value === null) return true
 
+    const selected = selectedOption.value
+    const carried = options.value.find(
+      (option) => option.code === selected?.code && option.period === period,
+    )
+
+    if (carried) {
+      selectedOptionKey.value = carried.key
+      return true
+    }
+
+    clearSelection()
     return true
   }
 
   /**
-   * Select a plan by code. A plan that is not currently visible (filtered out by
-   * the active period) cannot be selected.
+   * Select an option by key. An option filtered out by the active period cannot
+   * be selected.
    *
-   * @param {string|null} code
+   * @param {string|null} key
    * @returns {boolean}
    */
-  function selectPlan(code) {
-    if (code === null) {
+  function selectOption(key) {
+    if (key === null) {
       clearSelection()
       return true
     }
 
-    const plan = visiblePlans.value.find((candidate) => candidate.code === code)
-    if (!plan) {
+    const option = visibleOptions.value.find((candidate) => candidate.key === key)
+    if (!option) {
       clearSelection()
       return false
     }
 
-    selectedPlanCode.value = plan.code
+    selectedOptionKey.value = option.key
     return true
   }
 
   function reset() {
-    plans.value = []
-    checkoutAvailable.value = false
-    supportsBothPeriods.value = false
-    selectedPeriod.value = null
-    selectedPlanCode.value = null
+    clearCatalog()
     error.value = null
     reason.value = null
     state.value = PLAN_CATALOG_IDLE
@@ -262,11 +275,12 @@ export const useSubscriptionPlanStore = defineStore('subscriptionPlan', () => {
   return {
     // state
     state,
-    plans,
+    options,
+    periods,
     checkoutAvailable,
     supportsBothPeriods,
     selectedPeriod,
-    selectedPlanCode,
+    selectedOptionKey,
     error,
     reason,
     isLoading,
@@ -277,10 +291,11 @@ export const useSubscriptionPlanStore = defineStore('subscriptionPlan', () => {
     isUnavailable,
     hasError,
     availablePeriods,
-    visiblePlans,
-    selectedPlan,
+    visibleOptions,
+    selectedOption,
     canContinue,
     checkoutBlocked,
+    selectionNotPurchasable,
     // helpers
     isCurrentPlan,
     isSelectable,
@@ -288,7 +303,7 @@ export const useSubscriptionPlanStore = defineStore('subscriptionPlan', () => {
     loadCatalog,
     retry,
     selectPeriod,
-    selectPlan,
+    selectOption,
     reset,
   }
 })

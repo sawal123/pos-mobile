@@ -1,24 +1,20 @@
 # PREM-M02 — Halaman Manfaat & Pemilihan Paket Premium (UI)
 
-Status: **selesai (UI + adapter, tanpa pembayaran)**. Tidak ada endpoint Laravel baru,
-tidak ada perubahan sync engine / offline journal / database / stock movement /
-backup format, dan tidak ada integrasi payment gateway.
+Status: **selesai (UI + adapter selaras kontrak backend, tanpa pembayaran)**. Tidak ada
+perubahan sync engine / offline journal / database / stock movement / backup format, tidak
+ada integrasi payment gateway, dan entitlement PREM-M01 tidak diubah.
 
 ## Audit dependensi
 
-| Item                                | Hasil                                                      |
-| ----------------------------------- | ---------------------------------------------------------- |
-| PREM-M01 (PR #47) di `main`         | **Merged** (`c7c68aa`), entitlement fail-closed tersedia     |
-| `SubscriptionView.vue`              | Placeholder PREM-M01 → diganti halaman Premium               |
-| `subscriptionStore` / `entitlementService` | Dipakai apa adanya (tidak diubah)                      |
-| `cloudSessionStore`                 | Sumber `subscription` otoritatif (`GET /api/mobile/context`) |
-| Route `subscription` (`/subscription`) | Dipertahankan, guard business + PIN kasir tidak berubah   |
-| Endpoint Laravel yang ada           | `/api/auth/*`, `/api/mobile/context`, `/api/mobile/devices`, `/api/sync/*` |
-| Katalog paket / checkout            | **Tidak ada di backend** (DASH-12B billing masih *undecided*) |
-
-Konsekuensinya halaman ini tidak menampilkan satu pun harga tetap: katalog dibaca dari
-respons API, dan bila API belum menyediakannya aplikasi menampilkan empty/unavailable
-state yang jelas.
+| Item                                        | Hasil                                                          |
+| ------------------------------------------- | -------------------------------------------------------------- |
+| PREM-M01 (PR #47) di `main`                 | **Merged** (`c7c68aa`), entitlement fail-closed tersedia        |
+| PREM-D01 / PREM-D02A (kontrak katalog backend) | **Authoritative** — `GET /api/mobile/subscription/plans`     |
+| `SubscriptionView.vue`                      | Halaman Premium (bukan lagi placeholder)                        |
+| `subscriptionStore` / `entitlementService`  | Dipakai apa adanya (tidak diubah)                               |
+| `cloudSessionStore`                         | Sumber `subscription` + business aktif (`GET /api/mobile/context`) |
+| Route `subscription` (`/subscription`)      | Dipertahankan, guard business + PIN kasir tidak berubah         |
+| Harga resmi                                 | **Belum ada (BLOCKER)** → `plans: []`, `checkout_available: false` |
 
 ## Manfaat Premium (hanya yang didukung backend)
 
@@ -32,8 +28,10 @@ backend yang benar-benar ada:
 | Monitoring bisnis   | Tersedia        | Report/export + monitoring laundry di dashboard       |
 | Backup cloud        | Belum tersedia  | **Belum diimplementasikan backend**                   |
 
-Backup cloud sengaja ditandai "Belum tersedia" agar tidak menjanjikan kemampuan yang
-tidak ada; pengguna diarahkan ke Backup Data lokal yang sudah berjalan.
+Backup cloud/restore sengaja ditandai "Belum tersedia" (dan di-gate `deny` di backend
+PREM-D02A) agar tidak menjanjikan kemampuan yang tidak ada; pengguna diarahkan ke Backup
+Data lokal yang sudah berjalan. Daftar `benefits` yang dikirim backend per paket
+ditampilkan apa adanya — backend tetap sumber kebenaran.
 
 ## Akses yang tidak dikunci Premium
 
@@ -49,11 +47,17 @@ pengguna Free. Entitlement tetap **fail-closed** mengikuti PREM-M01:
 `src/services/subscription/planCatalogService.js` adalah satu-satunya modul yang tahu
 kontrak katalog. Aturan penting:
 
-- Path endpoint **tidak diasumsikan**. Path dibaca dari `VITE_SUBSCRIPTION_PLANS_PATH`;
-  bila kosong, adapter mengembalikan `unavailable` **tanpa melakukan request apa pun**.
-- Harga hanya dari API. Harga yang tidak bisa diparse (mis. `"Rp 49.000"`) → `price: null`,
-  `purchasable: false`, dan UI menampilkan "Harga belum tersedia".
-- `404/405/501` → `unavailable` (route belum ada), bukan error aplikasi.
+- **Endpoint kontrak backend** `/api/mobile/subscription/plans` dipakai secara default dan
+  bisa di-override lewat `VITE_SUBSCRIPTION_PLANS_PATH` (staging/test).
+- **`business_id` wajib** dan selalu diambil dari business aktif pada konteks cloud
+  (`cloudSessionStore.selectedBusiness`), tidak pernah di-hardcode dan tidak pernah tenant
+  lain. Tanpa business aktif, adapter **tidak melakukan request** (`reason: no_business`).
+- **Harga hanya dari `price_minor`.** Tidak ada angka mockup, tidak ada konversi, tidak ada
+  harga produksi yang dibuat sendiri. `price_minor` yang tidak valid/absen → periode itu
+  dibuang, paket tidak bisa dipilih, UI menampilkan "Harga belum tersedia".
+- Untuk `IDR`, nilai `price_minor` ditampilkan persis seperti yang dikirim backend
+  (`Rp <nilai>`); mata uang lain ditampilkan dengan kode ISO-nya tanpa konversi.
+- `404/405/501` → `unavailable` (katalog belum ter-deploy), bukan error aplikasi.
 - Read-only: tidak ada retry background, tidak ada polling, tidak menulis storage.
 
 Store `src/stores/subscriptionPlanStore.js` memegang lifecycle
@@ -62,30 +66,34 @@ dan gate CTA. Store tidak memberikan akses apa pun.
 
 ### State UI
 
-| State         | Pemicu                                             | UI                                        |
-| ------------- | -------------------------------------------------- | ----------------------------------------- |
-| `loading`     | request katalog berjalan                           | skeleton                                  |
-| `ready`       | ada paket valid                                    | toggle periode + kartu paket              |
-| `empty`       | `plans: []`                                        | "Belum ada paket" + Muat Ulang            |
-| `unavailable` | path belum dikonfigurasi / belum login / `404`     | "Paket belum tersedia" + hint + Muat Ulang |
-| `error`       | network / 5xx                                      | pesan error + Coba Lagi                    |
+| State         | Pemicu                                          | UI                                          |
+| ------------- | ----------------------------------------------- | ------------------------------------------- |
+| `loading`     | request katalog berjalan                        | skeleton                                    |
+| `ready`       | ada paket berharga                              | toggle periode + kartu paket                |
+| `empty`       | `plans: []` (kondisi sekarang: harga belum ada) | "Belum ada paket" + Muat Ulang              |
+| `unavailable` | belum login / belum pilih bisnis / `404`        | "Paket belum tersedia" + hint + Muat Ulang  |
+| `error`       | network / 5xx                                   | pesan error + Coba Lagi                     |
 
 ### Aturan pemilihan & CTA
 
-- Toggle Bulanan/Tahunan hanya tampil bila katalog memuat **kedua** periode.
-- Paket tanpa harga terkonfirmasi tidak dapat dipilih.
+- Satu paket `cloud` membawa **semua** billing period-nya, jadi Bulanan/Tahunan berasal
+  dari `billing_periods` pada satu entri — backend tidak perlu mengirim dua paket dengan
+  `code` yang sama.
+- Toggle hanya tampil bila katalog benar-benar memuat kedua periode; kalau hanya satu,
+  paket ditampilkan tanpa toggle.
+- Periode yang tidak dikenali produk (`weekly`, …) diabaikan, tidak pernah dirender.
+- Paket dengan `available: false` tidak ditawarkan; paket tanpa harga tidak dapat dipilih.
 - Paket yang sedang aktif ditandai "Paket Anda saat ini" dan tidak bisa dibeli lagi
   (mencegah pembelian ganda tanpa konfirmasi).
-- CTA "Lanjutkan" aktif hanya bila kontrak mengiklankan `checkout_available: true`
-  **dan** ada paket valid yang dipilih. Selama checkout belum tersedia, CTA nonaktif
-  dan berlabel "Checkout belum tersedia"; aplikasi tidak pernah memproses pembayaran.
+- CTA "Lanjutkan" aktif **hanya** bila kelima syarat terpenuhi: paket valid, billing
+  period valid, harga valid, `purchasable === true` (dari backend), dan
+  `checkout_available === true`. Selama checkout belum tersedia, CTA nonaktif berlabel
+  "Checkout belum tersedia"; aplikasi tidak pernah memproses pembayaran.
 
-## Kontrak yang dibutuhkan — handoff ke PREM-D01
-
-Agar UI katalog/checkout berfungsi, backend perlu menyediakan:
+## Kontrak backend (authoritative, PREM-D01/PREM-D02A)
 
 ```http
-GET /api/mobile/subscription/plans
+GET /api/mobile/subscription/plans?business_id={activeBusinessId}
 Authorization: Bearer <mobile token>
 Accept: application/json
 ```
@@ -93,66 +101,82 @@ Accept: application/json
 ```json
 {
   "data": {
-    "checkout_available": true,
+    "business_id": 1,
     "plans": [
       {
         "code": "cloud",
         "name": "Cloud",
-        "price": 49000,
-        "currency": "IDR",
-        "period": "monthly",
-        "features": ["Sinkronisasi cloud", "Dashboard web"],
-        "terms": "Perpanjangan otomatis belum tersedia."
-      },
-      {
-        "code": "cloud",
-        "name": "Cloud",
-        "price": 490000,
-        "currency": "IDR",
-        "period": "yearly",
-        "features": ["Sinkronisasi cloud", "Dashboard web"]
+        "billing_periods": [
+          { "period": "monthly", "currency": "IDR", "price_minor": "<integer resmi>" },
+          { "period": "yearly", "currency": "IDR", "price_minor": "<integer resmi>" }
+        ],
+        "benefits": ["Sinkronisasi cloud", "Dashboard web"],
+        "available": true,
+        "purchasable": false
       }
-    ]
+    ],
+    "checkout_available": false
   }
 }
 ```
 
+`<integer resmi>` = angka dari konfigurasi backend. **Pricing belum dikonfigurasi**, jadi
+saat ini respons sebenarnya adalah `"plans": []`; dokumen ini dan aplikasi tidak memuat
+harga apa pun, termasuk angka dari mockup.
+
 Ketentuan kontrak:
 
-1. `code` harus memakai kosakata yang sama dengan `subscription.plan` pada
-   `GET /api/mobile/context` (`free`, `cloud`, …) agar "Paket Anda saat ini" dapat
-   ditentukan dari entitlement, bukan dari flag klien.
-2. `price` adalah bilangan Rupiah utuh. Mobile **tidak** mengonversi atau menghitung harga
-   dan tidak menebak bila field tidak ada.
-3. `period` menentukan toggle Bulanan/Tahunan; hanya tampil bila kedua periode ada.
-4. `checkout_available` (atau `checkout.available`) adalah satu-satunya sumber izin CTA.
-   Selama `false`, aplikasi hanya menampilkan status "belum tersedia".
-5. `features` / `terms` bersifat opsional dan ditampilkan apa adanya.
-6. Error yang diharapkan: `404` (route belum ada), `401` (sesi tidak valid),
-   `403` (bisnis tidak punya akses cloud) — semuanya harus tetap mempertahankan akses POS offline.
+1. `code` memakai kosakata yang sama dengan `subscription.plan` pada
+   `GET /api/mobile/context` (`free`, `cloud`, …) agar "Paket Anda saat ini" ditentukan dari
+   entitlement, bukan dari flag klien.
+2. `billing_periods[].period` hanya `monthly`/`yearly`; `currency` mis. `IDR`;
+   `price_minor` integer yang ditampilkan apa adanya.
+3. `benefits` opsional, ditampilkan apa adanya.
+4. `available: false` berarti paket tidak ditawarkan sekarang.
+5. `purchasable` adalah gate backend untuk pembelian; hari ini selalu `false` karena
+   checkout belum ada.
+6. `checkout_available` adalah satu-satunya sumber izin CTA; hari ini selalu `false`.
+7. `business_id` wajib ada di query dan harus bisnis yang boleh diakses token tersebut.
+8. Error yang diharapkan: `404` (route belum ada), `401` (sesi tidak valid), `403`
+   (business bukan milik user), `422` (`business_id` tidak ada) — semuanya tetap
+   mempertahankan akses POS offline.
 
-Alias yang sudah dinormalisasi adapter: `code|plan|key|slug|id`, `name|title|label`,
-`price|amount|price_idr|amount_idr`, `period|interval|billing_period`,
-`features|benefits|feature_list`, `terms|term|notes|note`, dan periode
-`monthly|month|bulanan`, `yearly|annual|annually|year|tahunan`. Envelope yang diterima:
-array langsung, `plans`, `catalog`, `items`, atau dibungkus `data`.
+### Alias legacy
 
-Belum termasuk handoff ini (butuh kontrak terpisah sebelum diintegrasikan): endpoint
-checkout/pembayaran (mis. Midtrans) dan endpoint upgrade/renewal.
+Adapter masih menerima bentuk lama **hanya sebagai fallback**, dan bentuk kanonik selalu
+menang bila keduanya ada: `code|plan|key|slug|id`, `name|title|label`,
+`benefits|features|feature_list`, `terms|term|notes|note`, `price_minor|price|amount|price_idr`,
+`period|interval|billing_period`, serta entri flat dengan `period` + `price` (satu periode).
+Envelope yang diterima: array langsung, `plans`, `catalog`, `items`, atau dibungkus `data`.
 
 ## Konfigurasi
 
-| Variabel                        | Fungsi                                            |
-| ------------------------------- | ------------------------------------------------- |
-| `VITE_SUBSCRIPTION_PLANS_PATH`  | Path katalog paket; kosong = katalog dinonaktifkan |
+| Variabel                        | Fungsi                                                              |
+| ------------------------------- | ------------------------------------------------------------------- |
+| `VITE_SUBSCRIPTION_PLANS_PATH`  | Override path katalog (default: `/api/mobile/subscription/plans`)   |
+
+## Handoff
+
+Sudah selesai di backend: kontrak katalog PREM-D01 + policy/entitlement PREM-D02A.
+
+Masih menunggu (bukan lingkup PREM-M02):
+
+- **Harga resmi monthly/yearly (BLOCKER)** — sampai ada, `plans: []` dan checkout mati.
+- **PREM-D02B**: checkout Midtrans, webhook + signature, idempotency, aktivasi
+  (`starts_at`/`expires_at` wajib), renewal manual, payment history. Aktivasi tidak boleh
+  berasal dari callback client mobile.
+- Integrasi checkout di aplikasi mobile (setelah kontrak pembayaran diverifikasi).
 
 ## Pengujian
 
-`src/__tests__/premium-plan-selection.spec.js` (55 test) mencakup: normalisasi periode/harga/
-fitur, tidak ada harga karangan, tidak ada request saat path kosong, `404` → unavailable,
-`empty`, error + retry, loading, pemilihan paket/periode, gate CTA (tanpa checkout, tanpa
-harga, paket aktif), seluruh state UI, kejujuran daftar manfaat, jaminan akses lokal, dan
-fail-closed entitlement PREM-M01.
+`src/__tests__/premium-plan-selection.spec.js` (61 test) mencakup: endpoint default +
+override, `business_id` selalu ikut di query (dan tidak ada request tanpa business aktif),
+payload kanonik (satu paket `cloud` + `billing_periods` monthly/yearly), `price_minor` +
+format IDR, monthly-only, yearly-only, toggle monthly+yearly, periode tidak didukung
+diabaikan, harga hilang fail-closed, `plans: []`, `checkout_available: false`,
+`purchasable: false`, gate ganda pada CTA, proteksi paket aktif, alias legacy tidak
+mengalahkan kontrak kanonik, tidak ada angka mockup di adapter, seluruh state UI, kejujuran
+daftar manfaat, jaminan akses lokal, dan fail-closed entitlement PREM-M01.
 
-`src/__tests__/premium-settings-ui.spec.js` diperbarui: blok test placeholder PREM-M02 lama
-diganti dengan verifikasi halaman baru.
+`src/__tests__/premium-settings-ui.spec.js` (36 test, PREM-M01) tetap hijau tanpa
+perubahan.

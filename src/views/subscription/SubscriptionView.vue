@@ -98,12 +98,14 @@ const showStatusSkeleton = computed(() => subscriptionStatus.value === 'loading'
 
 const showCatalogSkeleton = computed(() => planStore.isIdle || planStore.isLoading)
 const showPeriodSelector = computed(() => planStore.supportsBothPeriods)
-const visiblePlans = computed(() => planStore.visiblePlans)
+const visibleOptions = computed(() => planStore.visibleOptions)
 
 const unavailableHint = computed(() => {
   switch (planStore.reason) {
     case PLAN_CATALOG_REASON.NOT_AUTHENTICATED:
       return 'Hubungkan akun cloud bisnis Anda untuk melihat paket yang tersedia.'
+    case PLAN_CATALOG_REASON.NO_BUSINESS:
+      return 'Pilih bisnis aktif terlebih dahulu agar paket untuk bisnis tersebut dapat dimuat.'
     case PLAN_CATALOG_REASON.ENDPOINT_MISSING:
       return 'Server belum menyediakan katalog paket. Hubungi admin untuk mengaktifkan langganan.'
     case PLAN_CATALOG_REASON.REQUEST_FAILED:
@@ -113,22 +115,33 @@ const unavailableHint = computed(() => {
   }
 })
 
-function isCurrentPlan(plan) {
-  return planStore.isCurrentPlan(plan)
+function isCurrentPlan(option) {
+  return planStore.isCurrentPlan(option)
 }
 
-function isPlanSelectable(plan) {
-  return planStore.isSelectable(plan)
+function isPlanSelectable(option) {
+  return planStore.isSelectable(option)
+}
+
+/** Honest reason why an option cannot be chosen yet. */
+function unavailablePlanNote(option) {
+  if (!option.hasPrice) {
+    return 'Harga belum tersedia. Paket belum dapat dipilih sebelum harga resmi dikonfigurasi server.'
+  }
+  if (option.purchasable !== true) {
+    return 'Paket ini belum dapat dibeli karena pembelian belum diaktifkan server.'
+  }
+  return 'Paket ini belum tersedia untuk dibeli saat ini.'
 }
 
 function handleSelectPeriod(period) {
   planStore.selectPeriod(period)
 }
 
-function handleSelectPlan(plan) {
-  if (!isPlanSelectable(plan)) return
+function handleSelectOption(option) {
+  if (!isPlanSelectable(option)) return
   checkoutNotice.value = ''
-  planStore.selectPlan(plan.code)
+  planStore.selectOption(option.key)
 }
 
 function handleRetry() {
@@ -403,88 +416,88 @@ onMounted(() => {
 
         <div class="space-y-3">
           <div
-            v-for="plan in visiblePlans"
-            :key="`${plan.code}-${plan.period ?? 'any'}`"
+            v-for="option in visibleOptions"
+            :key="option.key"
             class="rounded-2xl border p-4 transition"
             :class="
-              planStore.selectedPlanCode === plan.code
+              planStore.selectedOptionKey === option.key
                 ? 'border-primary bg-primary/5'
                 : 'border-zinc-200 bg-white'
             "
-            :data-testid="`plan-card-${plan.code}`"
+            :data-testid="`plan-card-${option.code}`"
           >
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0">
                 <p
                   class="text-sm font-semibold text-ink-primary"
-                  :data-testid="`plan-name-${plan.code}`"
+                  :data-testid="`plan-name-${option.code}`"
                 >
-                  {{ plan.name }}
+                  {{ option.name }}
                 </p>
                 <p
                   class="mt-0.5 text-sm font-semibold text-primary"
-                  :data-testid="`plan-price-${plan.code}`"
+                  :data-testid="`plan-price-${option.code}`"
                 >
-                  {{ plan.priceLabel || 'Harga belum tersedia' }}
+                  {{ option.priceLabel || 'Harga belum tersedia' }}
                 </p>
                 <p
-                  v-if="plan.periodLabel"
+                  v-if="option.periodLabel"
                   class="text-xs text-ink-secondary"
-                  :data-testid="`plan-period-${plan.code}`"
+                  :data-testid="`plan-period-${option.code}`"
                 >
-                  per {{ plan.periodLabel }}
+                  per {{ option.periodLabel }}
                 </p>
               </div>
 
               <span
-                v-if="isCurrentPlan(plan)"
+                v-if="isCurrentPlan(option)"
                 class="shrink-0 rounded-full bg-emerald-100 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-emerald-700"
-                :data-testid="`plan-current-${plan.code}`"
+                :data-testid="`plan-current-${option.code}`"
               >
                 Paket Anda saat ini
               </span>
             </div>
 
             <ul
-              v-if="plan.features.length"
+              v-if="option.benefits.length"
               class="mt-3 space-y-1"
-              :data-testid="`plan-features-${plan.code}`"
+              :data-testid="`plan-benefits-${option.code}`"
             >
               <li
-                v-for="feature in plan.features"
-                :key="feature"
+                v-for="benefit in option.benefits"
+                :key="benefit"
                 class="flex items-start gap-2 text-xs text-ink-secondary"
               >
                 <AppIcon name="chevron-right" class="text-primary" />
-                <span>{{ feature }}</span>
+                <span>{{ benefit }}</span>
               </li>
             </ul>
 
             <p
-              v-if="plan.terms"
+              v-if="option.terms"
               class="mt-3 text-xs leading-relaxed text-ink-secondary"
-              :data-testid="`plan-terms-${plan.code}`"
+              :data-testid="`plan-terms-${option.code}`"
             >
-              {{ plan.terms }}
+              {{ option.terms }}
             </p>
 
             <p
-              v-if="!plan.purchasable"
+              v-if="!isPlanSelectable(option) && !isCurrentPlan(option)"
               class="mt-3 text-xs leading-relaxed text-ink-secondary"
-              :data-testid="`plan-unpurchasable-${plan.code}`"
+              :data-testid="`plan-unpurchasable-${option.code}`"
             >
-              Paket ini belum dapat dipilih karena harga belum dikonfirmasi server.
+              {{ unavailablePlanNote(option) }}
             </p>
 
             <BaseButton
               class="mt-3"
               block
-              :variant="planStore.selectedPlanCode === plan.code ? 'primary' : 'secondary'"
-              :disabled="!isPlanSelectable(plan) || planStore.selectedPlanCode === plan.code"
-              :data-testid="`plan-select-${plan.code}`"
-              @click="handleSelectPlan(plan)"
+              :variant="planStore.selectedOptionKey === option.key ? 'primary' : 'secondary'"
+              :disabled="!isPlanSelectable(option) || planStore.selectedOptionKey === option.key"
+              :data-testid="`plan-select-${option.code}`"
+              @click="handleSelectOption(option)"
             >
-              {{ planStore.selectedPlanCode === plan.code ? 'Paket dipilih' : 'Pilih paket ini' }}
+              {{ planStore.selectedOptionKey === option.key ? 'Paket dipilih' : 'Pilih paket ini' }}
             </BaseButton>
           </div>
         </div>
@@ -493,21 +506,29 @@ onMounted(() => {
 
     <!-- Summary + CTA -->
     <BaseCard class="space-y-3" data-testid="plan-summary">
-      <div v-if="planStore.selectedPlan" class="space-y-1" data-testid="selected-plan-summary">
+      <div v-if="planStore.selectedOption" class="space-y-1" data-testid="selected-plan-summary">
         <p class="text-xs uppercase tracking-[0.16em] text-ink-secondary">Paket dipilih</p>
         <p class="text-sm font-semibold text-ink-primary" data-testid="selected-plan-name">
-          {{ planStore.selectedPlan.name }}
+          {{ planStore.selectedOption.name }}
         </p>
         <p class="text-xs text-ink-secondary" data-testid="selected-plan-price">
-          {{ planStore.selectedPlan.priceLabel || 'Harga belum tersedia' }}
-          <template v-if="planStore.selectedPlan.periodLabel">
-            / {{ planStore.selectedPlan.periodLabel }}
+          {{ planStore.selectedOption.priceLabel || 'Harga belum tersedia' }}
+          <template v-if="planStore.selectedOption.periodLabel">
+            / {{ planStore.selectedOption.periodLabel }}
           </template>
         </p>
       </div>
 
       <p v-else class="text-xs text-ink-secondary" data-testid="selected-plan-empty">
         Pilih satu paket untuk melanjutkan.
+      </p>
+
+      <p
+        v-if="planStore.selectionNotPurchasable"
+        class="text-xs leading-relaxed text-ink-secondary"
+        data-testid="plan-not-purchasable-note"
+      >
+        Paket ini belum dapat dilanjutkan karena harga atau pembelian belum tersedia dari server.
       </p>
 
       <BaseButton
