@@ -88,8 +88,10 @@ langganan:
 
 ## Handoff ke PREM-M02
 
-`/subscription` saat ini hanya placeholder. Pemilihan paket, checkout, dan
-integrasi pembayaran adalah lingkup PREM-M02 dan belum diimplementasikan di sini.
+`/subscription` pada PREM-M01 masih placeholder; halaman Premium (manfaat, katalog paket,
+pemilihan periode) sudah diisi pada PREM-M02 — lihat
+[PREM_M02_PLAN_SELECTION.md](./PREM_M02_PLAN_SELECTION.md). Checkout/pembayaran belum
+diimplementasikan dan tetap menunggu kontrak backend (PREM-D01).
 
 ## Pengujian
 
