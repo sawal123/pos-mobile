@@ -616,6 +616,17 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
       const db = await ensureConnection()
       await db.run("DELETE FROM app_meta WHERE key = 'cloud_context'", [])
     },
+    // PREM-M04: non-sensitive pending subscription payment (recovery only).
+    async loadPendingSubscriptionPayment() {
+      return readMetaValue('premium_pending_payment', null)
+    },
+    async savePendingSubscriptionPayment(payment) {
+      await writeMetaValue('premium_pending_payment', payment)
+    },
+    async clearPendingSubscriptionPayment() {
+      const db = await ensureConnection()
+      await db.run("DELETE FROM app_meta WHERE key = 'premium_pending_payment'", [])
+    },
     // P11: sync identity map (stable, durable, non-sensitive, survives logout)
     async loadSyncIdentityMap() {
       return readMetaValue('sync_identity_map', null)

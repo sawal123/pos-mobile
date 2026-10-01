@@ -966,10 +966,9 @@ describe('SubscriptionView — canonical catalog', () => {
     await cta.trigger('click')
     await flushPromises()
 
-    // Even when the backend offers checkout, the app never charges.
-    expect(wrapper.find('[data-testid="checkout-notice"]').text()).toContain(
-      'tidak memproses pembayaran',
-    )
+    // PREM-M04: an eligible continue now routes into the checkout flow. The app
+    // still never charges by itself — activation happens server-side.
+    expect(context.router.currentRoute.value.name).toBe('premium-checkout')
   })
 
   it('protects the plan the business already owns', async () => {

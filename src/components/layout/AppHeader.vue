@@ -5,7 +5,7 @@ import { useRoute } from 'vue-router'
 import { useBusinessStore } from '@/stores/businessStore'
 import SyncStatusBadge from '@/components/sync/SyncStatusBadge.vue'
 
-const props = defineProps({
+defineProps({
   showHamburger: {
     type: Boolean,
     default: false,
@@ -44,6 +44,8 @@ const pageTitle = computed(() => {
     settings: 'Pengaturan',
     subscription: 'Langganan',
     cloud: 'Cloud Login',
+    'premium-checkout': 'Pembayaran Premium',
+    'premium-payment-status': 'Status Pembayaran',
   }
 
   return titleMap[route?.name] ?? 'POS Mobile'

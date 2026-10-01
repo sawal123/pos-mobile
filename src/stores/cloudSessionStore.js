@@ -1065,6 +1065,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     syncCapabilitySummary,
     // actions
     setPersistenceAdapter,
+    invalidateCloudSession: handleInvalidToken,
     login,
     selectBusiness,
     selectOutlet,

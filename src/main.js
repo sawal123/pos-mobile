@@ -13,6 +13,7 @@ import {
 import { initializeSyncFoundation } from './services/sync'
 import { resolveDeviceIdentifier } from './services/cloud/deviceIdentifier'
 import { useCloudSessionStore } from './stores/cloudSessionStore'
+import { usePremiumCheckoutStore } from './stores/premiumCheckoutStore'
 import { useSyncPushStore } from './stores/syncPushStore'
 import { useSyncPullStore } from './stores/syncPullStore'
 import { useSyncBootstrapStore } from './stores/syncBootstrapStore'
@@ -246,6 +247,18 @@ export async function bootstrapApp({
         })
         syncStatusStore.startListeners()
         void syncStatusStore.refresh()
+      }
+
+      // PREM-M04: restore a pending Premium payment (display only — never
+      // "paid") and gate payment polling with the shared runtime signal.
+      // Non-blocking: a failure never stops POS startup.
+      const premiumCheckoutStore = usePremiumCheckoutStore(pinia)
+      premiumCheckoutStore.setPersistenceAdapter(adapter)
+      premiumCheckoutStore.init({ runtimeSignalService })
+      try {
+        await premiumCheckoutStore.hydratePending()
+      } catch {
+        // non-blocking
       }
     } catch {
       // Never block POS startup on cloud errors

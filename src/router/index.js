@@ -27,6 +27,8 @@ import OpenShiftView from '../views/shift/OpenShiftView.vue'
 import ShiftView from '../views/shift/ShiftView.vue'
 import SettingsView from '../views/settings/SettingsView.vue'
 import SubscriptionView from '../views/subscription/SubscriptionView.vue'
+import PremiumCheckoutView from '../views/subscription/PremiumCheckoutView.vue'
+import PremiumPaymentStatusView from '../views/subscription/PremiumPaymentStatusView.vue'
 import StockView from '../views/stock/StockView.vue'
 import CloudLoginView from '../views/settings/CloudLoginView.vue'
 import ReceiptView from '../views/transactions/ReceiptView.vue'
@@ -212,6 +214,16 @@ const routes = [
         component: CloudLoginView,
       },
       {
+        path: 'premium/checkout',
+        name: 'premium-checkout',
+        component: PremiumCheckoutView,
+      },
+      {
+        path: 'premium/payment-status',
+        name: 'premium-payment-status',
+        component: PremiumPaymentStatusView,
+      },
+      {
         path: 'laundry/orders',
         name: 'laundry-orders',
         component: LaundryOrdersView,
@@ -260,6 +272,8 @@ const businessRequiredRoutes = new Set([
   'reports',
   'settings',
   'subscription',
+  'premium-checkout',
+  'premium-payment-status',
 ])
 
 const pinRequiredRoutes = new Set([
@@ -291,6 +305,8 @@ const pinRequiredRoutes = new Set([
   'reports',
   'settings',
   'subscription',
+  'premium-checkout',
+  'premium-payment-status',
 ])
 
 const shiftRequiredRoutes = new Set([
