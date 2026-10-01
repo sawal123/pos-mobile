@@ -2349,6 +2349,10 @@ describe('INT-02 — cashier device onboarding', () => {
     await wrapper.find('#cloud-password input').setValue('secret')
     await wrapper.find('#cloud-login-btn').trigger('click')
     await flushPromises()
+
+    // PREM-M03: a single business now requires an explicit link confirmation.
+    await wrapper.find('#cloud-confirm-link-btn').trigger('click')
+    await flushPromises()
     await flushPromises()
     await flushPromises()
 

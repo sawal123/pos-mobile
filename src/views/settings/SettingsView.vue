@@ -54,10 +54,12 @@ const taxDraftEnabled = ref(taxStore.enabled)
 const taxDraftRate = ref(String(taxStore.rate))
 const taxFeedback = ref('')
 const taxRateValid = computed(() => !taxDraftEnabled.value || isValidTaxRate(taxDraftRate.value))
-watch([taxDraftEnabled, taxDraftRate], () => { taxFeedback.value = '' })
+watch([taxDraftEnabled, taxDraftRate], () => {
+  taxFeedback.value = ''
+})
 const taxPreview = computed(() => {
   if (!taxDraftEnabled.value || !taxRateValid.value) return 0
-  return Math.round(100000 * Number(taxDraftRate.value) / 100)
+  return Math.round((100000 * Number(taxDraftRate.value)) / 100)
 })
 
 function saveTaxSettings() {
@@ -65,7 +67,9 @@ function saveTaxSettings() {
     enabled: taxDraftEnabled.value,
     rate: taxDraftEnabled.value
       ? taxDraftRate.value
-      : (isValidTaxRate(taxDraftRate.value) ? taxDraftRate.value : taxStore.rate),
+      : isValidTaxRate(taxDraftRate.value)
+        ? taxDraftRate.value
+        : taxStore.rate,
   })
 
   taxFeedback.value = result.success ? 'Pengaturan pajak berhasil disimpan.' : result.error
@@ -84,11 +88,11 @@ const printerFeedbackMessage = ref('')
 
 const isNativePrinter = computed(() => isNativePrinterPlatform())
 const paperWidths = SUPPORTED_PAPER_WIDTHS
-const printerStatusText = computed(() => (
+const printerStatusText = computed(() =>
   printerStore.hasSelectedPrinter
-    ? (printerStore.selectedPrinter.name || printerStore.selectedPrinter.address)
-    : 'Belum memilih printer'
-))
+    ? printerStore.selectedPrinter.name || printerStore.selectedPrinter.address
+    : 'Belum memilih printer',
+)
 
 // ── Subscription / entitlement presentation ─────────────────────────────────
 
@@ -183,8 +187,43 @@ const subscriptionView = computed(() => {
 
 const cloudAccountSubtitle = computed(() => {
   if (!cloudStore.isAuthenticated) return 'Belum terhubung'
+  if (!cloudStore.isLinked) return 'Belum ada bisnis tertaut'
   return cloudStore.user?.email || cloudStore.selectedBusiness?.name || 'Terhubung'
 })
+
+// PREM-M03: Cloud link presentation (display only, never authorizes)
+const cloudLinked = computed(() => cloudStore.isLinked)
+const cloudAccount = computed(() => cloudStore.user?.email || '-')
+
+const cloudSubscriptionLabel = computed(() => {
+  if (subscriptionStore.status === 'free') return 'Free'
+  return subscriptionStore.planLabel || subscriptionStore.status
+})
+
+const cloudCheckedLabel = computed(() => {
+  const checkedAt = cloudStore.contextCheckedAt
+  if (!checkedAt) return 'Belum diperiksa ulang'
+  const date = new Date(checkedAt)
+  if (Number.isNaN(date.getTime())) return 'Belum diperiksa ulang'
+  return date.toLocaleString('id-ID', {
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+})
+
+const showDisconnectConfirm = ref(false)
+
+function goToCloud() {
+  lockedFeature.value = null
+  router.push({ name: 'cloud' })
+}
+
+async function confirmDisconnect() {
+  showDisconnectConfirm.value = false
+  await cloudStore.logout()
+}
 
 const settingsMenu = computed(() => [
   {
@@ -385,7 +424,10 @@ function handleBackup() {
 
 function handleRestoreClick() {
   if (shiftStore.isOpen) {
-    setFeedback('error', 'Restore backup tidak dapat dilakukan saat shift aktif. Tutup shift terlebih dahulu.')
+    setFeedback(
+      'error',
+      'Restore backup tidak dapat dilakukan saat shift aktif. Tutup shift terlebih dahulu.',
+    )
     return
   }
 
@@ -466,7 +508,9 @@ async function handleRestoreFileChange(event) {
     <!-- Active business -->
     <BaseCard v-if="businessStore.name" class="space-y-3" data-testid="active-business-card">
       <div class="flex items-center gap-3">
-        <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+        <span
+          class="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary"
+        >
           <AppIcon name="store" />
         </span>
         <div class="min-w-0">
@@ -505,6 +549,95 @@ async function handleRestoreFileChange(event) {
         </div>
       </div>
     </div>
+
+    <!-- Cloud account (PREM-M03) -->
+    <BaseCard class="space-y-3" data-testid="cloud-account-card">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <span
+            class="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary"
+          >
+            <AppIcon name="cloud" />
+          </span>
+          <div class="min-w-0">
+            <p class="text-xs uppercase tracking-[0.16em] text-ink-secondary">Akun Cloud</p>
+            <h3
+              class="truncate text-base font-semibold text-ink-primary"
+              data-testid="cloud-account-status"
+            >
+              {{ cloudLinked ? 'Terhubung' : 'Belum terhubung' }}
+            </h3>
+          </div>
+        </div>
+        <span
+          class="rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide"
+          :class="cloudLinked ? 'bg-emerald-100 text-emerald-700' : 'bg-zinc-100 text-zinc-600'"
+          data-testid="cloud-account-badge"
+        >
+          {{ cloudLinked ? 'Cloud' : 'Lokal' }}
+        </span>
+      </div>
+
+      <dl v-if="cloudLinked" class="space-y-1 text-xs text-ink-secondary">
+        <div class="flex items-center justify-between">
+          <dt>Akun</dt>
+          <dd class="font-medium text-ink-primary" data-testid="cloud-account-email">
+            {{ cloudAccount }}
+          </dd>
+        </div>
+        <div class="flex items-center justify-between">
+          <dt>Bisnis Cloud</dt>
+          <dd class="font-medium text-ink-primary" data-testid="cloud-account-business">
+            {{ cloudStore.selectedBusiness?.name ?? '-' }}
+          </dd>
+        </div>
+        <div class="flex items-center justify-between">
+          <dt>Subscription</dt>
+          <dd class="font-medium text-ink-primary" data-testid="cloud-account-subscription">
+            {{ cloudSubscriptionLabel }}
+          </dd>
+        </div>
+        <div class="flex items-center justify-between">
+          <dt>Status diperiksa</dt>
+          <dd class="font-medium text-ink-primary" data-testid="cloud-account-checked">
+            {{ cloudCheckedLabel }}
+          </dd>
+        </div>
+      </dl>
+
+      <p v-else class="text-xs text-ink-secondary">
+        Hubungkan POS ini dengan akun Cloud dan Dashboard. POS tetap dapat digunakan tanpa Cloud.
+      </p>
+
+      <div class="flex flex-wrap gap-2">
+        <BaseButton
+          v-if="!cloudLinked"
+          size="sm"
+          data-testid="cloud-login-entry"
+          @click="goToCloud"
+        >
+          Masuk ke Cloud
+        </BaseButton>
+        <template v-else>
+          <BaseButton
+            size="sm"
+            variant="secondary"
+            data-testid="cloud-manage-subscription"
+            @click="goToSubscription"
+          >
+            Kelola Langganan
+          </BaseButton>
+          <BaseButton
+            size="sm"
+            variant="danger"
+            data-testid="cloud-disconnect"
+            @click="showDisconnectConfirm = true"
+          >
+            Putuskan Cloud
+          </BaseButton>
+        </template>
+      </div>
+    </BaseCard>
 
     <!-- Subscription -->
     <div
@@ -550,7 +683,10 @@ async function handleRestoreFileChange(event) {
             </span>
           </div>
 
-          <p class="mt-1 text-xs leading-relaxed text-ink-secondary" data-testid="subscription-subtitle">
+          <p
+            class="mt-1 text-xs leading-relaxed text-ink-secondary"
+            data-testid="subscription-subtitle"
+          >
             {{ subscriptionView.subtitle }}
           </p>
 
@@ -583,7 +719,8 @@ async function handleRestoreFileChange(event) {
               Akses cloud: <span class="font-medium text-ink-primary">{{ cloudAccessLabel }}</span>
             </p>
             <p class="text-xs text-ink-secondary" data-testid="last-sync-status">
-              Status diperiksa: <span class="font-medium text-ink-primary">{{ lastSyncLabel }}</span>
+              Status diperiksa:
+              <span class="font-medium text-ink-primary">{{ lastSyncLabel }}</span>
             </p>
           </div>
         </div>
@@ -609,7 +746,9 @@ async function handleRestoreFileChange(event) {
     <p
       v-if="feedbackMessage"
       class="rounded-2xl px-4 py-3 text-sm"
-      :class="feedbackType === 'error' ? 'bg-danger/10 text-danger' : 'bg-emerald-100 text-emerald-700'"
+      :class="
+        feedbackType === 'error' ? 'bg-danger/10 text-danger' : 'bg-emerald-100 text-emerald-700'
+      "
       role="status"
       data-testid="settings-feedback"
     >
@@ -625,10 +764,14 @@ async function handleRestoreFileChange(event) {
       </div>
 
       <form class="space-y-5" @submit.prevent="saveTaxSettings">
-        <label class="flex cursor-pointer items-center justify-between gap-4 rounded-2xl bg-surface px-4 py-4">
+        <label
+          class="flex cursor-pointer items-center justify-between gap-4 rounded-2xl bg-surface px-4 py-4"
+        >
           <span>
             <span class="block text-sm font-semibold text-ink-primary">Aktifkan pajak</span>
-            <span class="mt-1 block text-xs leading-relaxed text-ink-secondary">Nonaktifkan untuk transaksi tanpa pajak.</span>
+            <span class="mt-1 block text-xs leading-relaxed text-ink-secondary"
+              >Nonaktifkan untuk transaksi tanpa pajak.</span
+            >
           </span>
           <input
             v-model="taxDraftEnabled"
@@ -641,7 +784,9 @@ async function handleRestoreFileChange(event) {
         </label>
 
         <div class="space-y-2">
-          <label for="tax-rate-input" class="block text-sm font-medium text-ink-primary">Persentase pajak</label>
+          <label for="tax-rate-input" class="block text-sm font-medium text-ink-primary"
+            >Persentase pajak</label
+          >
           <div class="relative">
             <input
               id="tax-rate-input"
@@ -657,39 +802,57 @@ async function handleRestoreFileChange(event) {
               aria-describedby="tax-rate-help"
               class="h-12 w-full rounded-2xl border border-zinc-200 bg-white px-4 pr-10 text-sm text-ink-primary outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/10 disabled:bg-zinc-100 disabled:text-zinc-500"
             />
-            <span class="pointer-events-none absolute right-4 top-3.5 text-sm font-medium text-ink-secondary">%</span>
+            <span
+              class="pointer-events-none absolute right-4 top-3.5 text-sm font-medium text-ink-secondary"
+              >%</span
+            >
           </div>
-          <p id="tax-rate-help" class="text-xs text-ink-secondary">Isi angka 0–100 dengan maksimal 2 angka desimal.</p>
-          <p v-if="taxDraftEnabled && !taxRateValid" class="text-xs font-medium text-danger" data-testid="tax-validation-error">
+          <p id="tax-rate-help" class="text-xs text-ink-secondary">
+            Isi angka 0–100 dengan maksimal 2 angka desimal.
+          </p>
+          <p
+            v-if="taxDraftEnabled && !taxRateValid"
+            class="text-xs font-medium text-danger"
+            data-testid="tax-validation-error"
+          >
             Persentase pajak tidak valid.
           </p>
         </div>
 
         <div class="rounded-2xl border border-primary/10 bg-primary/5 p-4">
-          <p class="text-xs font-semibold uppercase tracking-widest text-primary">Simulasi transaksi</p>
+          <p class="text-xs font-semibold uppercase tracking-widest text-primary">
+            Simulasi transaksi
+          </p>
           <div class="mt-3 flex items-center justify-between text-sm">
             <span class="text-ink-secondary">Subtotal</span>
             <span class="font-medium text-ink-primary">Rp 100.000</span>
           </div>
           <div v-if="taxDraftEnabled" class="mt-2 flex items-center justify-between gap-3 text-sm">
             <span class="text-ink-secondary">Pajak ({{ taxDraftRate || '0' }}%)</span>
-            <span class="font-medium text-ink-primary">{{ taxRateValid ? `Rp ${taxPreview.toLocaleString('id-ID')}` : '—' }}</span>
+            <span class="font-medium text-ink-primary">{{
+              taxRateValid ? `Rp ${taxPreview.toLocaleString('id-ID')}` : '—'
+            }}</span>
           </div>
-          <div class="mt-3 flex items-center justify-between border-t border-primary/10 pt-3 text-sm font-semibold">
+          <div
+            class="mt-3 flex items-center justify-between border-t border-primary/10 pt-3 text-sm font-semibold"
+          >
             <span>Total</span>
-            <span data-testid="tax-preview-total">{{ taxRateValid ? `Rp ${(100000 + taxPreview).toLocaleString('id-ID')}` : '—' }}</span>
+            <span data-testid="tax-preview-total">{{
+              taxRateValid ? `Rp ${(100000 + taxPreview).toLocaleString('id-ID')}` : '—'
+            }}</span>
           </div>
         </div>
 
         <div class="flex flex-wrap items-center gap-3">
-          <BaseButton
-            type="submit"
-            data-testid="save-tax-settings"
-            :disabled="!taxRateValid"
-          >
+          <BaseButton type="submit" data-testid="save-tax-settings" :disabled="!taxRateValid">
             Simpan Pengaturan
           </BaseButton>
-          <span v-if="taxFeedback" class="text-xs text-ink-secondary" role="status" data-testid="tax-feedback">
+          <span
+            v-if="taxFeedback"
+            class="text-xs text-ink-secondary"
+            role="status"
+            data-testid="tax-feedback"
+          >
             {{ taxFeedback }}
           </span>
         </div>
@@ -725,9 +888,11 @@ async function handleRestoreFileChange(event) {
             type="button"
             :data-testid="`paper-width-${width}`"
             class="h-12 rounded-2xl border text-sm font-semibold transition"
-            :class="printerStore.paperWidth === width
-              ? 'border-primary bg-primary/10 text-primary'
-              : 'border-zinc-200 bg-white text-ink-secondary'"
+            :class="
+              printerStore.paperWidth === width
+                ? 'border-primary bg-primary/10 text-primary'
+                : 'border-zinc-200 bg-white text-ink-secondary'
+            "
             @click="handlePaperWidthChange(width)"
           >
             {{ width }} mm
@@ -738,7 +903,11 @@ async function handleRestoreFileChange(event) {
       <p
         v-if="printerFeedbackMessage"
         class="rounded-2xl px-4 py-3 text-sm"
-        :class="printerFeedbackType === 'error' ? 'bg-danger/10 text-danger' : 'bg-emerald-100 text-emerald-700'"
+        :class="
+          printerFeedbackType === 'error'
+            ? 'bg-danger/10 text-danger'
+            : 'bg-emerald-100 text-emerald-700'
+        "
         data-testid="printer-feedback"
       >
         {{ printerFeedbackMessage }}
@@ -776,23 +945,16 @@ async function handleRestoreFileChange(event) {
       </p>
     </BaseCard>
 
-    <BaseButton
-      block
-      variant="secondary"
-      data-testid="settings-close-btn"
-      @click="handleBack"
-    >
+    <BaseButton block variant="secondary" data-testid="settings-close-btn" @click="handleBack">
       Tutup
     </BaseButton>
 
-    <BaseModal
-      :open="Boolean(lockedFeature)"
-      title="Fitur Premium"
-      @close="lockedFeature = null"
-    >
+    <BaseModal :open="Boolean(lockedFeature)" title="Fitur Premium" @close="lockedFeature = null">
       <div class="space-y-4" data-testid="locked-feature-modal">
         <div class="flex items-center gap-3">
-          <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-amber-100 text-amber-600">
+          <span
+            class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-amber-100 text-amber-600"
+          >
             <AppIcon name="lock" />
           </span>
           <p class="text-sm text-ink-secondary" data-testid="locked-feature-message">
@@ -806,7 +968,11 @@ async function handleRestoreFileChange(event) {
       </div>
     </BaseModal>
 
-    <BaseSheet :open="showPrinterSheet" title="Pilih Printer Bluetooth" @close="showPrinterSheet = false">
+    <BaseSheet
+      :open="showPrinterSheet"
+      title="Pilih Printer Bluetooth"
+      @close="showPrinterSheet = false"
+    >
       <div class="grid gap-2">
         <template v-if="printerDevices.length">
           <button
@@ -817,7 +983,9 @@ async function handleRestoreFileChange(event) {
             class="flex min-h-12 w-full flex-col items-start justify-center rounded-2xl border border-zinc-200 px-4 py-2 text-left transition active:bg-zinc-100"
             @click="handlePrinterSelected(device)"
           >
-            <span class="text-sm font-semibold text-ink-primary">{{ device.name || 'Tanpa nama' }}</span>
+            <span class="text-sm font-semibold text-ink-primary">{{
+              device.name || 'Tanpa nama'
+            }}</span>
             <span class="text-xs text-ink-secondary">{{ device.address }}</span>
           </button>
         </template>
@@ -832,5 +1000,34 @@ async function handleRestoreFileChange(event) {
         </template>
       </div>
     </BaseSheet>
+
+    <BaseModal
+      :open="showDisconnectConfirm"
+      title="Putuskan Cloud"
+      @close="showDisconnectConfirm = false"
+    >
+      <div class="space-y-4" data-testid="settings-disconnect-modal">
+        <p class="text-sm text-ink-secondary">
+          Sesi Cloud akan diputuskan dari POS ini. Data lokal (produk, transaksi, pelanggan, kas,
+          dan pengaturan) tidak akan dihapus.
+        </p>
+        <div class="flex flex-wrap gap-2">
+          <BaseButton
+            variant="danger"
+            data-testid="settings-disconnect-confirm"
+            @click="confirmDisconnect"
+          >
+            Ya, Putuskan
+          </BaseButton>
+          <BaseButton
+            variant="ghost"
+            data-testid="settings-disconnect-cancel"
+            @click="showDisconnectConfirm = false"
+          >
+            Batal
+          </BaseButton>
+        </div>
+      </div>
+    </BaseModal>
   </div>
 </template>

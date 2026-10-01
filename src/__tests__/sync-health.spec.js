@@ -1004,6 +1004,10 @@ describe('P17: UI Integration in CloudLoginView', () => {
     await wrapper.find('#cloud-logout-btn').trigger('click')
     await flushPromises()
 
+    // PREM-M03: disconnecting Cloud now requires confirmation.
+    await wrapper.find('#cloud-disconnect-confirm').trigger('click')
+    await flushPromises()
+
     expect(healthStore.status).toBeNull()
   })
 

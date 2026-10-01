@@ -42,6 +42,42 @@ function mapBusinessEntry(b) {
 }
 
 /**
+ * PREM-M03: parse the `businesses` payload defensively. A malformed payload
+ * (present but not an array) fails closed instead of throwing or granting
+ * access.
+ *
+ * @param {object|null|undefined} data
+ * @returns {{ok: boolean, businesses: object[]}}
+ */
+function extractBusinesses(data) {
+  const raw = data?.businesses
+
+  if (raw === undefined || raw === null) {
+    return { ok: true, businesses: [] }
+  }
+
+  if (!Array.isArray(raw)) {
+    return { ok: false, businesses: [] }
+  }
+
+  return { ok: true, businesses: raw.map(mapBusinessEntry) }
+}
+
+/**
+ * PREM-M03: detect an invalid/expired Cloud token from an `apiClient` error.
+ *
+ * @param {object|null|undefined} error
+ * @returns {boolean}
+ */
+function isUnauthorizedError(error) {
+  const status = Number(error?.status) || 0
+  const code = typeof error?.code === 'string' ? error.code : ''
+  return (
+    status === 401 || code === 'HTTP_401' || code === 'UNAUTHENTICATED' || code === 'TOKEN_INVALID'
+  )
+}
+
+/**
  * Cloud session store — P10.
  *
  * Owns NON-SENSITIVE cloud context:
@@ -101,6 +137,18 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   /** Timestamp of the last successful capability refresh. */
   const capabilitiesVerifiedAt = ref(null)
 
+  /**
+   * PREM-M03: last time the server context was checked, kept across restarts
+   * for display only. Unlike `capabilitiesVerifiedAt` it never authorizes.
+   */
+  const contextCheckedAt = ref(null)
+
+  /** PREM-M03: when this POS was explicitly linked to a Cloud business. */
+  const linkedAt = ref(null)
+
+  /** PREM-M03: true when the stored Cloud token was rejected (needs re-login). */
+  const sessionInvalid = ref(false)
+
   /** List of businesses from context (drives selection UI) */
   const businesses = ref([])
 
@@ -122,6 +170,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   // ── Computed ───────────────────────────────────────────────────────────────
 
   const isAuthenticated = computed(() => user.value !== null)
+
+  /** PREM-M03: a Cloud business is explicitly linked to this POS. */
+  const isLinked = computed(() => isAuthenticated.value && selectedBusiness.value !== null)
 
   const hasCloudAccess = computed(() => isAuthenticated.value && cloudAccess.value === true)
 
@@ -207,6 +258,32 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     return null
   }
 
+  /**
+   * PREM-M03: the backend rejected the stored token (401). Drop the invalid
+   * Cloud session, the linked association and the cached context, then surface
+   * a "login again" state. Local POS data is never touched and there is no
+   * retry loop (apiClient never retries).
+   */
+  async function handleInvalidToken() {
+    try {
+      await removeToken()
+    } catch {
+      // ignore – the local Cloud session is cleared regardless
+    }
+
+    if (_adapter) {
+      try {
+        await _adapter.clearCloudContext()
+      } catch {
+        // ignore – local POS data is untouched either way
+      }
+    }
+
+    clearSession()
+    sessionInvalid.value = true
+    error.value = 'Sesi Cloud tidak valid. Silakan masuk kembali untuk menghubungkan ulang.'
+  }
+
   function clearSession() {
     user.value = null
     selectedBusiness.value = null
@@ -218,6 +295,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     deviceContext.value = null
     capabilityState.value = 'unknown'
     capabilitiesVerifiedAt.value = null
+    contextCheckedAt.value = null
+    linkedAt.value = null
+    sessionInvalid.value = false
     businesses.value = []
     hasResolvedBusinessContext.value = false
     hasResolvedZeroBusiness.value = false
@@ -262,6 +342,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         cloudAccess: cloudAccess.value === true,
         registeredDeviceId: registeredDeviceId.value ?? null,
         hasResolvedZeroBusiness: hasResolvedZeroBusiness.value === true,
+        // PREM-M03: link metadata + last context check, display data only.
+        linkedAt: linkedAt.value ?? null,
+        contextCheckedAt: contextCheckedAt.value ?? null,
         // INT-02: non-sensitive capability context. Never includes a token.
         role: role.value ?? null,
         syncCapabilities: syncCapabilities.value ?? null,
@@ -316,6 +399,11 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       })
 
       if (!contextResult.ok) {
+        if (isUnauthorizedError(contextResult.error)) {
+          await handleInvalidToken()
+          return { ok: false, error: { ...contextResult.error, code: 'TOKEN_INVALID' } }
+        }
+
         // Rollback token – context is required
         await removeToken()
         user.value = null
@@ -323,13 +411,28 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         return { ok: false, error: contextResult.error }
       }
 
-      businesses.value = (contextResult.data?.businesses ?? []).map(mapBusinessEntry)
+      const parsed = extractBusinesses(contextResult.data)
+
+      if (!parsed.ok) {
+        // Fail closed: a malformed context must not grant any Cloud access.
+        await removeToken()
+        user.value = null
+        error.value = 'Context cloud dari server tidak valid.'
+        return {
+          ok: false,
+          error: { status: 0, code: 'MALFORMED_CONTEXT', message: error.value, data: null },
+        }
+      }
+
+      businesses.value = parsed.businesses
       hasResolvedBusinessContext.value = true
       hasResolvedZeroBusiness.value = businesses.value.length === 0
+      sessionInvalid.value = false
 
       // INT-02: a fresh context response is authoritative for this session.
       capabilityState.value = 'verified'
       capabilitiesVerifiedAt.value = new Date().toISOString()
+      contextCheckedAt.value = capabilitiesVerifiedAt.value
 
       // Persist cloud context on successful login + context
       await persistCloudContext()
@@ -358,6 +461,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       name: match.name,
       subscription: match.subscription ?? null,
     }
+    // PREM-M03: an explicit, user-confirmed link to this Cloud business.
+    linkedAt.value = new Date().toISOString()
+    sessionInvalid.value = false
     cloudAccess.value = match.cloud_access === true
     selectedOutlet.value = null
     registeredDeviceId.value = null
@@ -559,6 +665,8 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
             cloudAccess.value = ctx.cloudAccess === true
             registeredDeviceId.value = ctx.registeredDeviceId ?? null
             hasResolvedZeroBusiness.value = ctx.hasResolvedZeroBusiness === true
+            linkedAt.value = ctx.linkedAt ?? null
+            contextCheckedAt.value = ctx.contextCheckedAt ?? null
             role.value = normalizeRole(ctx.role ?? null)
             syncCapabilities.value = ctx.syncCapabilities ?? null
             deviceContext.value = ctx.deviceContext ?? null
@@ -698,7 +806,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     try {
       token = await getToken()
     } catch {
-      token = null
+      // ignore – treated as no token below
     }
 
     if (!token) {
@@ -712,6 +820,18 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       const result = await fetchMobileContext(token, { deviceIdentifier: deviceIdUsed })
 
       if (!result.ok) {
+        // PREM-M03: an invalid/expired token clears the Cloud session (but never
+        // local POS data) and asks the user to sign in again.
+        if (isUnauthorizedError(result.error)) {
+          await handleInvalidToken()
+          return {
+            ok: false,
+            code: 'TOKEN_INVALID',
+            message: error.value,
+            error: result.error,
+          }
+        }
+
         // Network/authorization failure: keep the local context but never leave
         // the capability contract marked as verified.
         if (capabilityState.value === 'verified') {
@@ -726,9 +846,22 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         }
       }
 
-      businesses.value = (result.data?.businesses ?? []).map(mapBusinessEntry)
+      const parsed = extractBusinesses(result.data)
+
+      if (!parsed.ok) {
+        // Fail closed: keep the previous context but drop the verified stamp.
+        if (capabilityState.value === 'verified') {
+          capabilityState.value = 'unverified'
+        }
+        capabilitiesVerifiedAt.value = null
+        error.value = 'Context cloud dari server tidak valid.'
+        return { ok: false, code: 'MALFORMED_CONTEXT', message: error.value }
+      }
+
+      businesses.value = parsed.businesses
       hasResolvedBusinessContext.value = true
       hasResolvedZeroBusiness.value = businesses.value.length === 0
+      sessionInvalid.value = false
 
       const previousBusinessId = selectedBusiness.value?.id ?? null
       const match = businesses.value.find((b) => b.id === previousBusinessId) ?? null
@@ -788,6 +921,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
 
       capabilityState.value = 'verified'
       capabilitiesVerifiedAt.value = new Date().toISOString()
+      contextCheckedAt.value = capabilitiesVerifiedAt.value
       error.value = null
 
       await persistCloudContext()
@@ -912,6 +1046,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     deviceContext,
     capabilityState,
     capabilitiesVerifiedAt,
+    contextCheckedAt,
+    linkedAt,
+    sessionInvalid,
     businesses,
     hasResolvedBusinessContext,
     hasResolvedZeroBusiness,
@@ -919,6 +1056,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     error,
     // computed
     isAuthenticated,
+    isLinked,
     hasCloudAccess,
     isDeviceRegistered,
     pushPolicy,
