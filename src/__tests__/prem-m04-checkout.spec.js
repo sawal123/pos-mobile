@@ -400,6 +400,56 @@ describe('createCheckout', () => {
 })
 
 // ════════════════════════════════════════════════════════════════════════════
+// 3b. Handoff hardening (Browser.open failure, browser close)
+// ════════════════════════════════════════════════════════════════════════════
+
+describe('payment handoff hardening', () => {
+  async function withPendingAttempt() {
+    await saveToken(TOKEN)
+    const env = setupEnv()
+    env.checkoutStore.startAttempt(monthlyOption())
+    apiRequest.mockResolvedValueOnce(apiOk(CHECKOUT_PAYLOAD))
+    await env.checkoutStore.createCheckout()
+    return env
+  }
+
+  it('a failed Browser.open preserves the pending payment (6)', async () => {
+    const { checkoutStore, adapter } = await withPendingAttempt()
+
+    const phaseBefore = checkoutStore.phase
+    const statusBefore = checkoutStore.status
+
+    openCheckoutUrl.mockResolvedValueOnce({ ok: false, code: 'BROWSER_OPEN_FAILED' })
+    const res = await checkoutStore.launchPayment()
+
+    expect(res.ok).toBe(false)
+    expect(checkoutStore.status).toBe(statusBefore)
+    expect(checkoutStore.phase).toBe(phaseBefore)
+    expect(checkoutStore.isPaid).toBe(false)
+    expect(checkoutStore.errorCode).toBe('BROWSER_OPEN_FAILED')
+
+    // No new checkout was created and the pending payment is still recoverable.
+    const checkoutCalls = apiRequest.mock.calls.filter(
+      (call) => call[0] === '/api/mobile/subscription/checkout',
+    )
+    expect(checkoutCalls).toHaveLength(1)
+    const record = await adapter.loadPendingSubscriptionPayment()
+    expect(record.paymentId).toBe(55)
+  })
+
+  it('closing the browser never marks the payment paid (7)', async () => {
+    const { checkoutStore } = await withPendingAttempt()
+
+    openCheckoutUrl.mockResolvedValueOnce({ ok: true, mode: 'native-browser' })
+    await checkoutStore.launchPayment()
+
+    // Only the backend can change the status; opening/closing the browser cannot.
+    expect(checkoutStore.isPaid).toBe(false)
+    expect(checkoutStore.status).toBe(PAYMENT_STATUS.PENDING)
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════════
 // 4. Backend payment status & polling
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -701,5 +751,42 @@ describe('PremiumPaymentStatusView', () => {
 
     expect(wrapper.find('[data-testid="payment-success"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="success-expires-at"]').exists()).toBe(true)
+  })
+
+  it('app resume triggers an authoritative status refresh (7, 8)', async () => {
+    await saveToken(TOKEN)
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const cloudStore = useCloudSessionStore(pinia)
+    cloudStore.user = { id: 1, name: 'Uji', email: 'uji@example.com' }
+
+    const checkoutStore = usePremiumCheckoutStore(pinia)
+    const adapter = createMemoryAdapter()
+    checkoutStore.setPersistenceAdapter(adapter)
+    await adapter.savePendingSubscriptionPayment({
+      paymentId: 55,
+      status: 'pending',
+      redirectUrl: 'https://x',
+    })
+    await checkoutStore.hydratePending()
+
+    apiRequest.mockResolvedValue(apiOk(paymentPayload({ status: 'pending' })))
+
+    const wrapper = mount(PremiumPaymentStatusView, { global: { plugins: [pinia] } })
+    await flushPromises()
+
+    const spy = vi.spyOn(checkoutStore, 'refreshStatus')
+    const original = Object.getOwnPropertyDescriptor(document, 'visibilityState')
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true })
+
+    document.dispatchEvent(new Event('visibilitychange'))
+    await flushPromises()
+
+    // Resuming the app only re-reads the backend; it never assumes paid.
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(checkoutStore.isPaid).toBe(false)
+
+    wrapper.unmount()
+    if (original) Object.defineProperty(document, 'visibilityState', original)
   })
 })

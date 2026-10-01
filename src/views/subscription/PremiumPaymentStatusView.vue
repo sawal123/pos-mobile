@@ -66,6 +66,18 @@ async function handleResume() {
   await checkoutStore.launchPayment()
 }
 
+let removeVisibilityListener = null
+
+/**
+ * PREM-M04: returning to the app (browser closed / app resumed) is NOT proof of
+ * payment. On resume we only re-read the authoritative backend status.
+ */
+async function handleAppResume() {
+  if (!cloudStore.isAuthenticated) return
+  if (!hasPayment.value) return
+  await checkoutStore.refreshStatus()
+}
+
 onMounted(async () => {
   if (!cloudStore.isAuthenticated) {
     router.replace({ name: 'cloud' })
@@ -83,10 +95,24 @@ onMounted(async () => {
   if (!checkoutStore.isTerminal && hasPayment.value) {
     checkoutStore.startPolling()
   }
+
+  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void handleAppResume()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    removeVisibilityListener = () => document.removeEventListener('visibilitychange', onVisibility)
+  }
 })
 
 onBeforeUnmount(() => {
   checkoutStore.stopPolling('unmounted')
+  if (removeVisibilityListener) {
+    removeVisibilityListener()
+    removeVisibilityListener = null
+  }
 })
 </script>
 

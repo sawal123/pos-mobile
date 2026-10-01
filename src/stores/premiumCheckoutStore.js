@@ -84,6 +84,21 @@ function messageForCode(code) {
   }
 }
 
+function launchMessageForCode(code) {
+  switch (code) {
+    case 'CHECKOUT_URL_MISSING':
+      return 'Halaman pembayaran tidak tersedia. Perbarui status pembayaran.'
+    case 'CHECKOUT_URL_MALFORMED':
+    case 'CHECKOUT_URL_PROTOCOL':
+    case 'CHECKOUT_URL_INSECURE':
+      return 'Tautan pembayaran tidak valid. Pembayaran tidak dilanjutkan.'
+    case 'BROWSER_OPEN_FAILED':
+      return 'Halaman pembayaran gagal dibuka. Coba lagi.'
+    default:
+      return 'Halaman pembayaran tidak dapat dibuka saat ini.'
+  }
+}
+
 function pickPendingFields(record) {
   const out = {}
   for (const key of PENDING_FIELDS) {
@@ -321,10 +336,19 @@ export const usePremiumCheckoutStore = defineStore('premiumCheckout', () => {
 
   async function launchPayment() {
     const url = payment.value?.redirectUrl ?? pending.value?.redirectUrl ?? null
-    if (typeof url !== 'string' || url.trim().length === 0) {
-      return { ok: false, code: 'NO_REDIRECT_URL' }
+    const result = await openCheckoutUrl(url)
+
+    if (!result.ok) {
+      // Opening the payment page failed. Never change the payment state and never
+      // create a new checkout — the pending payment stays recoverable.
+      errorCode.value = result.code
+      error.value = launchMessageForCode(result.code)
+      return result
     }
-    return openCheckoutUrl(url)
+
+    error.value = null
+    errorCode.value = null
+    return result
   }
 
   /**

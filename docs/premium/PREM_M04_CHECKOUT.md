@@ -52,10 +52,39 @@ Aktivasi hanya melalui webhook `POST /webhooks/midtrans`; entitlement authoritat
 ## Midtrans handoff
 
 - Backend memberi `redirect_url` (Midtrans Snap). Mobile hanya membuka URL itu melalui
-  `checkoutLauncher.openCheckoutUrl()` — memakai `@capacitor/browser` bila terpasang
-  (dynamic import), jika tidak `window.open(url,'_blank')`.
+  `checkoutLauncher.openCheckoutUrl()`.
+- **Native (Android/Capacitor)** memakai `Browser.open()` dari `@capacitor/browser`
+  (dependency nyata, diimpor statis). **Web** memakai `window.open(url,'_blank')`.
 - `MIDTRANS_SERVER_KEY` tidak ada di mobile; tidak ada pemanggilan API Midtrans privileged.
 - Metode pembayaran (QRIS/transfer/e-wallet/kartu) dikelola Midtrans; mobile hanya copy generik.
+
+### Validasi URL (fail closed)
+
+Sebelum dibuka, URL backend divalidasi:
+
+| Kondisi | Hasil |
+| --- | --- |
+| Kosong / bukan string | `CHECKOUT_URL_MISSING` |
+| Tidak bisa di-parse sebagai URL absolut | `CHECKOUT_URL_MALFORMED` |
+| Protokol bukan http/https (mis. `javascript:`, `data:`) | `CHECKOUT_URL_PROTOCOL` |
+| `http://` non-loopback, atau `http://` apa pun di production | `CHECKOUT_URL_INSECURE` |
+| `https://` | diterima |
+| `http://` loopback **hanya** di env development/test eksplisit | diterima (dev/test) |
+
+Production hanya menerima HTTPS. Pengecualian loopback hanya aktif bila `DEV`/`VITEST`/
+`MODE=development|test` — tidak pernah longgar di build production.
+
+### Kegagalan handoff
+
+Jika `Browser.open()` gagal atau URL invalid: store menampilkan error + retry, **tidak**
+mengubah status/phase pembayaran, **tidak** membuat checkout baru, dan pending payment
+tetap recoverable.
+
+### Kembali dari pembayaran
+
+Menutup browser / app resume **bukan** bukti pembayaran sukses. Saat view status kembali ke
+foreground (`visibilitychange`) status di-refresh dari backend; hanya backend yang dapat
+mengubah status.
 
 ## Status & polling
 
@@ -137,8 +166,8 @@ Tidak ada store entitlement/auth kedua.
 
 ## Batasan yang diketahui
 
-- `@capacitor/browser` belum terpasang → handoff memakai fallback `window.open`; perilaku di
-  Android WebView bergantung konfigurasi.
+- Handoff native memakai `@capacitor/browser`; pada build Android butuh `npx cap sync`
+  agar plugin terdaftar (di luar lingkup PR kode ini).
 - Tidak ada endpoint refresh token → 401 = login ulang (M03).
 - Endpoint payment show/index tidak mengembalikan `redirect_url`; resume pembayaran
   mengandalkan `redirect_url` yang dipersist saat checkout.

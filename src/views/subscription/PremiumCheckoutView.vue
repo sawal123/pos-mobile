@@ -69,7 +69,12 @@ async function handlePay() {
   const created = await checkoutStore.createCheckout()
   if (!created.ok) return
 
-  await checkoutStore.launchPayment()
+  const launched = await checkoutStore.launchPayment()
+  if (!launched.ok) {
+    // Stay here so the user can retry; the pending payment is preserved.
+    return
+  }
+
   router.push({ name: 'premium-payment-status' })
 }
 </script>
