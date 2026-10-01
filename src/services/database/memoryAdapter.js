@@ -33,6 +33,7 @@ export function createMemoryAdapter() {
     syncQueue: [],
     deviceIdentifier: null,
     cloudContext: null,
+    pendingSubscriptionPayment: null,
     syncIdentityMap: null,
     syncPushBinding: null,
     syncPushInflight: null,
@@ -238,6 +239,16 @@ export function createMemoryAdapter() {
     },
     async clearCloudContext() {
       state.cloudContext = null
+    },
+    // PREM-M04: non-sensitive pending subscription payment (recovery only).
+    async loadPendingSubscriptionPayment() {
+      return state.pendingSubscriptionPayment ? cloneValue(state.pendingSubscriptionPayment) : null
+    },
+    async savePendingSubscriptionPayment(payment) {
+      state.pendingSubscriptionPayment = cloneValue(payment)
+    },
+    async clearPendingSubscriptionPayment() {
+      state.pendingSubscriptionPayment = null
     },
     // P11: sync identity map (stable, durable, non-sensitive, survives logout)
     async loadSyncIdentityMap() {

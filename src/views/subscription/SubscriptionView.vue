@@ -14,10 +14,14 @@ import {
 import { PLAN_CATALOG_REASON, PLAN_PERIOD_LABELS } from '@/services/subscription/planCatalogService'
 import { useSubscriptionPlanStore } from '@/stores/subscriptionPlanStore'
 import { useSubscriptionStore } from '@/stores/subscriptionStore'
+import { useCloudSessionStore } from '@/stores/cloudSessionStore'
+import { usePremiumCheckoutStore } from '@/stores/premiumCheckoutStore'
 
 const router = useRouter()
 const subscriptionStore = useSubscriptionStore()
 const planStore = useSubscriptionPlanStore()
+const cloudStore = useCloudSessionStore()
+const checkoutStore = usePremiumCheckoutStore()
 
 const benefits = PREMIUM_BENEFITS
 const localGuarantees = LOCAL_GUARANTEES
@@ -150,13 +154,26 @@ function handleRetry() {
 }
 
 /**
- * No payment is ever processed here. Checkout activates only once the backend
- * advertises it, and even then activation stays a dashboard step.
+ * PREM-M04: the continue action routes into the checkout flow. Entitlement is
+ * still never activated here — only the backend activates after payment.
  */
 function handleContinue() {
   if (!planStore.canContinue) return
-  checkoutNotice.value =
-    'Aktivasi langganan diselesaikan melalui dashboard web. Aplikasi ini tidak memproses pembayaran.'
+
+  if (!cloudStore.isAuthenticated) {
+    router.push({ name: 'cloud' })
+    return
+  }
+  if (!cloudStore.isLinked) {
+    router.push({ name: 'cloud' })
+    return
+  }
+
+  router.push({ name: 'premium-checkout' })
+}
+
+function goToPaymentStatus() {
+  router.push({ name: 'premium-payment-status' })
 }
 
 function goBack() {
@@ -185,6 +202,18 @@ onMounted(() => {
         <h2 class="truncate text-2xl font-semibold text-ink-primary">Premium</h2>
       </div>
     </div>
+
+    <!-- PREM-M04: pending payment recovery entry -->
+    <button
+      v-if="checkoutStore.hasPending"
+      type="button"
+      data-testid="pending-payment-banner"
+      class="flex w-full items-center justify-between rounded-3xl border border-amber-300 bg-amber-50 px-4 py-3 text-left"
+      @click="goToPaymentStatus"
+    >
+      <span class="text-sm font-medium text-amber-800">Ada pembayaran Premium yang menunggu</span>
+      <AppIcon name="chevron-right" class="text-amber-700" />
+    </button>
 
     <!-- Current subscription status -->
     <div
