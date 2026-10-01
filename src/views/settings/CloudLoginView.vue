@@ -1,11 +1,16 @@
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
 import { Capacitor } from '@capacitor/core'
+import { useRouter } from 'vue-router'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
+import BaseModal from '@/components/base/BaseModal.vue'
+import { describeLoginError } from '@/services/cloud/cloudLoginErrors'
+import { useBusinessStore } from '@/stores/businessStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
+import { useSubscriptionStore } from '@/stores/subscriptionStore'
 import { useSyncPushStore } from '@/stores/syncPushStore'
 import { useSyncPullStore } from '@/stores/syncPullStore'
 import { useSyncBootstrapStore } from '@/stores/syncBootstrapStore'
@@ -19,7 +24,10 @@ import { useSyncContextGuardStore } from '@/stores/syncContextGuardStore'
 import { useSyncStatusStore } from '@/stores/syncStatusStore'
 import { useSyncReconciliationStore } from '@/stores/syncReconciliationStore'
 
+const businessStore = useBusinessStore()
 const cloudStore = useCloudSessionStore()
+const subscriptionStore = useSubscriptionStore()
+const router = useRouter()
 const syncPushStore = useSyncPushStore()
 const syncPullStore = useSyncPullStore()
 const syncBootstrapStore = useSyncBootstrapStore()
@@ -36,7 +44,11 @@ const syncReconciliationStore = useSyncReconciliationStore()
 // ── Form state ──────────────────────────────────────────────────────────────
 const email = ref('')
 const password = ref('')
-const step = ref('login') // 'login' | 'select-business' | 'select-outlet' | 'done'
+const showPassword = ref(false)
+const step = ref('login') // 'login' | 'select-business' | 'confirm-link' | 'select-outlet' | 'done'
+const pendingBusiness = ref(null)
+const loginErrorMessage = ref('')
+const showDisconnectConfirm = ref(false)
 const syncAllMessage = ref('')
 const syncAllSuccess = ref(false)
 const syncMessage = ref('')
@@ -65,7 +77,9 @@ const canSync = computed(
     cloudStore.isDeviceRegistered,
 )
 
-const isContextGuardBlocked = computed(() => canSync.value && syncContextGuardStore.status === 'blocked')
+const isContextGuardBlocked = computed(
+  () => canSync.value && syncContextGuardStore.status === 'blocked',
+)
 
 const isContextGuardMutationBlocked = computed(() => {
   if (!canSync.value) return false
@@ -95,6 +109,35 @@ const isZeroBusiness = computed(
       (cloudStore.hasResolvedBusinessContext && cloudStore.businesses.length === 0)) &&
     !cloudStore.selectedBusiness,
 )
+
+// PREM-M03: link presentation
+const isLinked = computed(() => cloudStore.isLinked)
+
+const isUnlinkedBusiness = computed(
+  () => cloudStore.isAuthenticated && !isLinked.value && !isZeroBusiness.value,
+)
+
+const localBusinessName = computed(() => businessStore.name || 'Bisnis lokal ini')
+
+const cloudAccountEmail = computed(() => cloudStore.user?.email || '—')
+
+const cloudSubscriptionLabel = computed(() => {
+  if (subscriptionStore.status === 'free') return 'Free'
+  return subscriptionStore.planLabel || subscriptionStore.status
+})
+
+const contextCheckedLabel = computed(() => {
+  const checkedAt = cloudStore.contextCheckedAt
+  if (!checkedAt) return 'Belum diperiksa ulang'
+  const date = new Date(checkedAt)
+  if (Number.isNaN(date.getTime())) return 'Belum diperiksa ulang'
+  return date.toLocaleString('id-ID', {
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+})
 
 const activeBusinessOutlets = computed(() => {
   const biz = cloudStore.businesses.find((b) => b.id === cloudStore.selectedBusiness?.id)
@@ -144,7 +187,8 @@ const reconciliationPresentation = computed(() => {
   if (acceptance === 'accepted') {
     return {
       tone: 'info',
-      message: 'Pengiriman sudah diterima server. Selesaikan pembersihan lokal dengan rekonsiliasi.',
+      message:
+        'Pengiriman sudah diterima server. Selesaikan pembersihan lokal dengan rekonsiliasi.',
     }
   }
   // Membership/subscription revoked while a request is outstanding: keep the
@@ -235,36 +279,41 @@ function resetRecoveryPresentation() {
 
 function snapshotCloudContext() {
   return {
-    businessId: cloudStore.selectedBusiness?.id != null ? Number(cloudStore.selectedBusiness.id) : null,
+    businessId:
+      cloudStore.selectedBusiness?.id != null ? Number(cloudStore.selectedBusiness.id) : null,
     outletId: cloudStore.selectedOutlet?.id != null ? Number(cloudStore.selectedOutlet.id) : null,
-    deviceIdentifier: cloudStore.deviceIdentifier != null ? String(cloudStore.deviceIdentifier) : null,
-    registeredDeviceId: cloudStore.registeredDeviceId != null ? Number(cloudStore.registeredDeviceId) : null,
+    deviceIdentifier:
+      cloudStore.deviceIdentifier != null ? String(cloudStore.deviceIdentifier) : null,
+    registeredDeviceId:
+      cloudStore.registeredDeviceId != null ? Number(cloudStore.registeredDeviceId) : null,
   }
 }
 
 function buildContextFingerprint() {
   const userId = cloudStore.user?.id != null ? String(cloudStore.user.id) : ''
-  const bizId = cloudStore.selectedBusiness?.id != null ? String(cloudStore.selectedBusiness.id) : ''
+  const bizId =
+    cloudStore.selectedBusiness?.id != null ? String(cloudStore.selectedBusiness.id) : ''
   const outletId = cloudStore.selectedOutlet?.id != null ? String(cloudStore.selectedOutlet.id) : ''
   const cloudAccess = cloudStore.cloudAccess === true ? '1' : '0'
-  const devId = cloudStore.deviceIdentifier != null ? String(cloudStore.deviceIdentifier).trim() : ''
+  const devId =
+    cloudStore.deviceIdentifier != null ? String(cloudStore.deviceIdentifier).trim() : ''
   const regId = cloudStore.registeredDeviceId != null ? String(cloudStore.registeredDeviceId) : ''
   return `${userId}:${bizId}:${outletId}:${cloudAccess}:${devId}:${regId}`
 }
 
 async function ensureContextGuardAllowsMutation() {
   if (!canSync.value) return false
-  
+
   const fingerprintBefore = buildContextFingerprint()
-  
+
   const result = await syncContextGuardStore.check()
-  
+
   const fingerprintAfter = buildContextFingerprint()
-  
+
   if (fingerprintBefore !== fingerprintAfter) {
     return false
   }
-  
+
   return (
     result?.ok === true &&
     (result.status === 'safe' || result.status === 'unbound') &&
@@ -684,14 +733,11 @@ async function handleSyncAll() {
       syncAllMessage.value =
         'Masih ada data lokal yang menunggu dikirim. Tekan Sinkronkan Semua kembali.'
     } else if (result.code === 'SYNC_CONFLICT_PENDING') {
-      syncAllMessage.value =
-        'Ada konflik sinkronisasi yang harus diselesaikan terlebih dahulu.'
+      syncAllMessage.value = 'Ada konflik sinkronisasi yang harus diselesaikan terlebih dahulu.'
     } else if (result.code === 'SYNC_PUSH_BLOCKED_PENDING') {
-      syncAllMessage.value =
-        'Ada data lokal yang belum dapat disinkronkan dan perlu diperiksa.'
+      syncAllMessage.value = 'Ada data lokal yang belum dapat disinkronkan dan perlu diperiksa.'
     } else {
-      syncAllMessage.value =
-        result.error?.message ?? result.message ?? 'Sinkronisasi gagal.'
+      syncAllMessage.value = result.error?.message ?? result.message ?? 'Sinkronisasi gagal.'
     }
   }
 }
@@ -799,8 +845,18 @@ async function handlePullNow() {
       fetched: typeof result.fetched === 'number' ? result.fetched : 0,
       applied: typeof result.applied === 'number' ? result.applied : 0,
       ignored: typeof result.ignored === 'number' ? result.ignored : 0,
-      cursorBefore: typeof result.cursorBefore === 'number' && Number.isInteger(result.cursorBefore) && result.cursorBefore >= 0 ? result.cursorBefore : null,
-      cursorAfter: typeof result.cursorAfter === 'number' && Number.isInteger(result.cursorAfter) && result.cursorAfter >= 0 ? result.cursorAfter : null,
+      cursorBefore:
+        typeof result.cursorBefore === 'number' &&
+        Number.isInteger(result.cursorBefore) &&
+        result.cursorBefore >= 0
+          ? result.cursorBefore
+          : null,
+      cursorAfter:
+        typeof result.cursorAfter === 'number' &&
+        Number.isInteger(result.cursorAfter) &&
+        result.cursorAfter >= 0
+          ? result.cursorAfter
+          : null,
     },
   })
 
@@ -912,7 +968,8 @@ async function handleUseServer(conflictId) {
     type: 'conflict',
     action: 'USE_SERVER',
     status: result.ok ? 'success' : 'failed',
-    code: result.code || (result.ok ? 'CONFLICT_USE_SERVER_RESOLVED' : 'CONFLICT_RESOLUTION_FAILED'),
+    code:
+      result.code || (result.ok ? 'CONFLICT_USE_SERVER_RESOLVED' : 'CONFLICT_RESOLUTION_FAILED'),
     startedAt,
     finishedAt,
     ...ctx,
@@ -964,7 +1021,8 @@ async function handleKeepLocal(conflictId) {
     type: 'conflict',
     action: 'KEEP_LOCAL',
     status: result.ok ? 'success' : 'failed',
-    code: result.code || (result.ok ? 'CONFLICT_KEEP_LOCAL_RESOLVED' : 'CONFLICT_RESOLUTION_FAILED'),
+    code:
+      result.code || (result.ok ? 'CONFLICT_KEEP_LOCAL_RESOLVED' : 'CONFLICT_RESOLUTION_FAILED'),
     startedAt,
     finishedAt,
     ...ctx,
@@ -986,9 +1044,14 @@ async function handleKeepLocal(conflictId) {
 async function handleLogin() {
   if (!email.value || !password.value) return
 
+  loginErrorMessage.value = ''
+
   const result = await cloudStore.login(email.value, password.value)
 
-  if (!result.ok) return
+  if (!result.ok) {
+    loginErrorMessage.value = describeLoginError(result.error).message
+    return
+  }
 
   const { businesses } = result
 
@@ -997,21 +1060,54 @@ async function handleLogin() {
     return
   }
 
-  if (businesses.length === 1) {
-    await cloudStore.selectBusiness(businesses[0].id)
-    await advanceAfterBusiness(businesses[0])
+  // PREM-M03: never auto-link – the user must confirm the Cloud business.
+  pendingBusiness.value = businesses.length === 1 ? businesses[0] : null
+  step.value = businesses.length === 1 ? 'confirm-link' : 'select-business'
+}
+
+function handleSelectBusiness(businessId) {
+  const biz = cloudStore.businesses.find((b) => b.id === businessId)
+  if (!biz) return
+  pendingBusiness.value = biz
+  step.value = 'confirm-link'
+}
+
+async function handleConfirmLink() {
+  if (!pendingBusiness.value) return
+
+  const biz = pendingBusiness.value
+  const result = await cloudStore.selectBusiness(biz.id)
+  if (!result.ok) return
+
+  await advanceAfterBusiness(biz)
+}
+
+function handleCancelLink() {
+  pendingBusiness.value = null
+  step.value = cloudStore.businesses.length > 1 ? 'select-business' : 'login'
+}
+
+async function handleRelink() {
+  loginErrorMessage.value = ''
+
+  const result = await cloudStore.refreshContext()
+
+  if (!result.ok) {
+    loginErrorMessage.value =
+      result.code === 'TOKEN_INVALID'
+        ? (cloudStore.error ?? 'Sesi Cloud tidak valid.')
+        : describeLoginError(result.error).message
     return
   }
 
-  step.value = 'select-business'
+  if (cloudStore.businesses.length === 0) return
+
+  pendingBusiness.value = cloudStore.businesses.length === 1 ? cloudStore.businesses[0] : null
+  step.value = cloudStore.businesses.length === 1 ? 'confirm-link' : 'select-business'
 }
 
-async function handleSelectBusiness(businessId) {
-  const result = await cloudStore.selectBusiness(businessId)
-  if (!result.ok) return
-
-  const biz = cloudStore.businesses.find((b) => b.id === businessId)
-  await advanceAfterBusiness(biz)
+function goToSubscription() {
+  router.push({ name: 'subscription' })
 }
 
 async function advanceAfterBusiness(biz) {
@@ -1071,8 +1167,13 @@ async function finishDeviceStep(outletResult = null) {
   step.value = 'done'
 }
 
-async function handleLogout() {
+function requestDisconnect() {
   if (isAnySyncOperationBusy.value) return
+  showDisconnectConfirm.value = true
+}
+
+async function confirmDisconnect() {
+  showDisconnectConfirm.value = false
   resetRecoveryPresentation()
   syncHealthStore.resetResult()
   autoSyncMessage.value = ''
@@ -1081,6 +1182,8 @@ async function handleLogout() {
   await cloudStore.logout()
   email.value = ''
   password.value = ''
+  pendingBusiness.value = null
+  loginErrorMessage.value = ''
   step.value = 'login'
 }
 
@@ -1107,8 +1210,11 @@ watch(
 
 // Sync context to adapter on mount (if already hydrated)
 onMounted(async () => {
-  if (cloudStore.isAuthenticated) {
+  if (cloudStore.isLinked) {
     step.value = 'done'
+  }
+
+  if (cloudStore.isAuthenticated) {
     try {
       await syncPushStore.refreshPendingCount()
       await syncConflictStore.loadConflicts()
@@ -1131,11 +1237,7 @@ onMounted(async () => {
     </div>
 
     <!-- ZERO BUSINESS STATE (Reachable when authenticated but has 0 businesses) -->
-    <BaseCard
-      v-if="isZeroBusiness"
-      id="cloud-no-business"
-      class="space-y-3"
-    >
+    <BaseCard v-if="isZeroBusiness" id="cloud-no-business" class="space-y-3">
       <p class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger">
         Akun Anda belum memiliki Business. Buat Business terlebih dahulu di dashboard web.
       </p>
@@ -1144,18 +1246,74 @@ onMounted(async () => {
         variant="danger"
         :disabled="isAnySyncOperationBusy"
         :loading="cloudStore.loading"
-        @click="handleLogout"
+        @click="requestDisconnect"
       >
-        Logout Cloud
+        Putuskan Cloud
       </BaseButton>
     </BaseCard>
 
     <!-- LOGGED IN STATE -->
-    <BaseCard
-      v-else-if="cloudStore.isAuthenticated && step === 'done'"
-      id="cloud-logged-in"
-      class="space-y-4"
-    >
+    <BaseCard v-else-if="isLinked && step === 'done'" id="cloud-logged-in" class="space-y-4">
+      <!-- PREM-M03: link status summary -->
+      <div
+        id="cloud-link-summary"
+        class="rounded-2xl border border-emerald-200 bg-emerald-50/60 px-4 py-3"
+      >
+        <div class="flex items-center justify-between">
+          <span class="text-sm font-semibold text-ink-primary">Cloud</span>
+          <span
+            class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-emerald-700"
+          >
+            Terhubung
+          </span>
+        </div>
+        <dl class="mt-2 space-y-1 text-xs text-ink-secondary">
+          <div class="flex items-center justify-between">
+            <dt>Akun</dt>
+            <dd class="font-medium text-ink-primary" data-testid="cloud-link-email">
+              {{ cloudAccountEmail }}
+            </dd>
+          </div>
+          <div class="flex items-center justify-between">
+            <dt>Bisnis Cloud</dt>
+            <dd class="font-medium text-ink-primary" data-testid="cloud-link-business">
+              {{ cloudStore.selectedBusiness?.name ?? '-' }}
+            </dd>
+          </div>
+          <div class="flex items-center justify-between">
+            <dt>Subscription</dt>
+            <dd class="font-medium text-ink-primary" data-testid="cloud-link-subscription">
+              {{ cloudSubscriptionLabel }}
+            </dd>
+          </div>
+          <div class="flex items-center justify-between">
+            <dt>Status diperiksa</dt>
+            <dd class="font-medium text-ink-primary" data-testid="cloud-link-checked">
+              {{ contextCheckedLabel }}
+            </dd>
+          </div>
+        </dl>
+        <div class="mt-3 flex flex-wrap gap-2">
+          <BaseButton
+            id="cloud-manage-subscription"
+            size="sm"
+            variant="secondary"
+            @click="goToSubscription"
+          >
+            Kelola Langganan
+          </BaseButton>
+          <BaseButton
+            id="cloud-disconnect-btn"
+            size="sm"
+            variant="danger"
+            :disabled="isAnySyncOperationBusy"
+            @click="requestDisconnect"
+          >
+            Putuskan Cloud
+          </BaseButton>
+        </div>
+      </div>
+
       <div class="space-y-2">
         <div class="flex items-center justify-between rounded-2xl bg-surface px-4 py-3">
           <span class="text-sm text-ink-secondary">Email</span>
@@ -1163,11 +1321,15 @@ onMounted(async () => {
         </div>
         <div class="flex items-center justify-between rounded-2xl bg-surface px-4 py-3">
           <span class="text-sm text-ink-secondary">Business</span>
-          <span class="font-medium text-ink-primary">{{ cloudStore.selectedBusiness?.name ?? '-' }}</span>
+          <span class="font-medium text-ink-primary">{{
+            cloudStore.selectedBusiness?.name ?? '-'
+          }}</span>
         </div>
         <div class="flex items-center justify-between rounded-2xl bg-surface px-4 py-3">
           <span class="text-sm text-ink-secondary">Outlet</span>
-          <span class="font-medium text-ink-primary">{{ cloudStore.selectedOutlet?.name ?? '-' }}</span>
+          <span class="font-medium text-ink-primary">{{
+            cloudStore.selectedOutlet?.name ?? '-'
+          }}</span>
         </div>
         <div class="flex items-center justify-between rounded-2xl bg-surface px-4 py-3">
           <span class="text-sm text-ink-secondary">Cloud Access</span>
@@ -1241,10 +1403,18 @@ onMounted(async () => {
 
         <div class="grid grid-cols-2 gap-2 text-xs text-ink-secondary sm:grid-cols-3">
           <div id="preview-products">Produk: {{ syncBootstrapStore.previewCounts.products }}</div>
-          <div id="preview-categories">Kategori: {{ syncBootstrapStore.previewCounts.categories }}</div>
-          <div id="preview-customers">Pelanggan: {{ syncBootstrapStore.previewCounts.customers }}</div>
-          <div id="preview-expenses">Pengeluaran: {{ syncBootstrapStore.previewCounts.expenses }}</div>
-          <div id="preview-transactions">Transaksi: {{ syncBootstrapStore.previewCounts.transactions }}</div>
+          <div id="preview-categories">
+            Kategori: {{ syncBootstrapStore.previewCounts.categories }}
+          </div>
+          <div id="preview-customers">
+            Pelanggan: {{ syncBootstrapStore.previewCounts.customers }}
+          </div>
+          <div id="preview-expenses">
+            Pengeluaran: {{ syncBootstrapStore.previewCounts.expenses }}
+          </div>
+          <div id="preview-transactions">
+            Transaksi: {{ syncBootstrapStore.previewCounts.transactions }}
+          </div>
         </div>
 
         <p
@@ -1300,13 +1470,21 @@ onMounted(async () => {
           </BaseButton>
         </div>
 
-        <div v-if="syncHealthStore.summary" class="grid grid-cols-2 gap-2 text-xs text-ink-secondary sm:grid-cols-3">
+        <div
+          v-if="syncHealthStore.summary"
+          class="grid grid-cols-2 gap-2 text-xs text-ink-secondary sm:grid-cols-3"
+        >
           <div id="health-pending-count">Pending: {{ syncHealthStore.summary.pendingCount }}</div>
-          <div id="health-conflict-count">Konflik: {{ syncHealthStore.summary.openConflictCount }}</div>
-          <div id="health-inflight-status">In-flight: {{ syncHealthStore.summary.hasInflight ? 'Ya' : 'Tidak' }}</div>
+          <div id="health-conflict-count">
+            Konflik: {{ syncHealthStore.summary.openConflictCount }}
+          </div>
+          <div id="health-inflight-status">
+            In-flight: {{ syncHealthStore.summary.hasInflight ? 'Ya' : 'Tidak' }}
+          </div>
           <div id="health-pull-cursor">Pull Cursor: {{ syncHealthStore.summary.pullCursor }}</div>
           <div id="health-bootstrap-status">
-            Bootstrap: {{
+            Bootstrap:
+            {{
               syncHealthStore.summary.bootstrapStatus === 'completed'
                 ? 'Completed'
                 : syncHealthStore.summary.bootstrapStatus === 'staged'
@@ -1337,16 +1515,25 @@ onMounted(async () => {
             }}
           </p>
 
-          <div v-if="syncHealthStore.issues && syncHealthStore.issues.length > 0" class="mt-2 space-y-1">
+          <div
+            v-if="syncHealthStore.issues && syncHealthStore.issues.length > 0"
+            class="mt-2 space-y-1"
+          >
             <div
               v-for="(issue, index) in syncHealthStore.issues"
               :key="`${issue.code}-${index}`"
               :id="`health-issue-${issue.code}-${index}`"
               class="flex items-center justify-between rounded-lg px-3 py-1.5 text-xs"
-              :class="issue.severity === 'blocked' ? 'bg-danger/5 text-danger' : 'bg-amber-500/10 text-amber-800'"
+              :class="
+                issue.severity === 'blocked'
+                  ? 'bg-danger/5 text-danger'
+                  : 'bg-amber-500/10 text-amber-800'
+              "
             >
               <span>{{ issue.message }}</span>
-              <span class="font-mono uppercase font-semibold text-[10px]">{{ issue.severity }}</span>
+              <span class="font-mono uppercase font-semibold text-[10px]">{{
+                issue.severity
+              }}</span>
             </div>
           </div>
 
@@ -1362,14 +1549,23 @@ onMounted(async () => {
 
       <!-- P18: Manual Sync Recovery Center -->
       <div
-        v-if="canSync && (syncHealthStore.lastResult || syncRecoveryStore.loading || recoveryMessage || syncRecoveryStore.lastResult)"
+        v-if="
+          canSync &&
+          (syncHealthStore.lastResult ||
+            syncRecoveryStore.loading ||
+            recoveryMessage ||
+            syncRecoveryStore.lastResult)
+        "
         id="cloud-recovery-section"
         class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
       >
         <div>
           <p class="text-sm font-semibold text-ink-primary">Pemulihan Sinkronisasi</p>
           <p id="recovery-plan-message" class="text-xs text-ink-secondary">
-            {{ recoveryPlan?.message || 'Pilih tindakan pemulihan yang sesuai berdasarkan status diagnostik.' }}
+            {{
+              recoveryPlan?.message ||
+              'Pilih tindakan pemulihan yang sesuai berdasarkan status diagnostik.'
+            }}
           </p>
         </div>
 
@@ -1383,7 +1579,9 @@ onMounted(async () => {
             variant="primary"
             size="sm"
             :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
-            :loading="syncRecoveryStore.loading && syncRecoveryStore.lastAction === 'RETRY_INFLIGHT'"
+            :loading="
+              syncRecoveryStore.loading && syncRecoveryStore.lastAction === 'RETRY_INFLIGHT'
+            "
             @click="handleRecovery('RETRY_INFLIGHT')"
           >
             Coba Ulang Push
@@ -1395,7 +1593,9 @@ onMounted(async () => {
             variant="primary"
             size="sm"
             :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
-            :loading="syncRecoveryStore.loading && syncRecoveryStore.lastAction === 'CONTINUE_PENDING'"
+            :loading="
+              syncRecoveryStore.loading && syncRecoveryStore.lastAction === 'CONTINUE_PENDING'
+            "
             @click="handleRecovery('CONTINUE_PENDING')"
           >
             Lanjutkan Sinkronisasi
@@ -1407,7 +1607,9 @@ onMounted(async () => {
             variant="primary"
             size="sm"
             :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
-            :loading="syncRecoveryStore.loading && syncRecoveryStore.lastAction === 'PREPARE_BOOTSTRAP'"
+            :loading="
+              syncRecoveryStore.loading && syncRecoveryStore.lastAction === 'PREPARE_BOOTSTRAP'
+            "
             @click="handleRecovery('PREPARE_BOOTSTRAP')"
           >
             Siapkan Data Lokal
@@ -1419,7 +1621,9 @@ onMounted(async () => {
             variant="primary"
             size="sm"
             :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
-            :loading="syncRecoveryStore.loading && syncRecoveryStore.lastAction === 'CONTINUE_BOOTSTRAP'"
+            :loading="
+              syncRecoveryStore.loading && syncRecoveryStore.lastAction === 'CONTINUE_BOOTSTRAP'
+            "
             @click="handleRecovery('CONTINUE_BOOTSTRAP')"
           >
             Lanjutkan Data Bootstrap
@@ -1469,7 +1673,9 @@ onMounted(async () => {
           v-if="reconciliationMessage"
           id="reconciliation-result-message"
           class="rounded-xl px-3 py-2 text-xs font-medium"
-          :class="reconciliationSuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'"
+          :class="
+            reconciliationSuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'
+          "
         >
           {{ reconciliationMessage }}
         </p>
@@ -1492,7 +1698,11 @@ onMounted(async () => {
             id="sync-all-btn"
             variant="primary"
             size="sm"
-            :disabled="syncBootstrapStore.hasContextMismatch || isAnySyncOperationBusy || isContextGuardMutationBlocked"
+            :disabled="
+              syncBootstrapStore.hasContextMismatch ||
+              isAnySyncOperationBusy ||
+              isContextGuardMutationBlocked
+            "
             :loading="syncOrchestratorStore.loading"
             @click="handleSyncAll"
           >
@@ -1527,7 +1737,11 @@ onMounted(async () => {
             id="sync-now-btn"
             variant="primary"
             size="sm"
-            :disabled="syncBootstrapStore.hasContextMismatch || isAnySyncOperationBusy || isContextGuardMutationBlocked"
+            :disabled="
+              syncBootstrapStore.hasContextMismatch ||
+              isAnySyncOperationBusy ||
+              isContextGuardMutationBlocked
+            "
             :loading="syncPushStore.loading"
             @click="handleSyncNow"
           >
@@ -1589,7 +1803,8 @@ onMounted(async () => {
         <div>
           <p class="text-sm font-semibold text-danger">Konflik Sinkronisasi</p>
           <p class="text-xs text-ink-secondary">
-            Ada {{ syncConflictStore.openConflictCount }} data konflik yang memerlukan keputusan manual Anda
+            Ada {{ syncConflictStore.openConflictCount }} data konflik yang memerlukan keputusan
+            manual Anda
           </p>
         </div>
 
@@ -1601,9 +1816,13 @@ onMounted(async () => {
             class="flex flex-col gap-2 rounded-xl bg-surface p-3 sm:flex-row sm:items-center sm:justify-between"
           >
             <div class="text-xs">
-              <span class="font-semibold text-ink-primary uppercase">{{ conflict.serverEntity || conflict.entityType }}</span>
+              <span class="font-semibold text-ink-primary uppercase">{{
+                conflict.serverEntity || conflict.entityType
+              }}</span>
               <span class="text-ink-secondary"> • ID: {{ conflict.entityId }}</span>
-              <span class="text-ink-secondary"> • Server Version: {{ conflict.serverSyncVersion }}</span>
+              <span class="text-ink-secondary">
+                • Server Version: {{ conflict.serverSyncVersion }}</span
+              >
             </div>
             <div class="flex items-center gap-2">
               <BaseButton
@@ -1650,7 +1869,8 @@ onMounted(async () => {
           <div class="space-y-0.5">
             <p class="text-sm font-semibold text-ink-primary">Sinkronisasi Otomatis</p>
             <p class="text-xs text-ink-secondary">
-              Berjalan hanya saat aplikasi aktif ketika koneksi kembali online atau aplikasi dibuka kembali.
+              Berjalan hanya saat aplikasi aktif ketika koneksi kembali online atau aplikasi dibuka
+              kembali.
             </p>
           </div>
           <label class="relative inline-flex cursor-pointer items-center">
@@ -1659,7 +1879,11 @@ onMounted(async () => {
               type="checkbox"
               class="peer sr-only"
               :checked="syncAutoSyncStore.enabled"
-              :disabled="isAnySyncOperationBusy || syncAutoSyncStore.loadingPreference || isContextGuardMutationBlocked"
+              :disabled="
+                isAnySyncOperationBusy ||
+                syncAutoSyncStore.loadingPreference ||
+                isContextGuardMutationBlocked
+              "
               @change="handleToggleAutoSync"
             />
             <div
@@ -1734,7 +1958,8 @@ onMounted(async () => {
           class="rounded-xl border border-danger/20 bg-danger/5 p-3 space-y-2 text-xs"
         >
           <p class="font-medium text-danger">
-            Hanya riwayat aktivitas sinkronisasi yang dihapus. Data POS dan antrean sinkronisasi tidak terpengaruh.
+            Hanya riwayat aktivitas sinkronisasi yang dihapus. Data POS dan antrean sinkronisasi
+            tidak terpengaruh.
           </p>
           <div class="flex items-center gap-2">
             <BaseButton
@@ -1766,7 +1991,10 @@ onMounted(async () => {
           Gagal memuat riwayat sinkronisasi.
         </p>
 
-        <div v-else-if="visibleActivityEntries.length === 0" class="text-xs text-ink-secondary italic py-2">
+        <div
+          v-else-if="visibleActivityEntries.length === 0"
+          class="text-xs text-ink-secondary italic py-2"
+        >
           Belum ada riwayat aktivitas sinkronisasi.
         </div>
 
@@ -1779,18 +2007,23 @@ onMounted(async () => {
           >
             <div class="space-y-0.5">
               <div class="flex items-center gap-2">
-                <span class="font-semibold text-ink-primary">{{ formatActivityAction(entry.action) }}</span>
+                <span class="font-semibold text-ink-primary">{{
+                  formatActivityAction(entry.action)
+                }}</span>
                 <span
                   class="rounded px-1.5 py-0.5 font-mono text-[10px] uppercase font-semibold"
                   :class="{
                     'bg-emerald-50 text-emerald-700': entry.status === 'success',
                     'bg-amber-50 text-amber-700': entry.status === 'attention',
-                    'bg-danger/10 text-danger': entry.status === 'blocked' || entry.status === 'failed',
+                    'bg-danger/10 text-danger':
+                      entry.status === 'blocked' || entry.status === 'failed',
                   }"
                 >
                   {{ entry.status }}
                 </span>
-                <span v-if="entry.code" class="text-[10px] text-ink-secondary font-mono">{{ entry.code }}</span>
+                <span v-if="entry.code" class="text-[10px] text-ink-secondary font-mono">{{
+                  entry.code
+                }}</span>
               </div>
               <p class="text-[11px] text-ink-secondary">
                 {{ formatActivitySummary(entry) }}
@@ -1826,15 +2059,15 @@ onMounted(async () => {
         variant="danger"
         :disabled="isAnySyncOperationBusy"
         :loading="cloudStore.loading"
-        @click="handleLogout"
+        @click="requestDisconnect"
       >
-        Logout Cloud
+        Putuskan Cloud
       </BaseButton>
     </BaseCard>
 
     <!-- SELECT BUSINESS -->
     <BaseCard v-else-if="step === 'select-business'" id="cloud-select-business" class="space-y-3">
-      <p class="text-sm font-medium text-ink-primary">Pilih Business</p>
+      <p class="text-sm font-medium text-ink-primary">Pilih Bisnis Cloud</p>
       <div
         v-for="biz in cloudStore.businesses"
         :key="biz.id"
@@ -1881,8 +2114,101 @@ onMounted(async () => {
       </p>
     </BaseCard>
 
+    <!-- CONFIRM LINK (PREM-M03) -->
+    <BaseCard v-else-if="step === 'confirm-link'" id="cloud-confirm-link" class="space-y-4">
+      <div>
+        <p class="text-sm font-medium text-ink-primary">Hubungkan Bisnis</p>
+        <p class="mt-1 text-xs text-ink-secondary">
+          Tautkan POS lokal ini dengan bisnis Cloud berikut. Data lokal tidak akan diubah.
+        </p>
+      </div>
+
+      <dl class="space-y-2">
+        <div class="flex items-center justify-between rounded-2xl bg-surface px-4 py-3">
+          <dt class="text-sm text-ink-secondary">Bisnis lokal</dt>
+          <dd class="font-medium text-ink-primary" data-testid="link-local-business">
+            {{ localBusinessName }}
+          </dd>
+        </div>
+        <div class="flex items-center justify-between rounded-2xl bg-surface px-4 py-3">
+          <dt class="text-sm text-ink-secondary">Akun Cloud</dt>
+          <dd class="font-medium text-ink-primary" data-testid="link-cloud-account">
+            {{ cloudAccountEmail }}
+          </dd>
+        </div>
+        <div class="flex items-center justify-between rounded-2xl bg-surface px-4 py-3">
+          <dt class="text-sm text-ink-secondary">Bisnis Cloud</dt>
+          <dd class="font-medium text-ink-primary" data-testid="link-cloud-business">
+            {{ pendingBusiness?.name ?? '-' }}
+          </dd>
+        </div>
+      </dl>
+
+      <p v-if="cloudStore.error" class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger">
+        {{ cloudStore.error }}
+      </p>
+
+      <div class="flex flex-wrap gap-2">
+        <BaseButton
+          id="cloud-confirm-link-btn"
+          :loading="cloudStore.loading"
+          :disabled="cloudStore.loading"
+          @click="handleConfirmLink"
+        >
+          Hubungkan Bisnis
+        </BaseButton>
+        <BaseButton
+          id="cloud-cancel-link-btn"
+          variant="ghost"
+          :disabled="cloudStore.loading"
+          @click="handleCancelLink"
+        >
+          Batal
+        </BaseButton>
+      </div>
+    </BaseCard>
+
+    <!-- UNLINKED (authenticated but no Cloud business linked yet) -->
+    <BaseCard v-else-if="isUnlinkedBusiness" id="cloud-unlinked" class="space-y-3">
+      <p class="text-sm font-medium text-ink-primary">Cloud terhubung</p>
+      <p class="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-700">
+        Belum ada bisnis Cloud yang ditautkan ke POS ini. Pilih bisnis untuk menautkan (perlu
+        koneksi internet).
+      </p>
+      <p
+        v-if="loginErrorMessage"
+        class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger"
+        role="status"
+      >
+        {{ loginErrorMessage }}
+      </p>
+      <div class="flex flex-wrap gap-2">
+        <BaseButton
+          id="cloud-relink-btn"
+          :loading="cloudStore.loading"
+          :disabled="cloudStore.loading"
+          @click="handleRelink"
+        >
+          Pilih Bisnis Cloud
+        </BaseButton>
+        <BaseButton
+          id="cloud-unlinked-disconnect"
+          variant="danger"
+          :disabled="isAnySyncOperationBusy"
+          @click="requestDisconnect"
+        >
+          Putuskan Cloud
+        </BaseButton>
+      </div>
+    </BaseCard>
+
     <!-- LOGIN FORM -->
     <BaseCard v-else class="space-y-4" id="cloud-login-form">
+      <p class="rounded-2xl bg-surface px-4 py-3 text-xs leading-relaxed text-ink-secondary">
+        Cloud Login menghubungkan POS ini dengan akun Cloud dan Dashboard. POS tetap dapat digunakan
+        tanpa Cloud Login.
+      </p>
+
       <BaseInput
         id="cloud-email"
         v-model="email"
@@ -1892,21 +2218,32 @@ onMounted(async () => {
         :disabled="cloudStore.loading"
       />
 
-      <BaseInput
-        id="cloud-password"
-        v-model="password"
-        label="Password"
-        type="password"
-        placeholder="••••••••"
-        :disabled="cloudStore.loading"
-      />
+      <div class="space-y-2">
+        <BaseInput
+          id="cloud-password"
+          v-model="password"
+          label="Password"
+          :type="showPassword ? 'text' : 'password'"
+          placeholder="••••••••"
+          :disabled="cloudStore.loading"
+        />
+        <button
+          id="cloud-toggle-password"
+          type="button"
+          class="text-xs font-medium text-primary underline-offset-2 hover:underline"
+          @click="showPassword = !showPassword"
+        >
+          {{ showPassword ? 'Sembunyikan password' : 'Tampilkan password' }}
+        </button>
+      </div>
 
       <p
-        v-if="cloudStore.error"
+        v-if="loginErrorMessage"
         id="cloud-login-error"
         class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger"
+        role="status"
       >
-        {{ cloudStore.error }}
+        {{ loginErrorMessage }}
       </p>
 
       <BaseButton
@@ -1916,8 +2253,39 @@ onMounted(async () => {
         :disabled="!email || !password || cloudStore.loading"
         @click="handleLogin"
       >
-        Login Cloud
+        Masuk ke Cloud
       </BaseButton>
     </BaseCard>
+
+    <!-- DISCONNECT CONFIRMATION (PREM-M03) -->
+    <BaseModal
+      :open="showDisconnectConfirm"
+      title="Putuskan Cloud"
+      @close="showDisconnectConfirm = false"
+    >
+      <div class="space-y-4" data-testid="cloud-disconnect-modal">
+        <p class="text-sm text-ink-secondary">
+          Sesi Cloud akan diputuskan dari POS ini. Data lokal (produk, transaksi, pelanggan, kas,
+          dan pengaturan) tidak akan dihapus.
+        </p>
+        <div class="flex flex-wrap gap-2">
+          <BaseButton
+            id="cloud-disconnect-confirm"
+            variant="danger"
+            :loading="cloudStore.loading"
+            @click="confirmDisconnect"
+          >
+            Ya, Putuskan
+          </BaseButton>
+          <BaseButton
+            id="cloud-disconnect-cancel"
+            variant="ghost"
+            @click="showDisconnectConfirm = false"
+          >
+            Batal
+          </BaseButton>
+        </div>
+      </div>
+    </BaseModal>
   </div>
 </template>

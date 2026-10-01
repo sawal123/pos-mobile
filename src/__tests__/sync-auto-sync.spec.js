@@ -1950,6 +1950,10 @@ describe('P20: Safe Foreground Auto Sync Trigger', () => {
     await wrapper.find('#cloud-logout-btn').trigger('click')
     await flushPromises()
 
+    // PREM-M03: disconnecting Cloud now requires confirmation.
+    await wrapper.find('#cloud-disconnect-confirm').trigger('click')
+    await flushPromises()
+
     expect(syncAutoSyncStore.lastResult).toBeNull()
     expect(syncAutoSyncStore.lastTriggeredAt).toBeNull()
 
