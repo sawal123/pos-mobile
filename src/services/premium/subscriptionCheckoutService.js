@@ -263,9 +263,11 @@ export async function listSubscriptionPayments({
     return { ok: false, code: CHECKOUT_ERROR_CODE.MALFORMED_RESPONSE, status: result.status }
   }
 
-  const payments = data
-    .map((item) => normalizeSubscriptionPayment(item))
-    .filter((item) => item !== null)
+  const payments = data.map((item) => normalizeSubscriptionPayment(item))
+
+  if (payments.some((item) => item === null)) {
+    return { ok: false, code: CHECKOUT_ERROR_CODE.MALFORMED_RESPONSE, status: result.status }
+  }
 
   return { ok: true, payments }
 }

@@ -1107,7 +1107,7 @@ async function handleRelink() {
 }
 
 function goToSubscription() {
-  router.push({ name: 'subscription' })
+  router.push({ name: cloudStore.isLinked ? 'my-subscription' : 'subscription' })
 }
 
 async function advanceAfterBusiness(biz) {
@@ -1300,7 +1300,7 @@ onMounted(async () => {
             variant="secondary"
             @click="goToSubscription"
           >
-            Kelola Langganan
+            Langganan Saya
           </BaseButton>
           <BaseButton
             id="cloud-disconnect-btn"

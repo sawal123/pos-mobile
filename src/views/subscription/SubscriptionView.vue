@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 import AppIcon from '@/components/base/AppIcon.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -18,6 +18,7 @@ import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { usePremiumCheckoutStore } from '@/stores/premiumCheckoutStore'
 
 const router = useRouter()
+const route = useRoute()
 const subscriptionStore = useSubscriptionStore()
 const planStore = useSubscriptionPlanStore()
 const cloudStore = useCloudSessionStore()
@@ -103,6 +104,7 @@ const showStatusSkeleton = computed(() => subscriptionStatus.value === 'loading'
 const showCatalogSkeleton = computed(() => planStore.isIdle || planStore.isLoading)
 const showPeriodSelector = computed(() => planStore.supportsBothPeriods)
 const visibleOptions = computed(() => planStore.visibleOptions)
+const renewalMode = computed(() => planStore.renewalMode)
 
 const unavailableHint = computed(() => {
   switch (planStore.reason) {
@@ -181,6 +183,11 @@ function goBack() {
 }
 
 onMounted(() => {
+  if (route.query?.renew === '1') {
+    planStore.enableRenewalMode()
+  } else {
+    planStore.disableRenewalMode()
+  }
   planStore.loadCatalog()
 })
 </script>
@@ -357,6 +364,14 @@ onMounted(() => {
         <h3 class="text-base font-semibold text-ink-primary">Pilih Paket</h3>
         <p class="mt-1 text-xs text-ink-secondary">
           Nama paket, harga dan fitur diambil langsung dari server.
+        </p>
+        <p
+          v-if="renewalMode"
+          class="mt-2 rounded-2xl bg-primary/5 px-4 py-3 text-xs leading-relaxed text-primary"
+          data-testid="renewal-mode-note"
+        >
+          Perpanjangan dibuat sebagai checkout baru. Masa aktif baru ditentukan server setelah
+          pembayaran terverifikasi.
         </p>
       </div>
 
