@@ -194,7 +194,8 @@ describe('entitlement resolution', () => {
 
   it('an expired status is never Premium', () => {
     expect(
-      resolveEntitlement({ subscription: { plan: 'pro', status: 'expired' }, verified: true }).status,
+      resolveEntitlement({ subscription: { plan: 'pro', status: 'expired' }, verified: true })
+        .status,
     ).toBe(ENTITLEMENT_STATUS.EXPIRED)
   })
 
@@ -218,7 +219,8 @@ describe('entitlement resolution', () => {
 
   it('a pending status is never Premium', () => {
     expect(
-      resolveEntitlement({ subscription: { plan: 'pro', status: 'pending' }, verified: true }).status,
+      resolveEntitlement({ subscription: { plan: 'pro', status: 'pending' }, verified: true })
+        .status,
     ).toBe(ENTITLEMENT_STATUS.PENDING)
   })
 
@@ -306,7 +308,7 @@ describe('Settings — Free state', () => {
     await wrapper.find('[data-testid="locked-feature-cta"]').trigger('click')
     await flushPromises()
 
-    expect(context.router.currentRoute.value.name).toBe('subscription')
+    expect(context.router.currentRoute.value.name).toBe('my-subscription')
   })
 
   it('navigates to the subscription page when the plan card is pressed', async () => {
@@ -317,7 +319,7 @@ describe('Settings — Free state', () => {
     await wrapper.find('[data-testid="subscription-card"]').trigger('click')
     await flushPromises()
 
-    expect(context.router.currentRoute.value.name).toBe('subscription')
+    expect(context.router.currentRoute.value.name).toBe('my-subscription')
   })
 })
 
@@ -474,9 +476,7 @@ describe('Settings — business context isolation', () => {
     const wrapper = await mountSettings(context)
     expect(wrapper.find('[data-testid="subscription-badge"]').text()).toBe('PREMIUM')
 
-    context.cloudStore.businesses = [
-      { id: 20, name: 'Toko B', subscription: { plan: 'free' } },
-    ]
+    context.cloudStore.businesses = [{ id: 20, name: 'Toko B', subscription: { plan: 'free' } }]
     context.cloudStore.selectedBusiness = {
       id: 20,
       name: 'Toko B',

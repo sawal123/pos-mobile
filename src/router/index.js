@@ -27,6 +27,7 @@ import OpenShiftView from '../views/shift/OpenShiftView.vue'
 import ShiftView from '../views/shift/ShiftView.vue'
 import SettingsView from '../views/settings/SettingsView.vue'
 import SubscriptionView from '../views/subscription/SubscriptionView.vue'
+import MySubscriptionView from '../views/subscription/MySubscriptionView.vue'
 import PremiumCheckoutView from '../views/subscription/PremiumCheckoutView.vue'
 import PremiumPaymentStatusView from '../views/subscription/PremiumPaymentStatusView.vue'
 import StockView from '../views/stock/StockView.vue'
@@ -209,6 +210,11 @@ const routes = [
         component: SubscriptionView,
       },
       {
+        path: 'subscription/my',
+        name: 'my-subscription',
+        component: MySubscriptionView,
+      },
+      {
         path: 'cloud',
         name: 'cloud',
         component: CloudLoginView,
@@ -272,6 +278,7 @@ const businessRequiredRoutes = new Set([
   'reports',
   'settings',
   'subscription',
+  'my-subscription',
   'premium-checkout',
   'premium-payment-status',
 ])
@@ -305,6 +312,7 @@ const pinRequiredRoutes = new Set([
   'reports',
   'settings',
   'subscription',
+  'my-subscription',
   'premium-checkout',
   'premium-payment-status',
 ])
@@ -356,8 +364,8 @@ export function createAppRouter() {
     }
 
     if (
-      ['laundry-orders', 'laundry-order-create', 'laundry-order-detail'].includes(to.name)
-      && businessStore.normalizedType !== 'Laundry'
+      ['laundry-orders', 'laundry-order-create', 'laundry-order-detail'].includes(to.name) &&
+      businessStore.normalizedType !== 'Laundry'
     ) {
       return { name: 'pos' }
     }

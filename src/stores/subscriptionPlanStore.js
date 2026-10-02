@@ -43,6 +43,7 @@ export const useSubscriptionPlanStore = defineStore('subscriptionPlan', () => {
   const selectedOptionKey = ref(null)
   const error = ref(null)
   const reason = ref(null)
+  const renewalMode = ref(false)
 
   const isLoading = ref(false)
 
@@ -79,7 +80,8 @@ export const useSubscriptionPlanStore = defineStore('subscriptionPlan', () => {
     if (option.available === false) return false
     if (option.hasPrice !== true) return false
     if (option.purchasable !== true) return false
-    return !isCurrentPlan(option)
+    if (isCurrentPlan(option) && renewalMode.value !== true) return false
+    return true
   }
 
   /** Both gates are honoured: the plan's `purchasable` and `checkout_available`. */
@@ -270,6 +272,15 @@ export const useSubscriptionPlanStore = defineStore('subscriptionPlan', () => {
     error.value = null
     reason.value = null
     state.value = PLAN_CATALOG_IDLE
+    renewalMode.value = false
+  }
+
+  function enableRenewalMode() {
+    renewalMode.value = true
+  }
+
+  function disableRenewalMode() {
+    renewalMode.value = false
   }
 
   return {
@@ -283,6 +294,7 @@ export const useSubscriptionPlanStore = defineStore('subscriptionPlan', () => {
     selectedOptionKey,
     error,
     reason,
+    renewalMode,
     isLoading,
     // computed
     isIdle,
@@ -305,5 +317,7 @@ export const useSubscriptionPlanStore = defineStore('subscriptionPlan', () => {
     selectPeriod,
     selectOption,
     reset,
+    enableRenewalMode,
+    disableRenewalMode,
   }
 })

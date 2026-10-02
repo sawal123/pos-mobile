@@ -194,6 +194,7 @@ const cloudAccountSubtitle = computed(() => {
 // PREM-M03: Cloud link presentation (display only, never authorizes)
 const cloudLinked = computed(() => cloudStore.isLinked)
 const cloudAccount = computed(() => cloudStore.user?.email || '-')
+const subscriptionEntryTitle = computed(() => (cloudLinked.value ? 'Langganan Saya' : 'Langganan'))
 
 const cloudSubscriptionLabel = computed(() => {
   if (subscriptionStore.status === 'free') return 'Free'
@@ -284,7 +285,7 @@ const lockedFeatureMessage = computed(() => {
 
 function goToSubscription() {
   lockedFeature.value = null
-  router.push({ name: 'subscription' })
+  router.push({ name: cloudLinked.value ? 'my-subscription' : 'subscription' })
 }
 
 function handleBack() {
@@ -622,10 +623,10 @@ async function handleRestoreFileChange(event) {
           <BaseButton
             size="sm"
             variant="secondary"
-            data-testid="cloud-manage-subscription"
+            data-testid="settings-my-subscription-entry"
             @click="goToSubscription"
           >
-            Kelola Langganan
+            Langganan Saya
           </BaseButton>
           <BaseButton
             size="sm"
@@ -673,7 +674,7 @@ async function handleRestoreFileChange(event) {
 
         <div class="min-w-0 flex-1">
           <div class="flex flex-wrap items-center gap-2">
-            <span class="text-sm font-semibold text-ink-primary">Langganan</span>
+            <span class="text-sm font-semibold text-ink-primary">{{ subscriptionEntryTitle }}</span>
             <span
               class="rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide"
               :class="subscriptionView.badgeClass"
