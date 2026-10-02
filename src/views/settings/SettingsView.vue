@@ -8,6 +8,7 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseSheet from '@/components/base/BaseSheet.vue'
 import SettingsMenuItem from '@/components/settings/SettingsMenuItem.vue'
+import CloudBackupPanel from '@/components/settings/CloudBackupPanel.vue'
 import {
   RESTORE_CONFIRMATION_MESSAGE,
   createBackupPayload,
@@ -224,6 +225,10 @@ function goToCloud() {
 async function confirmDisconnect() {
   showDisconnectConfirm.value = false
   await cloudStore.logout()
+}
+
+function handleCloudLocked() {
+  lockedFeature.value = { title: 'Backup Cloud' }
 }
 
 const settingsMenu = computed(() => [
@@ -742,6 +747,46 @@ async function handleRestoreFileChange(event) {
         :locked="item.locked"
         @select="handleMenuSelect(item)"
       />
+    </BaseCard>
+
+    <!-- Backup data: local (free) vs cloud (premium) -->
+    <BaseCard class="space-y-5" data-testid="backup-card">
+      <div>
+        <h3 class="text-lg font-semibold text-ink-primary">Backup Data</h3>
+        <p class="mt-1 text-sm text-ink-secondary">
+          Simpan salinan data POS Anda. Backup Lokal tetap gratis; Backup Cloud memerlukan Premium.
+        </p>
+      </div>
+
+      <div
+        class="space-y-3 rounded-3xl border border-zinc-200 bg-surface/60 p-4"
+        data-testid="local-backup-section"
+      >
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <span
+              class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary"
+            >
+              <AppIcon name="backup" />
+            </span>
+            <div class="min-w-0">
+              <h4 class="text-base font-semibold text-ink-primary">Backup Lokal</h4>
+              <p class="text-xs text-ink-secondary">Backup data ke perangkat ini.</p>
+            </div>
+          </div>
+          <span
+            class="rounded-full bg-emerald-100 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-emerald-700"
+          >
+            Gratis
+          </span>
+        </div>
+
+        <BaseButton data-testid="local-backup-now" @click="handleBackup">
+          Buat Backup Lokal
+        </BaseButton>
+      </div>
+
+      <CloudBackupPanel @locked="handleCloudLocked" />
     </BaseCard>
 
     <p
