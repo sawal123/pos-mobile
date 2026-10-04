@@ -16,6 +16,15 @@
  *   GET  /api/mobile/backups/{uuid}?business_id=
  *     -> 200 { data: {…metadata…} }
  *
+ *   GET  /api/mobile/backups/{uuid}/download?business_id=   (PREM-M06B3)
+ *     -> 200 raw streamed snapshot bytes
+ *        headers: X-Checksum-Sha256, X-Backup-Schema-Version
+ *     -> 404 BACKUP_NOT_FOUND / BACKUP_FILE_MISSING
+ *
+ * The download is a raw-byte transfer: it is never JSON-parsed here. Callers
+ * verify the checksum over the exact bytes before parsing (see
+ * `cloudRestoreService`).
+ *
  * Rules enforced here:
  * - the client never invents fields; only the exact contract fields are sent.
  * - `business_id` must come from the linked Cloud business (checked by caller).
@@ -25,10 +34,13 @@
  *   closed; the server metadata is never trusted over the attempt.
  * - no token or payload is ever logged.
  *
- * RESTORE IS OUT OF SCOPE FOR M06A — download is intentionally not exposed here.
+ * PREM-M06A added upload/list/detail. PREM-M06B3 adds the raw download only —
+ * the destructive restore itself lives exclusively in `restoreSafetyEngine`.
  */
 
-import { apiRequest } from '@/services/cloud/apiClient'
+import { API_RAW_ERROR, apiRawRequest, apiRequest } from '@/services/cloud/apiClient'
+import { MAX_CLOUD_BACKUP_BYTES } from '@/services/cloud/cloudBackupPayload'
+import { CLOUD_RESTORE_ERROR } from '@/services/cloud/cloudRestoreService'
 
 export const CLOUD_BACKUPS_PATH_ENV = 'VITE_CLOUD_BACKUPS_PATH'
 export const DEFAULT_CLOUD_BACKUPS_PATH = '/api/mobile/backups'
@@ -59,6 +71,7 @@ export const CLOUD_BACKUP_ERROR = Object.freeze({
   BACKUP_CHECKSUM_MISMATCH: 'BACKUP_CHECKSUM_MISMATCH',
   BACKUP_STORAGE_FAILED: 'BACKUP_STORAGE_FAILED',
   BACKUP_NOT_FOUND: 'BACKUP_NOT_FOUND',
+  BACKUP_FILE_MISSING: 'BACKUP_FILE_MISSING',
   MALFORMED_RESPONSE: 'MALFORMED_RESPONSE',
   NETWORK_ERROR: 'NETWORK_ERROR',
   REQUEST_FAILED: 'REQUEST_FAILED',
@@ -309,4 +322,58 @@ export async function getCloudBackup({
   }
 
   return { ok: true, backup: record }
+}
+
+/**
+ * Download one snapshot's exact bytes for Cloud Restore.
+ *
+ * The `business_id` is always the caller-resolved linked Cloud business — this
+ * function must never receive an arbitrary business id from the UI. The body is
+ * returned as untouched bytes; no JSON parsing, trimming or re-serialization
+ * happens here.
+ *
+ * @param {object} params
+ * @param {string|null} params.token
+ * @param {number|string} params.businessId
+ * @param {string} params.backupUuid
+ * @param {string} [params.path]
+ * @param {number} [params.maxBytes]
+ * @returns {Promise<{ok: boolean, status: number, headers?: object, bytes?: Uint8Array, text?: string, byteLength?: number, code?: string, error?: object}>}
+ */
+export async function downloadCloudBackup({
+  token = null,
+  businessId,
+  backupUuid,
+  path = resolveCloudBackupsPath(),
+  maxBytes = MAX_CLOUD_BACKUP_BYTES,
+} = {}) {
+  if (typeof backupUuid !== 'string' || backupUuid.trim().length === 0) {
+    return { ok: false, code: CLOUD_BACKUP_ERROR.MALFORMED_RESPONSE, status: 0 }
+  }
+
+  const base = String(path).replace(/\/+$/, '')
+  const requestPath = `${base}/${encodeURIComponent(backupUuid.trim())}/download?business_id=${encodeURIComponent(String(businessId))}`
+
+  let result
+  try {
+    result = await apiRawRequest(requestPath, { token, maxBytes })
+  } catch (err) {
+    return { ok: false, code: CLOUD_BACKUP_ERROR.NETWORK_ERROR, status: 0, error: err }
+  }
+
+  if (!result?.ok) {
+    if (result?.error?.code === API_RAW_ERROR.TOO_LARGE) {
+      return { ok: false, code: CLOUD_RESTORE_ERROR.DOWNLOAD_TOO_LARGE, status: result.status }
+    }
+    return { ok: false, ...mapError(result), error: result?.error ?? null }
+  }
+
+  return {
+    ok: true,
+    status: result.status,
+    headers: result.headers,
+    bytes: result.bytes,
+    text: result.text,
+    byteLength: result.byteLength,
+  }
 }

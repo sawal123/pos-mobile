@@ -4,6 +4,11 @@ import { computed, onMounted, watch } from 'vue'
 import AppIcon from '@/components/base/AppIcon.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import { CLOUD_BACKUP_PHASE, usePremiumCloudBackupStore } from '@/stores/premiumCloudBackupStore'
+import {
+  CLOUD_RESTORE_MESSAGES,
+  CLOUD_RESTORE_PHASE,
+  useCloudRestoreStore,
+} from '@/stores/cloudRestoreStore'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCartStore } from '@/stores/cartStore'
 import { useCashStore } from '@/stores/cashStore'
@@ -19,6 +24,7 @@ import { useTransactionStore } from '@/stores/transactionStore'
 const emit = defineEmits(['locked'])
 
 const store = usePremiumCloudBackupStore()
+const restoreStore = useCloudRestoreStore()
 const cloudStore = useCloudSessionStore()
 const subscriptionStore = useSubscriptionStore()
 
@@ -128,6 +134,63 @@ function deviceLabel(backup) {
   return backup?.device?.name || backup?.device?.identifier || 'Perangkat'
 }
 
+const restoreFlowStatus = computed(() => {
+  switch (restoreStore.restorePhase) {
+    case CLOUD_RESTORE_PHASE.DOWNLOADING:
+      return 'Mengunduh backup…'
+    case CLOUD_RESTORE_PHASE.VERIFYING:
+      return 'Memverifikasi integritas…'
+    case CLOUD_RESTORE_PHASE.VALIDATING:
+      return 'Memvalidasi data…'
+    case CLOUD_RESTORE_PHASE.RESTORING:
+      return 'Memulihkan data…'
+    case CLOUD_RESTORE_PHASE.SUCCESS:
+      return CLOUD_RESTORE_MESSAGES.success
+    default:
+      return restoreStore.restoreError || ''
+  }
+})
+
+const restoreTone = computed(() => {
+  if (restoreStore.restorePhase === CLOUD_RESTORE_PHASE.SUCCESS) return 'success'
+  if (
+    [
+      CLOUD_RESTORE_PHASE.ERROR,
+      CLOUD_RESTORE_PHASE.BLOCKED,
+      CLOUD_RESTORE_PHASE.ROLLING_BACK,
+      CLOUD_RESTORE_PHASE.RECOVERY_REQUIRED,
+    ].includes(restoreStore.restorePhase)
+  ) {
+    return 'error'
+  }
+  return 'idle'
+})
+
+const restoreOriginLabel = computed(() => {
+  const origin = restoreStore.downloadedMetadata?.origin
+  return origin?.name || origin?.identifier || 'Perangkat'
+})
+
+async function handleRestore(backup) {
+  if (locked.value) {
+    emit('locked')
+    return
+  }
+  if (restoreStore.isBusy || restoreStore.awaitingConfirmation) return
+  await restoreStore.startRestore({ backup })
+}
+
+async function handleConfirmRestore() {
+  if (!restoreStore.canConfirm) return
+  const result = await restoreStore.confirmRestore()
+  // Best-effort only: a list refresh failure never invalidates a committed restore.
+  if (result.ok) void store.refreshList()
+}
+
+function handleDismissRestore() {
+  restoreStore.cancelRestore()
+}
+
 onMounted(() => {
   if (!locked.value) {
     void store.refreshList()
@@ -141,6 +204,9 @@ watch(
   (next, previous) => {
     if (previous !== undefined && next !== previous) {
       store.clear()
+      // A relink discards uncommitted Cloud Restore state; an already
+      // destructive engine restore is left to durable engine recovery.
+      restoreStore.clear()
       if (!locked.value) void store.refreshList()
     }
   },
@@ -149,7 +215,10 @@ watch(
 watch(
   () => cloudStore.isAuthenticated,
   (authenticated) => {
-    if (authenticated !== true) store.clear()
+    if (authenticated !== true) {
+      store.clear()
+      restoreStore.clear()
+    }
   },
 )
 </script>
@@ -281,8 +350,119 @@ watch(
             <p class="text-xs text-ink-secondary">
               Ukuran: {{ formatSize(backup.sizeBytes) }} · Schema: v{{ backup.schemaVersion }}
             </p>
+            <div class="mt-2">
+              <BaseButton
+                size="sm"
+                variant="secondary"
+                data-testid="cloud-backup-restore"
+                :disabled="restoreStore.isBusy || restoreStore.awaitingConfirmation"
+                @click="handleRestore(backup)"
+              >
+                Restore
+              </BaseButton>
+            </div>
           </li>
         </ul>
+
+        <div
+          v-if="restoreStore.restorePhase !== CLOUD_RESTORE_PHASE.IDLE"
+          class="space-y-3 rounded-2xl border border-zinc-200 bg-white p-3"
+          data-testid="cloud-restore-flow"
+        >
+          <p class="text-sm font-semibold text-ink-primary">Restore Cloud</p>
+
+          <p
+            v-if="restoreFlowStatus"
+            class="rounded-2xl px-3 py-2 text-sm"
+            :class="
+              restoreTone === 'error'
+                ? 'bg-danger/10 text-danger'
+                : restoreTone === 'success'
+                  ? 'bg-emerald-100 text-emerald-700'
+                  : 'bg-zinc-100 text-ink-secondary'
+            "
+            role="status"
+            data-testid="cloud-restore-status"
+          >
+            {{ restoreFlowStatus }}
+          </p>
+
+          <div
+            v-if="restoreStore.awaitingConfirmation"
+            class="space-y-3"
+            data-testid="cloud-restore-confirmation"
+          >
+            <p class="text-sm text-ink-secondary" data-testid="cloud-restore-confirmation-message">
+              {{ restoreStore.confirmationMessage }}
+            </p>
+
+            <dl class="space-y-1 text-xs text-ink-secondary" data-testid="cloud-restore-metadata">
+              <div class="flex justify-between gap-3">
+                <dt>Tanggal backup</dt>
+                <dd data-testid="cloud-restore-meta-date">
+                  {{ formatDate(restoreStore.downloadedMetadata?.createdAt) }}
+                </dd>
+              </div>
+              <div class="flex justify-between gap-3">
+                <dt>Perangkat asal</dt>
+                <dd data-testid="cloud-restore-meta-origin">{{ restoreOriginLabel }}</dd>
+              </div>
+              <div class="flex justify-between gap-3">
+                <dt>Ukuran</dt>
+                <dd data-testid="cloud-restore-meta-size">
+                  {{ formatSize(restoreStore.downloadedMetadata?.sizeBytes) }}
+                </dd>
+              </div>
+              <div class="flex justify-between gap-3">
+                <dt>Schema</dt>
+                <dd data-testid="cloud-restore-meta-schema">
+                  v{{ restoreStore.downloadedMetadata?.schemaVersion }}
+                </dd>
+              </div>
+            </dl>
+
+            <p
+              v-if="restoreStore.isCrossDevice"
+              class="rounded-2xl bg-amber-50 px-3 py-2 text-xs text-amber-700"
+              data-testid="cloud-restore-cross-device"
+            >
+              {{ restoreStore.crossDeviceWarning }}
+            </p>
+
+            <div class="flex flex-wrap gap-2">
+              <BaseButton
+                data-testid="cloud-restore-confirm"
+                :disabled="!restoreStore.canConfirm"
+                @click="handleConfirmRestore"
+              >
+                Konfirmasi Restore
+              </BaseButton>
+              <BaseButton
+                size="sm"
+                variant="secondary"
+                data-testid="cloud-restore-cancel"
+                @click="handleDismissRestore"
+              >
+                Batal
+              </BaseButton>
+            </div>
+          </div>
+
+          <div
+            v-else-if="restoreStore.isTerminal"
+            class="flex flex-wrap gap-2"
+            data-testid="cloud-restore-dismiss-row"
+          >
+            <BaseButton
+              size="sm"
+              variant="secondary"
+              data-testid="cloud-restore-dismiss"
+              @click="handleDismissRestore"
+            >
+              Tutup
+            </BaseButton>
+          </div>
+        </div>
 
         <p
           v-if="store.listStale"
