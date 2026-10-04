@@ -20,6 +20,7 @@ import {
 import { useCloudSessionStore } from './stores/cloudSessionStore'
 import { usePremiumCheckoutStore } from './stores/premiumCheckoutStore'
 import { usePremiumCloudBackupStore } from './stores/premiumCloudBackupStore'
+import { useCloudRestoreStore } from './stores/cloudRestoreStore'
 import { useSyncPushStore } from './stores/syncPushStore'
 import { useSyncPullStore } from './stores/syncPullStore'
 import { useSyncBootstrapStore } from './stores/syncBootstrapStore'
@@ -334,6 +335,11 @@ export async function bootstrapApp({
       // device never POSTs. Non-blocking: a failure never stops POS startup.
       const cloudBackupStore = usePremiumCloudBackupStore(pinia)
       cloudBackupStore.init({ runtimeSignalService, adapter, scheduler: persistence })
+
+      // PREM-M06B3: Cloud Restore downloads through the same runtime signal and
+      // delegates every destructive step to the restore safety engine.
+      const cloudRestoreStore = useCloudRestoreStore(pinia)
+      cloudRestoreStore.init({ runtimeSignalService, engine: restoreSafetyEngine })
 
       // PREM-M04: restore a pending Premium payment (display only — never
       // "paid") and gate payment polling with the shared runtime signal.

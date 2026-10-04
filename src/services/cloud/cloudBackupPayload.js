@@ -101,6 +101,25 @@ export async function computeSha256Hex(value) {
 }
 
 /**
+ * Lowercase 64-character hexadecimal SHA-256 of exact raw bytes.
+ *
+ * Cloud Restore hashes the downloaded body byte-for-byte, so the digest is
+ * computed directly over the received bytes with no decode/encode round trip.
+ *
+ * @param {Uint8Array|ArrayBuffer} bytes
+ * @returns {Promise<string>}
+ */
+export async function computeSha256HexFromBytes(bytes) {
+  if (!isSha256Available()) {
+    throw new Error('Web Crypto SHA-256 is unavailable in this runtime.')
+  }
+
+  const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', view)
+  return bytesToHex(new Uint8Array(digest))
+}
+
+/**
  * Serialize once and derive the exact byte length + checksum for an attempt.
  *
  * @param {object} snapshot
