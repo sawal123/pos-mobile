@@ -316,6 +316,11 @@ export function createPersistenceService({ adapter, pinia }) {
       await nextTick()
       await writeQueue
     },
+    async rehydrate() {
+      await nextTick()
+      await writeQueue
+      await hydrateState()
+    },
     async close() {
       for (const stop of stopWatchers) {
         stop()

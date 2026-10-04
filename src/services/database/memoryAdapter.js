@@ -42,6 +42,7 @@ export function createMemoryAdapter() {
     syncServerVersions: null,
     syncConflicts: null,
     localOperationJournal: null,
+    restoreJournal: null,
   }
 
   return {
@@ -192,8 +193,12 @@ export function createMemoryAdapter() {
         if (item.id !== snapshot.id) return false
         if (item.updatedAt !== snapshot.updatedAt) return false
         if (item.operation !== snapshot.operation) return false
-        const itemPayload = item.payload === null || item.payload === undefined ? null : JSON.stringify(item.payload)
-        const snapPayload = snapshot.payload === null || snapshot.payload === undefined ? null : JSON.stringify(snapshot.payload)
+        const itemPayload =
+          item.payload === null || item.payload === undefined ? null : JSON.stringify(item.payload)
+        const snapPayload =
+          snapshot.payload === null || snapshot.payload === undefined
+            ? null
+            : JSON.stringify(snapshot.payload)
         return itemPayload === snapPayload
       })
 
@@ -210,8 +215,14 @@ export function createMemoryAdapter() {
         if (entry.id !== snapshot.id) return false
         if (entry.updatedAt !== snapshot.updatedAt) return false
         if (entry.operation !== snapshot.operation) return false
-        const itemPayload = entry.payload === null || entry.payload === undefined ? null : JSON.stringify(entry.payload)
-        const snapPayload = snapshot.payload === null || snapshot.payload === undefined ? null : JSON.stringify(snapshot.payload)
+        const itemPayload =
+          entry.payload === null || entry.payload === undefined
+            ? null
+            : JSON.stringify(entry.payload)
+        const snapPayload =
+          snapshot.payload === null || snapshot.payload === undefined
+            ? null
+            : JSON.stringify(snapshot.payload)
         return itemPayload === snapPayload
       })
 
@@ -283,6 +294,46 @@ export function createMemoryAdapter() {
     },
     async clearLocalOperationJournal() {
       state.localOperationJournal = null
+    },
+    // PREM-M06B2: durable restore safety journal, independent from P38.
+    async loadRestoreJournal() {
+      return state.restoreJournal ? cloneValue(state.restoreJournal) : null
+    },
+    async saveRestoreJournal(journal) {
+      state.restoreJournal = cloneValue(journal)
+    },
+    async clearRestoreJournal() {
+      state.restoreJournal = null
+    },
+    async applyRestoreSnapshotAtomic({ snapshot, hooks = null }) {
+      const previous = cloneValue(state)
+
+      try {
+        state.business = cloneValue(snapshot.business)
+        state.taxSettings = cloneValue(snapshot.taxSettings)
+        state.products = cloneValue(snapshot.products)
+        state.categories = cloneValue(
+          snapshot.categories.filter((category) => String(category) !== RESERVED_CATEGORY),
+        )
+        state.stockMovements = cloneValue(snapshot.stockMovements)
+        state.cashState = cloneValue(snapshot.cash)
+        state.customers = cloneValue(snapshot.customers)
+        state.expenses = cloneValue(snapshot.expenses)
+        state.transactions = cloneValue(snapshot.transactions)
+        await hooks?.afterDomainApply?.()
+
+        if (snapshot.syncMetadata) {
+          state.syncIdentityMap = cloneValue(snapshot.syncMetadata.identityMap)
+          await hooks?.afterIdentityMapApply?.()
+          state.syncServerVersions = cloneValue(snapshot.syncMetadata.serverVersions)
+          await hooks?.afterServerVersionsApply?.()
+        }
+
+        return { ok: true }
+      } catch (error) {
+        Object.assign(state, previous)
+        throw error
+      }
     },
     // P13: sync pull context binding (durable, survives restart & logout)
     async loadSyncPullBinding() {
