@@ -221,3 +221,7 @@ restored rows target the same backend identity.
 - Cross-device restore requires a portable v3 backup; v1/v2 are same-device only.
 - Cloud Restore requires network; offline restores cannot start.
 - Rollback/recovery relies entirely on the PREM-M06B2 engine's durable journal.
+- The app fetches through the WebView (no `CapacitorHttp`), so the backend must
+  expose `X-Checksum-Sha256` and `X-Backup-Schema-Version` via CORS
+  `Access-Control-Expose-Headers`. Without it the headers are unreadable and the
+  client correctly fails closed with `RESTORE_CHECKSUM_HEADER_MISSING`.
