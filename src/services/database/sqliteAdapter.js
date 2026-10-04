@@ -723,12 +723,151 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
     async saveLocalOperationJournal(journal) {
       await writeMetaValue('local_operation_journal_v1', journal)
     },
+    // PREM-M06B2: restore safety journal. It is separate from the P38 local
+    // operation journal because destructive restore has a different lifecycle.
+    async loadRestoreJournal() {
+      return readMetaValue('restore_journal_v1', null)
+    },
+    async saveRestoreJournal(journal) {
+      await writeMetaValue('restore_journal_v1', journal)
+    },
+    async clearRestoreJournal() {
+      const db = await ensureConnection()
+      await db.run("DELETE FROM app_meta WHERE key = 'restore_journal_v1'", [])
+    },
+    async applyRestoreSnapshotAtomic({ snapshot, hooks = null }) {
+      return await withTransaction(async (db) => {
+        await db.run('DELETE FROM business', [], false)
+        await db.run(
+          'INSERT INTO business (id, name, type, owner, phone, outlet, mode) VALUES (?, ?, ?, ?, ?, ?, ?)',
+          [
+            1,
+            snapshot.business.name,
+            snapshot.business.type,
+            snapshot.business.owner,
+            snapshot.business.phone,
+            snapshot.business.outlet,
+            snapshot.business.mode,
+          ],
+          false,
+        )
+
+        await db.run('DELETE FROM products', [], false)
+        await db.run('DELETE FROM categories', [], false)
+
+        for (const category of snapshot.categories) {
+          if (String(category) === RESERVED_CATEGORY) {
+            continue
+          }
+
+          await db.run('INSERT INTO categories (name) VALUES (?)', [category], false)
+        }
+
+        for (const product of snapshot.products) {
+          await db.run(
+            `INSERT INTO products
+              (id, name, category, sku, cost, price, stock, unit, min_stock,
+               kind, pricing_unit, min_quantity, estimated_duration, image_data, is_active)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              String(product.id),
+              product.name,
+              product.category,
+              product.sku ?? '',
+              Number(product.cost ?? 0),
+              Number(product.price),
+              Number(product.stock),
+              product.unit ?? 'pcs',
+              Number(product.minStock ?? 0),
+              product.kind ?? 'product',
+              product.pricingUnit ?? 'pcs',
+              Number(product.minQuantity ?? 0),
+              product.estimatedDuration ?? '',
+              product.imageData ?? '',
+              product.isActive ? 1 : 0,
+            ],
+            false,
+          )
+        }
+
+        await db.run('DELETE FROM customers', [], false)
+        for (const customer of snapshot.customers) {
+          await db.run(
+            'INSERT INTO customers (id, name, phone, email) VALUES (?, ?, ?, ?)',
+            [String(customer.id), customer.name, customer.phone, customer.email],
+            false,
+          )
+        }
+
+        await db.run('DELETE FROM expenses', [], false)
+        for (const expense of snapshot.expenses) {
+          await db.run(
+            'INSERT INTO expenses (id, title, category, amount, note, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+            [
+              String(expense.id),
+              expense.title,
+              expense.category,
+              Number(expense.amount),
+              expense.note,
+              expense.createdAt,
+            ],
+            false,
+          )
+        }
+
+        await db.run('DELETE FROM transactions', [], false)
+        for (const transaction of snapshot.transactions) {
+          await db.run(
+            'INSERT INTO transactions (id, payload, created_at) VALUES (?, ?, ?)',
+            [
+              String(transaction.id),
+              JSON.stringify(transaction),
+              String(transaction.createdAt ?? '') || new Date().toISOString(),
+            ],
+            false,
+          )
+        }
+
+        await db.run(
+          'INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)',
+          [APP_STATE_KEYS.tax, JSON.stringify(snapshot.taxSettings)],
+          false,
+        )
+        await db.run(
+          'INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)',
+          [APP_STATE_KEYS.stockMovements, JSON.stringify(snapshot.stockMovements)],
+          false,
+        )
+        await db.run(
+          'INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)',
+          [APP_STATE_KEYS.cash, JSON.stringify(snapshot.cash)],
+          false,
+        )
+        await hooks?.afterDomainApply?.()
+
+        if (snapshot.syncMetadata) {
+          await db.run(
+            'INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)',
+            ['sync_identity_map', JSON.stringify(snapshot.syncMetadata.identityMap)],
+            false,
+          )
+          await hooks?.afterIdentityMapApply?.()
+          await db.run(
+            'INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)',
+            ['sync_server_versions_v1', JSON.stringify(snapshot.syncMetadata.serverVersions)],
+            false,
+          )
+          await hooks?.afterServerVersionsApply?.()
+        }
+
+        return { ok: true }
+      })
+    },
     async persistSyncConflictsAndClearInflightAtomic({ expectedRequestId, conflictsState }) {
       return await withTransaction(async (db) => {
-        const { values = [] } = await db.query(
-          'SELECT value FROM app_meta WHERE key = ? LIMIT 1',
-          ['sync_push_inflight_v1'],
-        )
+        const { values = [] } = await db.query('SELECT value FROM app_meta WHERE key = ? LIMIT 1', [
+          'sync_push_inflight_v1',
+        ])
 
         if (!values.length || !values[0].value) {
           return {

@@ -13,9 +13,9 @@ import {
   RESTORE_CONFIRMATION_MESSAGE,
   createBackupPayload,
   downloadBackupFile,
-  restoreBackupPayload,
   validateBackupPayload,
 } from '@/services/backupService'
+import { RESTORE_MODE, getActiveRestoreSafetyEngine } from '@/services/restoreSafetyEngine'
 import {
   isNativePrinterPlatform,
   listPairedPrinters,
@@ -471,10 +471,20 @@ async function handleRestoreFileChange(event) {
       return
     }
 
-    const result = restoreBackupPayload(payload, getStoreContext())
+    const restoreSafetyEngine = getActiveRestoreSafetyEngine()
+    if (!restoreSafetyEngine) {
+      setFeedback('error', 'Restore aman belum siap. Tutup dan buka kembali aplikasi.')
+      return
+    }
+
+    const result = await restoreSafetyEngine.restore({
+      payload,
+      mode: RESTORE_MODE.SAME_DEVICE,
+      confirmed: true,
+    })
 
     if (!result.success) {
-      setFeedback('error', result.error)
+      setFeedback('error', result.error || 'Restore backup dibatalkan oleh safety engine.')
       return
     }
 

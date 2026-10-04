@@ -972,6 +972,61 @@ export function classifyCrossDeviceRestoreSafety(payload) {
   }
 }
 
+export function buildRestoreSnapshotFromBackupPayload(payload, { currentBusiness = null } = {}) {
+  const validation = validateBackupPayload(payload)
+
+  if (!validation.valid) {
+    return {
+      success: false,
+      error: validation.error,
+    }
+  }
+
+  const { data } = validation
+  const businessMode =
+    typeof data.business.mode === 'string'
+      ? data.business.mode
+      : typeof currentBusiness?.mode === 'string'
+        ? currentBusiness.mode
+        : 'setup'
+
+  const syncValidation =
+    payload.version === BACKUP_VERSION ? validatePortableSyncMetadata(payload) : null
+
+  return {
+    success: true,
+    error: '',
+    snapshot: {
+      business: {
+        ...data.business,
+        mode: businessMode,
+      },
+      taxSettings: {
+        enabled: data.taxSettings.enabled,
+        rate: Number(data.taxSettings.rate),
+      },
+      products: data.products.products.map((product) => normalizeProductForRestore(product)),
+      categories: [...data.products.categories],
+      stockMovements: data.stockMovements.map((movement) => ({ ...movement })),
+      cash: {
+        entries: data.cash.map((entry) => ({ ...entry })),
+      },
+      customers: data.customers.map((customer) => ({ ...customer })),
+      expenses: data.expenses.map((expense) => ({ ...expense })),
+      transactions: data.transactions.map((transaction) =>
+        normalizeTransactionForRestore(transaction),
+      ),
+      syncMetadata:
+        syncValidation?.valid === true
+          ? {
+              identityMap: syncValidation.metadata.identityMap,
+              serverVersions: syncValidation.metadata.serverVersions,
+            }
+          : null,
+    },
+  }
+}
+
 export function restoreBackupPayload(payload, stores) {
   if (stores.shiftStore.isOpen) {
     return {

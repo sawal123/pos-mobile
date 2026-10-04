@@ -12,6 +12,11 @@ import {
 } from './services/database/localOperationService'
 import { initializeSyncFoundation } from './services/sync'
 import { resolveDeviceIdentifier } from './services/cloud/deviceIdentifier'
+import {
+  RESTORE_RESULT_CODE,
+  createRestoreSafetyEngine,
+  setActiveRestoreSafetyEngine,
+} from './services/restoreSafetyEngine'
 import { useCloudSessionStore } from './stores/cloudSessionStore'
 import { usePremiumCheckoutStore } from './stores/premiumCheckoutStore'
 import { usePremiumCloudBackupStore } from './stores/premiumCloudBackupStore'
@@ -65,6 +70,42 @@ export function renderNativePersistenceFatal({
   return section
 }
 
+export function renderRestoreRecoveryFatal({
+  documentRef = typeof document !== 'undefined' ? document : null,
+  windowRef = typeof window !== 'undefined' ? window : null,
+  mountTarget = '#app',
+} = {}) {
+  if (!documentRef) {
+    return null
+  }
+
+  const container =
+    typeof mountTarget === 'string' ? documentRef.querySelector(mountTarget) : mountTarget
+
+  if (!container) {
+    return null
+  }
+
+  container.replaceChildren()
+  const section = documentRef.createElement('section')
+  const title = documentRef.createElement('h1')
+  const message = documentRef.createElement('p')
+  const warning = documentRef.createElement('p')
+  const retry = documentRef.createElement('button')
+
+  title.textContent = 'Pemulihan Restore Diperlukan'
+  message.textContent =
+    'Restore data sebelumnya terhenti dan rollback otomatis tidak selesai. Untuk melindungi data transaksi, aplikasi dihentikan.'
+  warning.textContent = 'Jangan buat transaksi baru sebelum data diperiksa.'
+  retry.type = 'button'
+  retry.textContent = 'Coba Lagi'
+  retry.addEventListener('click', () => windowRef?.location?.reload())
+
+  section.append(title, message, warning, retry)
+  container.append(section)
+  return section
+}
+
 export async function bootstrapApp({
   appFactory = createApp,
   piniaFactory = createPinia,
@@ -73,6 +114,7 @@ export async function bootstrapApp({
   initializeSync = initializeSyncFoundation,
   runtimeSignalFactory = createRuntimeSignalService,
   fatalPersistenceRenderer = renderNativePersistenceFatal,
+  fatalRestoreRecoveryRenderer = renderRestoreRecoveryFatal,
   documentRef = typeof document !== 'undefined' ? document : null,
   windowRef = typeof window !== 'undefined' ? window : null,
   rootComponent = App,
@@ -101,6 +143,41 @@ export async function bootstrapApp({
       syncFoundation: null,
       runtimeSignalService: null,
       fatalPersistenceError: error,
+    }
+  }
+
+  let restoreSafetyEngine = null
+
+  if (persistence) {
+    restoreSafetyEngine = createRestoreSafetyEngine({
+      adapter: persistence.adapter,
+      scheduler: persistence,
+    })
+    setActiveRestoreSafetyEngine(restoreSafetyEngine)
+
+    let recoveryResult
+    try {
+      recoveryResult = await restoreSafetyEngine.recoverPendingRestore()
+    } catch (error) {
+      recoveryResult = {
+        ok: false,
+        code: RESTORE_RESULT_CODE.ROLLBACK_FAILED,
+        error: error instanceof Error ? error.message : String(error ?? ''),
+      }
+    }
+
+    if (!recoveryResult.ok) {
+      fatalRestoreRecoveryRenderer({ documentRef, windowRef, mountTarget })
+      return {
+        app,
+        pinia,
+        router: null,
+        persistence,
+        syncFoundation: null,
+        runtimeSignalService: null,
+        restoreSafetyEngine,
+        fatalRestoreRecovery: recoveryResult,
+      }
     }
   }
 
@@ -283,6 +360,7 @@ export async function bootstrapApp({
     persistence,
     syncFoundation,
     runtimeSignalService,
+    restoreSafetyEngine,
   }
 }
 
