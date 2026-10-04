@@ -3,7 +3,6 @@ import { computed, onMounted, watch } from 'vue'
 
 import AppIcon from '@/components/base/AppIcon.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
-import { createBackupPayload } from '@/services/backupService'
 import { CLOUD_BACKUP_PHASE, usePremiumCloudBackupStore } from '@/stores/premiumCloudBackupStore'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCartStore } from '@/stores/cartStore'
@@ -93,8 +92,7 @@ async function handleBackup() {
     return
   }
 
-  const snapshot = createBackupPayload(getStoreContext())
-  await store.startBackup({ snapshot })
+  await store.startBackup({ stores: getStoreContext() })
 }
 
 async function handleRefresh() {

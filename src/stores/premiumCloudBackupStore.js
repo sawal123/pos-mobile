@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 
 import { getToken } from '@/services/cloud/tokenRepository'
+import { createBackupPayload, createBackupPayloadFromPersistence } from '@/services/backupService'
 import { createIdempotencyKey } from '@/services/premium/idempotency'
 import {
   CLOUD_BACKUP_ERROR,
@@ -81,6 +82,8 @@ export const usePremiumCloudBackupStore = defineStore('premiumCloudBackup', () =
   const lastCheckedAt = ref(null)
 
   let _runtime = null
+  let _adapter = null
+  let _scheduler = null
   // Synchronous guards — reserved before the first await so a double tap can
   // never start a second serialization or a second POST.
   let _active = false
@@ -124,8 +127,10 @@ export const usePremiumCloudBackupStore = defineStore('premiumCloudBackup', () =
   )
 
   // ── Helpers ────────────────────────────────────────────────────────────────
-  function init({ runtimeSignalService = null } = {}) {
+  function init({ runtimeSignalService = null, adapter = null, scheduler = null } = {}) {
     _runtime = runtimeSignalService ?? null
+    _adapter = adapter ?? _adapter
+    _scheduler = scheduler ?? _scheduler
   }
 
   function isOnline() {
@@ -207,6 +212,21 @@ export const usePremiumCloudBackupStore = defineStore('premiumCloudBackup', () =
     phase.value = CLOUD_BACKUP_PHASE.IDLE
 
     return { ok: true, attempt: attempt.value }
+  }
+
+  async function createSnapshot({ stores = null } = {}) {
+    if (_adapter) {
+      return createBackupPayloadFromPersistence({
+        adapter: _adapter,
+        scheduler: _scheduler,
+      })
+    }
+
+    if (stores) {
+      return createBackupPayload(stores)
+    }
+
+    return null
   }
 
   /**
@@ -323,7 +343,7 @@ export const usePremiumCloudBackupStore = defineStore('premiumCloudBackup', () =
    * @param {string|null} [params.appVersion]
    * @returns {Promise<{ok: boolean, backup?: object, code?: string}>}
    */
-  async function startBackup({ snapshot, appVersion = null } = {}) {
+  async function startBackup({ snapshot = null, stores = null, appVersion = null } = {}) {
     if (_active) return { ok: false, code: IN_FLIGHT_CODES.PREPARE }
     _active = true
 
@@ -331,11 +351,12 @@ export const usePremiumCloudBackupStore = defineStore('premiumCloudBackup', () =
       if (!canUseCloudBackup.value) {
         return { ok: false, code: 'NOT_ELIGIBLE' }
       }
-      if (snapshot === null || typeof snapshot !== 'object') {
+      const resolvedSnapshot = snapshot ?? (await createSnapshot({ stores }))
+      if (resolvedSnapshot === null || typeof resolvedSnapshot !== 'object') {
         return { ok: false, code: 'NO_SNAPSHOT' }
       }
 
-      const created = await createAttempt({ snapshot, appVersion })
+      const created = await createAttempt({ snapshot: resolvedSnapshot, appVersion })
       if (!created.ok) return created
 
       return await uploadCurrentAttempt()
@@ -457,6 +478,7 @@ export const usePremiumCloudBackupStore = defineStore('premiumCloudBackup', () =
     canRetry,
     // actions
     init,
+    createSnapshot,
     createAttempt,
     uploadCurrentAttempt,
     startBackup,
