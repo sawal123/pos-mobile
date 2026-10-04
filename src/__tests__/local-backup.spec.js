@@ -59,8 +59,23 @@ function seedStores(context) {
   context.cashierStore.setPinConfigured(true)
   context.productStore.$patch({
     products: [
-      { id: 'p-1', name: 'Es Kopi Susu', category: 'Minuman', price: 22000, stock: 18, imageData: 'data:image/webp;base64,seed', isActive: true },
-      { id: 'p-2', name: 'Croissant Butter', category: 'Makanan', price: 25000, stock: 9, isActive: false },
+      {
+        id: 'p-1',
+        name: 'Es Kopi Susu',
+        category: 'Minuman',
+        price: 22000,
+        stock: 18,
+        imageData: 'data:image/webp;base64,seed',
+        isActive: true,
+      },
+      {
+        id: 'p-2',
+        name: 'Croissant Butter',
+        category: 'Makanan',
+        price: 25000,
+        stock: 9,
+        isActive: false,
+      },
     ],
     categories: ['Minuman', 'Makanan'],
     stockMovements: [
@@ -95,9 +110,7 @@ function seedStores(context) {
     ],
   })
   context.customerStore.$patch({
-    customers: [
-      { id: 'c-1', name: 'Budi', phone: '081234567890', email: 'budi@email.com' },
-    ],
+    customers: [{ id: 'c-1', name: 'Budi', phone: '081234567890', email: 'budi@email.com' }],
   })
   context.expenseStore.$patch({
     expenses: [
@@ -131,9 +144,7 @@ function seedStores(context) {
         },
         status: 'paid',
         orderStatus: 'Masuk',
-        items: [
-          { id: 'p-1', name: 'Es Kopi Susu', price: 22000, qty: 1 },
-        ],
+        items: [{ id: 'p-1', name: 'Es Kopi Susu', price: 22000, qty: 1 }],
         itemCount: 1,
         subtotal: 22000,
         tax: 2420,
@@ -151,9 +162,7 @@ function seedStores(context) {
     },
   })
   context.cartStore.$patch({
-    items: [
-      { id: 'p-cart', name: 'Americano', price: 18000, qty: 1 },
-    ],
+    items: [{ id: 'p-cart', name: 'Americano', price: 18000, qty: 1 }],
   })
 }
 
@@ -172,7 +181,15 @@ function makeValidBackup(overrides = {}) {
       },
       products: {
         products: [
-          { id: 'p-backup', name: 'Latte', category: 'Minuman', price: 28000, stock: 10, imageData: 'data:image/webp;base64,backup', isActive: true },
+          {
+            id: 'p-backup',
+            name: 'Latte',
+            category: 'Minuman',
+            price: 28000,
+            stock: 10,
+            imageData: 'data:image/webp;base64,backup',
+            isActive: true,
+          },
         ],
         categories: ['Minuman'],
       },
@@ -234,9 +251,7 @@ function makeValidBackup(overrides = {}) {
           },
           status: 'paid',
           orderStatus: 'Masuk',
-          items: [
-            { id: 'p-backup', name: 'Latte', price: 28000, qty: 2 },
-          ],
+          items: [{ id: 'p-backup', name: 'Latte', price: 28000, qty: 2 }],
           itemCount: 2,
           subtotal: 56000,
           tax: 6160,
@@ -334,7 +349,7 @@ describe('P7 local backup & restore JSON', () => {
     seedStores(context)
 
     expect(createBackupPayload(context).version).toBe(BACKUP_VERSION)
-    expect(BACKUP_VERSION).toBe(2)
+    expect(BACKUP_VERSION).toBe(3)
   })
 
   it('exportedAt valid ISO date', () => {
@@ -377,7 +392,9 @@ describe('P7 local backup & restore JSON', () => {
     const context = createContext()
     seedStores(context)
 
-    expect(createBackupPayload(context).data.products.products[0].imageData).toBe('data:image/webp;base64,seed')
+    expect(createBackupPayload(context).data.products.products[0].imageData).toBe(
+      'data:image/webp;base64,seed',
+    )
   })
 
   it('categories masuk backup', () => {
@@ -511,7 +528,11 @@ describe('P7 local backup & restore JSON', () => {
   })
 
   it('data section hilang ditolak', () => {
-    const payload = { schema: BACKUP_SCHEMA, version: BACKUP_VERSION, exportedAt: '2026-08-21T07:00:00.000Z' }
+    const payload = {
+      schema: BACKUP_SCHEMA,
+      version: BACKUP_VERSION,
+      exportedAt: '2026-08-21T07:00:00.000Z',
+    }
 
     expect(validateBackupPayload(payload)).toEqual({
       valid: false,
@@ -589,7 +610,15 @@ describe('P7 local backup & restore JSON', () => {
     restoreBackupPayload(makeValidBackup(), context)
 
     expect(context.productStore.products).toEqual([
-      { id: 'p-backup', name: 'Latte', category: 'Minuman', price: 28000, stock: 10, imageData: 'data:image/webp;base64,backup', isActive: true },
+      {
+        id: 'p-backup',
+        name: 'Latte',
+        category: 'Minuman',
+        price: 28000,
+        stock: 10,
+        imageData: 'data:image/webp;base64,backup',
+        isActive: true,
+      },
     ])
   })
 
@@ -666,7 +695,14 @@ describe('P7 local backup & restore JSON', () => {
         products: {
           categories: ['Minuman'],
           products: [
-            { id: 'p-neg', name: 'Kopi Hitam', category: 'Minuman', price: 10000, stock: -3, isActive: true },
+            {
+              id: 'p-neg',
+              name: 'Kopi Hitam',
+              category: 'Minuman',
+              price: 10000,
+              stock: -3,
+              isActive: true,
+            },
           ],
         },
         stockMovements: [
@@ -925,7 +961,11 @@ describe('P0 backup/restore offline business core', () => {
     expect(payload.data.cash).toHaveLength(1)
     expect(payload.data.cash[0]).toMatchObject({ id: 'cash-1', type: 'in', amount: 100000 })
     expect(payload.data.stockMovements).toHaveLength(1)
-    expect(payload.data.stockMovements[0]).toMatchObject({ id: 'sm-1', productId: 'p-1', quantityChange: 5 })
+    expect(payload.data.stockMovements[0]).toMatchObject({
+      id: 'sm-1',
+      productId: 'p-1',
+      quantityChange: 5,
+    })
   })
 
   it('backup transaksi menyertakan orderStatus dan gross profit', () => {
@@ -1029,9 +1069,16 @@ describe('P0 backup/restore offline business core', () => {
       isActive: true,
     })
     context.productStore.adjustStock(created.product.id, { quantityChange: 5, note: 'Restock' })
-    context.cashStore.recordEntry({ type: 'in', amount: 500000, category: 'Modal', note: 'Saldo awal' })
+    context.cashStore.recordEntry({
+      type: 'in',
+      amount: 500000,
+      category: 'Modal',
+      note: 'Saldo awal',
+    })
     context.transactionStore.createTransaction({
-      items: [{ id: created.product.id, name: 'Beras 5kg', price: 65000, qty: 2, hppSnapshot: 55000 }],
+      items: [
+        { id: created.product.id, name: 'Beras 5kg', price: 65000, qty: 2, hppSnapshot: 55000 },
+      ],
       subtotal: 130000,
       tax: 0,
       total: 130000,
@@ -1119,7 +1166,7 @@ describe('P0 backup/restore offline business core', () => {
       makeBusinessReady(context.businessStore, { type: 'Laundry' })
       context.transactionStore.$patch({ items: [], lastTransaction: null })
 
-      const order = context.transactionStore.createLaundryOrder({
+      context.transactionStore.createLaundryOrder({
         customer: 'Budi Laundry',
         customerSnapshot: {
           id: 'cust-email-1',

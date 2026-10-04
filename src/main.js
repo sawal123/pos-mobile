@@ -38,9 +38,8 @@ export function renderNativePersistenceFatal({
     return null
   }
 
-  const container = typeof mountTarget === 'string'
-    ? documentRef.querySelector(mountTarget)
-    : mountTarget
+  const container =
+    typeof mountTarget === 'string' ? documentRef.querySelector(mountTarget) : mountTarget
 
   if (!container) {
     return null
@@ -54,7 +53,8 @@ export function renderNativePersistenceFatal({
   const retry = documentRef.createElement('button')
 
   title.textContent = 'Penyimpanan Lokal Bermasalah'
-  message.textContent = 'Database perangkat tidak dapat dibuka. Untuk melindungi data transaksi, aplikasi dihentikan dan tidak akan menggunakan penyimpanan sementara.'
+  message.textContent =
+    'Database perangkat tidak dapat dibuka. Untuk melindungi data transaksi, aplikasi dihentikan dan tidak akan menggunakan penyimpanan sementara.'
   warning.textContent = 'Jangan hapus data aplikasi atau uninstall sebelum data diperiksa.'
   retry.type = 'button'
   retry.textContent = 'Coba Lagi'
@@ -174,7 +174,10 @@ export async function bootstrapApp({
       }
       if (syncFoundation?.activityLogService) {
         const syncActivityLogStore = useSyncActivityLogStore(pinia)
-        syncActivityLogStore.init({ activityLogService: syncFoundation.activityLogService, adapter })
+        syncActivityLogStore.init({
+          activityLogService: syncFoundation.activityLogService,
+          adapter,
+        })
       }
 
       // P38: register the durable local operation journal and recover any
@@ -253,7 +256,7 @@ export async function bootstrapApp({
       // PREM-M06A: gate Cloud Backup by the shared runtime signal so an offline
       // device never POSTs. Non-blocking: a failure never stops POS startup.
       const cloudBackupStore = usePremiumCloudBackupStore(pinia)
-      cloudBackupStore.init({ runtimeSignalService })
+      cloudBackupStore.init({ runtimeSignalService, adapter, scheduler: persistence })
 
       // PREM-M04: restore a pending Premium payment (display only — never
       // "paid") and gate payment polling with the shared runtime signal.

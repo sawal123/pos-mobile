@@ -2,6 +2,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  BACKUP_VERSION,
   createBackupPayload,
   restoreBackupPayload,
   validateBackupPayload,
@@ -9,7 +10,6 @@ import {
 import { createLocalOperationService } from '@/services/database/localOperationService'
 import { createMemoryAdapter } from '@/services/database/memoryAdapter'
 import { createPersistenceService } from '@/services/database/persistenceService'
-import { DB_VERSION } from '@/services/database/schema'
 import { deserializeTransactionRows } from '@/services/database/sqliteAdapter'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCartStore } from '@/stores/cartStore'
@@ -76,7 +76,10 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       expect(validation.success).toBe(true)
 
       // Jalankan penjualan 5 unit
-      ctx.productStore.recordSaleStock([{ id: product.id, name: product.name, qty: 5 }], 'sale-negative-1')
+      ctx.productStore.recordSaleStock(
+        [{ id: product.id, name: product.name, qty: 5 }],
+        'sale-negative-1',
+      )
 
       // Hasil stok harus -3
       expect(ctx.productStore.getProductById(product.id).stock).toBe(-3)
@@ -141,26 +144,36 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       const product = created.product
 
       // 1. Kuantitas tidak valid (0 atau negatif)
-      const zeroQty = ctx.productStore.canFulfillSale([{ id: product.id, name: product.name, qty: 0 }])
+      const zeroQty = ctx.productStore.canFulfillSale([
+        { id: product.id, name: product.name, qty: 0 },
+      ])
       expect(zeroQty.success).toBe(false)
       expect(zeroQty.error).toContain('tidak valid')
 
-      const negQty = ctx.productStore.canFulfillSale([{ id: product.id, name: product.name, qty: -2 }])
+      const negQty = ctx.productStore.canFulfillSale([
+        { id: product.id, name: product.name, qty: -2 },
+      ])
       expect(negQty.success).toBe(false)
       expect(negQty.error).toContain('tidak valid')
 
-      const nanQty = ctx.productStore.canFulfillSale([{ id: product.id, name: product.name, qty: 'abc' }])
+      const nanQty = ctx.productStore.canFulfillSale([
+        { id: product.id, name: product.name, qty: 'abc' },
+      ])
       expect(nanQty.success).toBe(false)
       expect(nanQty.error).toContain('tidak valid')
 
       // 2. Produk tidak aktif
       ctx.productStore.toggleProductActive(product.id)
-      const inactiveSale = ctx.productStore.canFulfillSale([{ id: product.id, name: product.name, qty: 1 }])
+      const inactiveSale = ctx.productStore.canFulfillSale([
+        { id: product.id, name: product.name, qty: 1 },
+      ])
       expect(inactiveSale.success).toBe(false)
       expect(inactiveSale.error).toContain('tidak aktif')
 
       // 3. Produk tidak ditemukan
-      const notFoundSale = ctx.productStore.canFulfillSale([{ id: 'non-existent-id', name: 'Barang Hantu', qty: 1 }])
+      const notFoundSale = ctx.productStore.canFulfillSale([
+        { id: 'non-existent-id', name: 'Barang Hantu', qty: 1 },
+      ])
       expect(notFoundSale.success).toBe(false)
       expect(notFoundSale.error).toContain('tidak ditemukan')
     })
@@ -187,7 +200,10 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       expect(adjustRes.error).toContain('Layanan tidak memakai stok')
 
       // recordSaleStock pada layanan diabaikan
-      ctx.productStore.recordSaleStock([{ id: service.id, name: service.name, qty: 5 }], 'sale-laundry-1')
+      ctx.productStore.recordSaleStock(
+        [{ id: service.id, name: service.name, qty: 5 }],
+        'sale-laundry-1',
+      )
       expect(ctx.productStore.stockMovements).toHaveLength(0)
     })
   })
@@ -609,8 +625,11 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       await ctx.service.initialize()
       ctx.productStore.applyBusinessTemplate('Cafe / UMKM')
 
-      const coffee = ctx.productStore.products.find((p) => p.name.includes('Kopi') || p.category.includes('Minuman'))
-        ?? ctx.productStore.createProduct({
+      const coffee =
+        ctx.productStore.products.find(
+          (p) => p.name.includes('Kopi') || p.category.includes('Minuman'),
+        ) ??
+        ctx.productStore.createProduct({
           name: 'Cappuccino Blend',
           category: 'Minuman',
           cost: 8000,
@@ -620,8 +639,9 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
           isActive: true,
         }).product
 
-      const food = ctx.productStore.products.find((p) => p.category.includes('Makanan'))
-        ?? ctx.productStore.createProduct({
+      const food =
+        ctx.productStore.products.find((p) => p.category.includes('Makanan')) ??
+        ctx.productStore.createProduct({
           name: 'Croissant Butter',
           category: 'Makanan',
           cost: 10000,
@@ -637,7 +657,7 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       ctx.cartStore.addItem(food)
       ctx.cartStore.updateQty(food.id, 1)
 
-      const expectedSubtotal = (coffee.price * 2) + (food.price * 1)
+      const expectedSubtotal = coffee.price * 2 + food.price * 1
       const expectedTax = Math.round(expectedSubtotal * 0.1)
       const expectedTotal = expectedSubtotal + expectedTax
 
@@ -715,7 +735,7 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       expect(laundryOrder.orderStatus).toBe('Masuk')
       expect(laundryOrder.paymentStatus).toBe('unpaid')
       expect(laundryOrder.items[0].qty).toBe(2.5)
-      expect(laundryOrder.grossProfit).toBe((25000 - (4000 * 2.5)) + (35000 - 15000))
+      expect(laundryOrder.grossProfit).toBe(25000 - 4000 * 2.5 + (35000 - 15000))
 
       expect(ctx.cashStore.entries).toHaveLength(0)
 
@@ -788,7 +808,7 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       ctx.cartStore.addItem(item2)
       ctx.cartStore.updateQty(item2.id, 5)
 
-      const subtotal = (33000 * 4) + (13000 * 5)
+      const subtotal = 33000 * 4 + 13000 * 5
       const trx = ctx.transactionStore.createTransaction({
         items: ctx.cartStore.items,
         subtotal,
@@ -966,7 +986,7 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
 
       const backup = createBackupPayload(ctx)
       expect(backup.schema).toBe('pos-mobile-backup')
-      expect(backup.version).toBe(2)
+      expect(backup.version).toBe(BACKUP_VERSION)
       expect(backup.data.transactions.some((t) => t.id === trx1.id)).toBe(true)
       expect(backup.data.transactions.some((t) => t.id === trx2.id)).toBe(true)
 
@@ -984,8 +1004,12 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       expect(validRestore.success).toBe(true)
 
       expect(ctx.businessStore.name).toBe('Toko Kelontong Bersama')
-      expect(ctx.transactionStore.items.some((t) => t.id === trx1.id && t.taxRate === 11)).toBe(true)
-      expect(ctx.transactionStore.items.some((t) => t.id === trx2.id && t.taxRate === null)).toBe(true)
+      expect(ctx.transactionStore.items.some((t) => t.id === trx1.id && t.taxRate === 11)).toBe(
+        true,
+      )
+      expect(ctx.transactionStore.items.some((t) => t.id === trx2.id && t.taxRate === null)).toBe(
+        true,
+      )
       expect(ctx.productStore.getProductById(prod.id)).toBeTruthy()
     })
 
@@ -1033,7 +1057,7 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
 
       const backup = createBackupPayload(ctx)
       expect(backup.schema).toBe('pos-mobile-backup')
-      expect(backup.version).toBe(2)
+      expect(backup.version).toBe(BACKUP_VERSION)
 
       const backupProduct = backup.data.products.products.find((p) => p.id === product.id)
       expect(backupProduct).toBeTruthy()
@@ -1057,7 +1081,9 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
       expect(restoredProd).toBeTruthy()
       expect(restoredProd.stock).toBe(-3)
 
-      const matchingMovements = ctx.productStore.stockMovements.filter((m) => m.productId === product.id)
+      const matchingMovements = ctx.productStore.stockMovements.filter(
+        (m) => m.productId === product.id,
+      )
       expect(matchingMovements).toHaveLength(1)
       expect(matchingMovements[0]).toMatchObject({
         productId: product.id,
@@ -1078,16 +1104,36 @@ describe('QA-01 / P2 — Offline Transaction & SQLite Persistence', () => {
         version: 2,
         exportedAt: '2026-09-24T12:00:00.000Z',
         data: {
-          business: { name: 'Toko Test', type: 'Cafe / UMKM', owner: 'Owner', phone: '0812', outlet: 'Pusat' },
+          business: {
+            name: 'Toko Test',
+            type: 'Cafe / UMKM',
+            owner: 'Owner',
+            phone: '0812',
+            outlet: 'Pusat',
+          },
           taxSettings: { enabled: true, rate: 11 },
           products: {
             categories: ['Kategori A'],
             products: [
-              { id: 'p-1', name: 'Item Minus', category: 'Kategori A', price: 10000, stock: -3, isActive: true },
+              {
+                id: 'p-1',
+                name: 'Item Minus',
+                category: 'Kategori A',
+                price: 10000,
+                stock: -3,
+                isActive: true,
+              },
             ],
           },
           stockMovements: [
-            { id: 'sm-1', productId: 'p-1', quantityChange: -5, stockBefore: 2, stockAfter: -3, createdAt: '2026-09-24T12:00:00.000Z' },
+            {
+              id: 'sm-1',
+              productId: 'p-1',
+              quantityChange: -5,
+              stockBefore: 2,
+              stockAfter: -3,
+              createdAt: '2026-09-24T12:00:00.000Z',
+            },
           ],
           cash: [],
           customers: [],
