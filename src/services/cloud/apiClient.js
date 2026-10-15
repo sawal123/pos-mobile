@@ -81,11 +81,16 @@ export async function apiRequest(path, { method = 'GET', body, token } = {}) {
   let response
 
   try {
-    response = await fetch(buildApiUrl(path), {
+    const requestOptions = {
       method,
       headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    })
+    }
+
+    if (body !== undefined) {
+      requestOptions.body = JSON.stringify(body)
+    }
+
+    response = await fetch(buildApiUrl(path), requestOptions)
   } catch (networkError) {
     return {
       ok: false,
