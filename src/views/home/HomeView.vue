@@ -108,7 +108,7 @@ const laundryStatusSummaries = computed(() => {
   <div ref="refreshRoot" data-testid="home-pull-to-refresh" class="relative space-y-5">
     <div
       v-show="pullToRefresh.isVisible"
-      class="pointer-events-none absolute inset-x-0 -top-11 z-10 flex items-center justify-center gap-2 text-sm font-medium text-ink-secondary"
+      class="pointer-events-none absolute inset-x-0 top-2 z-10 flex items-center justify-center gap-2 text-sm font-medium text-ink-secondary"
       aria-live="polite"
       :style="{ transform: `translateY(${pullToRefresh.indicatorOffset}px)` }"
     >

@@ -144,7 +144,10 @@ export function usePullToRefresh({ root, onRefresh, threshold = PULL_TO_REFRESH_
   }
 
   onMounted(() => {
-    listenerTarget = root.value
+    // The page's <main> owns scrolling on tablet/desktop layouts. Listening
+    // there also keeps the gesture responsive when a pull begins in its
+    // padding rather than directly on Home's content card.
+    listenerTarget = root.value?.closest('main') ?? root.value
     if (!listenerTarget) return
 
     listenerTarget.addEventListener('touchstart', onTouchStart, { passive: true })

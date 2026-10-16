@@ -61,6 +61,19 @@ describe('usePullToRefresh', () => {
     expect(refresh).not.toHaveBeenCalled()
   })
 
+  it('captures a pull that starts in the scroll container padding', async () => {
+    const refresh = vi.fn(() => new Promise(() => {}))
+    const wrapper = mount(createHarness(refresh))
+    const main = wrapper.get('main').element
+
+    dispatchTouch(main, 'touchstart', { x: 0, y: 0 })
+    dispatchTouch(main, 'touchmove', { x: 0, y: PULL_TO_REFRESH_THRESHOLD + 10 })
+    dispatchTouch(main, 'touchend')
+    await Promise.resolve()
+
+    expect(refresh).toHaveBeenCalledTimes(1)
+  })
+
   it('cancels a pull shorter than the threshold', () => {
     const refresh = vi.fn()
     const wrapper = mount(createHarness(refresh))
