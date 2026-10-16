@@ -319,6 +319,34 @@ export function createLocalOperationService({ adapter = null, scheduler = null, 
   }
 
   /**
+   * Resumes an interrupted retail sale that belongs to the current context.
+   *
+   * Returns the recovered transaction (the operation's own identity) when a
+   * pending entry exists, otherwise null. Every step is idempotent, so calling
+   * this repeatedly — or after the operation already completed — never
+   * duplicates a transaction, a stock deduction or a cash entry.
+   */
+  async function resumePendingRetailSale() {
+    const pending = await journal.listPending()
+    const context = resolveContext()
+
+    const entry = pending
+      .filter((item) => item.operationType === LOCAL_OPERATION_TYPES.RETAIL_SALE)
+      .find((item) => !item.contextKey || item.contextKey === context.contextKey)
+
+    if (!entry) {
+      return null
+    }
+
+    await journal.markAttempt(entry.operationId)
+    const transaction = await recoverRetailSale(entry)
+    await flush()
+    await journal.commit(entry.operationId)
+
+    return transaction
+  }
+
+  /**
    * Commits a retail (cash or non-cash) sale as one durable logical operation.
    *
    * The order is fixed by design: durable journal -> transaction -> stock
@@ -332,6 +360,16 @@ export function createLocalOperationService({ adapter = null, scheduler = null, 
     const productStore = useProductStore(active)
     const cashStore = useCashStore(active)
     const context = resolveContext()
+
+    // An interrupted sale for THIS context is resumed (idempotently, keyed by
+    // operationId) instead of starting a new operation: a retry must never create
+    // a second transaction for the same checkout and must never leave a
+    // half-applied operation behind. Pending entries from another context are
+    // left untouched for their own recovery.
+    const resumed = await resumePendingRetailSale()
+    if (resumed) {
+      return resumed
+    }
 
     await journal.begin({
       operationId,
@@ -526,6 +564,7 @@ export function createLocalOperationService({ adapter = null, scheduler = null, 
     commitRetailSale,
     settleLaundryOrder,
     recoverPendingOperations,
+    resumePendingRetailSale,
     repairLegacySaleStockMovementLinks: repairLegacySaleStockMovementLinksNow,
     resolveContext,
   }

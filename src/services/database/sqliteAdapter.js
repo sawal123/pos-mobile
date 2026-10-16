@@ -86,11 +86,70 @@ export function deserializeTransactionRows(rows) {
 
 export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION } = {}) {
   let sqliteConnection = null
+  let rawConnection = null
   let dbConnection = null
 
-  async function ensureConnection() {
-    if (dbConnection) {
-      return dbConnection
+  // ── Single-writer coordination ─────────────────────────────────────────────
+  // @capacitor-community/sqlite allows only ONE transaction per connection, and
+  // its `run`/`query`/`execute` helpers default to `transaction = true` (the
+  // plugin opens its own BEGIN/COMMIT). Several independent producers drive this
+  // adapter — the PersistenceService write queue, the P38 local operation
+  // journal, the sync queue, restore and workspace switching — so without a
+  // single writer an implicit BEGIN could collide with an explicit transaction
+  // and leave the connection with a stale/rolled-back transaction state
+  // (`Run: Failed in beginTransactionAlready in transaction`, followed by
+  // `CommitTransaction: ... no current transaction`).
+  //
+  // The mutex below serializes every write and every explicit transaction.
+  // Reads never take the lock (so they cannot deadlock a transaction) and never
+  // let the plugin manage a transaction.
+  let writerTail = Promise.resolve()
+
+  function runExclusive(task) {
+    const run = writerTail.then(() => task())
+    writerTail = run.then(
+      () => {},
+      () => {},
+    )
+    return run
+  }
+
+  /**
+   * Connection wrapper used OUTSIDE an explicit transaction: reads are direct,
+   * writes are serialized with every explicit transaction, and no call ever lets
+   * the plugin open an implicit transaction.
+   */
+  function createGuardedConnection(raw) {
+    return {
+      query: (statement, values = []) => raw.query(statement, values, false),
+      run: (statement, values = []) => runExclusive(() => raw.run(statement, values, false)),
+      execute: (statements) => runExclusive(() => raw.execute(statements, false)),
+      beginTransaction: () => raw.beginTransaction(),
+      commitTransaction: () => raw.commitTransaction(),
+      rollbackTransaction: () => raw.rollbackTransaction(),
+      isDBOpen: () => raw.isDBOpen(),
+      open: () => raw.open(),
+      close: () => raw.close(),
+    }
+  }
+
+  /**
+   * Connection wrapper handed to a `withTransaction` callback. The writer lock
+   * is already held by the transaction, so these calls go straight to the plugin
+   * (acquiring the lock again would deadlock) and never manage a transaction
+   * themselves — they are part of the explicit one.
+   */
+  function createTransactionConnection(raw) {
+    return {
+      query: (statement, values = []) => raw.query(statement, values, false),
+      run: (statement, values = []) => raw.run(statement, values, false),
+      execute: (statements) => raw.execute(statements, false),
+    }
+  }
+
+  async function ensureRawConnection() {
+    if (rawConnection) {
+      return rawConnection
     }
 
     const { CapacitorSQLite, SQLiteConnection } = await import('@capacitor-community/sqlite')
@@ -109,9 +168,9 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
     const existingConnection = await sqliteConnection.isConnection(database, false)
 
     if (consistency.result && existingConnection.result) {
-      dbConnection = await sqliteConnection.retrieveConnection(database, false)
+      rawConnection = await sqliteConnection.retrieveConnection(database, false)
     } else {
-      dbConnection = await sqliteConnection.createConnection(
+      rawConnection = await sqliteConnection.createConnection(
         database,
         false,
         'no-encryption',
@@ -120,32 +179,44 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
       )
     }
 
-    const isOpen = await dbConnection.isDBOpen()
+    const isOpen = await rawConnection.isDBOpen()
 
     if (!isOpen.result) {
-      await dbConnection.open()
+      await rawConnection.open()
+    }
+
+    return rawConnection
+  }
+
+  async function ensureConnection() {
+    const raw = await ensureRawConnection()
+
+    if (!dbConnection) {
+      dbConnection = createGuardedConnection(raw)
     }
 
     return dbConnection
   }
 
   async function withTransaction(work) {
-    const db = await ensureConnection()
-    await db.beginTransaction()
+    return runExclusive(async () => {
+      const raw = await ensureRawConnection()
+      await raw.beginTransaction()
 
-    try {
-      const result = await work(db)
-      await db.commitTransaction()
-      return result
-    } catch (error) {
       try {
-        await db.rollbackTransaction()
-      } catch (rollbackError) {
-        console.error('Failed to rollback SQLite transaction.', rollbackError)
-      }
+        const result = await work(createTransactionConnection(raw))
+        await raw.commitTransaction()
+        return result
+      } catch (error) {
+        try {
+          await raw.rollbackTransaction()
+        } catch (rollbackError) {
+          console.error('Failed to rollback SQLite transaction.', rollbackError)
+        }
 
-      throw error
-    }
+        throw error
+      }
+    })
   }
 
   async function readMetaValue(key, fallback = null) {
@@ -1052,16 +1123,21 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
       })
     },
     async close() {
-      if (!dbConnection) {
+      if (!rawConnection) {
         return
       }
 
-      await dbConnection.close()
+      // Let any queued writer finish before the connection is closed so a
+      // transaction is never torn down mid-flight.
+      await writerTail.catch(() => {})
+
+      await rawConnection.close()
 
       if (sqliteConnection) {
         await sqliteConnection.closeConnection(database, false)
       }
 
+      rawConnection = null
       dbConnection = null
     },
   }
