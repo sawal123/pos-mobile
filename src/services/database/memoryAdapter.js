@@ -45,6 +45,7 @@ export function createMemoryAdapter() {
     restoreJournal: null,
     workspaceRegistry: null,
     workspaceSnapshots: {},
+    workspaceSwitchJournal: null,
   }
 
   return {
@@ -272,6 +273,16 @@ export function createMemoryAdapter() {
     },
     async replaceSyncQueueItems(entries) {
       state.syncQueue = Array.isArray(entries) ? cloneValue(entries) : []
+    },
+    // Durable workspace-switch journal (crash-safe switching).
+    async loadWorkspaceSwitchJournal() {
+      return state.workspaceSwitchJournal ? cloneValue(state.workspaceSwitchJournal) : null
+    },
+    async saveWorkspaceSwitchJournal(journal) {
+      state.workspaceSwitchJournal = cloneValue(journal)
+    },
+    async clearWorkspaceSwitchJournal() {
+      state.workspaceSwitchJournal = null
     },
     // PREM-M04: non-sensitive pending subscription payment (recovery only).
     async loadPendingSubscriptionPayment() {

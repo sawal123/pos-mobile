@@ -637,6 +637,19 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
         `workspace_snapshot_v1:${String(workspaceId)}`,
       ])
     },
+    // Durable workspace-switch journal. Written before the singleton tables are
+    // touched and cleared only after the registry commit, so an interrupted
+    // switch is always detectable and recoverable on the next start.
+    async loadWorkspaceSwitchJournal() {
+      return readMetaValue('workspace_switch_journal_v1', null)
+    },
+    async saveWorkspaceSwitchJournal(journal) {
+      await writeMetaValue('workspace_switch_journal_v1', journal)
+    },
+    async clearWorkspaceSwitchJournal() {
+      const db = await ensureConnection()
+      await db.run("DELETE FROM app_meta WHERE key = 'workspace_switch_journal_v1'", [])
+    },
     async replaceSyncQueueItems(entries) {
       await withTransaction(async (db) => {
         await db.run('DELETE FROM sync_queue', [], false)

@@ -76,13 +76,23 @@ const LOCAL_LAUNDRY = {
 
 const ok = (data) => ({ ok: true, status: 200, data: { data }, error: null })
 
+// A workspace switch now requires a persistence scheduler that can flush the
+// write queue and rehydrate the Pinia stores (fail-closed otherwise).
+function createStubScheduler() {
+  return {
+    flush: async () => {},
+    rehydrate: async () => {},
+    runSerialized: (task) => task(),
+  }
+}
+
 async function makeContext() {
   const pinia = createPinia()
   setActivePinia(pinia)
   const adapter = createMemoryAdapter()
   await adapter.initialize()
   const cloudStore = useCloudSessionStore(pinia)
-  cloudStore.setPersistenceAdapter(adapter)
+  cloudStore.setPersistenceAdapter(adapter, createStubScheduler())
   cloudStore.user = { id: 1, name: 'Owner', email: 'owner@example.com' }
   return { pinia, adapter, cloudStore, businessStore: useBusinessStore(pinia) }
 }
@@ -321,7 +331,7 @@ describe('7. restart retains the active workspace identity', () => {
 
     const restarted = await makeContext()
     // Same adapter (simulating the same device database).
-    restarted.cloudStore.setPersistenceAdapter(adapter)
+    restarted.cloudStore.setPersistenceAdapter(adapter, createStubScheduler())
     restarted.cloudStore.user = { id: 1, name: 'Owner', email: 'owner@example.com' }
     restarted.adapter.saveWorkspaceRegistry(await adapter.loadWorkspaceRegistry())
 
@@ -360,6 +370,7 @@ describe('8. a failed old-workspace save preserves the data', () => {
 
     const result = await switchOperationalWorkspace({
       adapter: failing,
+      scheduler: createStubScheduler(),
       targetWorkspaceId: cloudWorkspaceId(CAFE.id, 8),
     })
 
@@ -383,14 +394,14 @@ describe('9. per-workspace sync metadata isolation', () => {
     const workspaceA = cloudWorkspaceId(1, 10)
     const workspaceB = cloudWorkspaceId(2, 20)
 
-    await switchOperationalWorkspace({ adapter, targetWorkspaceId: workspaceA })
+    await switchOperationalWorkspace({ adapter, scheduler: createStubScheduler(), targetWorkspaceId: workspaceA })
     await adapter.saveSyncPushBinding({ businessId: 1, boundAt: new Date().toISOString() })
 
-    await switchOperationalWorkspace({ adapter, targetWorkspaceId: workspaceB })
+    await switchOperationalWorkspace({ adapter, scheduler: createStubScheduler(), targetWorkspaceId: workspaceB })
     // Tenant B starts with no tenant A binding.
     expect(await adapter.loadSyncPushBinding()).toBeNull()
 
-    await switchOperationalWorkspace({ adapter, targetWorkspaceId: workspaceA })
+    await switchOperationalWorkspace({ adapter, scheduler: createStubScheduler(), targetWorkspaceId: workspaceA })
     const restored = await adapter.loadSyncPushBinding()
     expect(restored.businessId).toBe(1)
   })
@@ -447,11 +458,11 @@ describe('11. offline workspace data survives a switch away and back', () => {
       ['Kiloan'],
     )
 
-    await switchOperationalWorkspace({ adapter, targetWorkspaceId: cloudWorkspaceId(CAFE.id, 8) })
+    await switchOperationalWorkspace({ adapter, scheduler: createStubScheduler(), targetWorkspaceId: cloudWorkspaceId(CAFE.id, 8) })
     // Cloud workspace is empty on first open.
     expect((await adapter.loadProducts()).products).toEqual([])
 
-    await switchOperationalWorkspace({ adapter, targetWorkspaceId: LOCAL_WORKSPACE_ID })
+    await switchOperationalWorkspace({ adapter, scheduler: createStubScheduler(), targetWorkspaceId: LOCAL_WORKSPACE_ID })
     const restored = await adapter.loadProducts()
     expect(restored.products.map((p) => p.id)).toEqual(['p-lokal'])
     expect((await adapter.loadBusiness()).name).toBe('Temuan')
@@ -505,7 +516,7 @@ describe('UI — business switch confirmation modal', () => {
     const adapter = createMemoryAdapter()
     await adapter.initialize()
     const cloudStore = useCloudSessionStore(pinia)
-    cloudStore.setPersistenceAdapter(adapter)
+    cloudStore.setPersistenceAdapter(adapter, createStubScheduler())
     const businessStore = useBusinessStore(pinia)
     await seedLocalLaundry(adapter, businessStore)
 

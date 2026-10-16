@@ -23,8 +23,11 @@ import {
 } from '@/services/cloud/businessContextActivation'
 import {
   LOCAL_WORKSPACE_ID,
+  WORKSPACE_SWITCH_RESULT,
   cloudWorkspaceId,
-  loadWorkspaceRegistry,
+  emptyWorkspaceRegistry,
+  readWorkspaceRegistryStrict,
+  recoverPendingWorkspaceSwitch,
   resolveActiveWorkspaceId,
   switchOperationalWorkspace,
 } from '@/services/cloud/businessWorkspaceService'
@@ -200,6 +203,19 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   /** Registry of known local/Cloud workspaces (display + isolation bookkeeping). */
   const workspaceRegistry = ref(null)
 
+  /**
+   * True when the workspace registry exists but could not be read/parsed.
+   * Treated as fail-closed: the device must not be assumed empty.
+   */
+  const workspaceRegistryUnreadable = ref(false)
+
+  /**
+   * True when a workspace switch could not be rolled back automatically and a
+   * manual recovery is required. While set, tenant data access and Cloud Sync
+   * stay blocked so a mixed/inconsistent workspace is never used.
+   */
+  const workspaceRecoveryRequired = ref(false)
+
   /** True while a cloud operation is in flight */
   const loading = ref(false)
 
@@ -263,7 +279,10 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
    * local workspace can never receive Café transactions (or vice versa).
    */
   const isOperationalCloudAccess = computed(
-    () => cloudAccess.value === true && isWorkspaceAligned.value,
+    () =>
+      cloudAccess.value === true &&
+      isWorkspaceAligned.value &&
+      workspaceRecoveryRequired.value !== true,
   )
 
   /**
@@ -344,11 +363,15 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
 
   async function loadWorkspaceState() {
     if (!_adapter) return
-    try {
-      activeWorkspaceId.value = await resolveActiveWorkspaceId(_adapter)
-      workspaceRegistry.value = await loadWorkspaceRegistry(_adapter)
-    } catch {
-      // non-blocking — the default local workspace id remains
+    const strict = await readWorkspaceRegistryStrict(_adapter)
+    if (strict.ok) {
+      workspaceRegistry.value = strict.registry
+      activeWorkspaceId.value = strict.registry.activeWorkspaceId ?? LOCAL_WORKSPACE_ID
+      workspaceRegistryUnreadable.value = false
+    } else {
+      // Never assume an unreadable registry means "empty device": that would let
+      // a switch overwrite a healthy workspace snapshot.
+      workspaceRegistryUnreadable.value = true
     }
   }
 
@@ -838,7 +861,8 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   async function adoptActiveWorkspace({ targetWorkspaceId, targetMeta }) {
     if (!_adapter || typeof _adapter.saveWorkspaceRegistry !== 'function') return
     try {
-      const registry = await loadWorkspaceRegistry(_adapter)
+      const strict = await readWorkspaceRegistryStrict(_adapter)
+      const registry = strict.ok ? strict.registry : emptyWorkspaceRegistry()
       registry.activeWorkspaceId = targetWorkspaceId
       registry.workspaces = { ...registry.workspaces }
       registry.workspaces[targetWorkspaceId] = {
@@ -853,6 +877,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       await _adapter.saveWorkspaceRegistry(registry)
       activeWorkspaceId.value = targetWorkspaceId
       workspaceRegistry.value = registry
+      workspaceRegistryUnreadable.value = false
     } catch {
       // non-blocking: the workspace still works, only the registry entry is late
     }
@@ -871,7 +896,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
    * @param {object} [options]
    * @param {boolean} [options.confirmed=false] The user confirmed the switch.
    */
-  async function activateOperationalContext({ confirmed = false } = {}) {
+  async function activateOperationalContext({ confirmed = false, autoSyncRunning = false } = {}) {
     const business = selectedBusiness.value
     const outlet = selectedOutlet.value
 
@@ -886,6 +911,11 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       error.value = 'Ruang kerja lokal belum siap diperiksa. Aktivasi kasir diblokir.'
       return { ok: false, code: 'LOCAL_WORKSPACE_UNAVAILABLE', message: error.value }
     }
+    if (workspaceRecoveryRequired.value) {
+      error.value =
+        'Pemulihan ruang kerja masih diperlukan. Aktivasi kasir diblokir sampai data dipastikan konsisten.'
+      return { ok: false, code: WORKSPACE_SWITCH_RESULT.RECOVERY_REQUIRED, message: error.value }
+    }
 
     const alreadyActive =
       operationalContext.value?.status === 'active' &&
@@ -896,6 +926,11 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     }
 
     await loadWorkspaceState()
+    if (workspaceRegistryUnreadable.value) {
+      error.value =
+        'Status ruang kerja lokal tidak dapat dibaca. Aktivasi kasir diblokir sampai data dipastikan aman.'
+      return { ok: false, code: WORKSPACE_SWITCH_RESULT.REGISTRY_UNREADABLE, message: error.value }
+    }
     const switchInfo = await evaluateWorkspaceSwitch({ business, outlet })
 
     if (switchInfo.requiresConfirmation && confirmed !== true) {
@@ -911,37 +946,6 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         code: 'BUSINESS_SWITCH_CONFIRMATION_REQUIRED',
         pendingSwitch: pendingSwitch.value,
       }
-    }
-
-    const targetMeta = {
-      name: business.name,
-      type: business.business_type,
-      businessId: business.id,
-      outletId: outlet.id,
-    }
-
-    if (switchInfo.needsMaterialise) {
-      const switchResult = await switchOperationalWorkspace({
-        adapter: _adapter,
-        scheduler: _scheduler,
-        targetWorkspaceId: switchInfo.targetWorkspaceId,
-        targetMeta,
-      })
-
-      if (!switchResult.ok) {
-        error.value = switchResult.message
-        return switchResult
-      }
-
-      activeWorkspaceId.value = switchResult.activeWorkspaceId
-      workspaceRegistry.value = switchResult.registry
-    } else if (switchInfo.targetWorkspaceId && !switchInfo.sameWorkspace) {
-      // Fresh device: the materialised data already belongs to the target, so we
-      // only adopt the workspace identity (no snapshot needed).
-      await adoptActiveWorkspace({
-        targetWorkspaceId: switchInfo.targetWorkspaceId,
-        targetMeta,
-      })
     }
 
     let businessStore
@@ -961,18 +965,20 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       mode: businessStore.mode,
     }
     const previousOperationalContext = operationalContext.value
+    const previousPendingSwitch = pendingSwitch.value
     const nextBusiness = {
       ...previousBusiness,
       name: business.name,
       type: business.business_type,
       outlet: outlet.name,
     }
-
-    try {
-      // Persist the local business first. If either persistence step fails, the
-      // in-memory and durable business snapshot are rolled back below.
-      await _adapter.saveBusiness(nextBusiness)
-      businessStore.setBusiness(nextBusiness)
+    const targetMeta = {
+      name: business.name,
+      type: business.business_type,
+      businessId: business.id,
+      outletId: outlet.id,
+    }
+    const markActive = () => {
       operationalContext.value = {
         status: 'active',
         cloudBusinessId: business.id,
@@ -982,6 +988,69 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         activatedAt: new Date().toISOString(),
       }
       pendingSwitch.value = null
+    }
+    const restoreContext = async () => {
+      operationalContext.value = previousOperationalContext
+      pendingSwitch.value = previousPendingSwitch
+      businessStore.setBusiness(previousBusiness)
+      try {
+        await persistCloudContext(_adapter)
+      } catch {
+        // best-effort: the workspace snapshot is already restored durably
+      }
+    }
+
+    if (switchInfo.needsMaterialise) {
+      const result = await switchOperationalWorkspace({
+        adapter: _adapter,
+        scheduler: _scheduler,
+        targetWorkspaceId: switchInfo.targetWorkspaceId,
+        targetMeta,
+        autoSyncRunning,
+        hooks: {
+          // 6. update business identity (durably, before the registry commits).
+          onTargetMaterialised: async () => {
+            await _adapter.saveBusiness(nextBusiness)
+            businessStore.setBusiness(nextBusiness)
+          },
+          // 7. persist Cloud context.
+          onPersistCloudContext: async () => {
+            markActive()
+            await persistCloudContext(_adapter, { throwOnError: true })
+          },
+          restoreContext,
+        },
+      })
+
+      if (!result.ok) {
+        // A failed rollback is never treated as success: block risky operations.
+        if (!result.rollback || result.rollback.ok !== true) {
+          if (result.rollback) {
+            workspaceRecoveryRequired.value = true
+          }
+        }
+        error.value = result.message
+        return result
+      }
+
+      activeWorkspaceId.value = result.activeWorkspaceId
+      workspaceRegistry.value = result.registry
+      error.value = null
+      return {
+        ok: true,
+        code: 'OPERATIONAL_CONTEXT_ACTIVATED',
+        activeWorkspaceId: result.activeWorkspaceId,
+      }
+    }
+
+    // Fresh device: the materialised data already belongs to the target, so we
+    // only adopt the workspace identity (nothing to snapshot).
+    await adoptActiveWorkspace({ targetWorkspaceId: switchInfo.targetWorkspaceId, targetMeta })
+
+    try {
+      await _adapter.saveBusiness(nextBusiness)
+      businessStore.setBusiness(nextBusiness)
+      markActive()
       await persistCloudContext(_adapter, { throwOnError: true })
       error.value = null
       return {
@@ -990,8 +1059,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         activeWorkspaceId: activeWorkspaceId.value,
       }
     } catch {
-      operationalContext.value = previousOperationalContext
-      businessStore.setBusiness(previousBusiness)
+      await restoreContext()
       try {
         await _adapter.saveBusiness(previousBusiness)
       } catch {
@@ -1003,10 +1071,28 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   }
 
   /**
+   * Run the crash-recovery pass for an interrupted workspace switch and expose
+   * the outcome. Returns `ok: false` when a manual recovery is required.
+   *
+   * @param {object} [options]
+   * @param {object} [options.hooks] Optional store-side context restore hook.
+   */
+  async function recoverInterruptedWorkspaceSwitch({ hooks = null } = {}) {
+    const result = await recoverPendingWorkspaceSwitch({
+      adapter: _adapter,
+      scheduler: _scheduler,
+      hooks,
+    })
+    workspaceRecoveryRequired.value = result.ok !== true
+    await loadWorkspaceState()
+    return result
+  }
+
+  /**
    * User confirmed the "Beralih Bisnis?" modal: perform the safe switch.
    */
-  async function confirmBusinessSwitch() {
-    return activateOperationalContext({ confirmed: true })
+  async function confirmBusinessSwitch(options = {}) {
+    return activateOperationalContext({ confirmed: true, ...options })
   }
 
   /**
@@ -1596,6 +1682,8 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     pendingSwitch,
     activeWorkspaceId,
     workspaceRegistry,
+    workspaceRegistryUnreadable,
+    workspaceRecoveryRequired,
     loading,
     error,
     // computed
@@ -1620,6 +1708,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     activateOperationalContext,
     confirmBusinessSwitch,
     cancelBusinessSwitch,
+    recoverInterruptedWorkspaceSwitch,
     doRegisterDevice,
     logout,
     hydrateFromStorage,

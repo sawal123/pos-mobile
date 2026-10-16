@@ -1171,7 +1171,9 @@ function applyActivationResult(activation) {
 async function handleConfirmBusinessSwitch() {
   if (isAnySyncOperationBusy.value) return
   switchErrorMessage.value = ''
-  const result = await cloudStore.confirmBusinessSwitch()
+  const result = await cloudStore.confirmBusinessSwitch({
+    autoSyncRunning: syncAutoSyncStore.running === true,
+  })
   if (result.ok) {
     showSwitchModal.value = false
     step.value = 'done'
@@ -1439,6 +1441,19 @@ onMounted(async () => {
             </p>
           </div>
         </div>
+      </div>
+
+      <!-- Workspace recovery required -->
+      <div
+        v-if="cloudStore.workspaceRecoveryRequired"
+        id="workspace-recovery-warning"
+        class="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900 shadow-sm"
+      >
+        <p class="font-semibold">Pemulihan ruang kerja diperlukan.</p>
+        <p class="mt-1 text-xs text-rose-700">
+          Perpindahan bisnis sebelumnya terhenti dan pemulihan otomatis tidak selesai. Sinkronisasi dan
+          akses data tenant diblokir sampai data ruang kerja dipastikan konsisten.
+        </p>
       </div>
 
       <!-- P14: Initial Bootstrap Section (Free to Cloud) -->
