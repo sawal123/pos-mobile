@@ -873,7 +873,8 @@ describe('P17: UI Integration in CloudLoginView', () => {
     await flushPromises()
 
     expect(wrapper.find('#sync-health-btn').exists()).toBe(true)
-    expect(wrapper.find('#sync-health-btn').text()).toContain('Periksa Status Sync')
+    expect(wrapper.find('#sync-health-btn').text()).toContain('Periksa')
+    expect(wrapper.find('#sync-health-btn').attributes('aria-label')).toBe('Periksa Status Sync')
 
     await wrapper.find('#sync-health-btn').trigger('click')
     await flushPromises()

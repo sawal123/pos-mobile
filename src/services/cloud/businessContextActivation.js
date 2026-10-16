@@ -170,6 +170,92 @@ export async function inspectLocalBusinessWorkspace({ adapter, runtime = null } 
   }
 }
 
+/**
+ * Read-only safety check used by the Cloud-first download flow.
+ *
+ * A newly materialised Cloud workspace deliberately has business metadata: the
+ * workspace switch writes the selected business identity before any catalogue
+ * data is downloaded. That identity must not be mistaken for offline data.
+ * Every other operational or sync artifact remains a hard stop, so this helper
+ * cannot be used to merge or overwrite an existing workspace.
+ */
+export async function inspectCloudFirstWorkspace({ adapter } = {}) {
+  if (!adapter || REQUIRED_READERS.some((key) => typeof adapter[key] !== 'function')) {
+    return {
+      ok: false,
+      safeToInitialize: false,
+      code: WORKSPACE_CLASSIFICATION.UNAVAILABLE,
+      reasons: ['workspace_reader_unavailable'],
+    }
+  }
+
+  try {
+    const [
+      storedProducts,
+      storedCustomers,
+      storedExpenses,
+      storedTransactions,
+      storedCash,
+      storedShift,
+      syncQueue,
+      pushBinding,
+      pullBinding,
+      inflight,
+      bootstrap,
+      identityMap,
+      serverVersions,
+      autoSettings,
+    ] = await Promise.all([
+      adapter.loadProducts(),
+      adapter.loadCustomers(),
+      adapter.loadExpenses(),
+      adapter.loadTransactions(),
+      adapter.loadCashState(),
+      adapter.loadShiftState(),
+      adapter.listSyncQueueItems({ limit: 1 }),
+      adapter.loadSyncPushBinding(),
+      adapter.loadSyncPullBinding(),
+      adapter.loadSyncPushInflight(),
+      adapter.loadSyncBootstrapState(),
+      adapter.loadSyncIdentityMap(),
+      adapter.loadSyncServerVersions(),
+      adapter.loadSyncAutoSettings(),
+    ])
+
+    const reasons = []
+    const products = storedProducts?.products ?? []
+    const categories = storedProducts?.categories ?? []
+    const stockMovements = storedProducts?.stockMovements ?? []
+    if (hasRows(products) || hasRows(categories) || hasRows(stockMovements)) reasons.push('catalog_or_stock')
+    if (hasRows(storedCustomers)) reasons.push('customers')
+    if (hasRows(storedExpenses)) reasons.push('expenses')
+    if (hasRows(storedTransactions)) reasons.push('transactions')
+    if (hasRows(storedCash?.entries)) reasons.push('cash')
+    if (hasMeaningfulShift(storedShift)) reasons.push('shift')
+    if (hasRows(syncQueue)) reasons.push('sync_queue')
+    if (pushBinding || pullBinding || inflight || bootstrap || identityMap || serverVersions || autoSettings) {
+      reasons.push('sync_metadata')
+    }
+
+    return {
+      ok: true,
+      safeToInitialize: reasons.length === 0,
+      code:
+        reasons.length === 0
+          ? WORKSPACE_CLASSIFICATION.EMPTY
+          : WORKSPACE_CLASSIFICATION.PROTECTED,
+      reasons,
+    }
+  } catch {
+    return {
+      ok: false,
+      safeToInitialize: false,
+      code: WORKSPACE_CLASSIFICATION.READ_FAILED,
+      reasons: ['workspace_read_failed'],
+    }
+  }
+}
+
 export function formatBusinessTypeForMismatch(type) {
   if (type === 'Cafe / UMKM') return 'Cafe'
   if (type === 'Grosir / Toko Kelontong') return 'Grosir'

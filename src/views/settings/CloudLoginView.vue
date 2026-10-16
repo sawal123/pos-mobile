@@ -7,6 +7,7 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
+import AppIcon from '@/components/base/AppIcon.vue'
 import { describeLoginError } from '@/services/cloud/cloudLoginErrors'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
@@ -93,6 +94,13 @@ const isContextGuardMutationBlocked = computed(() => {
   if (syncContextGuardStore.loading) return true
   return !['safe', 'unbound'].includes(syncContextGuardStore.status)
 })
+
+const canInitializeCloudData = computed(
+  () =>
+    canSync.value &&
+    syncContextGuardStore.status === 'unbound' &&
+    !syncBootstrapStore.isStaged,
+)
 
 const isAnySyncOperationBusy = computed(
   () =>
@@ -800,7 +808,7 @@ async function handleSyncNow() {
     const sent = result.removedQueueIds?.length ?? 0
     const rem = result.remaining ?? 0
     if (sent === 0 && rem === 0) {
-      syncMessage.value = 'Semua data telah tersinkronisasi.'
+      syncMessage.value = 'Tidak ada perubahan lokal untuk dikirim.'
     } else {
       syncMessage.value = `${sent} data berhasil dikirim, ${rem} masih menunggu.`
     }
@@ -810,7 +818,7 @@ async function handleSyncNow() {
   }
 }
 
-async function handlePullNow() {
+async function handlePullNow({ initialCloudRead = false } = {}) {
   if (isAnySyncOperationBusy.value || isContextGuardMutationBlocked.value) return
   resetRecoveryPresentation()
   syncHealthStore.resetResult()
@@ -819,7 +827,7 @@ async function handlePullNow() {
   const ctx = snapshotCloudContext()
   let result
   try {
-    result = await syncPullStore.pullNow()
+    result = await syncPullStore.pullNow({ initialCloudRead })
   } catch (err) {
     const finishedAt = new Date().toISOString()
     void syncActivityLogStore.record({
@@ -872,7 +880,9 @@ async function handlePullNow() {
     pullSuccess.value = true
     const applied = result.applied ?? 0
     if (applied === 0) {
-      pullMessage.value = 'Data lokal sudah terbaru.'
+      pullMessage.value = initialCloudRead
+        ? 'Tidak ada data Cloud baru untuk dimuat.'
+        : 'Data lokal sudah terbaru.'
     } else {
       pullMessage.value = `${applied} perubahan cloud diterapkan.`
     }
@@ -933,6 +943,9 @@ async function handleBootstrapNow() {
     bootstrapSuccess.value = false
     if (result.code === 'BOOTSTRAP_PREFLIGHT_FAILED') {
       bootstrapMessage.value = 'Sebagian data lokal belum kompatibel untuk sinkronisasi.'
+    } else if (result.code === 'BOOTSTRAP_SERVER_NOT_EMPTY') {
+      bootstrapMessage.value =
+        'Bisnis Cloud sudah memiliki data. Gunakan Muat Data Cloud untuk perangkat baru, bukan Siapkan Data Lokal.'
     } else {
       bootstrapMessage.value =
         result.error?.message ?? result.message ?? 'Gagal menyiapkan data lokal.'
@@ -1462,8 +1475,8 @@ onMounted(async () => {
         id="cloud-bootstrap-section"
         class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
       >
-        <div class="flex items-center justify-between">
-          <div>
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div class="min-w-0">
             <p class="text-sm font-semibold text-ink-primary">Siapkan Data Lokal ke Cloud</p>
             <p class="text-xs text-ink-secondary">
               Upload data offline/FREE yang sudah ada ke server cloud untuk pertama kali
@@ -1472,12 +1485,16 @@ onMounted(async () => {
           <BaseButton
             id="bootstrap-btn"
             variant="primary"
-            size="sm"
+            size="md"
             :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
             :loading="syncBootstrapStore.loading"
+            aria-label="Siapkan Data Lokal ke Cloud"
+            title="Siapkan Data Lokal ke Cloud"
+            class="w-full shrink-0 sm:w-auto"
             @click="handleBootstrapNow"
           >
-            Siapkan Data Lokal ke Cloud
+            <AppIcon name="upload" class="h-4 w-4" />
+            <span class="ml-1.5">Siapkan</span>
           </BaseButton>
         </div>
 
@@ -1531,8 +1548,8 @@ onMounted(async () => {
         id="cloud-health-section"
         class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
       >
-        <div class="flex items-center justify-between">
-          <div>
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div class="min-w-0">
             <p class="text-sm font-semibold text-ink-primary">Status Sinkronisasi</p>
             <p class="text-xs text-ink-secondary">
               Periksa kondisi outbox, konflik, envelope, dan binding lokal
@@ -1541,12 +1558,16 @@ onMounted(async () => {
           <BaseButton
             id="sync-health-btn"
             variant="secondary"
-            size="sm"
+            size="md"
             :disabled="isAnySyncOperationBusy"
             :loading="syncHealthStore.loading"
+            aria-label="Periksa Status Sync"
+            title="Periksa Status Sync"
+            class="w-full shrink-0 sm:w-auto"
             @click="handleCheckSyncHealth"
           >
-            Periksa Status Sync
+            <AppIcon name="shield" class="h-4 w-4" />
+            <span class="ml-1.5">Periksa</span>
           </BaseButton>
         </div>
 
@@ -1767,8 +1788,8 @@ onMounted(async () => {
         id="cloud-sync-all-section"
         class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
       >
-        <div class="flex items-center justify-between">
-          <div>
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div class="min-w-0">
             <p class="text-sm font-semibold text-ink-primary">Sinkronkan Semua</p>
             <p class="text-xs text-ink-secondary">
               Kirim data lokal tertunda lalu ambil pembaruan dari cloud
@@ -1777,16 +1798,20 @@ onMounted(async () => {
           <BaseButton
             id="sync-all-btn"
             variant="primary"
-            size="sm"
+            size="md"
             :disabled="
               syncBootstrapStore.hasContextMismatch ||
               isAnySyncOperationBusy ||
               isContextGuardMutationBlocked
             "
             :loading="syncOrchestratorStore.loading"
+            aria-label="Sinkronkan Semua"
+            title="Sinkronkan Semua"
+            class="w-full shrink-0 sm:w-auto"
             @click="handleSyncAll"
           >
-            Sinkronkan Semua
+            <AppIcon name="sync" class="h-4 w-4" />
+            <span class="ml-1.5">Sync Semua</span>
           </BaseButton>
         </div>
 
@@ -1806,8 +1831,8 @@ onMounted(async () => {
         id="cloud-sync-section"
         class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
       >
-        <div class="flex items-center justify-between">
-          <div>
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div class="min-w-0">
             <p class="text-sm font-semibold text-ink-primary">Sinkronisasi Cloud</p>
             <p id="sync-pending-label" class="text-xs text-ink-secondary">
               {{ syncPushStore.pendingCount }} data menunggu sinkronisasi
@@ -1816,16 +1841,20 @@ onMounted(async () => {
           <BaseButton
             id="sync-now-btn"
             variant="primary"
-            size="sm"
+            size="md"
             :disabled="
               syncBootstrapStore.hasContextMismatch ||
               isAnySyncOperationBusy ||
               isContextGuardMutationBlocked
             "
             :loading="syncPushStore.loading"
+            aria-label="Sync Sekarang"
+            title="Sync Sekarang"
+            class="w-full shrink-0 sm:w-auto"
             @click="handleSyncNow"
           >
-            Sync Sekarang
+            <AppIcon name="upload" class="h-4 w-4" />
+            <span class="ml-1.5">Kirim</span>
           </BaseButton>
         </div>
 
@@ -1845,8 +1874,8 @@ onMounted(async () => {
         id="cloud-pull-section"
         class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
       >
-        <div class="flex items-center justify-between">
-          <div>
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div class="min-w-0">
             <p class="text-sm font-semibold text-ink-primary">Tarik Data Cloud</p>
             <p class="text-xs text-ink-secondary">
               Ambil perubahan data dari server cloud ke POS lokal
@@ -1855,12 +1884,44 @@ onMounted(async () => {
           <BaseButton
             id="pull-now-btn"
             variant="secondary"
-            size="sm"
-            :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
+            size="md"
+            :disabled="
+              isAnySyncOperationBusy ||
+              isContextGuardMutationBlocked ||
+              syncContextGuardStore.status === 'unbound'
+            "
             :loading="syncPullStore.loading"
+            aria-label="Tarik Data Cloud"
+            title="Tarik Data Cloud"
+            class="w-full shrink-0 sm:w-auto"
             @click="handlePullNow"
           >
-            Tarik Data Cloud
+            <AppIcon name="download" class="h-4 w-4" />
+            <span class="ml-1.5">Tarik</span>
+          </BaseButton>
+        </div>
+
+        <div
+          v-if="canInitializeCloudData"
+          id="cloud-initialization-notice"
+          class="rounded-xl border border-amber-200 bg-amber-50 p-3"
+        >
+          <p class="text-xs text-amber-800">
+            Perangkat ini belum menginisialisasi data Cloud. Muat katalog Cloud ke ruang kerja baru ini.
+          </p>
+          <BaseButton
+            id="cloud-initialize-btn"
+            variant="primary"
+            size="md"
+            :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
+            :loading="syncPullStore.loading"
+            aria-label="Muat Data Cloud"
+            title="Muat Data Cloud"
+            class="mt-3 w-full sm:w-auto"
+            @click="handlePullNow({ initialCloudRead: true })"
+          >
+            <AppIcon name="download" class="h-4 w-4" />
+            <span class="ml-1.5">Muat Data Cloud</span>
           </BaseButton>
         </div>
 
@@ -1999,34 +2060,42 @@ onMounted(async () => {
         id="sync-activity-section"
         class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
       >
-        <div class="flex items-center justify-between">
-          <div>
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div class="min-w-0">
             <p class="text-sm font-semibold text-ink-primary">Riwayat Sinkronisasi</p>
             <p class="text-xs text-ink-secondary">
               Aktivitas dan audit trail sinkronisasi lokal (10 operasi terbaru)
             </p>
           </div>
-          <div class="flex items-center gap-2">
+          <div class="flex w-full flex-wrap gap-2 sm:w-auto sm:flex-nowrap">
             <BaseButton
               id="sync-activity-refresh-btn"
               variant="secondary"
-              size="sm"
+              size="md"
               :disabled="isAnySyncOperationBusy"
               :loading="syncActivityLogStore.loading"
+              aria-label="Muat Ulang Riwayat"
+              title="Muat Ulang Riwayat"
+              class="min-w-0 flex-1 sm:flex-none"
               @click="handleRefreshActivityLog"
             >
-              Muat Ulang Riwayat
+              <AppIcon name="refresh" class="h-4 w-4" />
+              <span class="ml-1.5">Muat Ulang</span>
             </BaseButton>
             <BaseButton
               v-if="syncActivityLogStore.entries.length > 0"
               id="sync-activity-clear-btn"
               variant="danger"
-              size="sm"
+              size="md"
               :disabled="isAnySyncOperationBusy"
               :loading="syncActivityLogStore.loading"
+              aria-label="Hapus Riwayat"
+              title="Hapus Riwayat"
+              class="min-w-0 flex-1 sm:flex-none"
               @click="showClearConfirm = true"
             >
-              Hapus Riwayat
+              <AppIcon name="trash" class="h-4 w-4" />
+              <span class="ml-1.5">Hapus</span>
             </BaseButton>
           </div>
         </div>
