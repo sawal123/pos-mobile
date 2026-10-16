@@ -211,6 +211,8 @@ describe('P1 POS flow', () => {
     expect(transactionStore.lastTransaction.paymentMethod).toBe('cash')
     expect(transactionStore.lastTransaction.invoiceNumber).toMatch(/^INV-/)
     expect(cartStore.items).toHaveLength(0)
-    expect(router.currentRoute.value.fullPath).toBe('/payment/success')
+    // The flow now stays on /payment and shows the success modal.
+    expect(router.currentRoute.value.fullPath).toBe('/payment')
+    expect(wrapper.find('[data-testid="payment-success-modal"]').exists()).toBe(true)
   })
 })

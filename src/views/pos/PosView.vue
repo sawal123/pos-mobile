@@ -1,4 +1,5 @@
 <script setup>
+import { ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 
@@ -7,6 +8,7 @@ import BaseInput from '@/components/base/BaseInput.vue'
 import CartItem from '@/components/pos/CartItem.vue'
 import CartSummary from '@/components/pos/CartSummary.vue'
 import CategoryPill from '@/components/pos/CategoryPill.vue'
+import MobileCartSheet from '@/components/pos/MobileCartSheet.vue'
 import ProductCard from '@/components/pos/ProductCard.vue'
 import { useCartStore } from '@/stores/cartStore'
 import { useProductStore } from '@/stores/productStore'
@@ -21,11 +23,26 @@ const router = useRouter()
 const { filterCategories, filteredProducts, searchQuery, selectedCategory } = storeToRefs(productStore)
 const { items, subtotal, tax, total } = storeToRefs(cartStore)
 
+const showCartSheet = ref(false)
+
+function openCartSheet() {
+  if (!items.value.length) {
+    return
+  }
+
+  showCartSheet.value = true
+}
+
+function closeCartSheet() {
+  showCartSheet.value = false
+}
+
 function handleCheckout() {
   if (!items.value.length) {
     return
   }
 
+  showCartSheet.value = false
   router.push('/payment')
 }
 </script>
@@ -117,14 +134,26 @@ function handleCheckout() {
       v-if="items.length"
       class="fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+5.25rem)] z-20 px-4 py-2 md:hidden"
     >
-      <div class="flex items-center justify-between gap-3 rounded-2xl bg-ink-primary px-4 py-3 text-white shadow-2xl backdrop-blur-md">
-        <div class="min-w-0">
-          <p class="text-xs text-white/70">{{ items.length }} item &bull; Total</p>
-          <p class="text-base font-bold text-white">{{ formatCurrency(total) }}</p>
-        </div>
+      <div class="flex items-center gap-2 rounded-2xl bg-ink-primary px-3 py-2.5 text-white shadow-2xl backdrop-blur-md">
+        <!-- Tapping the summary opens the cart bottom sheet for editing. -->
+        <button
+          type="button"
+          class="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-xl px-1.5 py-1 text-left transition active:scale-[0.99]"
+          data-testid="mobile-cart-summary"
+          aria-label="Buka keranjang untuk ubah jumlah"
+          @click="openCartSheet"
+        >
+          <span class="min-w-0">
+            <span class="block text-xs text-white/70">{{ items.length }} item &bull; Total</span>
+            <span class="block truncate text-base font-bold text-white">{{ formatCurrency(total) }}</span>
+          </span>
+          <span class="shrink-0 text-[11px] font-semibold text-white/70">Ubah</span>
+        </button>
+
         <button
           type="button"
           class="flex shrink-0 items-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white shadow-md transition active:scale-95"
+          data-testid="mobile-checkout-btn"
           @click="handleCheckout"
         >
           <span>Bayar</span>
@@ -132,5 +161,11 @@ function handleCheckout() {
         </button>
       </div>
     </div>
+
+    <MobileCartSheet
+      :open="showCartSheet"
+      @close="closeCartSheet"
+      @checkout="handleCheckout"
+    />
   </div>
 </template>

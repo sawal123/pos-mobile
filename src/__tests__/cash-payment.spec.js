@@ -136,7 +136,9 @@ describe('P3 cash payment', () => {
     expect(transactionStore.items).toHaveLength(initialCount + 1)
     expect(transactionStore.lastTransaction.cashReceived).toBe(total)
     expect(transactionStore.lastTransaction.changeAmount).toBe(0)
-    expect(router.currentRoute.value.fullPath).toBe('/payment/success')
+    // Success is shown as an in-flow modal, not an automatic redirect.
+    expect(router.currentRoute.value.fullPath).toBe('/payment')
+    expect(wrapper.find('[data-testid="payment-success-modal"]').exists()).toBe(true)
   })
 
   it('cashReceived > total valid', async () => {
@@ -150,7 +152,8 @@ describe('P3 cash payment', () => {
 
     expect(transactionStore.items).toHaveLength(initialCount + 1)
     expect(transactionStore.lastTransaction.cashReceived).toBe(50000)
-    expect(router.currentRoute.value.fullPath).toBe('/payment/success')
+    expect(router.currentRoute.value.fullPath).toBe('/payment')
+    expect(wrapper.find('[data-testid="payment-success-modal"]').exists()).toBe(true)
   })
 
   it('kembalian dihitung dengan benar', async () => {
@@ -307,7 +310,8 @@ describe('P3 cash payment', () => {
     await flushPromises()
 
     expect(transactionStore.items).toHaveLength(initialCount + 1)
-    expect(router.currentRoute.value.fullPath).toBe('/payment/success')
+    expect(router.currentRoute.value.fullPath).toBe('/payment')
+    expect(wrapper.find('[data-testid="payment-success-modal"]').exists()).toBe(true)
   })
 
   it('transaksi non-cash tidak membawa cashReceived/changeAmount dari cash', async () => {

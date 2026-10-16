@@ -7,6 +7,7 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import CustomerAutocomplete from '@/components/customer/CustomerAutocomplete.vue'
 import PaymentMethodCard from '@/components/payment/PaymentMethodCard.vue'
+import PaymentSuccessModal from '@/components/payment/PaymentSuccessModal.vue'
 import CartSummary from '@/components/pos/CartSummary.vue'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCartStore } from '@/stores/cartStore'
@@ -34,6 +35,15 @@ const isProcessing = ref(false)
 const hasAttemptedSubmit = ref(false)
 const paymentError = ref('')
 const isCashModalOpen = ref(false)
+
+/**
+ * Summary of the transaction that was actually committed. Set only after
+ * `commitRetailSale()` resolves, so the success modal can never appear for a
+ * payment that did not complete.
+ */
+const successSummary = ref(null)
+
+const isPaymentCompleted = computed(() => successSummary.value !== null)
 
 const paymentMethods = [
   { id: 'cash', label: 'Cash', description: 'Pembayaran tunai di kasir' },
@@ -218,6 +228,10 @@ function clearCashInput() {
 async function completePayment() {
   paymentError.value = ''
 
+  if (isPaymentCompleted.value) {
+    return
+  }
+
   if (!cartStore.items.length) {
     await router.push('/pos')
     return
@@ -229,51 +243,100 @@ async function completePayment() {
     return
   }
 
+  // Loading guard: a second tap while a payment is in flight is ignored, so a
+  // double-submit can never create two transactions.
   if (isProcessing.value) {
     return
   }
 
   isProcessing.value = true
 
-  const stockValidation = productStore.canFulfillSale(cartStore.items)
+  try {
+    const stockValidation = productStore.canFulfillSale(cartStore.items)
 
-  if (!stockValidation.success) {
-    paymentError.value = stockValidation.error
-    isProcessing.value = false
+    if (!stockValidation.success) {
+      paymentError.value = stockValidation.error
+      return
+    }
+
+    const transaction = await localOperations.commitRetailSale({
+      checkout: {
+        items: cartStore.items,
+        subtotal: cartStore.subtotal,
+        tax: cartStore.tax,
+        taxEnabled: taxStore.enabled,
+        taxRate: taxStore.enabled ? taxStore.rate : 0,
+        total: cartStore.total,
+        businessSnapshot: {
+          name: businessStore.name,
+          outlet: businessStore.outlet,
+          phone: businessStore.phone,
+        },
+        customer: selectedCustomer.value?.name ?? 'Walk-in Customer',
+        customerId: selectedCustomer.value?.id ?? null,
+        customerSnapshot: selectedCustomer.value ? { ...selectedCustomer.value } : null,
+        paymentMethod: selectedMethod.value,
+        cashReceived: isCashMethod.value ? parsedCashReceived.value : null,
+        changeAmount: isCashMethod.value ? changeAmount.value : null,
+        orderStatus: businessStore.normalizedType === 'Laundry' ? 'Masuk' : null,
+      },
+    })
+
+    // Success is recorded ONLY after the durable commit resolved. The summary is
+    // taken from the committed transaction — never from the cart being cleared.
+    successSummary.value = {
+      id: transaction.id,
+      invoiceNumber: transaction.invoiceNumber,
+      total: transaction.total,
+      paymentMethod: transaction.paymentMethod,
+      cashReceived: transaction.cashReceived ?? null,
+      changeAmount: transaction.changeAmount ?? null,
+      paidAt: transaction.paidAt ?? null,
+      createdAt: transaction.createdAt ?? null,
+      itemCount: transaction.itemCount ?? 0,
+    }
+
+    cartStore.clearCart()
+    isCashModalOpen.value = false
+  } catch (error) {
+    // Failure before/while committing: surface the error, keep the cart, and
+    // never show the success modal or navigate. There is no automatic retry — a
+    // partially written operation is left to the existing journal/recovery flow.
+    paymentError.value =
+      (error instanceof Error && error.message) ||
+      'Pembayaran gagal disimpan. Periksa kembali lalu coba lagi.'
+  } finally {
+    // Stay "processing" after success so the submit button can never fire again.
+    if (!isPaymentCompleted.value) {
+      isProcessing.value = false
+    }
+  }
+}
+
+// All post-success navigation replaces the payment entry, so the Android back
+// button can never return to /payment and re-run the checkout.
+function goToNewTransaction() {
+  router.replace('/pos')
+}
+
+function goToReceipt() {
+  const id = successSummary.value?.id
+
+  if (!id) {
+    goToNewTransaction()
     return
   }
 
-  await localOperations.commitRetailSale({
-    checkout: {
-      items: cartStore.items,
-      subtotal: cartStore.subtotal,
-      tax: cartStore.tax,
-      taxEnabled: taxStore.enabled,
-      taxRate: taxStore.enabled ? taxStore.rate : 0,
-      total: cartStore.total,
-      businessSnapshot: {
-        name: businessStore.name,
-        outlet: businessStore.outlet,
-        phone: businessStore.phone,
-      },
-      customer: selectedCustomer.value?.name ?? 'Walk-in Customer',
-      customerId: selectedCustomer.value?.id ?? null,
-      customerSnapshot: selectedCustomer.value ? { ...selectedCustomer.value } : null,
-      paymentMethod: selectedMethod.value,
-      cashReceived: isCashMethod.value ? parsedCashReceived.value : null,
-      changeAmount: isCashMethod.value ? changeAmount.value : null,
-      orderStatus: businessStore.normalizedType === 'Laundry' ? 'Masuk' : null,
-    },
-  })
+  router.replace(`/transactions/${id}/receipt`)
+}
 
-  cartStore.clearCart()
-  isCashModalOpen.value = false
-  await router.push('/payment/success')
+function goToTransactions() {
+  router.replace('/transactions')
 }
 </script>
 
 <template>
-  <div class="grid gap-5 lg:grid-cols-[1fr_380px] xl:grid-cols-[1fr_400px] items-start">
+  <div class="grid gap-5 pb-32 lg:grid-cols-[1fr_380px] xl:grid-cols-[1fr_400px] items-start md:pb-0">
     <!-- Left Column: Payment Details -->
     <section class="min-w-0 space-y-4">
       <div>
@@ -415,14 +478,59 @@ async function completePayment() {
         />
       </BaseCard>
 
-      <BaseButton block size="lg" :disabled="isSubmitDisabled" @click="completePayment">
-        Selesaikan Pembayaran
-      </BaseButton>
+      <!-- Desktop checkout CTA (mobile uses the sticky CTA below). The wrapper
+           controls visibility: a `hidden` class on BaseButton itself would lose
+           to its own `inline-flex` utility. -->
+      <div class="hidden md:block">
+        <BaseButton
+          block
+          size="lg"
+          :disabled="isSubmitDisabled"
+          data-testid="desktop-submit-payment"
+          @click="completePayment"
+        >
+          Selesaikan Pembayaran
+        </BaseButton>
+      </div>
 
       <p v-if="paymentError" class="rounded-2xl bg-danger/10 p-3 text-xs font-semibold text-danger">
         {{ paymentError }}
       </p>
     </section>
+
+    <!-- Mobile sticky checkout CTA: always reachable and clear of the bottom nav
+         and the Android safe area, with the amount due next to the button. -->
+    <div
+      v-if="cartStore.items.length && !isPaymentCompleted"
+      class="fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+5.25rem)] z-30 px-4 md:hidden"
+      data-testid="mobile-payment-cta"
+    >
+      <div class="flex items-center gap-3 rounded-2xl border border-zinc-200 bg-white/95 px-4 py-3 shadow-2xl backdrop-blur-md">
+        <div class="min-w-0 flex-1">
+          <p class="text-[11px] font-medium uppercase tracking-wide text-ink-secondary">Total Pembayaran</p>
+          <p class="truncate text-base font-bold text-ink-primary" data-testid="mobile-payment-total">
+            {{ formatCurrency(cartStore.total) }}
+          </p>
+        </div>
+        <BaseButton
+          size="lg"
+          :disabled="isSubmitDisabled"
+          data-testid="mobile-submit-payment"
+          @click="completePayment"
+        >
+          Selesaikan Pembayaran
+        </BaseButton>
+      </div>
+    </div>
+
+    <!-- Payment success modal (shown only after a committed transaction) -->
+    <PaymentSuccessModal
+      :open="isPaymentCompleted"
+      :summary="successSummary"
+      @new-transaction="goToNewTransaction"
+      @view-receipt="goToReceipt"
+      @view-transactions="goToTransactions"
+    />
 
     <!-- Modal Keypad Uang Diterima (Khusus CASH) -->
     <div
