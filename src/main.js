@@ -205,6 +205,9 @@ export async function bootstrapApp({
       const devId = await resolveDeviceIdentifier(adapter)
       const cloudStore = useCloudSessionStore(pinia)
       cloudStore.deviceIdentifier = devId
+      // The scheduler lets a business switch flush pending writes and rehydrate
+      // the reactive stores after a safe workspace swap.
+      cloudStore.setPersistenceAdapter(adapter, persistence)
       // Restore token + non-sensitive cloud context (no push/pull)
       await cloudStore.hydrateFromStorage(adapter)
 

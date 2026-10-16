@@ -18,9 +18,16 @@ import {
   resolveSyncPushPolicy,
 } from '@/services/sync/syncCapabilityPolicy'
 import {
-  buildBusinessMismatchMessage,
+  buildBusinessSwitchConfirmation,
   inspectLocalBusinessWorkspace,
 } from '@/services/cloud/businessContextActivation'
+import {
+  LOCAL_WORKSPACE_ID,
+  cloudWorkspaceId,
+  loadWorkspaceRegistry,
+  resolveActiveWorkspaceId,
+  switchOperationalWorkspace,
+} from '@/services/cloud/businessWorkspaceService'
 
 /**
  * Normalise a raw `/api/mobile/context` business entry. `role` and
@@ -179,6 +186,20 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
    */
   const operationalContext = ref(null)
 
+  /**
+   * Confirmation snapshot for a required Cloud→local workspace switch. Set when
+   * the selected Cloud business differs from the active local workspace. It is a
+   * confirmation prompt, never an error: the Cloud link itself is already valid.
+   * Shape: { localBusiness, cloudBusiness, localWorkspaceId, targetWorkspaceId, confirmation }.
+   */
+  const pendingSwitch = ref(null)
+
+  /** Workspace id currently materialised in the singleton local database. */
+  const activeWorkspaceId = ref(LOCAL_WORKSPACE_ID)
+
+  /** Registry of known local/Cloud workspaces (display + isolation bookkeeping). */
+  const workspaceRegistry = ref(null)
+
   /** True while a cloud operation is in flight */
   const loading = ref(false)
 
@@ -187,6 +208,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
 
   /** Reference to persistence adapter */
   let _adapter = null
+
+  /** Reference to the persistence service (flush/rehydrate) */
+  let _scheduler = null
 
   // ── Computed ───────────────────────────────────────────────────────────────
 
@@ -206,16 +230,40 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   )
 
   /**
+   * The active local workspace matches the selected Cloud business/outlet.
+   *
+   * A Cloud link may be perfectly valid (server entitlement intact) while the
+   * local workspace still belongs to a different business. In that case tenant
+   * data access and Cloud Sync must stay blocked until the user confirms a
+   * safe workspace switch — but login and business selection are never refused.
+   */
+  const isWorkspaceAligned = computed(() => {
+    const business = selectedBusiness.value
+    if (!business) return false
+
+    const context = operationalContext.value
+    // No operational context yet, or a legacy unknown-type link: preserve the
+    // pre-existing tolerant behaviour so legacy sessions keep working.
+    if (!context || context.status === 'unknown_type') return true
+    if (context.status !== 'active') return false
+    if (context.cloudBusinessId !== business.id) return false
+    if (context.outletId && selectedOutlet.value && context.outletId !== selectedOutlet.value.id) {
+      return false
+    }
+    return true
+  })
+
+  /** True when a safe workspace switch awaits explicit user confirmation. */
+  const requiresBusinessSwitch = computed(() => pendingSwitch.value !== null)
+
+  /**
    * Server entitlement is kept separately in `cloudAccess`; this flag is the
-   * only one that sync callers may use. Legacy contexts without a gate record
-   * remain supported until their next verified refresh.
+   * only one that tenant-data access and sync callers may use. It requires both
+   * the server entitlement AND an aligned operational workspace, so a laundry
+   * local workspace can never receive Café transactions (or vice versa).
    */
   const isOperationalCloudAccess = computed(
-    () =>
-      cloudAccess.value === true &&
-      (operationalContext.value === null ||
-        operationalContext.value.status === 'active' ||
-        operationalContext.value.status === 'unknown_type'),
+    () => cloudAccess.value === true && isWorkspaceAligned.value,
   )
 
   /**
@@ -256,8 +304,11 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  function setPersistenceAdapter(adapter) {
+  function setPersistenceAdapter(adapter, scheduler = null) {
     _adapter = adapter
+    if (scheduler) {
+      _scheduler = scheduler
+    }
   }
 
   function toSelectedBusiness(business) {
@@ -291,20 +342,81 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     })
   }
 
-  function blockOperationalContext({ localBusiness, cloudBusiness, code = 'LOCAL_BUSINESS_CONTEXT_MISMATCH' }) {
-    operationalContext.value = {
-      status: 'mismatch',
-      cloudBusinessId: cloudBusiness?.id ?? null,
-      code,
-      detectedAt: new Date().toISOString(),
+  async function loadWorkspaceState() {
+    if (!_adapter) return
+    try {
+      activeWorkspaceId.value = await resolveActiveWorkspaceId(_adapter)
+      workspaceRegistry.value = await loadWorkspaceRegistry(_adapter)
+    } catch {
+      // non-blocking — the default local workspace id remains
     }
-    // Keep the server entitlement snapshot on selectedBusiness, but do not
-    // expose this unsafe link as active Cloud sync access.
-    cloudAccess.value = false
-    error.value = buildBusinessMismatchMessage({ localBusiness, cloudBusiness })
-    return { ok: false, code, message: error.value }
   }
 
+  /**
+   * Read-only decision about whether activating the selected Cloud business (and
+   * optional outlet) requires switching the active local workspace, and whether
+   * that switch needs explicit confirmation from the user.
+   */
+  async function evaluateWorkspaceSwitch({ business, outlet = null }) {
+    const targetWorkspaceId = outlet ? cloudWorkspaceId(business.id, outlet.id) : null
+    const currentActiveId = activeWorkspaceId.value ?? (await resolveActiveWorkspaceId(_adapter))
+    const workspace = await inspectWorkspace()
+    const occupied = workspace.ok ? workspace.occupied === true : true
+
+    const sameWorkspace = Boolean(targetWorkspaceId) && currentActiveId === targetWorkspaceId
+    const freshLocal = currentActiveId === LOCAL_WORKSPACE_ID && !occupied
+
+    return {
+      targetWorkspaceId,
+      currentActiveId,
+      workspace,
+      localBusiness: workspace.localBusiness,
+      occupied,
+      sameWorkspace,
+      freshLocal,
+      // The target must be materialised whenever it is not already the active
+      // workspace, except on a fresh, empty device (nothing to namespace yet).
+      needsMaterialise: !sameWorkspace && !freshLocal,
+      // Confirmation is only required when there is real data to preserve.
+      requiresConfirmation: !sameWorkspace && !freshLocal && occupied,
+    }
+  }
+
+  function setPendingSwitch({
+    localBusiness,
+    cloudBusiness,
+    targetWorkspaceId = null,
+    currentActiveId = null,
+  }) {
+    pendingSwitch.value = {
+      localBusiness,
+      cloudBusiness: {
+        id: cloudBusiness?.id ?? null,
+        name: cloudBusiness?.name ?? '',
+        business_type: cloudBusiness?.business_type ?? null,
+      },
+      localWorkspaceId: currentActiveId,
+      targetWorkspaceId,
+      confirmation: buildBusinessSwitchConfirmation({ localBusiness, cloudBusiness }),
+      detectedAt: new Date().toISOString(),
+    }
+    operationalContext.value = {
+      status: 'switch_pending',
+      cloudBusinessId: cloudBusiness?.id ?? null,
+      code: 'BUSINESS_SWITCH_CONFIRMATION_REQUIRED',
+      localBusiness,
+      detectedAt: new Date().toISOString(),
+    }
+  }
+
+  /**
+   * Re-evaluate the operational workspace for the selected Cloud business.
+   *
+   * NEVER rejects a valid Cloud link. A differing local workspace only produces
+   * a `switch_pending` confirmation state, so tenant data access and Cloud Sync
+   * stay blocked until the user confirms a safe switch — while the account stays
+   * fully logged in and the business stays linked.
+   */
   async function validateOperationalContext() {
     const business = selectedBusiness.value
     if (!business) return { ok: true, code: 'NO_CLOUD_BUSINESS_SELECTED' }
@@ -330,29 +442,44 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     if (context?.status === 'active' && context.cloudBusinessId === business.id) {
       const workspace = await inspectWorkspace()
       const local = workspace.localBusiness
-      if (
-        !workspace.ok ||
-        local.name !== business.name ||
-        normalizeCloudBusinessType(local.type) !== business.business_type ||
-        (context.outletName && local.outlet !== context.outletName)
-      ) {
-        return blockOperationalContext({ localBusiness: local, cloudBusiness: business })
+      const sameIdentity =
+        workspace.ok &&
+        local.name === business.name &&
+        normalizeCloudBusinessType(local.type) === business.business_type &&
+        (!context.outletName || local.outlet === context.outletName)
+
+      if (sameIdentity) {
+        return { ok: true, code: 'OPERATIONAL_CONTEXT_ACTIVE' }
       }
-      return { ok: true, code: 'OPERATIONAL_CONTEXT_ACTIVE' }
+
+      // The materialised workspace drifted from the linked business: require a
+      // switch instead of silently treating the link as active.
+      setPendingSwitch({
+        localBusiness: local,
+        cloudBusiness: business,
+        currentActiveId: activeWorkspaceId.value,
+      })
+      return { ok: true, code: 'BUSINESS_SWITCH_CONFIRMATION_REQUIRED' }
     }
 
-    const workspace = await inspectWorkspace()
-    if (!workspace.ok || !workspace.safeToActivate) {
-      return blockOperationalContext({ localBusiness: workspace.localBusiness, cloudBusiness: business })
+    const switchInfo = await evaluateWorkspaceSwitch({ business })
+
+    if (switchInfo.requiresConfirmation) {
+      setPendingSwitch({
+        localBusiness: switchInfo.localBusiness,
+        cloudBusiness: business,
+        currentActiveId: switchInfo.currentActiveId,
+      })
+      return { ok: true, code: 'BUSINESS_SWITCH_CONFIRMATION_REQUIRED' }
     }
 
     operationalContext.value = {
-      status: 'pending_activation',
+      status: 'pending_outlet',
       cloudBusinessId: business.id,
-      code: 'ACTIVATION_PENDING',
+      code: 'OUTLET_SELECTION_REQUIRED',
       detectedAt: new Date().toISOString(),
     }
-    return { ok: true, code: 'ACTIVATION_PENDING' }
+    return { ok: true, code: 'OUTLET_SELECTION_REQUIRED' }
   }
 
   /**
@@ -437,8 +564,11 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     hasResolvedBusinessContext.value = false
     hasResolvedZeroBusiness.value = false
     operationalContext.value = null
+    pendingSwitch.value = null
     error.value = null
-    // deviceIdentifier is intentionally NOT cleared on logout
+    // deviceIdentifier, activeWorkspaceId and workspaceRegistry are device-local
+    // and intentionally NOT cleared on logout — the active local workspace keeps
+    // its own isolated identity and data.
   }
 
   /**
@@ -590,6 +720,11 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
    * Select a business from the context list.
    * Business MUST be sourced from businesses state – no arbitrary IDs.
    * Persists cloud context on change.
+   *
+   * Selecting a Cloud business is ALWAYS allowed for a valid membership, even
+   * when the local workspace currently holds a different business. A differing
+   * workspace only marks a pending switch that the user must confirm; it never
+   * rejects the Cloud login or the business link.
    */
   async function selectBusiness(businessId) {
     const match = businesses.value.find((b) => b.id === businessId)
@@ -599,26 +734,16 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       return { ok: false }
     }
 
-    // Selecting a different Cloud business while this singleton POS already
-    // protects local operational data is never a safe relink.
-    const isAlreadyActive =
-      operationalContext.value?.status === 'active' &&
-      operationalContext.value?.cloudBusinessId === match.id
-    if (!isAlreadyActive && match.business_type && _adapter) {
-      const workspace = await inspectWorkspace()
-      if (!workspace.ok || !workspace.safeToActivate) {
-        return blockOperationalContext({ localBusiness: workspace.localBusiness, cloudBusiness: match })
-      }
-    }
-
     selectedBusiness.value = toSelectedBusiness(match)
     // PREM-M03: an explicit, user-confirmed link to this Cloud business.
     linkedAt.value = new Date().toISOString()
     sessionInvalid.value = false
+    // Server entitlement only. A local workspace mismatch must never flip this.
     cloudAccess.value = match.cloud_access === true
     selectedOutlet.value = null
     registeredDeviceId.value = null
     hasResolvedZeroBusiness.value = false
+    pendingSwitch.value = null
 
     // INT-02: role and capabilities follow the business that is really selected.
     applyBusinessContext(match)
@@ -634,18 +759,37 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       if (match.business_type_status !== 'legacy') {
         cloudAccess.value = false
       }
-    } else if (!isAlreadyActive) {
-      operationalContext.value = {
-        status: 'pending_outlet',
-        cloudBusinessId: match.id,
-        code: 'OUTLET_SELECTION_REQUIRED',
-        detectedAt: new Date().toISOString(),
+    } else {
+      await loadWorkspaceState()
+      const switchInfo = await evaluateWorkspaceSwitch({ business: match })
+
+      if (switchInfo.requiresConfirmation) {
+        // A confirmation is required, but the Cloud link stays valid and no
+        // error is surfaced: the UI shows the "Beralih Bisnis?" modal instead.
+        setPendingSwitch({
+          localBusiness: switchInfo.localBusiness,
+          cloudBusiness: match,
+          currentActiveId: switchInfo.currentActiveId,
+        })
+        error.value = null
+      } else {
+        operationalContext.value = {
+          status: 'pending_outlet',
+          cloudBusinessId: match.id,
+          code: 'OUTLET_SELECTION_REQUIRED',
+          detectedAt: new Date().toISOString(),
+        }
       }
     }
 
     await persistCloudContext()
 
-    return { ok: true, business: match }
+    return {
+      ok: true,
+      business: match,
+      switchRequired: pendingSwitch.value !== null,
+      pendingSwitch: pendingSwitch.value,
+    }
   }
 
   /**
@@ -688,11 +832,46 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   }
 
   /**
-   * Commits a Cloud business into the singleton local workspace only after an
-   * explicit user confirmation, a verified type, and an empty local workspace.
-   * No product/template/data migration is performed here.
+   * Record the target workspace as the active one without a full switch. Used
+   * on a fresh device where the materialised data already belongs to the target.
    */
-  async function activateOperationalContext() {
+  async function adoptActiveWorkspace({ targetWorkspaceId, targetMeta }) {
+    if (!_adapter || typeof _adapter.saveWorkspaceRegistry !== 'function') return
+    try {
+      const registry = await loadWorkspaceRegistry(_adapter)
+      registry.activeWorkspaceId = targetWorkspaceId
+      registry.workspaces = { ...registry.workspaces }
+      registry.workspaces[targetWorkspaceId] = {
+        id: targetWorkspaceId,
+        kind: targetWorkspaceId.startsWith('cloud:') ? 'cloud' : 'local',
+        name: targetMeta?.name ?? '',
+        type: targetMeta?.type ?? '',
+        businessId: targetMeta?.businessId ?? null,
+        outletId: targetMeta?.outletId ?? null,
+        updatedAt: new Date().toISOString(),
+      }
+      await _adapter.saveWorkspaceRegistry(registry)
+      activeWorkspaceId.value = targetWorkspaceId
+      workspaceRegistry.value = registry
+    } catch {
+      // non-blocking: the workspace still works, only the registry entry is late
+    }
+  }
+
+  /**
+   * Commit the selected Cloud business/outlet into the active operational
+   * workspace.
+   *
+   * When the active local workspace belongs to a different business this first
+   * requires an explicit confirmation and then performs a *safe* workspace
+   * switch: the previous workspace is persisted and verified, the target
+   * workspace is materialised, and tenant data + sync metadata stay fully
+   * isolated. Nothing is deleted.
+   *
+   * @param {object} [options]
+   * @param {boolean} [options.confirmed=false] The user confirmed the switch.
+   */
+  async function activateOperationalContext({ confirmed = false } = {}) {
     const business = selectedBusiness.value
     const outlet = selectedOutlet.value
 
@@ -710,14 +889,59 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
 
     const alreadyActive =
       operationalContext.value?.status === 'active' &&
-      operationalContext.value?.cloudBusinessId === business.id
+      operationalContext.value?.cloudBusinessId === business.id &&
+      operationalContext.value?.outletId === outlet.id
     if (alreadyActive) {
       return { ok: true, code: 'OPERATIONAL_CONTEXT_ACTIVE' }
     }
 
-    const workspace = await inspectWorkspace()
-    if (!workspace.ok || !workspace.safeToActivate) {
-      return blockOperationalContext({ localBusiness: workspace.localBusiness, cloudBusiness: business })
+    await loadWorkspaceState()
+    const switchInfo = await evaluateWorkspaceSwitch({ business, outlet })
+
+    if (switchInfo.requiresConfirmation && confirmed !== true) {
+      setPendingSwitch({
+        localBusiness: switchInfo.localBusiness,
+        cloudBusiness: business,
+        targetWorkspaceId: switchInfo.targetWorkspaceId,
+        currentActiveId: switchInfo.currentActiveId,
+      })
+      error.value = null
+      return {
+        ok: false,
+        code: 'BUSINESS_SWITCH_CONFIRMATION_REQUIRED',
+        pendingSwitch: pendingSwitch.value,
+      }
+    }
+
+    const targetMeta = {
+      name: business.name,
+      type: business.business_type,
+      businessId: business.id,
+      outletId: outlet.id,
+    }
+
+    if (switchInfo.needsMaterialise) {
+      const switchResult = await switchOperationalWorkspace({
+        adapter: _adapter,
+        scheduler: _scheduler,
+        targetWorkspaceId: switchInfo.targetWorkspaceId,
+        targetMeta,
+      })
+
+      if (!switchResult.ok) {
+        error.value = switchResult.message
+        return switchResult
+      }
+
+      activeWorkspaceId.value = switchResult.activeWorkspaceId
+      workspaceRegistry.value = switchResult.registry
+    } else if (switchInfo.targetWorkspaceId && !switchInfo.sameWorkspace) {
+      // Fresh device: the materialised data already belongs to the target, so we
+      // only adopt the workspace identity (no snapshot needed).
+      await adoptActiveWorkspace({
+        targetWorkspaceId: switchInfo.targetWorkspaceId,
+        targetMeta,
+      })
     }
 
     let businessStore
@@ -757,9 +981,14 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         outletName: outlet.name,
         activatedAt: new Date().toISOString(),
       }
+      pendingSwitch.value = null
       await persistCloudContext(_adapter, { throwOnError: true })
       error.value = null
-      return { ok: true, code: 'OPERATIONAL_CONTEXT_ACTIVATED' }
+      return {
+        ok: true,
+        code: 'OPERATIONAL_CONTEXT_ACTIVATED',
+        activeWorkspaceId: activeWorkspaceId.value,
+      }
     } catch {
       operationalContext.value = previousOperationalContext
       businessStore.setBusiness(previousBusiness)
@@ -771,6 +1000,33 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       error.value = 'Aktivasi bisnis Cloud gagal. Data lokal tidak diubah.'
       return { ok: false, code: 'OPERATIONAL_CONTEXT_ACTIVATION_FAILED', message: error.value }
     }
+  }
+
+  /**
+   * User confirmed the "Beralih Bisnis?" modal: perform the safe switch.
+   */
+  async function confirmBusinessSwitch() {
+    return activateOperationalContext({ confirmed: true })
+  }
+
+  /**
+   * User cancelled the switch: keep the previous local workspace untouched and
+   * keep the Cloud account linked (just not aligned to the active workspace).
+   */
+  function cancelBusinessSwitch() {
+    const pending = pendingSwitch.value
+    pendingSwitch.value = null
+    if (operationalContext.value?.status === 'switch_pending') {
+      operationalContext.value = {
+        status: 'switch_declined',
+        cloudBusinessId: operationalContext.value.cloudBusinessId,
+        code: 'BUSINESS_SWITCH_DECLINED',
+        localBusiness: pending?.localBusiness ?? null,
+        detectedAt: new Date().toISOString(),
+      }
+    }
+    error.value = null
+    return { ok: true, code: 'BUSINESS_SWITCH_DECLINED' }
   }
 
   /**
@@ -899,6 +1155,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       } catch {
         // non-blocking
       }
+
+      // Restore the active workspace identity + registry (device-local).
+      await loadWorkspaceState()
     }
 
     // Check if there's a valid token in secure storage
@@ -943,7 +1202,11 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
             // A cached Cloud selection alone is not proof that it owns the
             // singleton local database. Re-evaluate before any sync can run.
             const operationalResult = await validateOperationalContext()
-            if (!operationalResult.ok) {
+            if (
+              selectedBusiness.value &&
+              operationalResult.code !== 'OPERATIONAL_CONTEXT_ACTIVE' &&
+              operationalResult.code !== 'NO_CLOUD_BUSINESS_SELECTED'
+            ) {
               await persistCloudContext()
             }
           }
@@ -1330,6 +1593,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     hasResolvedBusinessContext,
     hasResolvedZeroBusiness,
     operationalContext,
+    pendingSwitch,
+    activeWorkspaceId,
+    workspaceRegistry,
     loading,
     error,
     // computed
@@ -1339,6 +1605,8 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     isDeviceRegistered,
     isOperationalContextActive,
     isOperationalCloudAccess,
+    isWorkspaceAligned,
+    requiresBusinessSwitch,
     pushPolicy,
     canPerformCloudPush,
     isCashierContext,
@@ -1350,6 +1618,8 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     selectBusiness,
     selectOutlet,
     activateOperationalContext,
+    confirmBusinessSwitch,
+    cancelBusinessSwitch,
     doRegisterDevice,
     logout,
     hydrateFromStorage,
