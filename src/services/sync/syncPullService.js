@@ -10,6 +10,7 @@ import { useCustomerStore } from '@/stores/customerStore'
 import { useExpenseStore } from '@/stores/expenseStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import { useTransactionStore } from '@/stores/transactionStore'
+import { inspectCloudFirstWorkspace } from '@/services/cloud/businessContextActivation'
 
 const KNOWN_ENTITIES = new Set([
   'categories',
@@ -168,22 +169,69 @@ export function createSyncPullService({
     }
 
     // ── 2. P12 Business Binding check ─────────────────────────────────────────
+    let existingPullBinding = null
+    if (adapter && typeof adapter.loadSyncPullBinding === 'function') {
+      existingPullBinding = await adapter.loadSyncPullBinding()
+    }
+
     if (adapter && typeof adapter.loadSyncPushBinding === 'function') {
       const pushBinding = await adapter.loadSyncPushBinding()
-      if (!pushBinding) {
-        return {
-          ok: false,
-          code: 'SYNC_BUSINESS_NOT_BOUND',
-          message: 'Business has not been bound to sync outbox yet. Push sync must be initialized first.',
-          error: {
-            code: 'SYNC_BUSINESS_NOT_BOUND',
+      if (!pushBinding && !existingPullBinding && options.initialCloudRead === true) {
+        const workspace = await inspectCloudFirstWorkspace({ adapter })
+        if (!workspace.ok || !workspace.safeToInitialize) {
+          return {
+            ok: false,
+            code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
             message:
-              'Business has not been bound to sync outbox yet. Push sync must be initialized first.',
-          },
+              'Cloud data can only be loaded into a new empty workspace. Existing local data remains unchanged.',
+            error: {
+              code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+              reasons: workspace.reasons ?? [],
+            },
+          }
+        }
+
+        try {
+          await adapter.saveSyncPullBinding({
+            businessId: selectedBusiness.id,
+            outletId: selectedOutlet.id,
+            deviceIdentifier,
+            registeredDeviceId,
+            boundAt: new Date().toISOString(),
+            mode: 'cloud_first_read',
+          })
+          existingPullBinding = await adapter.loadSyncPullBinding()
+        } catch (err) {
+          return {
+            ok: false,
+            code: 'SYNC_PULL_BINDING_PERSIST_FAILED',
+            message: 'Failed to persist the Cloud data binding before download.',
+            error: {
+              code: 'SYNC_PULL_BINDING_PERSIST_FAILED',
+              message: err instanceof Error ? err.message : String(err),
+            },
+          }
         }
       }
 
-      if (Number(pushBinding.businessId) !== Number(selectedBusiness.id)) {
+      if (!pushBinding) {
+        if (existingPullBinding) {
+          // A durable Cloud-first read binding is sufficient for future pulls.
+          // Push remains independently controlled by the push binding/policy.
+        } else {
+        return {
+          ok: false,
+          code: 'SYNC_BUSINESS_NOT_BOUND',
+          message: 'This device has not initialized Cloud data. Choose Muat Data Cloud to begin.',
+          error: {
+            code: 'SYNC_BUSINESS_NOT_BOUND',
+            message: 'This device has not initialized Cloud data. Choose Muat Data Cloud to begin.',
+          },
+        }
+        }
+      }
+
+      if (pushBinding && Number(pushBinding.businessId) !== Number(selectedBusiness.id)) {
         return {
           ok: false,
           code: 'SYNC_BUSINESS_BINDING_MISMATCH',
@@ -197,7 +245,6 @@ export function createSyncPullService({
     }
 
     // ── 3. P13 Pull Context Binding check ─────────────────────────────────────
-    let existingPullBinding = null
     if (adapter && typeof adapter.loadSyncPullBinding === 'function') {
       existingPullBinding = await adapter.loadSyncPullBinding()
       if (existingPullBinding) {
