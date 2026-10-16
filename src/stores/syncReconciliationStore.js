@@ -56,7 +56,7 @@ export const useSyncReconciliationStore = defineStore('syncReconciliation', () =
         user: cloudStore.user,
         selectedBusiness: cloudStore.selectedBusiness,
         selectedOutlet: cloudStore.selectedOutlet,
-        cloudAccess: cloudStore.cloudAccess,
+        cloudAccess: cloudStore.isOperationalCloudAccess,
         deviceIdentifier: cloudStore.deviceIdentifier,
         registeredDeviceId: cloudStore.registeredDeviceId,
       }

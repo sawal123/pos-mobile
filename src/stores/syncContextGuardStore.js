@@ -51,7 +51,7 @@ export const useSyncContextGuardStore = defineStore('syncContextGuard', () => {
       const cloudStore = useCloudSessionStore()
       return {
         user: cloudStore.user ? { id: cloudStore.user.id } : null,
-        cloudAccess: cloudStore.cloudAccess === true,
+        cloudAccess: cloudStore.isOperationalCloudAccess === true,
         selectedBusiness: cloudStore.selectedBusiness
           ? { id: cloudStore.selectedBusiness.id }
           : null,

@@ -616,6 +616,67 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
       const db = await ensureConnection()
       await db.run("DELETE FROM app_meta WHERE key = 'cloud_context'", [])
     },
+    // Workspace isolation: registry of local/Cloud workspaces + their durable
+    // snapshots. Stored in the generic app_meta key/value table so no schema
+    // migration is required and existing databases keep working untouched.
+    async loadWorkspaceRegistry() {
+      return readMetaValue('workspace_registry_v1', null)
+    },
+    async saveWorkspaceRegistry(registry) {
+      await writeMetaValue('workspace_registry_v1', registry)
+    },
+    async loadWorkspaceSnapshot(workspaceId) {
+      return readMetaValue(`workspace_snapshot_v1:${String(workspaceId)}`, null)
+    },
+    async saveWorkspaceSnapshot(workspaceId, snapshot) {
+      await writeMetaValue(`workspace_snapshot_v1:${String(workspaceId)}`, snapshot)
+    },
+    async deleteWorkspaceSnapshot(workspaceId) {
+      const db = await ensureConnection()
+      await db.run('DELETE FROM app_meta WHERE key = ?', [
+        `workspace_snapshot_v1:${String(workspaceId)}`,
+      ])
+    },
+    // Durable workspace-switch journal. Written before the singleton tables are
+    // touched and cleared only after the registry commit, so an interrupted
+    // switch is always detectable and recoverable on the next start.
+    async loadWorkspaceSwitchJournal() {
+      return readMetaValue('workspace_switch_journal_v1', null)
+    },
+    async saveWorkspaceSwitchJournal(journal) {
+      await writeMetaValue('workspace_switch_journal_v1', journal)
+    },
+    async clearWorkspaceSwitchJournal() {
+      const db = await ensureConnection()
+      await db.run("DELETE FROM app_meta WHERE key = 'workspace_switch_journal_v1'", [])
+    },
+    async replaceSyncQueueItems(entries) {
+      await withTransaction(async (db) => {
+        await db.run('DELETE FROM sync_queue', [], false)
+
+        for (const entry of Array.isArray(entries) ? entries : []) {
+          await db.run(
+            `INSERT INTO sync_queue
+               (id, entity_type, entity_id, operation, payload, created_at, updated_at, attempt_count, last_error)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              entry.id,
+              entry.entityType,
+              entry.entityId,
+              entry.operation,
+              entry.payload === null || entry.payload === undefined
+                ? null
+                : JSON.stringify(entry.payload),
+              entry.createdAt,
+              entry.updatedAt,
+              Number(entry.attemptCount ?? 0),
+              entry.lastError ?? null,
+            ],
+            false,
+          )
+        }
+      })
+    },
     // PREM-M04: non-sensitive pending subscription payment (recovery only).
     async loadPendingSubscriptionPayment() {
       return readMetaValue('premium_pending_payment', null)

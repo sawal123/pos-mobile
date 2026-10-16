@@ -66,12 +66,19 @@ const reconciliationSuccess = ref(false)
 const autoSyncMessage = ref('')
 const autoSyncSuccess = ref(false)
 const showClearConfirm = ref(false)
+const showSwitchModal = ref(false)
+const switchErrorMessage = ref('')
+
+// Confirmation copy for a required workspace switch (never an error banner).
+const switchPrompt = computed(() =>
+  showSwitchModal.value ? (cloudStore.pendingSwitch?.confirmation ?? null) : null,
+)
 
 // ── Derived ─────────────────────────────────────────────────────────────────
 const canSync = computed(
   () =>
     cloudStore.isAuthenticated &&
-    cloudStore.hasCloudAccess &&
+    cloudStore.isOperationalCloudAccess &&
     Boolean(cloudStore.selectedBusiness) &&
     Boolean(cloudStore.selectedOutlet) &&
     cloudStore.isDeviceRegistered,
@@ -1140,6 +1147,49 @@ async function handleSelectOutlet(outletId) {
 }
 
 /**
+ * Shared post-activation handling. A required business switch is a
+ * confirmation, not a failure: it opens the "Beralih Bisnis?" modal instead of
+ * sending the user back as if something went wrong.
+ *
+ * @param {object} activation Result of `cloudStore.activateOperationalContext()`.
+ * @returns {boolean} true when the flow may continue to the "done" step.
+ */
+function applyActivationResult(activation) {
+  if (activation.ok) {
+    step.value = 'done'
+    return true
+  }
+  if (activation.code === 'BUSINESS_SWITCH_CONFIRMATION_REQUIRED') {
+    switchErrorMessage.value = ''
+    showSwitchModal.value = true
+    return false
+  }
+  step.value = 'select-outlet'
+  return false
+}
+
+async function handleConfirmBusinessSwitch() {
+  if (isAnySyncOperationBusy.value) return
+  switchErrorMessage.value = ''
+  const result = await cloudStore.confirmBusinessSwitch({
+    autoSyncRunning: syncAutoSyncStore.running === true,
+  })
+  if (result.ok) {
+    showSwitchModal.value = false
+    step.value = 'done'
+    return
+  }
+  switchErrorMessage.value = result.message ?? result.error?.message ?? 'Perpindahan bisnis gagal.'
+}
+
+function handleCancelBusinessSwitch() {
+  cloudStore.cancelBusinessSwitch()
+  showSwitchModal.value = false
+  switchErrorMessage.value = ''
+  step.value = 'done'
+}
+
+/**
  * INT-02: an `owner`/`member` registers the device through the existing flow.
  * A `cashier` must never call `POST /api/mobile/devices` — the owner
  * pre-registers the device in the Dashboard, so the cashier only *resolves*
@@ -1159,11 +1209,28 @@ async function finishDeviceStep(outletResult = null) {
       return
     }
 
+    if (cloudStore.selectedBusiness?.business_type_status !== 'legacy') {
+      const activation = await cloudStore.activateOperationalContext()
+      if (!applyActivationResult(activation)) return
+      return
+    }
+
     step.value = 'done'
     return
   }
 
-  await cloudStore.doRegisterDevice({ platform: getPlatform() })
+  const registration = await cloudStore.doRegisterDevice({ platform: getPlatform() })
+  if (!registration.ok) {
+    step.value = 'select-outlet'
+    return
+  }
+
+  if (cloudStore.selectedBusiness?.business_type_status !== 'legacy') {
+    const activation = await cloudStore.activateOperationalContext()
+    if (!applyActivationResult(activation)) return
+    return
+  }
+
   step.value = 'done'
 }
 
@@ -1374,6 +1441,19 @@ onMounted(async () => {
             </p>
           </div>
         </div>
+      </div>
+
+      <!-- Workspace recovery required -->
+      <div
+        v-if="cloudStore.workspaceRecoveryRequired"
+        id="workspace-recovery-warning"
+        class="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900 shadow-sm"
+      >
+        <p class="font-semibold">Pemulihan ruang kerja diperlukan.</p>
+        <p class="mt-1 text-xs text-rose-700">
+          Perpindahan bisnis sebelumnya terhenti dan pemulihan otomatis tidak selesai. Sinkronisasi dan
+          akses data tenant diblokir sampai data ruang kerja dipastikan konsisten.
+        </p>
       </div>
 
       <!-- P14: Initial Bootstrap Section (Free to Cloud) -->
@@ -2283,6 +2363,44 @@ onMounted(async () => {
             @click="showDisconnectConfirm = false"
           >
             Batal
+          </BaseButton>
+        </div>
+      </div>
+    </BaseModal>
+
+    <!-- BUSINESS SWITCH CONFIRMATION -->
+    <BaseModal
+      :open="showSwitchModal && Boolean(switchPrompt)"
+      :title="switchPrompt?.title ?? 'Beralih Bisnis?'"
+      @close="handleCancelBusinessSwitch"
+    >
+      <div class="space-y-4" data-testid="business-switch-modal">
+        <p id="business-switch-message" class="whitespace-pre-line text-sm text-ink-secondary">
+          {{ switchPrompt?.message }}
+        </p>
+        <p
+          v-if="switchErrorMessage"
+          class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger"
+          role="status"
+        >
+          {{ switchErrorMessage }}
+        </p>
+        <div class="flex flex-wrap gap-2">
+          <BaseButton
+            id="business-switch-confirm"
+            :loading="cloudStore.loading"
+            :disabled="isAnySyncOperationBusy"
+            @click="handleConfirmBusinessSwitch"
+          >
+            {{ switchPrompt?.confirmLabel ?? 'Simpan & Beralih' }}
+          </BaseButton>
+          <BaseButton
+            id="business-switch-cancel"
+            variant="ghost"
+            :disabled="isAnySyncOperationBusy"
+            @click="handleCancelBusinessSwitch"
+          >
+            {{ switchPrompt?.cancelLabel ?? 'Batal' }}
           </BaseButton>
         </div>
       </div>

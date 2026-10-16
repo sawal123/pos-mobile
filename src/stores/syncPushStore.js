@@ -98,7 +98,7 @@ export const useSyncPushStore = defineStore('syncPush', () => {
         user: cloudStore.user,
         selectedBusiness: cloudStore.selectedBusiness,
         selectedOutlet: cloudStore.selectedOutlet,
-        cloudAccess: cloudStore.cloudAccess,
+        cloudAccess: cloudStore.isOperationalCloudAccess,
         deviceIdentifier: cloudStore.deviceIdentifier,
         registeredDeviceId: cloudStore.registeredDeviceId,
         role: cloudStore.role,

@@ -17,6 +17,7 @@ import {
   createRestoreSafetyEngine,
   setActiveRestoreSafetyEngine,
 } from './services/restoreSafetyEngine'
+import { recoverPendingWorkspaceSwitch } from './services/cloud/businessWorkspaceService'
 import { useCloudSessionStore } from './stores/cloudSessionStore'
 import { usePremiumCheckoutStore } from './stores/premiumCheckoutStore'
 import { usePremiumCloudBackupStore } from './stores/premiumCloudBackupStore'
@@ -71,6 +72,43 @@ export function renderNativePersistenceFatal({
   return section
 }
 
+export function renderWorkspaceRecoveryFatal({
+  documentRef = typeof document !== 'undefined' ? document : null,
+  windowRef = typeof window !== 'undefined' ? window : null,
+  mountTarget = '#app',
+} = {}) {
+  if (!documentRef) {
+    return null
+  }
+
+  const container =
+    typeof mountTarget === 'string' ? documentRef.querySelector(mountTarget) : mountTarget
+
+  if (!container) {
+    return null
+  }
+
+  container.replaceChildren()
+  const section = documentRef.createElement('section')
+  const title = documentRef.createElement('h1')
+  const message = documentRef.createElement('p')
+  const warning = documentRef.createElement('p')
+  const retry = documentRef.createElement('button')
+
+  title.textContent = 'Pemulihan Ruang Kerja Diperlukan'
+  message.textContent =
+    'Perpindahan bisnis sebelumnya terhenti dan pemulihan otomatis tidak selesai. Untuk melindungi data transaksi, aplikasi dihentikan.'
+  warning.textContent =
+    'Jangan membuat transaksi baru atau beralih bisnis sebelum data diperiksa.'
+  retry.type = 'button'
+  retry.textContent = 'Coba Lagi'
+  retry.addEventListener('click', () => windowRef?.location?.reload())
+
+  section.append(title, message, warning, retry)
+  container.append(section)
+  return section
+}
+
 export function renderRestoreRecoveryFatal({
   documentRef = typeof document !== 'undefined' ? document : null,
   windowRef = typeof window !== 'undefined' ? window : null,
@@ -116,6 +154,7 @@ export async function bootstrapApp({
   runtimeSignalFactory = createRuntimeSignalService,
   fatalPersistenceRenderer = renderNativePersistenceFatal,
   fatalRestoreRecoveryRenderer = renderRestoreRecoveryFatal,
+  fatalWorkspaceRecoveryRenderer = renderWorkspaceRecoveryFatal,
   documentRef = typeof document !== 'undefined' ? document : null,
   windowRef = typeof window !== 'undefined' ? window : null,
   rootComponent = App,
@@ -180,6 +219,37 @@ export async function bootstrapApp({
         fatalRestoreRecovery: recoveryResult,
       }
     }
+
+    // A workspace switch interrupted by a forced close is healed here, before
+    // any store is hydrated or any sync can run, so the registry and the
+    // materialised data always agree.
+    let workspaceRecoveryResult
+    try {
+      workspaceRecoveryResult = await recoverPendingWorkspaceSwitch({
+        adapter: persistence.adapter,
+        scheduler: persistence,
+      })
+    } catch (error) {
+      workspaceRecoveryResult = {
+        ok: false,
+        code: 'WORKSPACE_RECOVERY_REQUIRED',
+        message: error instanceof Error ? error.message : String(error ?? ''),
+      }
+    }
+
+    if (!workspaceRecoveryResult.ok) {
+      fatalWorkspaceRecoveryRenderer({ documentRef, windowRef, mountTarget })
+      return {
+        app,
+        pinia,
+        router: null,
+        persistence,
+        syncFoundation: null,
+        runtimeSignalService: null,
+        restoreSafetyEngine,
+        workspaceRecovery: workspaceRecoveryResult,
+      }
+    }
   }
 
   const syncFoundation = persistence
@@ -205,6 +275,9 @@ export async function bootstrapApp({
       const devId = await resolveDeviceIdentifier(adapter)
       const cloudStore = useCloudSessionStore(pinia)
       cloudStore.deviceIdentifier = devId
+      // The scheduler lets a business switch flush pending writes and rehydrate
+      // the reactive stores after a safe workspace swap.
+      cloudStore.setPersistenceAdapter(adapter, persistence)
       // Restore token + non-sensitive cloud context (no push/pull)
       await cloudStore.hydrateFromStorage(adapter)
 
