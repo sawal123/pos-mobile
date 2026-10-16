@@ -495,7 +495,10 @@ describe('12. unknown Cloud business_type is handled without a silent Café fall
     expect(activation.code).toBe('CLOUD_BUSINESS_TYPE_UNKNOWN')
     // No silent Café identity was applied to the local workspace.
     expect(businessStore.name).toBe('Temuan')
+    // Tenant operations stay blocked, but the server entitlement is preserved.
     expect(cloudStore.isOperationalCloudAccess).toBe(false)
+    expect(cloudStore.cloudAccess).toBe(true)
+    expect(cloudStore.hasCloudAccess).toBe(true)
   })
 
   it('classifies an unreadable workspace as unavailable (fail closed)', async () => {

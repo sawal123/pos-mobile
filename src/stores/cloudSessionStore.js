@@ -25,7 +25,6 @@ import {
   LOCAL_WORKSPACE_ID,
   WORKSPACE_SWITCH_RESULT,
   cloudWorkspaceId,
-  emptyWorkspaceRegistry,
   readWorkspaceRegistryStrict,
   recoverPendingWorkspaceSwitch,
   resolveActiveWorkspaceId,
@@ -246,21 +245,32 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   )
 
   /**
-   * The active local workspace matches the selected Cloud business/outlet.
+   * The active local workspace matches the selected Cloud business/outlet, so
+   * tenant data may be served for it.
    *
    * A Cloud link may be perfectly valid (server entitlement intact) while the
-   * local workspace still belongs to a different business. In that case tenant
-   * data access and Cloud Sync must stay blocked until the user confirms a
-   * safe workspace switch — but login and business selection are never refused.
+   * local workspace still belongs to a different business, or while the backend
+   * reports an explicit unknown business type. In both cases tenant data access
+   * and Cloud Sync must stay blocked — but the server entitlement itself is
+   * never altered (see `cloudAccess`).
    */
   const isWorkspaceAligned = computed(() => {
     const business = selectedBusiness.value
     if (!business) return false
 
     const context = operationalContext.value
-    // No operational context yet, or a legacy unknown-type link: preserve the
-    // pre-existing tolerant behaviour so legacy sessions keep working.
-    if (!context || context.status === 'unknown_type') return true
+    // No operational context yet: preserve the pre-existing tolerant behaviour
+    // so a legacy session that never wrote one keeps working.
+    if (!context) return true
+
+    if (context.status === 'unknown_type') {
+      // Only an EXPLICITLY unknown business type fails closed for tenant
+      // operations. A legacy backend that simply omitted `business_type` (or a
+      // restored cache predating it) keeps the pre-existing tolerant behaviour.
+      // Either way the server entitlement is never touched.
+      return business.business_type_status !== 'unknown'
+    }
+
     if (context.status !== 'active') return false
     if (context.cloudBusinessId !== business.id) return false
     if (context.outletId && selectedOutlet.value && context.outletId !== selectedOutlet.value.id) {
@@ -397,9 +407,11 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       occupied,
       sameWorkspace,
       freshLocal,
-      // The target must be materialised whenever it is not already the active
-      // workspace, except on a fresh, empty device (nothing to namespace yet).
-      needsMaterialise: !sameWorkspace && !freshLocal,
+      // The target must always be materialised through the durable switching
+      // protocol whenever it is not already the active workspace — including on
+      // a fresh device. This keeps the registry write inside the journaled,
+      // rollback-capable path instead of a separate non-atomic "adopt" write.
+      needsMaterialise: !sameWorkspace,
       // Confirmation is only required when there is real data to preserve.
       requiresConfirmation: !sameWorkspace && !freshLocal && occupied,
     }
@@ -452,12 +464,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         detectedAt: new Date().toISOString(),
       }
       error.value = 'Jenis bisnis dari Cloud tidak tersedia atau tidak dikenali. Aktivasi kasir diblokir.'
-      // A Cloud link and its server entitlement may still be displayed, but it
-      // cannot become an operational cashier context. Modern API responses
-      // explicitly carrying null/unknown type also fail closed for sync.
-      if (business.business_type_status !== 'legacy') {
-        cloudAccess.value = false
-      }
+      // An unknown business type blocks cashier activation and tenant/sync
+      // operations (via `isWorkspaceAligned`), but it must NEVER alter the
+      // server-provided entitlement: `cloudAccess` keeps reflecting the backend.
       return { ok: true, code: 'CLOUD_BUSINESS_TYPE_UNKNOWN', message: error.value }
     }
 
@@ -779,9 +788,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         detectedAt: new Date().toISOString(),
       }
       error.value = 'Jenis bisnis dari Cloud tidak tersedia atau tidak dikenali. Aktivasi kasir diblokir.'
-      if (match.business_type_status !== 'legacy') {
-        cloudAccess.value = false
-      }
+      // Entitlement comes from the backend context only: an unknown business
+      // type blocks activation + tenant operations, but never rewrites
+      // `cloudAccess`.
     } else {
       await loadWorkspaceState()
       const switchInfo = await evaluateWorkspaceSwitch({ business: match })
@@ -852,35 +861,6 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     await persistCloudContext()
 
     return { ok: true, outlet: match, device: deviceResolution }
-  }
-
-  /**
-   * Record the target workspace as the active one without a full switch. Used
-   * on a fresh device where the materialised data already belongs to the target.
-   */
-  async function adoptActiveWorkspace({ targetWorkspaceId, targetMeta }) {
-    if (!_adapter || typeof _adapter.saveWorkspaceRegistry !== 'function') return
-    try {
-      const strict = await readWorkspaceRegistryStrict(_adapter)
-      const registry = strict.ok ? strict.registry : emptyWorkspaceRegistry()
-      registry.activeWorkspaceId = targetWorkspaceId
-      registry.workspaces = { ...registry.workspaces }
-      registry.workspaces[targetWorkspaceId] = {
-        id: targetWorkspaceId,
-        kind: targetWorkspaceId.startsWith('cloud:') ? 'cloud' : 'local',
-        name: targetMeta?.name ?? '',
-        type: targetMeta?.type ?? '',
-        businessId: targetMeta?.businessId ?? null,
-        outletId: targetMeta?.outletId ?? null,
-        updatedAt: new Date().toISOString(),
-      }
-      await _adapter.saveWorkspaceRegistry(registry)
-      activeWorkspaceId.value = targetWorkspaceId
-      workspaceRegistry.value = registry
-      workspaceRegistryUnreadable.value = false
-    } catch {
-      // non-blocking: the workspace still works, only the registry entry is late
-    }
   }
 
   /**
@@ -1043,10 +1023,10 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       }
     }
 
-    // Fresh device: the materialised data already belongs to the target, so we
-    // only adopt the workspace identity (nothing to snapshot).
-    await adoptActiveWorkspace({ targetWorkspaceId: switchInfo.targetWorkspaceId, targetMeta })
-
+    // The active workspace already IS the target (its data is materialised):
+    // only the identity and Cloud context need to be recorded. No registry write
+    // happens here — `activeWorkspaceId` already points at the target, so the
+    // durable switching protocol above is intentionally not needed.
     try {
       await _adapter.saveBusiness(nextBusiness)
       businessStore.setBusiness(nextBusiness)

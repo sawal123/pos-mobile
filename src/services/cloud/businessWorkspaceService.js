@@ -51,6 +51,9 @@ export const WORKSPACE_SWITCH_RESULT = Object.freeze({
   SNAPSHOT_WRITE_FAILED: 'WORKSPACE_SNAPSHOT_WRITE_FAILED',
   SNAPSHOT_VERIFY_FAILED: 'WORKSPACE_SNAPSHOT_VERIFY_FAILED',
   SNAPSHOT_READ_FAILED: 'WORKSPACE_SNAPSHOT_READ_FAILED',
+  TARGET_SNAPSHOT_MISSING: 'WORKSPACE_TARGET_SNAPSHOT_MISSING',
+  TARGET_SNAPSHOT_INVALID: 'WORKSPACE_TARGET_SNAPSHOT_INVALID',
+  JOURNAL_READ_FAILED: 'WORKSPACE_JOURNAL_READ_FAILED',
   JOURNAL_WRITE_FAILED: 'WORKSPACE_JOURNAL_WRITE_FAILED',
   APPLY_FAILED: 'WORKSPACE_SWITCH_APPLY_FAILED',
   REGISTRY_WRITE_FAILED: 'WORKSPACE_REGISTRY_WRITE_FAILED',
@@ -237,6 +240,43 @@ export function buildEmptyWorkspaceSnapshot() {
       autoSettings: null,
     },
   }
+}
+
+/**
+ * Structural validation of a stored workspace snapshot. A snapshot that fails
+ * this check is treated as corrupt and must never be materialised.
+ *
+ * @param {unknown} snapshot
+ * @returns {boolean}
+ */
+export function isValidWorkspaceSnapshot(snapshot) {
+  if (snapshot === null || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+    return false
+  }
+  if (snapshot.version !== 1) {
+    return false
+  }
+  if (
+    snapshot.business === null ||
+    typeof snapshot.business !== 'object' ||
+    Array.isArray(snapshot.business)
+  ) {
+    return false
+  }
+
+  for (const key of ['products', 'categories', 'customers', 'expenses', 'transactions', 'syncQueue']) {
+    const value = snapshot[key]
+    if (value !== undefined && value !== null && !Array.isArray(value)) {
+      return false
+    }
+  }
+
+  const sync = snapshot.sync
+  if (sync !== undefined && sync !== null && (typeof sync !== 'object' || Array.isArray(sync))) {
+    return false
+  }
+
+  return true
 }
 
 /**
@@ -505,11 +545,18 @@ export async function switchOperationalWorkspace({
     }
   }
 
+  // A journal that cannot be read is NOT the same as "no journal": failing to
+  // read it must abort the switch, never fall through to a fresh switch.
   let pendingJournal
   try {
     pendingJournal = await adapter.loadWorkspaceSwitchJournal()
   } catch {
-    pendingJournal = null
+    return {
+      ok: false,
+      code: WORKSPACE_SWITCH_RESULT.JOURNAL_READ_FAILED,
+      message:
+        'Jurnal perpindahan ruang kerja tidak dapat dibaca. Perpindahan dibatalkan dan data lama tidak diubah.',
+    }
   }
   if (pendingJournal && !isFinalPhase(pendingJournal.phase)) {
     return {
@@ -612,16 +659,44 @@ export async function switchOperationalWorkspace({
     }
   }
 
-  let targetSnapshot
+  // Resolve the target snapshot. Only a genuinely NEW workspace may receive an
+  // empty snapshot; a registered workspace whose snapshot is missing or corrupt
+  // must fail closed instead of silently presenting empty data.
+  let rawTargetSnapshot
   try {
-    targetSnapshot =
-      (await adapter.loadWorkspaceSnapshot(targetWorkspaceId)) ?? buildEmptyWorkspaceSnapshot()
+    rawTargetSnapshot = await adapter.loadWorkspaceSnapshot(targetWorkspaceId)
   } catch {
     return {
       ok: false,
       code: WORKSPACE_SWITCH_RESULT.SNAPSHOT_READ_FAILED,
       message: 'Gagal membaca ruang kerja tujuan. Perpindahan dibatalkan dan data lama tidak diubah.',
     }
+  }
+
+  const targetRegistered = Boolean(
+    registry.workspaces && Object.prototype.hasOwnProperty.call(registry.workspaces, targetWorkspaceId),
+  )
+
+  let targetSnapshot
+  if (rawTargetSnapshot === null || rawTargetSnapshot === undefined) {
+    if (targetRegistered) {
+      return {
+        ok: false,
+        code: WORKSPACE_SWITCH_RESULT.TARGET_SNAPSHOT_MISSING,
+        message:
+          'Data ruang kerja tujuan tidak ditemukan. Perpindahan dibatalkan dan data lama tidak diubah.',
+      }
+    }
+    targetSnapshot = buildEmptyWorkspaceSnapshot()
+  } else if (!isValidWorkspaceSnapshot(rawTargetSnapshot)) {
+    return {
+      ok: false,
+      code: WORKSPACE_SWITCH_RESULT.TARGET_SNAPSHOT_INVALID,
+      message:
+        'Data ruang kerja tujuan rusak atau tidak valid. Perpindahan dibatalkan dan data lama tidak diubah.',
+    }
+  } else {
+    targetSnapshot = rawTargetSnapshot
   }
 
   const journal = {
