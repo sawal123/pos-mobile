@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 
+import { normalizeCloudBusinessType } from '@/data/businessTemplates'
+import { useBusinessStore } from '@/stores/businessStore'
 import {
   cloudLogin,
   fetchMobileContext,
@@ -15,6 +17,10 @@ import {
   normalizeRole,
   resolveSyncPushPolicy,
 } from '@/services/sync/syncCapabilityPolicy'
+import {
+  buildBusinessMismatchMessage,
+  inspectLocalBusinessWorkspace,
+} from '@/services/cloud/businessContextActivation'
 
 /**
  * Normalise a raw `/api/mobile/context` business entry. `role` and
@@ -25,9 +31,17 @@ import {
  * @returns {object}
  */
 function mapBusinessEntry(b) {
+  const businessType = normalizeCloudBusinessType(b.business_type)
+  const hasBusinessType = Object.prototype.hasOwnProperty.call(b, 'business_type')
+
   return {
     id: b.id,
     name: b.name,
+    // Canonical UI/business-store type. Unknown values stay null and are never
+    // silently converted to Cafe.
+    business_type: businessType,
+    business_type_raw: typeof b.business_type === 'string' ? b.business_type : null,
+    business_type_status: businessType ? 'valid' : (hasBusinessType ? 'unknown' : 'legacy'),
     role: normalizeRole(b.role ?? b.role_name ?? null),
     sync_capabilities: b.sync_capabilities ?? null,
     cloud_access: b.cloud_access,
@@ -99,7 +113,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   const user = ref(null)
 
   /** Selected business from /api/mobile/context */
-  const selectedBusiness = ref(null) // { id, name }
+  const selectedBusiness = ref(null) // { id, name, business_type }
 
   /** Selected outlet */
   const selectedOutlet = ref(null) // { id, name }
@@ -158,6 +172,13 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   /** Tracks whether the account has confirmed zero business from /api/mobile/context (persisted across restart) */
   const hasResolvedZeroBusiness = ref(false)
 
+  /**
+   * Durable link between this singleton local workspace and a Cloud business.
+   * It prevents a legacy Cloud selection from being mistaken for a safe local
+   * business activation after a restart.
+   */
+  const operationalContext = ref(null)
+
   /** True while a cloud operation is in flight */
   const loading = ref(false)
 
@@ -177,6 +198,25 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   const hasCloudAccess = computed(() => isAuthenticated.value && cloudAccess.value === true)
 
   const isDeviceRegistered = computed(() => registeredDeviceId.value !== null)
+
+  const isOperationalContextActive = computed(
+    () =>
+      operationalContext.value?.status === 'active' &&
+      operationalContext.value?.cloudBusinessId === selectedBusiness.value?.id,
+  )
+
+  /**
+   * Server entitlement is kept separately in `cloudAccess`; this flag is the
+   * only one that sync callers may use. Legacy contexts without a gate record
+   * remain supported until their next verified refresh.
+   */
+  const isOperationalCloudAccess = computed(
+    () =>
+      cloudAccess.value === true &&
+      (operationalContext.value === null ||
+        operationalContext.value.status === 'active' ||
+        operationalContext.value.status === 'unknown_type'),
+  )
 
   /**
    * Effective INT-02 push policy for the selected business.
@@ -218,6 +258,101 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
 
   function setPersistenceAdapter(adapter) {
     _adapter = adapter
+  }
+
+  function toSelectedBusiness(business) {
+    return {
+      id: business.id,
+      name: business.name,
+      business_type: business.business_type ?? null,
+      business_type_raw: business.business_type_raw ?? null,
+      business_type_status: business.business_type_status ?? 'legacy',
+      subscription: business.subscription ?? null,
+    }
+  }
+
+  function readRuntimeBusiness() {
+    try {
+      const businessStore = useBusinessStore()
+      return {
+        name: businessStore.name,
+        type: businessStore.type,
+        outlet: businessStore.outlet,
+      }
+    } catch {
+      return null
+    }
+  }
+
+  async function inspectWorkspace() {
+    return inspectLocalBusinessWorkspace({
+      adapter: _adapter,
+      runtime: { business: readRuntimeBusiness() },
+    })
+  }
+
+  function blockOperationalContext({ localBusiness, cloudBusiness, code = 'LOCAL_BUSINESS_CONTEXT_MISMATCH' }) {
+    operationalContext.value = {
+      status: 'mismatch',
+      cloudBusinessId: cloudBusiness?.id ?? null,
+      code,
+      detectedAt: new Date().toISOString(),
+    }
+    // Keep the server entitlement snapshot on selectedBusiness, but do not
+    // expose this unsafe link as active Cloud sync access.
+    cloudAccess.value = false
+    error.value = buildBusinessMismatchMessage({ localBusiness, cloudBusiness })
+    return { ok: false, code, message: error.value }
+  }
+
+  async function validateOperationalContext() {
+    const business = selectedBusiness.value
+    if (!business) return { ok: true, code: 'NO_CLOUD_BUSINESS_SELECTED' }
+
+    if (!business.business_type) {
+      operationalContext.value = {
+        status: 'unknown_type',
+        cloudBusinessId: business.id,
+        code: 'CLOUD_BUSINESS_TYPE_UNKNOWN',
+        detectedAt: new Date().toISOString(),
+      }
+      error.value = 'Jenis bisnis dari Cloud tidak tersedia atau tidak dikenali. Aktivasi kasir diblokir.'
+      // A Cloud link and its server entitlement may still be displayed, but it
+      // cannot become an operational cashier context. Modern API responses
+      // explicitly carrying null/unknown type also fail closed for sync.
+      if (business.business_type_status !== 'legacy') {
+        cloudAccess.value = false
+      }
+      return { ok: true, code: 'CLOUD_BUSINESS_TYPE_UNKNOWN', message: error.value }
+    }
+
+    const context = operationalContext.value
+    if (context?.status === 'active' && context.cloudBusinessId === business.id) {
+      const workspace = await inspectWorkspace()
+      const local = workspace.localBusiness
+      if (
+        !workspace.ok ||
+        local.name !== business.name ||
+        normalizeCloudBusinessType(local.type) !== business.business_type ||
+        (context.outletName && local.outlet !== context.outletName)
+      ) {
+        return blockOperationalContext({ localBusiness: local, cloudBusiness: business })
+      }
+      return { ok: true, code: 'OPERATIONAL_CONTEXT_ACTIVE' }
+    }
+
+    const workspace = await inspectWorkspace()
+    if (!workspace.ok || !workspace.safeToActivate) {
+      return blockOperationalContext({ localBusiness: workspace.localBusiness, cloudBusiness: business })
+    }
+
+    operationalContext.value = {
+      status: 'pending_activation',
+      cloudBusinessId: business.id,
+      code: 'ACTIVATION_PENDING',
+      detectedAt: new Date().toISOString(),
+    }
+    return { ok: true, code: 'ACTIVATION_PENDING' }
   }
 
   /**
@@ -301,6 +436,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     businesses.value = []
     hasResolvedBusinessContext.value = false
     hasResolvedZeroBusiness.value = false
+    operationalContext.value = null
     error.value = null
     // deviceIdentifier is intentionally NOT cleared on logout
   }
@@ -310,7 +446,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
    * Minimal context: user, selectedBusiness, selectedOutlet, cloudAccess, registeredDeviceId.
    * Token is NEVER included.
    */
-  async function persistCloudContext(adapter = _adapter) {
+  async function persistCloudContext(adapter = _adapter, { throwOnError = false } = {}) {
     const targetAdapter = adapter ?? _adapter
     if (!targetAdapter) return
 
@@ -327,6 +463,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
           ? {
               id: selectedBusiness.value.id,
               name: selectedBusiness.value.name,
+              business_type: selectedBusiness.value.business_type ?? null,
+              business_type_raw: selectedBusiness.value.business_type_raw ?? null,
+              business_type_status: selectedBusiness.value.business_type_status ?? 'unknown',
               // PREM-M01: server-provided subscription snapshot so the Settings
               // screen can show the last known plan across an app restart. It is
               // display data only and never authorizes access.
@@ -350,8 +489,12 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         syncCapabilities: syncCapabilities.value ?? null,
         deviceContext: deviceContext.value ?? null,
         capabilityState: capabilityState.value,
+        operationalContext: operationalContext.value ?? null,
       })
     } catch (err) {
+      if (throwOnError) {
+        throw err
+      }
       console.error('Failed to persist cloud context.', err)
     }
   }
@@ -456,11 +599,19 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       return { ok: false }
     }
 
-    selectedBusiness.value = {
-      id: match.id,
-      name: match.name,
-      subscription: match.subscription ?? null,
+    // Selecting a different Cloud business while this singleton POS already
+    // protects local operational data is never a safe relink.
+    const isAlreadyActive =
+      operationalContext.value?.status === 'active' &&
+      operationalContext.value?.cloudBusinessId === match.id
+    if (!isAlreadyActive && match.business_type && _adapter) {
+      const workspace = await inspectWorkspace()
+      if (!workspace.ok || !workspace.safeToActivate) {
+        return blockOperationalContext({ localBusiness: workspace.localBusiness, cloudBusiness: match })
+      }
     }
+
+    selectedBusiness.value = toSelectedBusiness(match)
     // PREM-M03: an explicit, user-confirmed link to this Cloud business.
     linkedAt.value = new Date().toISOString()
     sessionInvalid.value = false
@@ -471,6 +622,26 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
 
     // INT-02: role and capabilities follow the business that is really selected.
     applyBusinessContext(match)
+
+    if (!match.business_type) {
+      operationalContext.value = {
+        status: 'unknown_type',
+        cloudBusinessId: match.id,
+        code: 'CLOUD_BUSINESS_TYPE_UNKNOWN',
+        detectedAt: new Date().toISOString(),
+      }
+      error.value = 'Jenis bisnis dari Cloud tidak tersedia atau tidak dikenali. Aktivasi kasir diblokir.'
+      if (match.business_type_status !== 'legacy') {
+        cloudAccess.value = false
+      }
+    } else if (!isAlreadyActive) {
+      operationalContext.value = {
+        status: 'pending_outlet',
+        cloudBusinessId: match.id,
+        code: 'OUTLET_SELECTION_REQUIRED',
+        detectedAt: new Date().toISOString(),
+      }
+    }
 
     await persistCloudContext()
 
@@ -514,6 +685,92 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     await persistCloudContext()
 
     return { ok: true, outlet: match, device: deviceResolution }
+  }
+
+  /**
+   * Commits a Cloud business into the singleton local workspace only after an
+   * explicit user confirmation, a verified type, and an empty local workspace.
+   * No product/template/data migration is performed here.
+   */
+  async function activateOperationalContext() {
+    const business = selectedBusiness.value
+    const outlet = selectedOutlet.value
+
+    if (!business || !outlet) {
+      return { ok: false, code: 'ACTIVATION_CONTEXT_INCOMPLETE' }
+    }
+    if (!business.business_type) {
+      error.value = 'Jenis bisnis dari Cloud tidak tersedia atau tidak dikenali. Aktivasi kasir diblokir.'
+      return { ok: false, code: 'CLOUD_BUSINESS_TYPE_UNKNOWN', message: error.value }
+    }
+    if (!_adapter) {
+      error.value = 'Ruang kerja lokal belum siap diperiksa. Aktivasi kasir diblokir.'
+      return { ok: false, code: 'LOCAL_WORKSPACE_UNAVAILABLE', message: error.value }
+    }
+
+    const alreadyActive =
+      operationalContext.value?.status === 'active' &&
+      operationalContext.value?.cloudBusinessId === business.id
+    if (alreadyActive) {
+      return { ok: true, code: 'OPERATIONAL_CONTEXT_ACTIVE' }
+    }
+
+    const workspace = await inspectWorkspace()
+    if (!workspace.ok || !workspace.safeToActivate) {
+      return blockOperationalContext({ localBusiness: workspace.localBusiness, cloudBusiness: business })
+    }
+
+    let businessStore
+    try {
+      businessStore = useBusinessStore()
+    } catch {
+      error.value = 'Konteks bisnis lokal tidak tersedia. Aktivasi kasir diblokir.'
+      return { ok: false, code: 'LOCAL_BUSINESS_STORE_UNAVAILABLE', message: error.value }
+    }
+
+    const previousBusiness = {
+      name: businessStore.name,
+      type: businessStore.type,
+      owner: businessStore.owner,
+      phone: businessStore.phone,
+      outlet: businessStore.outlet,
+      mode: businessStore.mode,
+    }
+    const previousOperationalContext = operationalContext.value
+    const nextBusiness = {
+      ...previousBusiness,
+      name: business.name,
+      type: business.business_type,
+      outlet: outlet.name,
+    }
+
+    try {
+      // Persist the local business first. If either persistence step fails, the
+      // in-memory and durable business snapshot are rolled back below.
+      await _adapter.saveBusiness(nextBusiness)
+      businessStore.setBusiness(nextBusiness)
+      operationalContext.value = {
+        status: 'active',
+        cloudBusinessId: business.id,
+        businessType: business.business_type,
+        outletId: outlet.id,
+        outletName: outlet.name,
+        activatedAt: new Date().toISOString(),
+      }
+      await persistCloudContext(_adapter, { throwOnError: true })
+      error.value = null
+      return { ok: true, code: 'OPERATIONAL_CONTEXT_ACTIVATED' }
+    } catch {
+      operationalContext.value = previousOperationalContext
+      businessStore.setBusiness(previousBusiness)
+      try {
+        await _adapter.saveBusiness(previousBusiness)
+      } catch {
+        // The activation remains failed and Cloud mutation stays unavailable.
+      }
+      error.value = 'Aktivasi bisnis Cloud gagal. Data lokal tidak diubah.'
+      return { ok: false, code: 'OPERATIONAL_CONTEXT_ACTIVATION_FAILED', message: error.value }
+    }
   }
 
   /**
@@ -660,7 +917,12 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
 
           if (ctx) {
             user.value = ctx.user ?? null
-            selectedBusiness.value = ctx.selectedBusiness ?? null
+            selectedBusiness.value = ctx.selectedBusiness
+              ? toSelectedBusiness({
+                  ...ctx.selectedBusiness,
+                  business_type: normalizeCloudBusinessType(ctx.selectedBusiness.business_type),
+                })
+              : null
             selectedOutlet.value = ctx.selectedOutlet ?? null
             cloudAccess.value = ctx.cloudAccess === true
             registeredDeviceId.value = ctx.registeredDeviceId ?? null
@@ -670,12 +932,20 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
             role.value = normalizeRole(ctx.role ?? null)
             syncCapabilities.value = ctx.syncCapabilities ?? null
             deviceContext.value = ctx.deviceContext ?? null
+            operationalContext.value = ctx.operationalContext ?? null
 
             // INT-02: a restored cache is never an authorization. It is either
             // a genuine pre-INT-02 legacy cache, or an unverified snapshot that
             // must be re-confirmed online before any cloud mutation.
             capabilityState.value = role.value || syncCapabilities.value ? 'unverified' : 'legacy'
             capabilitiesVerifiedAt.value = null
+
+            // A cached Cloud selection alone is not proof that it owns the
+            // singleton local database. Re-evaluate before any sync can run.
+            const operationalResult = await validateOperationalContext()
+            if (!operationalResult.ok) {
+              await persistCloudContext()
+            }
           }
         } catch {
           // non-blocking – POS still starts
@@ -897,11 +1167,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       let deviceResolution = null
 
       if (match) {
-        selectedBusiness.value = {
-          id: match.id,
-          name: match.name,
-          subscription: match.subscription ?? null,
-        }
+        selectedBusiness.value = toSelectedBusiness(match)
         cloudAccess.value = match.cloud_access === true
         applyBusinessContext(match)
 
@@ -916,6 +1182,17 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
 
         if (selectedOutlet.value) {
           deviceResolution = resolveDeviceFromContext()
+        }
+
+        const operationalResult = await validateOperationalContext()
+        if (!operationalResult.ok) {
+          await persistCloudContext()
+          return {
+            ok: false,
+            code: operationalResult.code,
+            message: operationalResult.message,
+            businesses: businesses.value,
+          }
         }
       }
 
@@ -1052,6 +1329,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     businesses,
     hasResolvedBusinessContext,
     hasResolvedZeroBusiness,
+    operationalContext,
     loading,
     error,
     // computed
@@ -1059,6 +1337,8 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     isLinked,
     hasCloudAccess,
     isDeviceRegistered,
+    isOperationalContextActive,
+    isOperationalCloudAccess,
     pushPolicy,
     canPerformCloudPush,
     isCashierContext,
@@ -1069,6 +1349,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     login,
     selectBusiness,
     selectOutlet,
+    activateOperationalContext,
     doRegisterDevice,
     logout,
     hydrateFromStorage,

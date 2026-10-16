@@ -68,7 +68,7 @@ export const useSyncOrchestratorStore = defineStore('syncOrchestrator', () => {
         selectedOutlet: cloudStore.selectedOutlet
           ? { ...cloudStore.selectedOutlet }
           : null,
-        cloudAccess: cloudStore.cloudAccess === true,
+        cloudAccess: cloudStore.isOperationalCloudAccess === true,
         deviceIdentifier: cloudStore.deviceIdentifier,
         registeredDeviceId: cloudStore.registeredDeviceId,
       }

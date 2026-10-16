@@ -46,6 +46,25 @@ export function normalizeBusinessType(type) {
   return BUSINESS_TYPE_ALIASES[key] ?? 'Cafe / UMKM'
 }
 
+/**
+ * Strict business-type normalizer for server-provided Cloud context.
+ *
+ * Unlike {@link normalizeBusinessType}, this never assigns a fallback. A
+ * missing or unknown backend value must not silently turn a Cloud workspace
+ * into a Cafe cashier.
+ *
+ * @param {unknown} type
+ * @returns {'Cafe / UMKM'|'Laundry'|'Grosir / Toko Kelontong'|null}
+ */
+export function normalizeCloudBusinessType(type) {
+  if (typeof type !== 'string' || !type.trim()) {
+    return null
+  }
+
+  const key = type.trim().toLowerCase()
+  return BUSINESS_TYPE_ALIASES[key] ?? null
+}
+
 export function getBusinessTemplate(type) {
   const template = BUSINESS_TEMPLATES[normalizeBusinessType(type)]
 

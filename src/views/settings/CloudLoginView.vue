@@ -71,7 +71,7 @@ const showClearConfirm = ref(false)
 const canSync = computed(
   () =>
     cloudStore.isAuthenticated &&
-    cloudStore.hasCloudAccess &&
+    cloudStore.isOperationalCloudAccess &&
     Boolean(cloudStore.selectedBusiness) &&
     Boolean(cloudStore.selectedOutlet) &&
     cloudStore.isDeviceRegistered,
@@ -1159,11 +1159,32 @@ async function finishDeviceStep(outletResult = null) {
       return
     }
 
+    if (cloudStore.selectedBusiness?.business_type_status !== 'legacy') {
+      const activation = await cloudStore.activateOperationalContext()
+      if (!activation.ok) {
+        step.value = 'select-outlet'
+        return
+      }
+    }
+
     step.value = 'done'
     return
   }
 
-  await cloudStore.doRegisterDevice({ platform: getPlatform() })
+  const registration = await cloudStore.doRegisterDevice({ platform: getPlatform() })
+  if (!registration.ok) {
+    step.value = 'select-outlet'
+    return
+  }
+
+  if (cloudStore.selectedBusiness?.business_type_status !== 'legacy') {
+    const activation = await cloudStore.activateOperationalContext()
+    if (!activation.ok) {
+      step.value = 'select-outlet'
+      return
+    }
+  }
+
   step.value = 'done'
 }
 

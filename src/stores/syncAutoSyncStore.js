@@ -69,7 +69,7 @@ export const useSyncAutoSyncStore = defineStore('syncAutoSync', () => {
       selectedOutlet: cloudStore.selectedOutlet
         ? { id: cloudStore.selectedOutlet.id }
         : null,
-      cloudAccess: cloudStore.cloudAccess === true,
+      cloudAccess: cloudStore.isOperationalCloudAccess === true,
       deviceIdentifier: cloudStore.deviceIdentifier || null,
       registeredDeviceId: cloudStore.registeredDeviceId || null,
     }
