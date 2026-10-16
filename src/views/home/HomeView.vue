@@ -30,7 +30,13 @@ async function refreshHome() {
   return syncStatusStore.refresh()
 }
 
-const pullToRefresh = usePullToRefresh({
+const {
+  indicatorOffset,
+  isDragging,
+  isRefreshing,
+  isVisible: isRefreshIndicatorVisible,
+  message: refreshMessage,
+} = usePullToRefresh({
   root: refreshRoot,
   onRefresh: refreshHome,
 })
@@ -107,26 +113,26 @@ const laundryStatusSummaries = computed(() => {
 <template>
   <div ref="refreshRoot" data-testid="home-pull-to-refresh" class="relative space-y-5">
     <div
-      v-show="pullToRefresh.isVisible"
-      class="pointer-events-none absolute inset-x-0 top-2 z-10 flex items-center justify-center gap-2 text-sm font-medium text-ink-secondary"
+      v-show="isRefreshIndicatorVisible"
+      class="pointer-events-none absolute inset-x-0 -top-11 z-10 flex items-center justify-center gap-2 text-sm font-medium text-ink-secondary"
       aria-live="polite"
-      :style="{ transform: `translateY(${pullToRefresh.indicatorOffset}px)` }"
+      :style="{ transform: `translateY(${indicatorOffset}px)` }"
     >
       <span
         class="h-4 w-4 rounded-full border-2 border-primary/25 border-t-primary"
-        :class="pullToRefresh.isRefreshing ? 'animate-spin' : ''"
+        :class="isRefreshing ? 'animate-spin' : ''"
       />
-      <span>{{ pullToRefresh.message }}</span>
+      <span>{{ refreshMessage }}</span>
     </div>
 
     <div
       class="space-y-5"
       :class="
-        pullToRefresh.isDragging || pullToRefresh.isRefreshing
+        isDragging || isRefreshing
           ? 'transition-transform duration-150'
           : 'transition-transform duration-300'
       "
-      :style="{ transform: `translateY(${pullToRefresh.indicatorOffset}px)` }"
+      :style="{ transform: `translateY(${indicatorOffset}px)` }"
     >
       <BaseCard class="space-y-5">
         <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">

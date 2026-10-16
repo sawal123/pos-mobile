@@ -1,5 +1,5 @@
 import { mount } from '@vue/test-utils'
-import { defineComponent, ref } from 'vue'
+import { defineComponent, nextTick, ref } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { PULL_TO_REFRESH_THRESHOLD, usePullToRefresh } from '@/composables/usePullToRefresh'
@@ -25,13 +25,15 @@ function createHarness(onRefresh) {
       const root = ref(null)
       const pullToRefresh = usePullToRefresh({ root, onRefresh })
 
-      return { pullToRefresh, root }
+      return { ...pullToRefresh, root }
     },
     template: `
       <main>
         <div ref="root" data-testid="pull-root">
           <button type="button">Aksi</button>
-          <span data-testid="message">{{ pullToRefresh.message }}</span>
+          <span data-testid="message">{{ message }}</span>
+          <span v-if="isVisible" data-testid="indicator">Indikator</span>
+          <div data-testid="pull-content" :style="{ transform: \`translateY(\${indicatorOffset}px)\` }" />
         </div>
       </main>
     `,
@@ -82,6 +84,30 @@ describe('usePullToRefresh', () => {
 
     expect(refresh).not.toHaveBeenCalled()
     expect(wrapper.get('[data-testid="message"]').text()).toBe('Tarik untuk memperbarui')
+  })
+
+  it('does not show the indicator before the finger has moved down', async () => {
+    const wrapper = mount(createHarness(vi.fn()))
+    const root = wrapper.get('[data-testid="pull-root"]').element
+
+    dispatchTouch(root, 'touchstart', { x: 0, y: 0 })
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="indicator"]').exists()).toBe(false)
+  })
+
+  it('reveals the indicator and moves content down while pulling', async () => {
+    const wrapper = mount(createHarness(vi.fn()))
+    const root = wrapper.get('[data-testid="pull-root"]').element
+
+    dispatchTouch(root, 'touchstart', { x: 0, y: 0 })
+    dispatchTouch(root, 'touchmove', { x: 0, y: 50 })
+    await nextTick()
+
+    expect(wrapper.find('[data-testid="indicator"]').exists()).toBe(true)
+    const contentStyle = wrapper.get('[data-testid="pull-content"]').attributes('style')
+    expect(contentStyle).toContain('translateY(')
+    expect(contentStyle).not.toContain('translateY(0px)')
   })
 
   it('refreshes once after a qualifying vertical pull and shows completion feedback', async () => {

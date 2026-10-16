@@ -39,7 +39,7 @@ export function usePullToRefresh({ root, onRefresh, threshold = PULL_TO_REFRESH_
   const indicatorOffset = computed(() => Math.min(pullDistance.value * 0.55, threshold + 28))
   const isVisible = computed(
     () =>
-      isDragging.value ||
+      pullDistance.value > 0 ||
       isRefreshing.value ||
       status.value === 'success' ||
       status.value === 'error',
