@@ -13,7 +13,7 @@ import { useCartStore } from '@/stores/cartStore'
 import { useCustomerStore } from '@/stores/customerStore'
 import { useProductStore } from '@/stores/productStore'
 import { useTaxStore } from '@/stores/taxStore'
-import { resolveLocalOperationService } from '@/services/database/localOperationService'
+import { createOperationId, resolveLocalOperationService } from '@/services/database/localOperationService'
 import { formatCurrency } from '@/utils/formatters'
 
 const QUICK_CASH_AMOUNTS = [20000, 50000, 100000, 200000, 500000]
@@ -34,6 +34,17 @@ const isProcessing = ref(false)
 const hasAttemptedSubmit = ref(false)
 const paymentError = ref('')
 const isCashModalOpen = ref(false)
+
+/**
+ * Stable operation identity for THIS checkout.
+ *
+ * It is created on the first submit and reused for every retry of the same
+ * payment, so a retry after a storage failure resumes that exact operation
+ * (idempotent) instead of creating a second transaction. It is cleared once the
+ * checkout succeeds — and a fresh payment mount starts a fresh identity, so a
+ * new checkout can never be mistaken for an earlier pending one.
+ */
+const checkoutOperationId = ref(null)
 
 const paymentMethods = [
   { id: 'cash', label: 'Cash', description: 'Pembayaran tunai di kasir' },
@@ -243,7 +254,13 @@ async function completePayment() {
     return
   }
 
+  // The same checkout keeps its operation identity across retries.
+  if (!checkoutOperationId.value) {
+    checkoutOperationId.value = createOperationId()
+  }
+
   await localOperations.commitRetailSale({
+    operationId: checkoutOperationId.value,
     checkout: {
       items: cartStore.items,
       subtotal: cartStore.subtotal,
@@ -266,6 +283,8 @@ async function completePayment() {
     },
   })
 
+  // Committed: this checkout is done, the next one gets a fresh identity.
+  checkoutOperationId.value = null
   cartStore.clearCart()
   isCashModalOpen.value = false
   await router.push('/payment/success')

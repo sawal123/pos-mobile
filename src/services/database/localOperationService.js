@@ -295,6 +295,13 @@ export async function repairLegacySaleStockMovementLinks({
 export function createLocalOperationService({ adapter = null, scheduler = null, pinia = null } = {}) {
   const journal = createOperationJournal({ adapter })
 
+  /**
+   * In-flight sale commits by operation identity. A second call with the same
+   * `operationId` (double-submit, retried transport) shares the first commit
+   * instead of starting a parallel one.
+   */
+  const inFlightOperations = new Map()
+
   function activePinia() {
     return pinia ?? getActivePinia()
   }
@@ -319,20 +326,33 @@ export function createLocalOperationService({ adapter = null, scheduler = null, 
   }
 
   /**
-   * Resumes an interrupted retail sale that belongs to the current context.
+   * Resumes the checkout the caller is retrying — and ONLY that one.
    *
-   * Returns the recovered transaction (the operation's own identity) when a
-   * pending entry exists, otherwise null. Every step is idempotent, so calling
-   * this repeatedly — or after the operation already completed — never
-   * duplicates a transaction, a stock deduction or a cash entry.
+   * Identity must be *proven* by the exact `operationId` the caller is retrying
+   * with. A pending operation that merely shares the business context is a
+   * different checkout and is never treated as this one. Every step is
+   * idempotent, so resuming twice — or after the operation already completed —
+   * never duplicates a transaction, a stock deduction or a cash entry.
+   *
+   * @param {string|null} operationId The checkout's stable operation identity.
+   * @returns {Promise<object|null>} The resumed transaction, or null.
    */
-  async function resumePendingRetailSale() {
+  async function resumePendingRetailSale(operationId) {
+    if (!operationId) {
+      return null
+    }
+
     const pending = await journal.listPending()
     const context = resolveContext()
 
-    const entry = pending
-      .filter((item) => item.operationType === LOCAL_OPERATION_TYPES.RETAIL_SALE)
-      .find((item) => !item.contextKey || item.contextKey === context.contextKey)
+    const entry = pending.find(
+      (item) =>
+        item.operationType === LOCAL_OPERATION_TYPES.RETAIL_SALE &&
+        String(item.operationId) === String(operationId) &&
+        // A pending operation from another business context is never resumed
+        // here; it belongs to its own recovery path.
+        (!item.contextKey || item.contextKey === context.contextKey),
+    )
 
     if (!entry) {
       return null
@@ -347,28 +367,102 @@ export function createLocalOperationService({ adapter = null, scheduler = null, 
   }
 
   /**
-   * Commits a retail (cash or non-cash) sale as one durable logical operation.
+   * A pending retail sale for the current context that is NOT the operation the
+   * caller asked for (the exact-identity resume already ran and found nothing).
    *
-   * The order is fixed by design: durable journal -> transaction -> stock
-   * movements -> cash ledger -> journal cleared. A crash at any boundary is
-   * recovered idempotently, so the operation is never applied twice and never
-   * left half-applied.
+   * Its identity is unproven for this checkout, so it must never be returned as
+   * this checkout's result — and its local state cannot be assumed consistent.
+   * The caller fails closed until it is resolved.
+   *
+   * @returns {Promise<object|null>}
    */
-  async function commitRetailSale({ checkout, operationId = createOperationId() }) {
+  async function findUnresolvedPendingRetailSale() {
+    const pending = await journal.listPending()
+    const context = resolveContext()
+
+    return (
+      pending.find(
+        (item) =>
+          item.operationType === LOCAL_OPERATION_TYPES.RETAIL_SALE &&
+          (!item.contextKey || item.contextKey === context.contextKey),
+      ) ?? null
+    )
+  }
+
+  /**
+   * Commits a retail (cash or non-cash) sale as ONE durable logical operation,
+   * identified by the caller's stable `operationId`.
+   *
+   * The returned transaction always refers to the checkout the caller asked for:
+   * a retry of the same operation resumes it, an already-committed operation is
+   * replayed, and an unrelated pending operation fails closed instead of being
+   * returned as this checkout's result. Concurrent calls with the same identity
+   * share one commit.
+   *
+   * @param {object} options
+   * @param {object} options.checkout
+   * @param {string} [options.operationId] Stable identity for this checkout.
+   * @returns {Promise<object>} The committed transaction.
+   */
+  function commitRetailSale({ checkout, operationId = createOperationId() }) {
+    const key = String(operationId)
+    const inFlight = inFlightOperations.get(key)
+
+    if (inFlight) {
+      // Another call with the same identity is already committing: share it so a
+      // double-submit can never produce a second transaction.
+      return inFlight
+    }
+
+    const run = commitRetailSaleOnce({ checkout, operationId }).finally(() => {
+      inFlightOperations.delete(key)
+    })
+
+    inFlightOperations.set(key, run)
+    return run
+  }
+
+  async function commitRetailSaleOnce({ checkout, operationId }) {
     const active = activePinia()
     const transactionStore = useTransactionStore(active)
     const productStore = useProductStore(active)
     const cashStore = useCashStore(active)
     const context = resolveContext()
 
-    // An interrupted sale for THIS context is resumed (idempotently, keyed by
-    // operationId) instead of starting a new operation: a retry must never create
-    // a second transaction for the same checkout and must never leave a
-    // half-applied operation behind. Pending entries from another context are
-    // left untouched for their own recovery.
-    const resumed = await resumePendingRetailSale()
+    // 1. Retry of the SAME checkout. Identity is proven by the exact operationId
+    //    the caller supplied; a pending operation that merely shares the business
+    //    context is a different checkout. A pending entry means the operation is
+    //    INCOMPLETE (transaction/stock/cash may be partially applied), so it must
+    //    be resumed before anything else can replay it.
+    const resumed = await resumePendingRetailSale(operationId)
     if (resumed) {
       return resumed
+    }
+
+    // 2. Idempotency by operationId: with no pending entry, an existing
+    //    transaction with this identity means the operation already completed
+    //    (e.g. a caller retried after a transport/UI hiccup). Replay it — never
+    //    create a second one.
+    const alreadyCommitted = transactionStore.items.find(
+      (item) => String(item.id) === String(operationId),
+    )
+    if (alreadyCommitted) {
+      return alreadyCommitted
+    }
+
+    // 3. An unrelated pending sale for this context cannot be resolved from here:
+    //    its identity is unproven for this checkout and its local state may be
+    //    half-applied. Fail closed — never return the wrong transaction, never
+    //    report a false success — and require the pending operation to be
+    //    resolved (its own retry identity, or the startup recovery pass) first.
+    const unresolved = await findUnresolvedPendingRetailSale()
+    if (unresolved) {
+      const error = new Error(
+        'Masih ada transaksi yang belum selesai pada konteks ini. Selesaikan atau periksa operasi tertunda tersebut sebelum melakukan pembayaran baru.',
+      )
+      error.code = 'PENDING_OPERATION_UNRESOLVED'
+      error.pendingOperationId = unresolved.operationId
+      throw error
     }
 
     await journal.begin({

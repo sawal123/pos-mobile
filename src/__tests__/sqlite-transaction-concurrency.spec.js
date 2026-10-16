@@ -552,8 +552,8 @@ describe('end-to-end sale commit over the SQLite adapter', () => {
 
     const before = runtime.transactionStore.items.length
 
-    // A retry with a brand-new identity must resume the pending operation.
-    const sale = await runtime.localOperations.commitRetailSale({ checkout })
+    // A retry with the SAME operation identity resumes the pending operation.
+    const sale = await runtime.localOperations.commitRetailSale({ checkout, operationId })
 
     expect(sale.id).toBe(operationId)
     expect(runtime.transactionStore.items).toHaveLength(before + 1)
@@ -564,6 +564,49 @@ describe('end-to-end sale commit over the SQLite adapter', () => {
     ).toHaveLength(1)
     expect(runtime.cashStore.entries).toHaveLength(1)
     expect((await runtime.adapter.loadLocalOperationJournal())?.entries ?? []).toEqual([])
+    expect(nativeState.transactionActive).toBe(false)
+
+    await runtime.scheduler.close()
+  })
+
+  it('fails closed for a NEW checkout while an unrelated sale is still pending', async () => {
+    const runtime = await makeRuntime()
+    await runtime.scheduler.flush()
+
+    // An earlier, unrelated checkout was interrupted (different identity).
+    const pendingCheckout = makeCheckout(runtime.product)
+    await runtime.adapter.saveLocalOperationJournal({
+      version: 1,
+      entries: [
+        {
+          operationId: 'op-other',
+          operationType: 'retail_sale',
+          phase: 'journal_saved',
+          status: 'pending',
+          contextKey: 'local',
+          payload: { checkout: pendingCheckout },
+          artifacts: {},
+          attempts: 0,
+        },
+      ],
+    })
+    await runtime.scheduler.flush()
+
+    const before = runtime.transactionStore.items.length
+
+    // A brand-new checkout must never be answered with the pending operation...
+    await expect(
+      runtime.localOperations.commitRetailSale({
+        checkout: makeCheckout(runtime.product),
+        operationId: 'op-new',
+      }),
+    ).rejects.toMatchObject({ code: 'PENDING_OPERATION_UNRESOLVED' })
+
+    // ...and must not silently create a transaction either.
+    expect(runtime.transactionStore.items).toHaveLength(before)
+    expect(
+      (await runtime.adapter.loadLocalOperationJournal())?.entries.map((e) => e.operationId),
+    ).toEqual(['op-other'])
     expect(nativeState.transactionActive).toBe(false)
 
     await runtime.scheduler.close()
