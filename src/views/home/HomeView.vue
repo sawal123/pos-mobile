@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import AppIcon from '@/components/base/AppIcon.vue'
@@ -10,26 +10,52 @@ import { useBusinessStore } from '@/stores/businessStore'
 import { useCashStore } from '@/stores/cashStore'
 import { useProductStore } from '@/stores/productStore'
 import { useShiftStore } from '@/stores/shiftStore'
+import { useSyncStatusStore } from '@/stores/syncStatusStore'
 import { isPaidTransaction, useTransactionStore } from '@/stores/transactionStore'
 import { formatCurrency } from '@/utils/formatters'
+import { usePullToRefresh } from '@/composables/usePullToRefresh'
 
 const businessStore = useBusinessStore()
 const cashStore = useCashStore()
 const productStore = useProductStore()
 const shiftStore = useShiftStore()
+const syncStatusStore = useSyncStatusStore()
 const transactionStore = useTransactionStore()
+const refreshRoot = ref(null)
+
+async function refreshHome() {
+  // Home summaries are computed from the live Pinia stores. Only the local,
+  // read-only sync status needs an explicit refresh; no cloud sync or store
+  // hydration is performed here, so pending offline work remains untouched.
+  return syncStatusStore.refresh()
+}
+
+const {
+  indicatorOffset,
+  isDragging,
+  isRefreshing,
+  isVisible: isRefreshIndicatorVisible,
+  message: refreshMessage,
+} = usePullToRefresh({
+  root: refreshRoot,
+  onRefresh: refreshHome,
+})
 
 function isToday(dateString) {
   if (!dateString) return false
   const date = new Date(dateString)
   const today = new Date()
 
-  return date.getFullYear() === today.getFullYear()
-    && date.getMonth() === today.getMonth()
-    && date.getDate() === today.getDate()
+  return (
+    date.getFullYear() === today.getFullYear() &&
+    date.getMonth() === today.getMonth() &&
+    date.getDate() === today.getDate()
+  )
 }
 
-const todayTransactions = computed(() => transactionStore.items.filter((transaction) => isToday(transaction.createdAt)))
+const todayTransactions = computed(() =>
+  transactionStore.items.filter((transaction) => isToday(transaction.createdAt)),
+)
 const todayRevenue = computed(() =>
   transactionStore.items
     .filter(isPaidTransaction)
@@ -51,7 +77,11 @@ const summaries = computed(() => {
 
   return [
     { label: 'Omzet Hari Ini', value: formatCurrency(todayRevenue.value), tone: 'text-primary' },
-    { label: 'Transaksi Hari Ini', value: todayTransactions.value.length, tone: 'text-ink-primary' },
+    {
+      label: 'Transaksi Hari Ini',
+      value: todayTransactions.value.length,
+      tone: 'text-ink-primary',
+    },
     { label: 'Saldo Kas', value: formatCurrency(cashStore.balance), tone: 'text-success' },
     { label: 'Stok Minimum', value: productStore.lowStockProducts.length, tone: 'text-warning' },
   ]
@@ -81,74 +111,118 @@ const laundryStatusSummaries = computed(() => {
 </script>
 
 <template>
-  <div class="space-y-5">
-    <BaseCard class="space-y-5">
-      <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div class="min-w-0">
-          <p class="text-sm font-medium uppercase tracking-[0.18em] text-primary">Home</p>
-          <h2 class="mt-2 truncate text-2xl font-semibold text-ink-primary">
-            {{ businessStore.name || 'POS Mobile' }}
-          </h2>
-          <div class="mt-2 flex flex-wrap gap-2 text-sm text-ink-secondary">
-            <span>{{ businessStore.outlet || 'Outlet Utama' }}</span>
-            <span>{{ businessStore.normalizedType }}</span>
+  <div ref="refreshRoot" data-testid="home-pull-to-refresh" class="relative space-y-5">
+    <div
+      v-show="isRefreshIndicatorVisible"
+      class="pointer-events-none absolute inset-x-0 -top-11 z-10 flex items-center justify-center gap-2 text-sm font-medium text-ink-secondary"
+      aria-live="polite"
+      :style="{ transform: `translateY(${indicatorOffset}px)` }"
+    >
+      <span
+        class="h-4 w-4 rounded-full border-2 border-primary/25 border-t-primary"
+        :class="isRefreshing ? 'animate-spin' : ''"
+      />
+      <span>{{ refreshMessage }}</span>
+    </div>
+
+    <div
+      class="space-y-5"
+      :class="
+        isDragging || isRefreshing
+          ? 'transition-transform duration-150'
+          : 'transition-transform duration-300'
+      "
+      :style="{ transform: `translateY(${indicatorOffset}px)` }"
+    >
+      <BaseCard class="space-y-5">
+        <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div class="min-w-0">
+            <p class="text-sm font-medium uppercase tracking-[0.18em] text-primary">Home</p>
+            <h2 class="mt-2 truncate text-2xl font-semibold text-ink-primary">
+              {{ businessStore.name || 'POS Mobile' }}
+            </h2>
+            <div class="mt-2 flex flex-wrap gap-2 text-sm text-ink-secondary">
+              <span>{{ businessStore.outlet || 'Outlet Utama' }}</span>
+              <span>{{ businessStore.normalizedType }}</span>
+            </div>
+          </div>
+
+          <BaseBadge :variant="shiftStore.isOpen ? 'success' : 'warning'">
+            {{ shiftStore.isOpen ? 'Shift Aktif' : 'Shift Belum Dibuka' }}
+          </BaseBadge>
+        </div>
+
+        <div
+          class="grid grid-cols-2 gap-3"
+          :class="isLaundry ? 'lg:grid-cols-3' : 'lg:grid-cols-4'"
+        >
+          <div
+            v-for="summary in summaries"
+            :key="summary.label"
+            class="min-h-[88px] rounded-2xl bg-surface p-4"
+          >
+            <p class="text-xs font-medium uppercase tracking-[0.14em] text-ink-secondary">
+              {{ summary.label }}
+            </p>
+            <p class="mt-2 break-words text-xl font-semibold" :class="summary.tone">
+              {{ summary.value }}
+            </p>
           </div>
         </div>
 
-        <BaseBadge :variant="shiftStore.isOpen ? 'success' : 'warning'">
-          {{ shiftStore.isOpen ? 'Shift Aktif' : 'Shift Belum Dibuka' }}
-        </BaseBadge>
-      </div>
-
-      <div class="grid grid-cols-2 gap-3" :class="isLaundry ? 'lg:grid-cols-3' : 'lg:grid-cols-4'">
+        <!-- Laundry Order Status summaries -->
         <div
-          v-for="summary in summaries"
-          :key="summary.label"
-          class="min-h-[88px] rounded-2xl bg-surface p-4"
+          v-if="isLaundry"
+          class="space-y-2 border-t border-zinc-100 pt-4"
+          data-testid="laundry-status-summaries"
         >
-          <p class="text-xs font-medium uppercase tracking-[0.14em] text-ink-secondary">{{ summary.label }}</p>
-          <p class="mt-2 break-words text-xl font-semibold" :class="summary.tone">{{ summary.value }}</p>
+          <p class="text-xs font-semibold uppercase tracking-[0.14em] text-ink-secondary">
+            Status Order Laundry
+          </p>
+          <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <RouterLink
+              v-for="item in laundryStatusSummaries"
+              :key="item.status"
+              :to="{ path: '/laundry/orders', query: { status: item.status } }"
+              :data-testid="`laundry-summary-${item.status}`"
+              class="group min-h-[80px] rounded-2xl border border-zinc-200/80 bg-white p-3.5 shadow-soft transition hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md"
+            >
+              <p class="text-xs font-medium text-ink-secondary group-hover:text-primary transition">
+                {{ item.status }}
+              </p>
+              <p class="mt-1 text-2xl font-bold" :class="item.tone">{{ item.count }}</p>
+            </RouterLink>
+          </div>
         </div>
-      </div>
+      </BaseCard>
 
-      <!-- Laundry Order Status summaries -->
-      <div v-if="isLaundry" class="space-y-2 border-t border-zinc-100 pt-4" data-testid="laundry-status-summaries">
-        <p class="text-xs font-semibold uppercase tracking-[0.14em] text-ink-secondary">Status Order Laundry</p>
-        <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <section class="space-y-3">
+        <div>
+          <h3 class="text-lg font-semibold text-ink-primary">Menu Operasional</h3>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           <RouterLink
-            v-for="item in laundryStatusSummaries"
-            :key="item.status"
-            :to="{ path: '/laundry/orders', query: { status: item.status } }"
-            :data-testid="`laundry-summary-${item.status}`"
-            class="group min-h-[80px] rounded-2xl border border-zinc-200/80 bg-white p-3.5 shadow-soft transition hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md"
+            v-for="item in menuItems"
+            :key="item.key"
+            :to="item.to"
+            :data-testid="`home-menu-${item.key}`"
+            class="min-h-[116px] rounded-3xl bg-card p-4 shadow-soft transition hover:-translate-y-0.5 hover:shadow-md focus:outline-none focus:ring-4 focus:ring-primary/15"
           >
-            <p class="text-xs font-medium text-ink-secondary group-hover:text-primary transition">{{ item.status }}</p>
-            <p class="mt-1 text-2xl font-bold" :class="item.tone">{{ item.count }}</p>
+            <span
+              class="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10 text-primary"
+            >
+              <AppIcon :name="item.icon" />
+            </span>
+            <span class="mt-4 block text-base font-semibold text-ink-primary">{{
+              item.title
+            }}</span>
+            <span class="mt-1 block text-sm leading-snug text-ink-secondary">{{
+              item.subtitle
+            }}</span>
           </RouterLink>
         </div>
-      </div>
-    </BaseCard>
-
-    <section class="space-y-3">
-      <div>
-        <h3 class="text-lg font-semibold text-ink-primary">Menu Operasional</h3>
-      </div>
-
-      <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-        <RouterLink
-          v-for="item in menuItems"
-          :key="item.key"
-          :to="item.to"
-          :data-testid="`home-menu-${item.key}`"
-          class="min-h-[116px] rounded-3xl bg-card p-4 shadow-soft transition hover:-translate-y-0.5 hover:shadow-md focus:outline-none focus:ring-4 focus:ring-primary/15"
-        >
-          <span class="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-            <AppIcon :name="item.icon" />
-          </span>
-          <span class="mt-4 block text-base font-semibold text-ink-primary">{{ item.title }}</span>
-          <span class="mt-1 block text-sm leading-snug text-ink-secondary">{{ item.subtitle }}</span>
-        </RouterLink>
-      </div>
-    </section>
+      </section>
+    </div>
   </div>
 </template>
