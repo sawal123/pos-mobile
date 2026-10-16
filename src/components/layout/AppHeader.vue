@@ -53,8 +53,11 @@ const pageTitle = computed(() => {
 </script>
 
 <template>
-  <header class="sticky top-0 z-30 border-b border-zinc-200/70 bg-white/90 backdrop-blur">
-    <div class="flex items-center justify-between gap-3 px-4 py-3.5 md:px-6 md:py-4">
+  <header
+    data-testid="app-header"
+    class="safe-area-top sticky top-0 z-30 border-b border-zinc-200/70 bg-white/90 backdrop-blur"
+  >
+    <div class="safe-area-inline flex items-center justify-between gap-3 py-3.5 md:py-4">
       <div class="flex min-w-0 flex-1 items-center gap-3">
         <!-- Hamburger Button to open sidebar -->
         <button
@@ -66,7 +69,15 @@ const pageTitle = computed(() => {
           title="Buka Menu"
           aria-label="Buka Menu"
         >
-          <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <svg
+            class="h-5 w-5"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
             <line x1="3" y1="12" x2="21" y2="12" />
             <line x1="3" y1="6" x2="21" y2="6" />
             <line x1="3" y1="18" x2="21" y2="18" />
@@ -83,8 +94,12 @@ const pageTitle = computed(() => {
 
       <div class="flex shrink-0 items-center gap-2">
         <SyncStatusBadge />
-        <div class="rounded-2xl bg-surface px-2.5 py-1.5 text-right text-xs sm:px-3 sm:py-2 sm:text-sm text-ink-secondary">
-          <p class="max-w-[120px] truncate font-medium text-ink-primary sm:max-w-none">{{ businessStore.outlet }}</p>
+        <div
+          class="rounded-2xl bg-surface px-2.5 py-1.5 text-right text-xs sm:px-3 sm:py-2 sm:text-sm text-ink-secondary"
+        >
+          <p class="max-w-[120px] truncate font-medium text-ink-primary sm:max-w-none">
+            {{ businessStore.outlet }}
+          </p>
           <p class="text-[10px] uppercase tracking-[0.14em] sm:text-xs">
             {{ businessStore.mode === 'cloud' ? 'Cloud Mode' : 'Free Mode' }}
           </p>
