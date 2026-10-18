@@ -538,6 +538,35 @@ export function createSyncPullService({
         }
       }
 
+      if (
+        isInitialCloudPull &&
+        adapter &&
+        typeof adapter.saveCloudInitializationJournal === 'function'
+      ) {
+        try {
+          await adapter.saveCloudInitializationJournal({
+            version: 1,
+            phase: 'completed',
+            businessId: selectedBusiness.id,
+            outletId: selectedOutlet.id,
+            deviceIdentifier,
+            registeredDeviceId,
+            completedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          })
+        } catch (err) {
+          return {
+            ok: false,
+            code: 'CLOUD_INITIALIZATION_JOURNAL_PERSIST_FAILED',
+            message: 'Failed to persist completed Cloud initialization journal.',
+            error: {
+              code: 'CLOUD_INITIALIZATION_JOURNAL_PERSIST_FAILED',
+              message: err instanceof Error ? err.message : String(err),
+            },
+          }
+        }
+      }
+
       if (adapter && typeof adapter.saveSyncPullBinding === 'function') {
         try {
           await adapter.saveSyncPullBinding({
@@ -559,27 +588,6 @@ export function createSyncPullService({
               message: err instanceof Error ? err.message : String(err),
             },
           }
-        }
-      }
-
-      if (
-        isInitialCloudPull &&
-        adapter &&
-        typeof adapter.saveCloudInitializationJournal === 'function'
-      ) {
-        try {
-          await adapter.saveCloudInitializationJournal({
-            version: 1,
-            phase: 'completed',
-            businessId: selectedBusiness.id,
-            outletId: selectedOutlet.id,
-            deviceIdentifier,
-            registeredDeviceId,
-            completedAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          })
-        } catch {
-          // Best-effort journal phase update
         }
       }
 
@@ -1884,7 +1892,36 @@ export function createSyncPullService({
       }
     }
 
-    // ── 15. Persist pull context binding as completed ──────────────────────────
+    // ── 15. Persist initialization journal completion & pull context binding as completed ──
+    if (
+      isInitialCloudPull &&
+      adapter &&
+      typeof adapter.saveCloudInitializationJournal === 'function'
+    ) {
+      try {
+        await adapter.saveCloudInitializationJournal({
+          version: 1,
+          phase: 'completed',
+          businessId: selectedBusiness.id,
+          outletId: selectedOutlet.id,
+          deviceIdentifier,
+          registeredDeviceId,
+          completedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        })
+      } catch (err) {
+        return {
+          ok: false,
+          code: 'CLOUD_INITIALIZATION_JOURNAL_PERSIST_FAILED',
+          message: 'Failed to persist completed Cloud initialization journal.',
+          error: {
+            code: 'CLOUD_INITIALIZATION_JOURNAL_PERSIST_FAILED',
+            message: err instanceof Error ? err.message : String(err),
+          },
+        }
+      }
+    }
+
     if (adapter && typeof adapter.saveSyncPullBinding === 'function') {
       try {
         await adapter.saveSyncPullBinding({
@@ -1906,27 +1943,6 @@ export function createSyncPullService({
             message: err instanceof Error ? err.message : String(err),
           },
         }
-      }
-    }
-
-    if (
-      isInitialCloudPull &&
-      adapter &&
-      typeof adapter.saveCloudInitializationJournal === 'function'
-    ) {
-      try {
-        await adapter.saveCloudInitializationJournal({
-          version: 1,
-          phase: 'completed',
-          businessId: selectedBusiness.id,
-          outletId: selectedOutlet.id,
-          deviceIdentifier,
-          registeredDeviceId,
-          completedAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        })
-      } catch {
-        // Best-effort journal phase update
       }
     }
 

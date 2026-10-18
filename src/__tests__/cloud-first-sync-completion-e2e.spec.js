@@ -1265,6 +1265,70 @@ describe('Cloud-First Sync Completion E2E (PR #60 Task 4)', () => {
     expect(await scenario.adapter.listSyncQueueItems()).toHaveLength(0)
   })
 
+  it('14. Initial pull fails if saveCloudInitializationJournal completion throws and leaves binding incomplete', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud', initialOnline: true })
+    const catUuid = '11111111-2222-4333-8444-555555555555'
+    const prodUuid = '99999999-9999-4999-8999-999999999999'
+    scenario.fakeServer.db.categories.push({
+      sync_id: catUuid,
+      name: 'Minuman',
+      business_id: 10,
+      sync_version: 1,
+      sync_sequence: 1,
+      is_active: 1,
+    })
+    scenario.fakeServer.db.products.push({
+      sync_id: prodUuid,
+      category_sync_id: catUuid,
+      name: 'Kopi Tubruk',
+      price: 10000,
+      business_id: 10,
+      sync_version: 1,
+      sync_sequence: 2,
+      is_active: 1,
+    })
+    mockServerHandler.handle = scenario.fakeServer.handleRequest
+
+    const cloudContext = makeValidCloudContext({ role: 'owner', syncCapabilities: { push_mode: 'full' } })
+    useCloudSessionStore(scenario.pinia).$patch(cloudContext)
+    await scenario.adapter.saveCloudContext(cloudContext)
+    await scenario.adapter.saveDeviceIdentifier(cloudContext.deviceIdentifier)
+
+    const originalSaveJournal = scenario.adapter.saveCloudInitializationJournal.bind(scenario.adapter)
+    scenario.adapter.saveCloudInitializationJournal = async (journal) => {
+      if (journal.phase === 'completed') {
+        throw new Error('SQLite disk I/O error on journal completion')
+      }
+      return originalSaveJournal(journal)
+    }
+
+    const pullStore = useSyncPullStore(scenario.pinia)
+    const result = await pullStore.pullNow({ initialCloudRead: true })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('CLOUD_INITIALIZATION_JOURNAL_PERSIST_FAILED')
+
+    // Binding must NOT be marked completed
+    const pullBinding = await scenario.adapter.loadSyncPullBinding()
+    expect(pullBinding?.status).toBe('initializing')
+
+    // Context guard stays unbound
+    const guardService = createSyncContextGuardService({ adapter: scenario.adapter })
+    const guardReport = await guardService.inspect({ context: cloudContext })
+    expect(guardReport.status).toBe('unbound')
+
+    // Restore normal journal save and retry
+    scenario.adapter.saveCloudInitializationJournal = originalSaveJournal
+    const retryResult = await pullStore.pullNow({ initialCloudRead: true })
+    expect(retryResult.ok).toBe(true)
+
+    const finalBinding = await scenario.adapter.loadSyncPullBinding()
+    expect(finalBinding?.status).toBe('completed')
+
+    const productStore = useProductStore(scenario.pinia)
+    const matching = productStore.products.filter((p) => p.name === 'Kopi Tubruk')
+    expect(matching).toHaveLength(1)
+  })
 })
 
 function scenarioHelperAdapter() {

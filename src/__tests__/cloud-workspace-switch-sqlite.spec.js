@@ -16,9 +16,11 @@ import { DB_VERSION } from '@/services/database/schema'
 import {
   WORKSPACE_SWITCH_PHASE,
   WORKSPACE_RECOVERY_RESULT,
+  WORKSPACE_SWITCH_RESULT,
   captureActiveWorkspaceSnapshot,
   cloudWorkspaceId,
   computeWorkspaceChecksum,
+  evaluateWorkspaceSwitchBlockers,
   recoverPendingWorkspaceSwitch,
   switchOperationalWorkspace,
 } from '@/services/cloud/businessWorkspaceService'
@@ -356,5 +358,58 @@ describe('SQLite-backed workspace switching', () => {
 
     adapter = await forceStopAndRestart(adapter)
     expect(await adapter.loadCloudInitializationJournal()).toBeNull()
+  })
+
+  it('scopes cloud initialization journal to each workspace and blocks switching when initializing', async () => {
+    let adapter = await openAdapter()
+    const journalA = {
+      version: 1,
+      phase: 'initializing',
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: 'dev-sqlite-ws-1',
+      registeredDeviceId: 55,
+      startedAt: '2026-10-18T00:00:00.000Z',
+      completedAt: null,
+      updatedAt: '2026-10-18T00:00:00.000Z',
+    }
+    await adapter.saveCloudInitializationJournal(journalA)
+
+    // Switch is blocked while journal is initializing
+    const blockers = await evaluateWorkspaceSwitchBlockers({ adapter })
+    expect(blockers).toContain('cloud_initialization_pending')
+
+    const switchResult = await switchOperationalWorkspace({
+      adapter,
+      scheduler: stubScheduler(),
+      targetWorkspaceId: cafeTarget,
+    })
+    expect(switchResult.ok).toBe(false)
+    expect(switchResult.code).toBe(WORKSPACE_SWITCH_RESULT.BLOCKED_PENDING_OPERATION)
+
+    // Mark completed
+    journalA.phase = 'completed'
+    journalA.completedAt = '2026-10-18T00:05:00.000Z'
+    await adapter.saveCloudInitializationJournal(journalA)
+
+    // Now switch to cafeTarget succeeds
+    const allowedSwitch = await switchOperationalWorkspace({
+      adapter,
+      scheduler: stubScheduler(),
+      targetWorkspaceId: cafeTarget,
+    })
+    expect(allowedSwitch.ok).toBe(true)
+
+    // Target workspace (Cafe) starts with clean/null initialization journal
+    expect(await adapter.loadCloudInitializationJournal()).toBeNull()
+
+    // Switch back to LOCAL_ID restores Business A's completed journal
+    const switchBack = await switchOperationalWorkspace({
+      adapter,
+      scheduler: stubScheduler(),
+      targetWorkspaceId: LOCAL_ID,
+    })
+    expect(switchBack.ok).toBe(true)
+    expect(await adapter.loadCloudInitializationJournal()).toEqual(journalA)
   })
 })
