@@ -208,7 +208,11 @@ export function createSyncPullService({
           }
         }
 
-        const workspace = await inspectCloudFirstWorkspace({ adapter, scheduler })
+        const workspace = await inspectCloudFirstWorkspace({
+          adapter,
+          scheduler,
+          context: guardContext,
+        })
         if (!workspace.ok || !workspace.safeToInitialize) {
           return {
             ok: false,

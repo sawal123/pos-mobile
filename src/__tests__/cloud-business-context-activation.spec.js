@@ -578,6 +578,128 @@ describe('13. Cloud-first workspace safety journals', () => {
     })
     expect(loadRestoreJournal).toBeTypeOf('function')
   })
+
+  it('differentiates valid Auto Sync preference from operational sync metadata', async () => {
+    const validContext = {
+      businessId: 10,
+      outletId: 20,
+      registeredDeviceId: 77,
+      deviceIdentifier: 'dev-123',
+    }
+
+    // 1. Workspace kosong tanpa preferensi -> safe
+    const adapter1 = createMemoryAdapter()
+    await adapter1.initialize()
+    await adapter1.saveCloudContext({
+      selectedBusiness: { id: 10 },
+      selectedOutlet: { id: 20 },
+      registeredDeviceId: 77,
+      deviceIdentifier: 'dev-123',
+    })
+    const report1 = await inspectCloudFirstWorkspace({ adapter: adapter1 })
+    expect(report1.ok).toBe(true)
+    expect(report1.safeToInitialize).toBe(true)
+    expect(report1.reasons).toEqual([])
+
+    // 2. Workspace kosong dengan Auto Sync enabled yang valid -> safe
+    const adapter2 = createMemoryAdapter()
+    await adapter2.initialize()
+    await adapter2.saveCloudContext({
+      selectedBusiness: { id: 10 },
+      selectedOutlet: { id: 20 },
+      registeredDeviceId: 77,
+      deviceIdentifier: 'dev-123',
+    })
+    await adapter2.saveSyncAutoSettings({
+      version: 1,
+      enabled: true,
+      context: validContext,
+      updatedAt: '2026-10-18T00:00:00.000Z',
+    })
+    const report2 = await inspectCloudFirstWorkspace({ adapter: adapter2 })
+    expect(report2.ok).toBe(true)
+    expect(report2.safeToInitialize).toBe(true)
+    expect(report2.reasons).toEqual([])
+
+    // 3. Workspace kosong dengan Auto Sync disabled yang valid -> safe
+    const adapter3 = createMemoryAdapter()
+    await adapter3.initialize()
+    await adapter3.saveCloudContext({
+      selectedBusiness: { id: 10 },
+      selectedOutlet: { id: 20 },
+      registeredDeviceId: 77,
+      deviceIdentifier: 'dev-123',
+    })
+    await adapter3.saveSyncAutoSettings({
+      version: 1,
+      enabled: false,
+      context: validContext,
+      updatedAt: '2026-10-18T00:00:00.000Z',
+    })
+    const report3 = await inspectCloudFirstWorkspace({ adapter: adapter3 })
+    expect(report3.ok).toBe(true)
+    expect(report3.safeToInitialize).toBe(true)
+
+    // 4. Preferensi dari bisnis lain -> diblokir
+    const adapter4 = createMemoryAdapter()
+    await adapter4.initialize()
+    await adapter4.saveCloudContext({
+      selectedBusiness: { id: 10 },
+      selectedOutlet: { id: 20 },
+      registeredDeviceId: 77,
+      deviceIdentifier: 'dev-123',
+    })
+    await adapter4.saveSyncAutoSettings({
+      version: 1,
+      enabled: true,
+      context: { ...validContext, businessId: 999 },
+      updatedAt: '2026-10-18T00:00:00.000Z',
+    })
+    const report4 = await inspectCloudFirstWorkspace({ adapter: adapter4 })
+    expect(report4.ok).toBe(true)
+    expect(report4.safeToInitialize).toBe(false)
+    expect(report4.reasons).toContain('auto_sync_context_mismatch')
+
+    // 5. Preferensi corrupt -> fail-closed
+    const adapter5 = createMemoryAdapter()
+    await adapter5.initialize()
+    await adapter5.saveCloudContext({
+      selectedBusiness: { id: 10 },
+      selectedOutlet: { id: 20 },
+      registeredDeviceId: 77,
+      deviceIdentifier: 'dev-123',
+    })
+    await adapter5.saveSyncAutoSettings({
+      version: 99,
+      enabled: 'yes',
+      context: 'corrupt',
+    })
+    const report5 = await inspectCloudFirstWorkspace({ adapter: adapter5 })
+    expect(report5.ok).toBe(true)
+    expect(report5.safeToInitialize).toBe(false)
+    expect(report5.reasons).toContain('auto_sync_settings_invalid')
+
+    // 6. Data transaksi atau outbox pending tetap memblokir initial pull
+    const adapter6 = createMemoryAdapter()
+    await adapter6.initialize()
+    await adapter6.saveCloudContext({
+      selectedBusiness: { id: 10 },
+      selectedOutlet: { id: 20 },
+      registeredDeviceId: 77,
+      deviceIdentifier: 'dev-123',
+    })
+    await adapter6.saveSyncAutoSettings({
+      version: 1,
+      enabled: true,
+      context: validContext,
+      updatedAt: '2026-10-18T00:00:00.000Z',
+    })
+    await adapter6.saveTransactions([{ id: 'trx-1', total: 10000 }])
+    const report6 = await inspectCloudFirstWorkspace({ adapter: adapter6 })
+    expect(report6.ok).toBe(true)
+    expect(report6.safeToInitialize).toBe(false)
+    expect(report6.reasons).toContain('transactions')
+  })
 })
 
 // ════════════════════════════════════════════════════════════════════════════

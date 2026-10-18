@@ -640,6 +640,143 @@ describe('Cloud-First Sync Completion E2E (PR #60 Task 4)', () => {
     })
     expect(await restarted.adapter.listSyncQueueItems()).toHaveLength(0)
   })
+
+  it('allows initial Cloud pull with valid Auto Sync enabled/disabled preference and blocks mismatched or corrupt preferences', async () => {
+    // 1. Valid Auto Sync enabled -> pull succeeds
+    const scenarioEnabled = await createOfflineOnlineScenario({ businessMode: 'cloud', initialOnline: true })
+    mockServerHandler.handle = scenarioEnabled.fakeServer.handleRequest
+
+    const cloudContext = makeValidCloudContext({
+      role: 'owner',
+      syncCapabilities: { push_mode: 'full' },
+      capabilityState: 'verified',
+    })
+    useCloudSessionStore(scenarioEnabled.pinia).$patch(cloudContext)
+    await scenarioEnabled.adapter.saveCloudContext(cloudContext)
+    await scenarioEnabled.adapter.saveDeviceIdentifier(cloudContext.deviceIdentifier)
+    await saveToken('mock-bearer-token-123')
+
+    const categorySyncId = '77777777-7777-4777-8777-777777777777'
+    scenarioEnabled.fakeServer.db.categories.push({
+      sync_id: categorySyncId,
+      name: 'Makanan',
+      business_id: 10,
+      sync_version: 1,
+      sync_sequence: 1,
+      is_active: 1,
+    })
+    scenarioEnabled.fakeServer.db.products.push({
+      sync_id: '88888888-8888-4888-8888-888888888888',
+      category_sync_id: categorySyncId,
+      name: 'Nasi Goreng Spesial',
+      price: 25000,
+      stock: 15,
+      business_id: 10,
+      sync_version: 1,
+      sync_sequence: 2,
+      is_active: 1,
+    })
+
+    await scenarioEnabled.adapter.saveSyncAutoSettings({
+      version: 1,
+      enabled: true,
+      context: {
+        businessId: 10,
+        outletId: 101,
+        registeredDeviceId: 55,
+        deviceIdentifier: cloudContext.deviceIdentifier,
+      },
+      updatedAt: new Date().toISOString(),
+    })
+
+    const pullStoreEnabled = useSyncPullStore(scenarioEnabled.pinia)
+    const pullEnabled = await pullStoreEnabled.pullNow({ initialCloudRead: true })
+    expect(pullEnabled.ok).toBe(true)
+
+    const productStore = useProductStore(scenarioEnabled.pinia)
+    expect(productStore.products.some((p) => p.name === 'Nasi Goreng Spesial')).toBe(true)
+
+    // Verify autoSettings was preserved and not deleted
+    const preservedSettings = await scenarioEnabled.adapter.loadSyncAutoSettings()
+    expect(preservedSettings).toMatchObject({
+      version: 1,
+      enabled: true,
+      context: {
+        businessId: 10,
+        outletId: 101,
+      },
+    })
+
+    // Restart preserves preferences and pull binding
+    const restarted = await restartAppScenario(scenarioEnabled)
+    const restartedSettings = await restarted.adapter.loadSyncAutoSettings()
+    expect(restartedSettings.enabled).toBe(true)
+    const restartedPullBinding = await restarted.adapter.loadSyncPullBinding()
+    expect(restartedPullBinding.mode).toBe('cloud_first_read')
+
+    // 2. Foreign business Auto Sync preference -> blocked
+    const scenarioForeign = await createOfflineOnlineScenario({ businessMode: 'cloud', initialOnline: true })
+    mockServerHandler.handle = scenarioForeign.fakeServer.handleRequest
+    useCloudSessionStore(scenarioForeign.pinia).$patch(cloudContext)
+    await scenarioForeign.adapter.saveCloudContext(cloudContext)
+    await scenarioForeign.adapter.saveDeviceIdentifier(cloudContext.deviceIdentifier)
+    await saveToken('mock-bearer-token-123')
+
+    await scenarioForeign.adapter.saveSyncAutoSettings({
+      version: 1,
+      enabled: true,
+      context: {
+        businessId: 999,
+        outletId: 101,
+        registeredDeviceId: 55,
+        deviceIdentifier: cloudContext.deviceIdentifier,
+      },
+      updatedAt: new Date().toISOString(),
+    })
+
+    const reportForeign = await inspectCloudFirstWorkspace({
+      adapter: scenarioForeign.adapter,
+      context: cloudContext,
+    })
+    expect(reportForeign.ok).toBe(true)
+    expect(reportForeign.safeToInitialize).toBe(false)
+    expect(reportForeign.reasons).toContain('auto_sync_context_mismatch')
+
+    const pullStoreForeign = useSyncPullStore(scenarioForeign.pinia)
+    const pullForeign = await pullStoreForeign.pullNow({ initialCloudRead: true })
+    expect(pullForeign.ok).toBe(false)
+    expect(['SYNC_CONTEXT_GUARD_BLOCKED', 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY']).toContain(
+      pullForeign.code,
+    )
+
+    // 3. Corrupt Auto Sync preference -> fail-closed
+    const scenarioCorrupt = await createOfflineOnlineScenario({ businessMode: 'cloud', initialOnline: true })
+    mockServerHandler.handle = scenarioCorrupt.fakeServer.handleRequest
+    useCloudSessionStore(scenarioCorrupt.pinia).$patch(cloudContext)
+    await scenarioCorrupt.adapter.saveCloudContext(cloudContext)
+    await scenarioCorrupt.adapter.saveDeviceIdentifier(cloudContext.deviceIdentifier)
+    await saveToken('mock-bearer-token-123')
+
+    await scenarioCorrupt.adapter.saveSyncAutoSettings({
+      version: 2,
+      enabled: 'not-a-bool',
+    })
+
+    const reportCorrupt = await inspectCloudFirstWorkspace({
+      adapter: scenarioCorrupt.adapter,
+      context: cloudContext,
+    })
+    expect(reportCorrupt.ok).toBe(true)
+    expect(reportCorrupt.safeToInitialize).toBe(false)
+    expect(reportCorrupt.reasons).toContain('auto_sync_settings_invalid')
+
+    const pullStoreCorrupt = useSyncPullStore(scenarioCorrupt.pinia)
+    const pullCorrupt = await pullStoreCorrupt.pullNow({ initialCloudRead: true })
+    expect(pullCorrupt.ok).toBe(false)
+    expect(['SYNC_CONTEXT_GUARD_BLOCKED', 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY']).toContain(
+      pullCorrupt.code,
+    )
+  })
 })
 
 function scenarioHelperAdapter() {

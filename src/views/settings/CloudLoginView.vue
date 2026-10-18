@@ -519,6 +519,12 @@ async function handleConfirmClearActivityLog() {
 async function handleToggleAutoSync(event) {
   if (isAnySyncOperationBusy.value || isContextGuardMutationBlocked.value) return
   const target = event.target.checked
+  if (target && syncContextGuardStore.status !== 'safe') {
+    autoSyncSuccess.value = false
+    autoSyncMessage.value =
+      'Inisialisasi data Cloud harus diselesaikan terlebih dahulu sebelum mengaktifkan sinkronisasi otomatis.'
+    return
+  }
   const res = await syncAutoSyncStore.setEnabled(target)
   if (res.ok) {
     autoSyncSuccess.value = true
@@ -2059,7 +2065,8 @@ onMounted(async () => {
               :disabled="
                 isAnySyncOperationBusy ||
                 syncAutoSyncStore.loadingPreference ||
-                isContextGuardMutationBlocked
+                isContextGuardMutationBlocked ||
+                (!syncAutoSyncStore.enabled && syncContextGuardStore.status !== 'safe')
               "
               @change="handleToggleAutoSync"
             />

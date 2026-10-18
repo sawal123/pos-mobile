@@ -240,6 +240,142 @@ export async function inspectLocalBusinessWorkspace({ adapter, runtime = null } 
   }
 }
 
+function isPlainObject(val) {
+  return val !== null && typeof val === 'object' && !Array.isArray(val)
+}
+
+function isValidDateString(val) {
+  if (typeof val !== 'string' || !val.trim()) return false
+  const time = new Date(val).getTime()
+  return Number.isFinite(time)
+}
+
+function extractContextIdentity(ctx) {
+  if (!ctx || typeof ctx !== 'object') return null
+
+  const businessId =
+    ctx.businessId ??
+    (ctx.selectedBusiness && typeof ctx.selectedBusiness === 'object'
+      ? ctx.selectedBusiness.id
+      : null)
+  const outletId =
+    ctx.outletId ??
+    (ctx.selectedOutlet && typeof ctx.selectedOutlet === 'object'
+      ? ctx.selectedOutlet.id
+      : null)
+  const registeredDeviceId = ctx.registeredDeviceId ?? null
+  const deviceIdentifier =
+    typeof ctx.deviceIdentifier === 'string' && ctx.deviceIdentifier.trim()
+      ? ctx.deviceIdentifier.trim()
+      : null
+
+  const parsedBusinessId = Number(businessId)
+  const parsedOutletId = Number(outletId)
+  const parsedDeviceId = Number(registeredDeviceId)
+
+  if (
+    !Number.isInteger(parsedBusinessId) ||
+    parsedBusinessId <= 0 ||
+    !Number.isInteger(parsedOutletId) ||
+    parsedOutletId <= 0 ||
+    !Number.isInteger(parsedDeviceId) ||
+    parsedDeviceId <= 0 ||
+    !deviceIdentifier
+  ) {
+    return null
+  }
+
+  return {
+    businessId: parsedBusinessId,
+    outletId: parsedOutletId,
+    registeredDeviceId: parsedDeviceId,
+    deviceIdentifier,
+  }
+}
+
+function evaluateAutoSyncPreferenceSafety(autoSettings, targetContext) {
+  if (autoSettings === null || autoSettings === undefined) {
+    return { safe: true }
+  }
+
+  if (!isPlainObject(autoSettings)) {
+    return { safe: false, reason: 'auto_sync_settings_invalid' }
+  }
+
+  const allowedKeys = new Set(['version', 'enabled', 'context', 'updatedAt'])
+  for (const k of Object.keys(autoSettings)) {
+    if (!allowedKeys.has(k)) {
+      return { safe: false, reason: 'auto_sync_settings_invalid' }
+    }
+  }
+
+  if (autoSettings.version !== 1) {
+    return { safe: false, reason: 'auto_sync_settings_invalid' }
+  }
+
+  if (typeof autoSettings.enabled !== 'boolean') {
+    return { safe: false, reason: 'auto_sync_settings_invalid' }
+  }
+
+  if (!isValidDateString(autoSettings.updatedAt)) {
+    return { safe: false, reason: 'auto_sync_settings_invalid' }
+  }
+
+  const hasContext = autoSettings.context !== null && autoSettings.context !== undefined
+  if (autoSettings.enabled === true && !hasContext) {
+    return { safe: false, reason: 'auto_sync_settings_invalid' }
+  }
+
+  if (hasContext) {
+    if (!isPlainObject(autoSettings.context)) {
+      return { safe: false, reason: 'auto_sync_settings_invalid' }
+    }
+
+    const allowedCtxKeys = new Set(['businessId', 'outletId', 'deviceIdentifier', 'registeredDeviceId'])
+    for (const k of Object.keys(autoSettings.context)) {
+      if (!allowedCtxKeys.has(k)) {
+        return { safe: false, reason: 'auto_sync_settings_invalid' }
+      }
+    }
+
+    const { businessId, outletId, registeredDeviceId, deviceIdentifier } = autoSettings.context
+    const parsedBusinessId = Number(businessId)
+    const parsedOutletId = Number(outletId)
+    const parsedDeviceId = Number(registeredDeviceId)
+
+    if (
+      !Number.isInteger(parsedBusinessId) ||
+      parsedBusinessId <= 0 ||
+      !Number.isInteger(parsedOutletId) ||
+      parsedOutletId <= 0 ||
+      !Number.isInteger(parsedDeviceId) ||
+      parsedDeviceId <= 0 ||
+      typeof deviceIdentifier !== 'string' ||
+      !deviceIdentifier.trim() ||
+      deviceIdentifier.length > 128
+    ) {
+      return { safe: false, reason: 'auto_sync_settings_invalid' }
+    }
+
+    const expected = extractContextIdentity(targetContext)
+    if (!expected) {
+      return { safe: false, reason: 'auto_sync_context_mismatch' }
+    }
+
+    const isMatch =
+      parsedBusinessId === expected.businessId &&
+      parsedOutletId === expected.outletId &&
+      parsedDeviceId === expected.registeredDeviceId &&
+      deviceIdentifier.trim() === expected.deviceIdentifier
+
+    if (!isMatch) {
+      return { safe: false, reason: 'auto_sync_context_mismatch' }
+    }
+  }
+
+  return { safe: true }
+}
+
 /**
  * Read-only safety check used by the Cloud-first download flow.
  *
@@ -249,7 +385,11 @@ export async function inspectLocalBusinessWorkspace({ adapter, runtime = null } 
  * Every other operational or sync artifact remains a hard stop, so this helper
  * cannot be used to merge or overwrite an existing workspace.
  */
-export async function inspectCloudFirstWorkspace({ adapter, scheduler = null } = {}) {
+export async function inspectCloudFirstWorkspace({
+  adapter,
+  scheduler = null,
+  context = null,
+} = {}) {
   if (!adapter || CLOUD_FIRST_REQUIRED_READERS.some((key) => typeof adapter[key] !== 'function')) {
     return {
       ok: false,
@@ -273,6 +413,15 @@ export async function inspectCloudFirstWorkspace({ adapter, scheduler = null } =
   }
 
   try {
+    let targetContext = context
+    if (!targetContext && typeof adapter.loadCloudContext === 'function') {
+      try {
+        targetContext = await adapter.loadCloudContext()
+      } catch {
+        targetContext = null
+      }
+    }
+
     const [
       storedProducts,
       storedCustomers,
@@ -326,8 +475,12 @@ export async function inspectCloudFirstWorkspace({ adapter, scheduler = null } =
     if (hasRows(storedCash?.entries)) reasons.push('cash')
     if (hasMeaningfulShift(storedShift)) reasons.push('shift')
     if (hasRows(syncQueue)) reasons.push('sync_queue')
-    if (pushBinding || pullBinding || inflight || bootstrap || identityMap || serverVersions || autoSettings) {
+    if (pushBinding || pullBinding || inflight || bootstrap || identityMap || serverVersions) {
       reasons.push('sync_metadata')
+    }
+    const autoSyncSafety = evaluateAutoSyncPreferenceSafety(autoSettings, targetContext)
+    if (!autoSyncSafety.safe) {
+      reasons.push(autoSyncSafety.reason)
     }
     if (hasPendingLocalOperation(localOperationJournal)) reasons.push('local_operation_pending')
     if (hasUnfinishedRestore(restoreJournal)) reasons.push('restore_journal_pending')
