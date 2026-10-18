@@ -1577,6 +1577,322 @@ describe('Cloud-First Sync Completion E2E (PR #60 Task 4)', () => {
     expect(trx).toHaveLength(1)
     expect(trx[0].id).toBe(saleUuid)
   })
+
+  it('17. Local transaction with valid UUID and no pending outbox appearing after interrupted pull is NOT assumed remote and fails closed on retry', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud', initialOnline: true })
+    const localSaleUuid = '770e8400-e29b-41d4-a716-446655440099'
+
+    const cloudContext = makeValidCloudContext({ role: 'owner', syncCapabilities: { push_mode: 'full' } })
+    useCloudSessionStore(scenario.pinia).$patch(cloudContext)
+    await scenario.adapter.saveCloudContext(cloudContext)
+
+    // Interrupted pull state
+    await scenario.adapter.saveCloudInitializationJournal({
+      version: 1,
+      phase: 'initializing',
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: cloudContext.deviceIdentifier,
+      registeredDeviceId: 55,
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      updatedAt: new Date().toISOString(),
+    })
+    await scenario.adapter.saveSyncPullBinding({
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: cloudContext.deviceIdentifier,
+      registeredDeviceId: 55,
+      boundAt: new Date().toISOString(),
+      mode: 'cloud_first_read',
+      status: 'initializing',
+    })
+
+    // Local transaction with valid UUID created offline / after interrupted pull without pending outbox
+    const localTransactions = [
+      {
+        id: localSaleUuid,
+        invoiceNumber: 'INV-LOCAL-001',
+        status: 'paid',
+        paymentStatus: 'paid',
+        total: 15000,
+        items: [],
+      },
+    ]
+    await scenario.adapter.saveTransactions(localTransactions)
+    useTransactionStore(scenario.pinia).$patch({ items: localTransactions })
+
+    // Cloud returns empty records or unrelated records that DO NOT include the local transaction
+    mockServerHandler.handle = async () => ({
+      ok: true,
+      status: 200,
+      data: {
+        data: {
+          records: [],
+          next_cursor: 0,
+          server_sequence: 0,
+          has_more: false,
+        },
+      },
+    })
+
+    const pullStore = useSyncPullStore(scenario.pinia)
+    const result = await pullStore.pullNow({ initialCloudRead: true })
+
+    // MUST fail closed because provenance cannot be proven
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY')
+    expect(result.error?.reasons).toContain('transactions')
+
+    // Local transaction MUST NOT be deleted or overwritten
+    const storedTrx = await scenario.adapter.loadTransactions()
+    expect(storedTrx).toHaveLength(1)
+    expect(storedTrx[0].id).toBe(localSaleUuid)
+
+    // Pull binding must NOT be marked completed
+    const binding = await scenario.adapter.loadSyncPullBinding()
+    expect(binding?.status).toBe('initializing')
+  })
+
+  it('18. Distinguishes provably remote transaction from unverified local transaction when durable bindings exist', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud', initialOnline: true })
+    const remoteSaleUuid = '660e8400-e29b-41d4-a716-446655440003'
+    const localSaleUuid = '770e8400-e29b-41d4-a716-446655440099'
+
+    const cloudContext = makeValidCloudContext({ role: 'owner', syncCapabilities: { push_mode: 'full' } })
+    useCloudSessionStore(scenario.pinia).$patch(cloudContext)
+    await scenario.adapter.saveCloudContext(cloudContext)
+
+    await scenario.adapter.saveCloudInitializationJournal({
+      version: 1,
+      phase: 'initializing',
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: cloudContext.deviceIdentifier,
+      registeredDeviceId: 55,
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      updatedAt: new Date().toISOString(),
+    })
+    await scenario.adapter.saveSyncPullBinding({
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: cloudContext.deviceIdentifier,
+      registeredDeviceId: 55,
+      boundAt: new Date().toISOString(),
+      mode: 'cloud_first_read',
+      status: 'initializing',
+    })
+
+    // Durable proof exists for the remote sale
+    await scenario.adapter.saveSyncIdentityMap({
+      [`transaction:${remoteSaleUuid}`]: remoteSaleUuid,
+    })
+    await scenario.adapter.saveSyncServerVersions({
+      [`sales:${remoteSaleUuid}`]: { syncVersion: 1, syncSequence: 1 },
+    })
+
+    // Both the proven remote transaction and unverified local transaction exist in SQLite
+    const transactions = [
+      {
+        id: remoteSaleUuid,
+        invoiceNumber: 'INV-REMOTE-001',
+        status: 'paid',
+        paymentStatus: 'paid',
+        total: 25000,
+        items: [],
+      },
+      {
+        id: localSaleUuid,
+        invoiceNumber: 'INV-LOCAL-001',
+        status: 'paid',
+        paymentStatus: 'paid',
+        total: 15000,
+        items: [],
+      },
+    ]
+    await scenario.adapter.saveTransactions(transactions)
+    useTransactionStore(scenario.pinia).$patch({ items: transactions })
+
+    // Preflight inspect MUST detect unmapped local transaction and fail closed
+    const inspectReport = await inspectCloudFirstWorkspace({ adapter: scenario.adapter, context: cloudContext })
+    expect(inspectReport.safeToInitialize).toBe(false)
+    expect(inspectReport.reasons).toContain('transactions')
+
+    // Cloud returns only the remote sale
+    mockServerHandler.handle = async () => ({
+      ok: true,
+      status: 200,
+      data: {
+        data: {
+          records: [
+            {
+              entity: 'sales',
+              sync_sequence: 1,
+              data: {
+                sync_id: remoteSaleUuid,
+                sync_version: 1,
+                transaction_number: 'INV-REMOTE-001',
+                status: 'paid',
+                payment_status: 'paid',
+                subtotal: 25000,
+                tax_amount: 0,
+                total_amount: 25000,
+                sold_at: '2026-10-18T11:00:00Z',
+              },
+            },
+          ],
+          next_cursor: 1,
+          server_sequence: 1,
+          has_more: false,
+        },
+      },
+    })
+
+    const pullStore = useSyncPullStore(scenario.pinia)
+    const result = await pullStore.pullNow({ initialCloudRead: true })
+
+    // MUST fail closed because unverified local sale cannot be merged
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY')
+    expect(result.error?.reasons).toContain('transactions')
+
+    // Neither transaction is deleted
+    const storedTrx = await scenario.adapter.loadTransactions()
+    expect(storedTrx).toHaveLength(2)
+  })
+
+  it('19. Local cash entry with valid UUID and no pending outbox fails closed and is NOT assumed remote', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud', initialOnline: true })
+    const localCashUuid = '880e8400-e29b-41d4-a716-446655440088'
+
+    const cloudContext = makeValidCloudContext({ role: 'owner', syncCapabilities: { push_mode: 'full' } })
+    useCloudSessionStore(scenario.pinia).$patch(cloudContext)
+    await scenario.adapter.saveCloudContext(cloudContext)
+
+    await scenario.adapter.saveCloudInitializationJournal({
+      version: 1,
+      phase: 'initializing',
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: cloudContext.deviceIdentifier,
+      registeredDeviceId: 55,
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      updatedAt: new Date().toISOString(),
+    })
+    await scenario.adapter.saveSyncPullBinding({
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: cloudContext.deviceIdentifier,
+      registeredDeviceId: 55,
+      boundAt: new Date().toISOString(),
+      mode: 'cloud_first_read',
+      status: 'initializing',
+    })
+
+    await scenario.adapter.saveCashState({
+      entries: [
+        {
+          id: localCashUuid,
+          type: 'in',
+          amount: 50000,
+          category: 'Modal Awal',
+          note: 'Kas lokal',
+          createdAt: new Date().toISOString(),
+        },
+      ],
+    })
+
+    // Cloud returns empty records
+    mockServerHandler.handle = async () => ({
+      ok: true,
+      status: 200,
+      data: {
+        data: {
+          records: [],
+          next_cursor: 0,
+          server_sequence: 0,
+          has_more: false,
+        },
+      },
+    })
+
+    const pullStore = useSyncPullStore(scenario.pinia)
+    const result = await pullStore.pullNow({ initialCloudRead: true })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY')
+    expect(result.error?.reasons).toContain('cash')
+
+    // Local cash entry remains intact
+    const storedCash = await scenario.adapter.loadCashState()
+    expect(storedCash.entries).toHaveLength(1)
+    expect(storedCash.entries[0].id).toBe(localCashUuid)
+  })
+
+  it('20. Local shift with valid UUID and no pending outbox fails closed and is NOT assumed remote', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud', initialOnline: true })
+    const localShiftUuid = '990e8400-e29b-41d4-a716-446655440077'
+
+    const cloudContext = makeValidCloudContext({ role: 'owner', syncCapabilities: { push_mode: 'full' } })
+    useCloudSessionStore(scenario.pinia).$patch(cloudContext)
+    await scenario.adapter.saveCloudContext(cloudContext)
+
+    await scenario.adapter.saveCloudInitializationJournal({
+      version: 1,
+      phase: 'initializing',
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: cloudContext.deviceIdentifier,
+      registeredDeviceId: 55,
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      updatedAt: new Date().toISOString(),
+    })
+    await scenario.adapter.saveSyncPullBinding({
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: cloudContext.deviceIdentifier,
+      registeredDeviceId: 55,
+      boundAt: new Date().toISOString(),
+      mode: 'cloud_first_read',
+      status: 'initializing',
+    })
+
+    await scenario.adapter.saveShiftState({
+      id: localShiftUuid,
+      shiftNumber: 'SHIFT-LOCAL-001',
+      status: 'open',
+      openingBalance: 100000,
+      openedAt: new Date().toISOString(),
+    })
+
+    // Cloud returns records that do NOT contain this shift
+    mockServerHandler.handle = async () => ({
+      ok: true,
+      status: 200,
+      data: {
+        data: {
+          records: [],
+          next_cursor: 0,
+          server_sequence: 0,
+          has_more: false,
+        },
+      },
+    })
+
+    const pullStore = useSyncPullStore(scenario.pinia)
+    const result = await pullStore.pullNow({ initialCloudRead: true })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY')
+    expect(result.error?.reasons).toContain('shift')
+
+    // Local shift remains intact
+    const storedShift = await scenario.adapter.loadShiftState()
+    expect(storedShift.id).toBe(localShiftUuid)
+  })
 })
 
 function scenarioHelperAdapter() {

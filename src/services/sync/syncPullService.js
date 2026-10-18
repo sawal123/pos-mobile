@@ -10,7 +10,12 @@ import { useCustomerStore } from '@/stores/customerStore'
 import { useExpenseStore } from '@/stores/expenseStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import { useTransactionStore } from '@/stores/transactionStore'
-import { inspectCloudFirstWorkspace } from '@/services/cloud/businessContextActivation'
+import {
+  inspectCloudFirstWorkspace,
+  isTransactionMapped,
+  isCashEntryMapped,
+  isShiftMapped,
+} from '@/services/cloud/businessContextActivation'
 
 const KNOWN_ENTITIES = new Set([
   'categories',
@@ -36,6 +41,94 @@ export function isProductionApiConfigured() {
   }
 
   return /^https?:\/\//i.test(BASE_URL)
+}
+
+async function verifyProvenance({
+  baselineTransactionIds,
+  baselineCashEntryIds,
+  baselineShift,
+  allRecords = [],
+  serverVersionsToSave = {},
+  identityMap = null,
+  serverVersions = null,
+  activeRegistry = null,
+}) {
+  if (baselineTransactionIds && baselineTransactionIds.size > 0) {
+    for (const txId of baselineTransactionIds) {
+      const normId = String(txId).trim().toLowerCase()
+      const inAllRecords = allRecords.some(
+        (r) => r.entity === 'sales' && r.data && String(r.data.sync_id).trim().toLowerCase() === normId,
+      )
+      const inServerVersionsToSave = Boolean(
+        serverVersionsToSave && (serverVersionsToSave[`sales:${normId}`] || serverVersionsToSave[`sales:${txId}`]),
+      )
+      const inDurableMap = isTransactionMapped(txId, identityMap, serverVersions)
+      let inRegistry = false
+      if (!inAllRecords && !inServerVersionsToSave && !inDurableMap && activeRegistry) {
+        try {
+          inRegistry = await activeRegistry.hasSyncId('transaction', txId)
+        } catch {
+          inRegistry = false
+        }
+      }
+      if (!inAllRecords && !inServerVersionsToSave && !inDurableMap && !inRegistry) {
+        return { ok: false, reason: 'transactions' }
+      }
+    }
+  }
+
+  if (baselineCashEntryIds && baselineCashEntryIds.size > 0) {
+    for (const cashId of baselineCashEntryIds) {
+      const normId = String(cashId).trim().toLowerCase()
+      const inAllRecords = allRecords.some(
+        (r) => r.entity === 'cash_ledger' && r.data && String(r.data.sync_id).trim().toLowerCase() === normId,
+      )
+      const inServerVersionsToSave = Boolean(
+        serverVersionsToSave && (serverVersionsToSave[`cash_ledger:${normId}`] || serverVersionsToSave[`cash_ledger:${cashId}`]),
+      )
+      const inDurableMap = isCashEntryMapped(cashId, identityMap, serverVersions)
+      let inRegistry = false
+      if (!inAllRecords && !inServerVersionsToSave && !inDurableMap && activeRegistry) {
+        try {
+          inRegistry = await activeRegistry.hasSyncId('cash_entry', cashId)
+        } catch {
+          inRegistry = false
+        }
+      }
+      if (!inAllRecords && !inServerVersionsToSave && !inDurableMap && !inRegistry) {
+        return { ok: false, reason: 'cash' }
+      }
+    }
+  }
+
+  if (baselineShift) {
+    const normId = baselineShift.id ? String(baselineShift.id).trim().toLowerCase() : ''
+    const shiftNum = baselineShift.shiftNumber ? String(baselineShift.shiftNumber).trim() : ''
+    const inAllRecords = allRecords.some(
+      (r) =>
+        r.entity === 'shifts' &&
+        r.data &&
+        ((normId && String(r.data.sync_id).trim().toLowerCase() === normId) ||
+          (shiftNum && String(r.data.shift_number).trim() === shiftNum)),
+    )
+    const inServerVersionsToSave = Boolean(
+      serverVersionsToSave && normId && (serverVersionsToSave[`shifts:${normId}`] || serverVersionsToSave[`shifts:${baselineShift.id}`]),
+    )
+    const inDurableMap = isShiftMapped(baselineShift, identityMap, serverVersions)
+    let inRegistry = false
+    if (!inAllRecords && !inServerVersionsToSave && !inDurableMap && activeRegistry) {
+      try {
+        inRegistry = normId ? await activeRegistry.hasSyncId('shift', baselineShift.id) : false
+      } catch {
+        inRegistry = false
+      }
+    }
+    if (!inAllRecords && !inServerVersionsToSave && !inDurableMap && !inRegistry) {
+      return { ok: false, reason: 'shift' }
+    }
+  }
+
+  return { ok: true }
 }
 
 const MAX_PULL_PAGES = 1000
@@ -204,6 +297,8 @@ export function createSyncPullService({
     )
 
     let baselineTransactionIds = new Set()
+    let baselineCashEntryIds = new Set()
+    let baselineShift = null
 
     if (adapter && typeof adapter.loadSyncPushBinding === 'function') {
       const pushBinding = await adapter.loadSyncPushBinding()
@@ -257,6 +352,47 @@ export function createSyncPullService({
             }
           } catch {
             baselineTransactionIds = new Set()
+          }
+        }
+        if (stores?.transactionStore?.items && Array.isArray(stores.transactionStore.items)) {
+          for (const t of stores.transactionStore.items) {
+            if (t && t.id) baselineTransactionIds.add(String(t.id))
+          }
+        }
+
+        if (adapter && typeof adapter.loadCashState === 'function') {
+          try {
+            const currentCash = await adapter.loadCashState()
+            const entries = currentCash?.entries
+            if (Array.isArray(entries)) {
+              for (const e of entries) {
+                if (e && e.id) baselineCashEntryIds.add(String(e.id))
+              }
+            }
+          } catch {
+            baselineCashEntryIds = new Set()
+          }
+        }
+        if (stores?.cashStore?.entries && Array.isArray(stores.cashStore.entries)) {
+          for (const e of stores.cashStore.entries) {
+            if (e && e.id) baselineCashEntryIds.add(String(e.id))
+          }
+        }
+
+        if (adapter && typeof adapter.loadShiftState === 'function') {
+          try {
+            const currentShift = await adapter.loadShiftState()
+            if (currentShift && typeof currentShift === 'object' && (currentShift.id || currentShift.shiftNumber)) {
+              baselineShift = currentShift
+            }
+          } catch {
+            baselineShift = null
+          }
+        }
+        if (!baselineShift && stores?.shiftStore && (stores.shiftStore.id || stores.shiftStore.shiftNumber)) {
+          baselineShift = {
+            id: stores.shiftStore.id,
+            shiftNumber: stores.shiftStore.shiftNumber,
           }
         }
 
@@ -501,6 +637,87 @@ export function createSyncPullService({
 
     // ── 6. Handle empty snapshot ──────────────────────────────────────────────
     if (allRecords.length === 0) {
+      if (isInitialCloudPull) {
+        let freshQueueCount = 0
+        if (activeQueueService && typeof activeQueueService.countPending === 'function') {
+          freshQueueCount = await activeQueueService.countPending()
+        } else if (adapter && typeof adapter.listSyncQueueItems === 'function') {
+          const q = await adapter.listSyncQueueItems({ limit: 1 })
+          freshQueueCount = Array.isArray(q) ? q.length : 0
+        }
+        if (freshQueueCount > 0) {
+          return {
+            ok: false,
+            code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+            message: 'Local operations were created during Cloud initialization. Initial pull cannot merge local changes.',
+            error: {
+              code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+              reasons: ['sync_queue'],
+            },
+          }
+        }
+
+        let freshTrx = []
+        if (adapter && typeof adapter.loadTransactions === 'function') {
+          freshTrx = await adapter.loadTransactions()
+        }
+        const allTransactionIds = new Set(baselineTransactionIds)
+        if (Array.isArray(freshTrx)) {
+          for (const tx of freshTrx) {
+            if (tx && tx.id) allTransactionIds.add(String(tx.id))
+          }
+        }
+
+        let freshCash = []
+        if (adapter && typeof adapter.loadCashState === 'function') {
+          const cashState = await adapter.loadCashState()
+          freshCash = cashState?.entries ?? []
+        }
+        const allCashEntryIds = new Set(baselineCashEntryIds)
+        if (Array.isArray(freshCash)) {
+          for (const c of freshCash) {
+            if (c && c.id) allCashEntryIds.add(String(c.id))
+          }
+        }
+
+        let activeShift = baselineShift
+        if (adapter && typeof adapter.loadShiftState === 'function') {
+          const shiftState = await adapter.loadShiftState()
+          if (shiftState && typeof shiftState === 'object' && (shiftState.id || shiftState.shiftNumber)) {
+            activeShift = shiftState
+          }
+        }
+
+        const currentIdentityMap = adapter && typeof adapter.loadSyncIdentityMap === 'function'
+          ? await adapter.loadSyncIdentityMap()
+          : null
+        const currentServerVersions = adapter && typeof adapter.loadSyncServerVersions === 'function'
+          ? await adapter.loadSyncServerVersions()
+          : null
+
+        const provenanceCheck = await verifyProvenance({
+          baselineTransactionIds: allTransactionIds,
+          baselineCashEntryIds: allCashEntryIds,
+          baselineShift: activeShift,
+          allRecords: [],
+          serverVersionsToSave: {},
+          identityMap: currentIdentityMap,
+          serverVersions: currentServerVersions,
+          activeRegistry,
+        })
+
+        if (!provenanceCheck.ok) {
+          return {
+            ok: false,
+            code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+            message: `Unverified local ${provenanceCheck.reason} detected during Cloud initialization. Initial pull cannot merge local changes.`,
+            error: {
+              code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+              reasons: [provenanceCheck.reason],
+            },
+          }
+        }
+      }
       if (
         options.initialCloudRead === true &&
         adapter &&
@@ -1815,21 +2032,59 @@ export function createSyncPullService({
       if (adapter && typeof adapter.loadTransactions === 'function') {
         freshTrx = await adapter.loadTransactions()
       }
-      const hasNewLocalTrx =
-        Array.isArray(freshTrx) &&
-        freshTrx.some((tx) => {
-          if (!tx || typeof tx !== 'object') return true
-          if (!isUuid(tx.id)) return true
-          return !baselineTransactionIds.has(String(tx.id))
-        })
-      if (hasNewLocalTrx) {
+      const allTransactionIds = new Set(baselineTransactionIds)
+      if (Array.isArray(freshTrx)) {
+        for (const tx of freshTrx) {
+          if (tx && tx.id) allTransactionIds.add(String(tx.id))
+        }
+      }
+
+      let freshCash = []
+      if (adapter && typeof adapter.loadCashState === 'function') {
+        const cashState = await adapter.loadCashState()
+        freshCash = cashState?.entries ?? []
+      }
+      const allCashEntryIds = new Set(baselineCashEntryIds)
+      if (Array.isArray(freshCash)) {
+        for (const c of freshCash) {
+          if (c && c.id) allCashEntryIds.add(String(c.id))
+        }
+      }
+
+      let activeShift = baselineShift
+      if (adapter && typeof adapter.loadShiftState === 'function') {
+        const shiftState = await adapter.loadShiftState()
+        if (shiftState && typeof shiftState === 'object' && (shiftState.id || shiftState.shiftNumber)) {
+          activeShift = shiftState
+        }
+      }
+
+      const currentIdentityMap = adapter && typeof adapter.loadSyncIdentityMap === 'function'
+        ? await adapter.loadSyncIdentityMap()
+        : null
+      const currentServerVersions = adapter && typeof adapter.loadSyncServerVersions === 'function'
+        ? await adapter.loadSyncServerVersions()
+        : null
+
+      const provenanceCheck = await verifyProvenance({
+        baselineTransactionIds: allTransactionIds,
+        baselineCashEntryIds: allCashEntryIds,
+        baselineShift: activeShift,
+        allRecords,
+        serverVersionsToSave,
+        identityMap: currentIdentityMap,
+        serverVersions: currentServerVersions,
+        activeRegistry,
+      })
+
+      if (!provenanceCheck.ok) {
         return {
           ok: false,
           code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
-          message: 'Local transactions were created during Cloud initialization. Initial pull cannot merge local changes.',
+          message: `Unverified local ${provenanceCheck.reason} detected during Cloud initialization. Initial pull cannot merge local changes.`,
           error: {
             code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
-            reasons: ['transactions'],
+            reasons: [provenanceCheck.reason],
           },
         }
       }

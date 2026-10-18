@@ -24,6 +24,9 @@ import {
   inspectCloudFirstWorkspace,
   inspectLocalBusinessWorkspace,
   WORKSPACE_CLASSIFICATION,
+  isTransactionMapped,
+  isCashEntryMapped,
+  isShiftMapped,
 } from '@/services/cloud/businessContextActivation'
 import {
   LOCAL_WORKSPACE_ID,
@@ -699,6 +702,100 @@ describe('13. Cloud-first workspace safety journals', () => {
     expect(report6.ok).toBe(true)
     expect(report6.safeToInitialize).toBe(false)
     expect(report6.reasons).toContain('transactions')
+  })
+})
+
+describe('Cloud-first provenance classification & interrupted recovery', () => {
+  it('identifies mapped versus unmapped UUID records in durable bindings', () => {
+    const identityMap = {
+      'transaction:660e8400-e29b-41d4-a716-446655440001': '660e8400-e29b-41d4-a716-446655440001',
+      'cash_entry:660e8400-e29b-41d4-a716-446655440002': '660e8400-e29b-41d4-a716-446655440002',
+      'shift:SHIFT-001': '660e8400-e29b-41d4-a716-446655440003',
+    }
+    const serverVersions = {
+      'sales:660e8400-e29b-41d4-a716-446655440001': { syncVersion: 1 },
+      'cash_ledger:660e8400-e29b-41d4-a716-446655440002': { syncVersion: 1 },
+      'shifts:660e8400-e29b-41d4-a716-446655440003': { syncVersion: 1 },
+    }
+
+    // Mapped entries
+    expect(isTransactionMapped('660e8400-e29b-41d4-a716-446655440001', identityMap, serverVersions)).toBe(true)
+    expect(isCashEntryMapped('660e8400-e29b-41d4-a716-446655440002', identityMap, serverVersions)).toBe(true)
+    expect(isShiftMapped({ id: '660e8400-e29b-41d4-a716-446655440003', shiftNumber: 'SHIFT-001' }, identityMap, serverVersions)).toBe(true)
+
+    // Unmapped UUID entries (e.g. locally created)
+    expect(isTransactionMapped('770e8400-e29b-41d4-a716-446655440099', identityMap, serverVersions)).toBe(false)
+    expect(isCashEntryMapped('770e8400-e29b-41d4-a716-446655440099', identityMap, serverVersions)).toBe(false)
+    expect(isShiftMapped({ id: '770e8400-e29b-41d4-a716-446655440099', shiftNumber: 'SHIFT-LOCAL' }, identityMap, serverVersions)).toBe(false)
+  })
+
+  it('fresh workspace with UUID transactions is classified as local operational data and blocked from initial pull', async () => {
+    const adapter = createMemoryAdapter()
+    await adapter.initialize()
+    const validContext = {
+      selectedBusiness: { id: 10 },
+      selectedOutlet: { id: 101 },
+      registeredDeviceId: 55,
+      deviceIdentifier: 'dev-123',
+    }
+    await adapter.saveCloudContext(validContext)
+
+    // Local transaction with a valid UUID created offline
+    await adapter.saveTransactions([
+      {
+        id: '770e8400-e29b-41d4-a716-446655440099',
+        total: 20000,
+      },
+    ])
+
+    const report = await inspectCloudFirstWorkspace({ adapter, context: validContext })
+    expect(report.ok).toBe(true)
+    expect(report.safeToInitialize).toBe(false)
+    expect(report.reasons).toContain('transactions')
+  })
+
+  it('interrupted pull with unmapped UUID cash entry or shift fails closed when durable bindings exist', async () => {
+    const adapter = createMemoryAdapter()
+    await adapter.initialize()
+    const validContext = {
+      businessId: 10,
+      outletId: 101,
+      registeredDeviceId: 55,
+      deviceIdentifier: 'dev-123',
+    }
+    await adapter.saveCloudContext(validContext)
+    await adapter.saveCloudInitializationJournal({
+      version: 1,
+      phase: 'initializing',
+      ...validContext,
+      startedAt: new Date().toISOString(),
+    })
+    await adapter.saveSyncPullBinding({
+      ...validContext,
+      mode: 'cloud_first_read',
+      status: 'initializing',
+      boundAt: new Date().toISOString(),
+    })
+
+    // Durable bindings exist for a remote cash entry
+    const remoteCashId = '660e8400-e29b-41d4-a716-446655440002'
+    await adapter.saveSyncIdentityMap({
+      [`cash_entry:${remoteCashId}`]: remoteCashId,
+    })
+
+    // But local cash entry with valid UUID was added
+    const localCashId = '880e8400-e29b-41d4-a716-446655440088'
+    await adapter.saveCashState({
+      entries: [
+        { id: remoteCashId, amount: 10000 },
+        { id: localCashId, amount: 20000 },
+      ],
+    })
+
+    const report = await inspectCloudFirstWorkspace({ adapter, context: validContext })
+    expect(report.ok).toBe(true)
+    expect(report.safeToInitialize).toBe(false)
+    expect(report.reasons).toContain('cash')
   })
 })
 

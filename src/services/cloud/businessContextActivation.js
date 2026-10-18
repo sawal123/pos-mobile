@@ -75,7 +75,21 @@ function hasMeaningfulBusiness(value) {
   return Boolean(value && (isNonEmptyText(value.name) || isNonEmptyText(value.type)))
 }
 
-function hasLocalOperationalTransactions(storedTransactions, syncQueue) {
+export function isTransactionMapped(id, identityMap, serverVersions) {
+  if (!id) return false
+  const normId = String(id).trim().toLowerCase()
+  if (identityMap && typeof identityMap === 'object') {
+    if (identityMap[`transaction:${normId}`] || identityMap[`transaction:${id}`]) return true
+    if (identityMap.transaction && (identityMap.transaction[normId] || identityMap.transaction[id])) return true
+    if (identityMap.transactions && (identityMap.transactions[normId] || identityMap.transactions[id])) return true
+  }
+  if (serverVersions && typeof serverVersions === 'object') {
+    if (serverVersions[`sales:${normId}`] || serverVersions[`sales:${id}`]) return true
+  }
+  return false
+}
+
+function hasLocalOperationalTransactions(storedTransactions, syncQueue, identityMap = null, serverVersions = null) {
   if (!hasRows(storedTransactions)) return false
 
   if (
@@ -92,10 +106,40 @@ function hasLocalOperationalTransactions(storedTransactions, syncQueue) {
     if (!isUuid(tx.id)) return true
   }
 
+  const hasDurableBindings = Boolean(
+    (identityMap && (
+      Object.keys(identityMap).some((k) => k.startsWith('transaction:')) ||
+      (identityMap.transaction && Object.keys(identityMap.transaction).length > 0) ||
+      (identityMap.transactions && Object.keys(identityMap.transactions).length > 0)
+    )) ||
+    (serverVersions && Object.keys(serverVersions).some((k) => k.startsWith('sales:')))
+  )
+
+  if (hasDurableBindings) {
+    for (const tx of storedTransactions) {
+      if (!isTransactionMapped(tx.id, identityMap, serverVersions)) {
+        return true
+      }
+    }
+  }
+
   return false
 }
 
-function hasLocalOperationalCash(storedCash, syncQueue) {
+export function isCashEntryMapped(id, identityMap, serverVersions) {
+  if (!id) return false
+  const normId = String(id).trim().toLowerCase()
+  if (identityMap && typeof identityMap === 'object') {
+    if (identityMap[`cash_entry:${normId}`] || identityMap[`cash_entry:${id}`]) return true
+    if (identityMap.cash_entry && (identityMap.cash_entry[normId] || identityMap.cash_entry[id])) return true
+  }
+  if (serverVersions && typeof serverVersions === 'object') {
+    if (serverVersions[`cash_ledger:${normId}`] || serverVersions[`cash_ledger:${id}`]) return true
+  }
+  return false
+}
+
+function hasLocalOperationalCash(storedCash, syncQueue, identityMap = null, serverVersions = null) {
   const entries = storedCash?.entries
   if (!hasRows(entries)) return false
 
@@ -112,10 +156,41 @@ function hasLocalOperationalCash(storedCash, syncQueue) {
     if (!entry || typeof entry !== 'object' || !isUuid(entry.id)) return true
   }
 
+  const hasDurableBindings = Boolean(
+    (identityMap && (
+      Object.keys(identityMap).some((k) => k.startsWith('cash_entry:')) ||
+      (identityMap.cash_entry && Object.keys(identityMap.cash_entry).length > 0)
+    )) ||
+    (serverVersions && Object.keys(serverVersions).some((k) => k.startsWith('cash_ledger:')))
+  )
+
+  if (hasDurableBindings) {
+    for (const entry of entries) {
+      if (!isCashEntryMapped(entry.id, identityMap, serverVersions)) {
+        return true
+      }
+    }
+  }
+
   return false
 }
 
-function hasLocalOperationalShift(storedShift, syncQueue) {
+export function isShiftMapped(shift, identityMap, serverVersions) {
+  if (!shift) return false
+  const id = shift.id ? String(shift.id).trim().toLowerCase() : ''
+  const shiftNumber = shift.shiftNumber ? String(shift.shiftNumber).trim() : ''
+
+  if (identityMap && typeof identityMap === 'object') {
+    if (id && (identityMap[`shift:${id}`] || (identityMap.shift && identityMap.shift[id]))) return true
+    if (shiftNumber && (identityMap[`shift:${shiftNumber}`] || (identityMap.shift && identityMap.shift[shiftNumber]))) return true
+  }
+  if (serverVersions && typeof serverVersions === 'object') {
+    if (id && (serverVersions[`shifts:${id}`] || serverVersions[`shifts:${shift.id}`])) return true
+  }
+  return false
+}
+
+function hasLocalOperationalShift(storedShift, syncQueue, identityMap = null, serverVersions = null) {
   if (!hasMeaningfulShift(storedShift)) return false
 
   if (
@@ -128,6 +203,20 @@ function hasLocalOperationalShift(storedShift, syncQueue) {
   }
 
   if (!isUuid(storedShift.id)) return true
+
+  const hasDurableBindings = Boolean(
+    (identityMap && (
+      Object.keys(identityMap).some((k) => k.startsWith('shift:')) ||
+      (identityMap.shift && Object.keys(identityMap.shift).length > 0)
+    )) ||
+    (serverVersions && Object.keys(serverVersions).some((k) => k.startsWith('shifts:')))
+  )
+
+  if (hasDurableBindings) {
+    if (!isShiftMapped(storedShift, identityMap, serverVersions)) {
+      return true
+    }
+  }
 
   return false
 }
@@ -554,9 +643,9 @@ export async function inspectCloudFirstWorkspace({
       }
 
       // Operational data: Distinguish previously applied remote rows from newly created local operational data
-      if (hasLocalOperationalTransactions(storedTransactions, syncQueue)) reasons.push('transactions')
-      if (hasLocalOperationalCash(storedCash, syncQueue)) reasons.push('cash')
-      if (hasLocalOperationalShift(storedShift, syncQueue)) reasons.push('shift')
+      if (hasLocalOperationalTransactions(storedTransactions, syncQueue, identityMap, serverVersions)) reasons.push('transactions')
+      if (hasLocalOperationalCash(storedCash, syncQueue, identityMap, serverVersions)) reasons.push('cash')
+      if (hasLocalOperationalShift(storedShift, syncQueue, identityMap, serverVersions)) reasons.push('shift')
       if (hasRows(syncQueue)) reasons.push('sync_queue')
       if (pushBinding || inflight || bootstrap || (pullBinding && pullBinding.status === 'completed')) {
         reasons.push('sync_metadata')
