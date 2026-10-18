@@ -1540,6 +1540,101 @@ describe('P14: Bootstrap Context Verification & Dependency-Aware Push', () => {
     expect(await queueService.countPending()).toBe(1)
   })
 
+  it('creates a durable push binding after a completed Cloud-first pull without bootstrap', async () => {
+    const cloudProductId = '22222222-2222-4222-8222-222222222222'
+    await adapter.saveSyncPullBinding({
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
+      registeredDeviceId: 55,
+      mode: 'cloud_first_read',
+      boundAt: new Date().toISOString(),
+    })
+    await adapter.saveSyncPullState({
+      version: 1,
+      cursor: 2,
+      serverSequence: 2,
+      updatedAt: new Date().toISOString(),
+    })
+    await adapter.saveSyncServerVersions({
+      'products:22222222-2222-4222-8222-222222222222': { syncVersion: 1, syncSequence: 2 },
+    })
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, cloudProductId, {
+      id: cloudProductId,
+      name: 'Kopi Cloud Diubah',
+      category: 'Minuman',
+      price: 20000,
+      stock: 12,
+      unit: 'cup',
+    })
+
+    const transport = vi.fn().mockImplementation(async ({ body }) => ({
+      ok: true,
+      status: 200,
+      data: { data: { request_id: body.request_id, duplicate: false } },
+    }))
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+      capabilityVerifier: async () => ({
+        ok: true,
+        role: 'owner',
+        syncCapabilities: { push_mode: 'full' },
+        capabilityState: 'verified',
+      }),
+    })
+
+    const result = await pushService.pushNow({ context: makeValidCloudContext() })
+
+    expect(result.ok).toBe(true)
+    expect(transport).toHaveBeenCalledTimes(1)
+    expect(await adapter.loadSyncPushBinding()).toMatchObject({
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
+      registeredDeviceId: 55,
+      source: 'cloud_first_read',
+    })
+  })
+
+  it('blocks Cloud-first push when the completed pull cursor is not durable', async () => {
+    await adapter.saveSyncPullBinding({
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
+      registeredDeviceId: 55,
+      mode: 'cloud_first_read',
+      boundAt: new Date().toISOString(),
+    })
+    await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-1', {
+      id: 'p-1',
+      name: 'Perubahan Lokal',
+      price: 10000,
+    })
+
+    const transport = vi.fn()
+    const pushService = createSyncPushService({
+      adapter,
+      queueService,
+      registry,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const result = await pushService.pushNow({ context: makeValidCloudContext() })
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'SYNC_CLOUD_FIRST_NOT_READY',
+      cloudFirstCode: 'CLOUD_FIRST_PULL_NOT_DURABLE',
+    })
+    expect(transport).not.toHaveBeenCalled()
+    expect(await adapter.loadSyncPushBinding()).toBeNull()
+  })
+
   it('returns ok: true on empty push even without bootstrap state or binding', async () => {
     const transport = vi.fn()
     const pushService = createSyncPushService({

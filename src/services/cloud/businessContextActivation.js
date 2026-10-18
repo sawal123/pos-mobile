@@ -40,6 +40,15 @@ const REQUIRED_READERS = [
   'loadSyncAutoSettings',
 ]
 
+const CLOUD_FIRST_REQUIRED_READERS = [
+  ...REQUIRED_READERS,
+  'loadLocalOperationJournal',
+  'loadRestoreJournal',
+  'loadWorkspaceSwitchJournal',
+  'loadSyncConflicts',
+  'loadSyncPullState',
+]
+
 function isNonEmptyText(value) {
   return typeof value === 'string' && value.trim().length > 0
 }
@@ -62,6 +71,67 @@ function hasMeaningfulShift(value) {
 
 function hasMeaningfulBusiness(value) {
   return Boolean(value && (isNonEmptyText(value.name) || isNonEmptyText(value.type)))
+}
+
+function hasPendingLocalOperation(value) {
+  if (!value) return false
+  const list = Array.isArray(value.entries)
+    ? value.entries
+    : Array.isArray(value.ops)
+      ? value.ops
+      : null
+  if (!list) return false
+  return list.some(
+    (entry) =>
+      !entry?.status ||
+      entry.status === 'pending' ||
+      !['completed', 'rolled_back', 'committed'].includes(entry.status),
+  )
+}
+
+function hasUnfinishedRestore(value) {
+  return Boolean(
+    value &&
+      typeof value === 'object' &&
+      !['completed', 'rolled_back', 'committed'].includes(value.phase),
+  )
+}
+
+function hasUnfinishedWorkspaceSwitch(value) {
+  return Boolean(
+    value &&
+      typeof value === 'object' &&
+      !['committed', 'rolled_back'].includes(value.phase),
+  )
+}
+
+function hasOpenSyncConflict(value) {
+  if (!value) return false
+  if (Array.isArray(value)) {
+    return value.some((c) => !c?.status || c.status === 'open')
+  }
+  if (Array.isArray(value.conflicts)) {
+    return value.conflicts.some((c) => !c?.status || c.status === 'open')
+  }
+  return false
+}
+
+function hasInconsistentPullState(pullState, pullBinding) {
+  if (!pullState) return false
+  if (
+    typeof pullState !== 'object' ||
+    pullState.version !== 1 ||
+    !Number.isInteger(pullState.cursor) ||
+    pullState.cursor < 0 ||
+    !Number.isInteger(pullState.serverSequence) ||
+    pullState.serverSequence < 0 ||
+    typeof pullState.updatedAt !== 'string' ||
+    pullState.updatedAt.trim().length === 0 ||
+    !pullBinding
+  ) {
+    return true
+  }
+  return false
 }
 
 export function normalizeBusinessSnapshot(value) {
@@ -179,13 +249,26 @@ export async function inspectLocalBusinessWorkspace({ adapter, runtime = null } 
  * Every other operational or sync artifact remains a hard stop, so this helper
  * cannot be used to merge or overwrite an existing workspace.
  */
-export async function inspectCloudFirstWorkspace({ adapter } = {}) {
-  if (!adapter || REQUIRED_READERS.some((key) => typeof adapter[key] !== 'function')) {
+export async function inspectCloudFirstWorkspace({ adapter, scheduler = null } = {}) {
+  if (!adapter || CLOUD_FIRST_REQUIRED_READERS.some((key) => typeof adapter[key] !== 'function')) {
     return {
       ok: false,
       safeToInitialize: false,
       code: WORKSPACE_CLASSIFICATION.UNAVAILABLE,
       reasons: ['workspace_reader_unavailable'],
+    }
+  }
+
+  if (scheduler && typeof scheduler.flush === 'function') {
+    try {
+      await scheduler.flush()
+    } catch {
+      return {
+        ok: false,
+        safeToInitialize: false,
+        code: WORKSPACE_CLASSIFICATION.READ_FAILED,
+        reasons: ['persistence_operation_pending'],
+      }
     }
   }
 
@@ -205,6 +288,11 @@ export async function inspectCloudFirstWorkspace({ adapter } = {}) {
       identityMap,
       serverVersions,
       autoSettings,
+      localOperationJournal,
+      restoreJournal,
+      workspaceSwitchJournal,
+      conflicts,
+      pullState,
     ] = await Promise.all([
       adapter.loadProducts(),
       adapter.loadCustomers(),
@@ -220,6 +308,11 @@ export async function inspectCloudFirstWorkspace({ adapter } = {}) {
       adapter.loadSyncIdentityMap(),
       adapter.loadSyncServerVersions(),
       adapter.loadSyncAutoSettings(),
+      adapter.loadLocalOperationJournal(),
+      adapter.loadRestoreJournal(),
+      adapter.loadWorkspaceSwitchJournal(),
+      adapter.loadSyncConflicts(),
+      adapter.loadSyncPullState(),
     ])
 
     const reasons = []
@@ -235,6 +328,15 @@ export async function inspectCloudFirstWorkspace({ adapter } = {}) {
     if (hasRows(syncQueue)) reasons.push('sync_queue')
     if (pushBinding || pullBinding || inflight || bootstrap || identityMap || serverVersions || autoSettings) {
       reasons.push('sync_metadata')
+    }
+    if (hasPendingLocalOperation(localOperationJournal)) reasons.push('local_operation_pending')
+    if (hasUnfinishedRestore(restoreJournal)) reasons.push('restore_journal_pending')
+    if (hasUnfinishedWorkspaceSwitch(workspaceSwitchJournal)) reasons.push('workspace_switch_pending')
+    if (hasOpenSyncConflict(conflicts)) reasons.push('sync_conflict_pending')
+    if (hasInconsistentPullState(pullState, pullBinding)) {
+      reasons.push('inconsistent_pull_state')
+    } else if (pullState) {
+      reasons.push('pull_state_present')
     }
 
     return {

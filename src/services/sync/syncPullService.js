@@ -80,6 +80,8 @@ export function createSyncPullService({
       scheduler,
     })
 
+  let isInitialPulling = false
+
   async function resolveToken(overrideContext = {}) {
     if (overrideContext.token) return overrideContext.token
     if (typeof tokenFetcher === 'function') {
@@ -107,7 +109,20 @@ export function createSyncPullService({
    * @returns {Promise<{ok: boolean, fetched?: number, applied?: number, ignored?: number, warnings?: string[], cursorBefore?: number, cursorAfter?: number, serverSequence?: number, pages?: number, error?: any, code?: string, conflict?: any}>}
    */
   async function pullNow(options = {}) {
-    const overrideContext = options.context ?? {}
+    if (options.initialCloudRead === true) {
+      if (isInitialPulling) {
+        return {
+          ok: false,
+          code: 'INITIAL_PULL_ALREADY_IN_PROGRESS',
+          message: 'Initial Cloud pull is already in progress.',
+          error: { code: 'INITIAL_PULL_ALREADY_IN_PROGRESS' },
+        }
+      }
+      isInitialPulling = true
+    }
+
+    try {
+      const overrideContext = options.context ?? {}
     const activeCloudStore = cloudStore ?? (pinia ? useCloudSessionStore(pinia) : null)
 
     const token = await resolveToken(overrideContext)
@@ -177,15 +192,36 @@ export function createSyncPullService({
     if (adapter && typeof adapter.loadSyncPushBinding === 'function') {
       const pushBinding = await adapter.loadSyncPushBinding()
       if (!pushBinding && !existingPullBinding && options.initialCloudRead === true) {
-        const workspace = await inspectCloudFirstWorkspace({ adapter })
+        if (scheduler && typeof scheduler.flush === 'function') {
+          try {
+            await scheduler.flush()
+          } catch (err) {
+            return {
+              ok: false,
+              code: 'CLOUD_INITIALIZATION_PERSISTENCE_PENDING',
+              message: 'Local persistence has not finished. Complete recovery before loading Cloud data.',
+              error: {
+                code: 'CLOUD_INITIALIZATION_PERSISTENCE_PENDING',
+                message: err instanceof Error ? err.message : String(err),
+              },
+            }
+          }
+        }
+
+        const workspace = await inspectCloudFirstWorkspace({ adapter, scheduler })
         if (!workspace.ok || !workspace.safeToInitialize) {
           return {
             ok: false,
-            code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
-            message:
-              'Cloud data can only be loaded into a new empty workspace. Existing local data remains unchanged.',
+            code: !workspace.ok
+              ? 'CLOUD_INITIALIZATION_SAFETY_CHECK_FAILED'
+              : 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+            message: !workspace.ok
+              ? 'Local workspace safety check failed. Complete recovery before loading Cloud data.'
+              : 'Cloud data can only be loaded into a new empty workspace. Existing local data remains unchanged.',
             error: {
-              code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+              code: !workspace.ok
+                ? (workspace.code || 'CLOUD_INITIALIZATION_SAFETY_CHECK_FAILED')
+                : 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
               reasons: workspace.reasons ?? [],
             },
           }
@@ -413,7 +449,23 @@ export function createSyncPullService({
       }
 
       if (
-        cursorAfter !== cursorBefore &&
+        options.initialCloudRead === true &&
+        adapter &&
+        typeof adapter.saveSyncServerVersions === 'function' &&
+        typeof adapter.loadSyncServerVersions === 'function'
+      ) {
+        try {
+          const existingVersions = await adapter.loadSyncServerVersions()
+          if (!existingVersions) {
+            await adapter.saveSyncServerVersions({})
+          }
+        } catch {
+          // best-effort persistence of default versions map
+        }
+      }
+
+      if (
+        (cursorAfter !== cursorBefore || options.initialCloudRead === true) &&
         adapter &&
         typeof adapter.saveSyncPullState === 'function'
       ) {
@@ -1700,17 +1752,22 @@ export function createSyncPullService({
       }
     }
 
-    return {
-      ok: true,
-      fetched: allRecords.length,
-      applied: appliedCount,
-      ignored: ignoredCount,
-      warnings,
-      cursorBefore,
-      cursorAfter,
-      serverSequence: finalServerSequence,
-      pages: pagesCount,
-      error: null,
+      return {
+        ok: true,
+        fetched: allRecords.length,
+        applied: appliedCount,
+        ignored: ignoredCount,
+        warnings,
+        cursorBefore,
+        cursorAfter,
+        serverSequence: finalServerSequence,
+        pages: pagesCount,
+        error: null,
+      }
+    } finally {
+      if (options.initialCloudRead === true) {
+        isInitialPulling = false
+      }
     }
   }
 

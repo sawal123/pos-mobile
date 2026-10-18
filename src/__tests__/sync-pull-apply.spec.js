@@ -30,6 +30,7 @@ import { createMemoryAdapter } from '../services/database/memoryAdapter'
 import { createSyncQueueService } from '../services/sync/syncQueueService'
 import { createSyncIdentityRegistry, isUuid } from '../services/sync/syncIdentityRegistry'
 import { createSyncPullService } from '../services/sync/syncPullService'
+import { createSyncPushService } from '../services/sync/syncPushService'
 import { initializeSyncFoundation } from '../services/sync/index'
 import { pullSyncChanges } from '../services/sync/syncPullTransport'
 import { createSyncChangeTracker } from '../services/sync/syncTracker'
@@ -206,10 +207,12 @@ describe('P13: Sync Pull Service Preconditions & Bindings', () => {
         },
       },
     }))
+    const freshQueueService = createSyncQueueService({ adapter: freshAdapter })
+    const freshRegistry = createSyncIdentityRegistry({ adapter: freshAdapter })
     const pullService = createSyncPullService({
       adapter: freshAdapter,
-      queueService: createSyncQueueService({ adapter: freshAdapter }),
-      registry: createSyncIdentityRegistry({ adapter: freshAdapter }),
+      queueService: freshQueueService,
+      registry: freshRegistry,
       pinia,
       tokenFetcher: async () => 'test-token',
       transport,
@@ -238,6 +241,41 @@ describe('P13: Sync Pull Service Preconditions & Bindings', () => {
     const retry = await pullService.pullNow({ context: makeValidCloudContext() })
     expect(retry).toMatchObject({ ok: true, fetched: 0, cursorAfter: 2 })
     expect(products.products.filter((product) => product.id === productSyncId)).toHaveLength(1)
+
+    await freshQueueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, productSyncId, {
+      id: productSyncId,
+      name: 'Kopi Susu Baru',
+      category: 'Minuman',
+      price: 19000,
+      stock: 12,
+      unit: 'cup',
+    })
+    const pushTransport = vi.fn().mockImplementation(async ({ body }) => ({
+      ok: true,
+      status: 200,
+      data: { data: { request_id: body.request_id, duplicate: false } },
+    }))
+    const pushService = createSyncPushService({
+      adapter: freshAdapter,
+      queueService: freshQueueService,
+      registry: freshRegistry,
+      tokenFetcher: async () => 'test-token',
+      transport: pushTransport,
+      capabilityVerifier: async () => ({
+        ok: true,
+        role: 'owner',
+        syncCapabilities: { push_mode: 'full' },
+        capabilityState: 'verified',
+      }),
+    })
+    const push = await pushService.pushNow({ context: makeValidCloudContext() })
+    expect(push.ok).toBe(true)
+    expect(pushTransport).toHaveBeenCalledTimes(1)
+    expect(await freshAdapter.loadSyncPushBinding()).toMatchObject({
+      businessId: 10,
+      outletId: 101,
+      source: 'cloud_first_read',
+    })
   })
 
   it('refuses Cloud-first initialization when the target workspace already has local data', async () => {

@@ -95,11 +95,14 @@ const isContextGuardMutationBlocked = computed(() => {
   return !['safe', 'unbound'].includes(syncContextGuardStore.status)
 })
 
+const isInitialPullRunning = ref(false)
+
 const canInitializeCloudData = computed(
   () =>
     canSync.value &&
     syncContextGuardStore.status === 'unbound' &&
-    !syncBootstrapStore.isStaged,
+    !syncBootstrapStore.isStaged &&
+    !isInitialPullRunning.value,
 )
 
 const isAnySyncOperationBusy = computed(
@@ -820,75 +823,108 @@ async function handleSyncNow() {
 
 async function handlePullNow({ initialCloudRead = false } = {}) {
   if (isAnySyncOperationBusy.value || isContextGuardMutationBlocked.value) return
-  resetRecoveryPresentation()
-  syncHealthStore.resetResult()
-  pullMessage.value = ''
-  const startedAt = new Date().toISOString()
-  const ctx = snapshotCloudContext()
-  let result
+  if (initialCloudRead && isInitialPullRunning.value) return
+  if (initialCloudRead) {
+    isInitialPullRunning.value = true
+  }
+
   try {
-    result = await syncPullStore.pullNow({ initialCloudRead })
-  } catch (err) {
+    resetRecoveryPresentation()
+    syncHealthStore.resetResult()
+    pullMessage.value = ''
+    const startedAt = new Date().toISOString()
+    const ctx = snapshotCloudContext()
+    let result
+    try {
+      result = await syncPullStore.pullNow({ initialCloudRead })
+    } catch (err) {
+      const finishedAt = new Date().toISOString()
+      void syncActivityLogStore.record({
+        type: 'pull',
+        action: 'PULL_NOW',
+        status: 'failed',
+        code: 'EXCEPTION',
+        startedAt,
+        finishedAt,
+        ...ctx,
+        summary: {},
+      })
+      pullSuccess.value = false
+      pullMessage.value = err.message || 'Gagal menarik data cloud.'
+      return
+    }
+
     const finishedAt = new Date().toISOString()
+    const status = classifyPullStatus(result)
+
     void syncActivityLogStore.record({
       type: 'pull',
       action: 'PULL_NOW',
-      status: 'failed',
-      code: 'EXCEPTION',
+      status,
+      code: result.code || (result.ok ? 'SYNC_PULL_SUCCESS' : 'SYNC_PULL_FAILED'),
       startedAt,
       finishedAt,
       ...ctx,
-      summary: {},
+      summary: {
+        fetched: typeof result.fetched === 'number' ? result.fetched : 0,
+        applied: typeof result.applied === 'number' ? result.applied : 0,
+        ignored: typeof result.ignored === 'number' ? result.ignored : 0,
+        cursorBefore:
+          typeof result.cursorBefore === 'number' &&
+          Number.isInteger(result.cursorBefore) &&
+          result.cursorBefore >= 0
+            ? result.cursorBefore
+            : null,
+        cursorAfter:
+          typeof result.cursorAfter === 'number' &&
+          Number.isInteger(result.cursorAfter) &&
+          result.cursorAfter >= 0
+            ? result.cursorAfter
+            : null,
+      },
     })
-    pullSuccess.value = false
-    pullMessage.value = err.message || 'Gagal menarik data cloud.'
-    return
-  }
 
-  const finishedAt = new Date().toISOString()
-  const status = classifyPullStatus(result)
+    await syncConflictStore.loadConflicts()
+    if (result.ok) {
+      if (initialCloudRead) {
+        let guard = null
+        let statusRefresh = null
+        try {
+          guard = await syncContextGuardStore.check()
+          statusRefresh = await syncStatusStore.refresh()
+          await syncPushStore.refreshPendingCount()
+        } catch {
+          pullSuccess.value = false
+          pullMessage.value =
+            'Data Cloud telah diterapkan, tetapi status sinkronisasi belum dapat diverifikasi. Pengiriman tetap diblokir sampai status aman.'
+          return
+        }
 
-  void syncActivityLogStore.record({
-    type: 'pull',
-    action: 'PULL_NOW',
-    status,
-    code: result.code || (result.ok ? 'SYNC_PULL_SUCCESS' : 'SYNC_PULL_FAILED'),
-    startedAt,
-    finishedAt,
-    ...ctx,
-    summary: {
-      fetched: typeof result.fetched === 'number' ? result.fetched : 0,
-      applied: typeof result.applied === 'number' ? result.applied : 0,
-      ignored: typeof result.ignored === 'number' ? result.ignored : 0,
-      cursorBefore:
-        typeof result.cursorBefore === 'number' &&
-        Number.isInteger(result.cursorBefore) &&
-        result.cursorBefore >= 0
-          ? result.cursorBefore
-          : null,
-      cursorAfter:
-        typeof result.cursorAfter === 'number' &&
-        Number.isInteger(result.cursorAfter) &&
-        result.cursorAfter >= 0
-          ? result.cursorAfter
-          : null,
-    },
-  })
+        if (!guard?.ok || guard.status !== 'safe' || !statusRefresh?.ok) {
+          pullSuccess.value = false
+          pullMessage.value =
+            'Data Cloud telah diterapkan, tetapi status sinkronisasi belum dapat diverifikasi. Pengiriman tetap diblokir sampai status aman.'
+          return
+        }
+      }
 
-  await syncConflictStore.loadConflicts()
-  if (result.ok) {
-    pullSuccess.value = true
-    const applied = result.applied ?? 0
-    if (applied === 0) {
-      pullMessage.value = initialCloudRead
-        ? 'Tidak ada data Cloud baru untuk dimuat.'
-        : 'Data lokal sudah terbaru.'
+      pullSuccess.value = true
+      const applied = result.applied ?? 0
+      if (applied === 0) {
+        pullMessage.value = initialCloudRead
+          ? 'Tidak ada data Cloud baru untuk dimuat.'
+          : 'Data lokal sudah terbaru.'
+      } else {
+        pullMessage.value = `${applied} perubahan cloud diterapkan.`
+      }
     } else {
-      pullMessage.value = `${applied} perubahan cloud diterapkan.`
+      pullSuccess.value = false
+      pullMessage.value = result.error?.message ?? result.message ?? 'Gagal menarik data cloud.'
     }
-  } else {
-    pullSuccess.value = false
-    pullMessage.value = result.error?.message ?? result.message ?? 'Gagal menarik data cloud.'
+  } finally {
+    if (initialCloudRead) {
+      isInitialPullRunning.value = false
+    }
   }
 }
 
@@ -1913,8 +1949,8 @@ onMounted(async () => {
             id="cloud-initialize-btn"
             variant="primary"
             size="md"
-            :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
-            :loading="syncPullStore.loading"
+            :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked || isInitialPullRunning"
+            :loading="syncPullStore.loading || isInitialPullRunning"
             aria-label="Muat Data Cloud"
             title="Muat Data Cloud"
             class="mt-3 w-full sm:w-auto"

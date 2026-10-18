@@ -21,6 +21,7 @@ import { _resetTokenStore } from '@/services/cloud/tokenRepository'
 import { createMemoryAdapter } from '@/services/database/memoryAdapter'
 import {
   buildBusinessSwitchConfirmation,
+  inspectCloudFirstWorkspace,
   inspectLocalBusinessWorkspace,
   WORKSPACE_CLASSIFICATION,
 } from '@/services/cloud/businessContextActivation'
@@ -505,6 +506,77 @@ describe('12. unknown Cloud business_type is handled without a silent Café fall
     const report = await inspectLocalBusinessWorkspace({ adapter: null })
     expect(report.ok).toBe(false)
     expect(report.code).toBe(WORKSPACE_CLASSIFICATION.UNAVAILABLE)
+  })
+})
+
+describe('13. Cloud-first workspace safety journals', () => {
+  it('blocks initial Cloud reads while recovery, conflict, or operation journals are pending', async () => {
+    const cases = [
+      {
+        reason: 'local_operation_pending',
+        write: (adapter) =>
+          adapter.saveLocalOperationJournal({ version: 1, entries: [{ status: 'pending' }] }),
+      },
+      {
+        reason: 'restore_journal_pending',
+        write: (adapter) => adapter.saveRestoreJournal({ version: 1, phase: 'applying' }),
+      },
+      {
+        reason: 'workspace_switch_pending',
+        write: (adapter) => adapter.saveWorkspaceSwitchJournal({ version: 1, phase: 'applying' }),
+      },
+      {
+        reason: 'sync_conflict_pending',
+        write: (adapter) =>
+          adapter.saveSyncConflicts({ version: 1, conflicts: [{ id: 'c-1', status: 'open' }] }),
+      },
+      {
+        reason: 'inconsistent_pull_state',
+        write: (adapter) =>
+          adapter.saveSyncPullState({ version: 1, cursor: -1, serverSequence: 0, updatedAt: '2026-01-01' }),
+      },
+    ]
+
+    for (const scenario of cases) {
+      const adapter = createMemoryAdapter()
+      await adapter.initialize()
+      await scenario.write(adapter)
+
+      const report = await inspectCloudFirstWorkspace({ adapter })
+      expect(report.ok).toBe(true)
+      expect(report.safeToInitialize).toBe(false)
+      expect(report.reasons).toContain(scenario.reason)
+    }
+  })
+
+  it('fails closed when persistence flush fails during Cloud-first inspection', async () => {
+    const adapter = createMemoryAdapter()
+    await adapter.initialize()
+    const failingScheduler = {
+      flush: vi.fn().mockRejectedValue(new Error('disk write failed')),
+    }
+
+    const report = await inspectCloudFirstWorkspace({ adapter, scheduler: failingScheduler })
+    expect(report).toMatchObject({
+      ok: false,
+      safeToInitialize: false,
+      code: WORKSPACE_CLASSIFICATION.READ_FAILED,
+      reasons: ['persistence_operation_pending'],
+    })
+  })
+
+  it('fails closed when a Cloud-first journal reader is unavailable', async () => {
+    const adapter = createMemoryAdapter()
+    await adapter.initialize()
+    const { loadRestoreJournal, ...withoutRestoreReader } = adapter
+
+    const report = await inspectCloudFirstWorkspace({ adapter: withoutRestoreReader })
+    expect(report).toMatchObject({
+      ok: false,
+      safeToInitialize: false,
+      code: WORKSPACE_CLASSIFICATION.UNAVAILABLE,
+    })
+    expect(loadRestoreJournal).toBeTypeOf('function')
   })
 })
 
