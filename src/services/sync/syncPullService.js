@@ -203,6 +203,8 @@ export function createSyncPullService({
       (existingInitJournal && existingInitJournal.phase === 'initializing')
     )
 
+    let baselineTransactionIds = new Set()
+
     if (adapter && typeof adapter.loadSyncPushBinding === 'function') {
       const pushBinding = await adapter.loadSyncPushBinding()
       if (!pushBinding && isInitialCloudPull) {
@@ -242,6 +244,19 @@ export function createSyncPullService({
                 : 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
               reasons: workspace.reasons ?? [],
             },
+          }
+        }
+
+        if (adapter && typeof adapter.loadTransactions === 'function') {
+          try {
+            const currentTrx = await adapter.loadTransactions()
+            if (Array.isArray(currentTrx)) {
+              for (const t of currentTrx) {
+                if (t && t.id) baselineTransactionIds.add(String(t.id))
+              }
+            }
+          } catch {
+            baselineTransactionIds = new Set()
           }
         }
 
@@ -800,12 +815,39 @@ export function createSyncPullService({
           isOpen: shiftStore.isOpen,
         }
       : null
-    const nextTransactions = transactionStore
-      ? transactionStore.items.map((t) => ({
-          ...t,
-          items: Array.isArray(t.items) ? t.items.map((it) => ({ ...it })) : [],
-        }))
-      : []
+    let prospectiveTransactions = []
+    if (isInitialCloudPull) {
+      if (adapter && typeof adapter.loadTransactions === 'function') {
+        try {
+          const storedTrx = await adapter.loadTransactions()
+          if (Array.isArray(storedTrx)) {
+            prospectiveTransactions = storedTrx
+          }
+        } catch {
+          prospectiveTransactions = []
+        }
+      }
+    } else {
+      prospectiveTransactions = transactionStore?.items ?? []
+      if (
+        prospectiveTransactions.length === 0 &&
+        adapter &&
+        typeof adapter.loadTransactions === 'function'
+      ) {
+        try {
+          const storedTrx = await adapter.loadTransactions()
+          if (Array.isArray(storedTrx) && storedTrx.length > 0) {
+            prospectiveTransactions = storedTrx
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+    const nextTransactions = prospectiveTransactions.map((t) => ({
+      ...t,
+      items: Array.isArray(t.items) ? t.items.map((it) => ({ ...it })) : [],
+    }))
 
     const warnings = []
     let appliedCount = 0
@@ -1773,7 +1815,14 @@ export function createSyncPullService({
       if (adapter && typeof adapter.loadTransactions === 'function') {
         freshTrx = await adapter.loadTransactions()
       }
-      if (Array.isArray(freshTrx) && freshTrx.length > 0) {
+      const hasNewLocalTrx =
+        Array.isArray(freshTrx) &&
+        freshTrx.some((tx) => {
+          if (!tx || typeof tx !== 'object') return true
+          if (!isUuid(tx.id)) return true
+          return !baselineTransactionIds.has(String(tx.id))
+        })
+      if (hasNewLocalTrx) {
         return {
           ok: false,
           code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',

@@ -15,6 +15,8 @@
  * workspace read-only and builds the confirmation copy; it never mutates data.
  */
 
+import { isUuid } from '@/services/sync/syncIdentityRegistry'
+
 export const WORKSPACE_CLASSIFICATION = Object.freeze({
   EMPTY: 'LOCAL_WORKSPACE_EMPTY',
   PROTECTED: 'LOCAL_WORKSPACE_PROTECTED',
@@ -71,6 +73,63 @@ function hasMeaningfulShift(value) {
 
 function hasMeaningfulBusiness(value) {
   return Boolean(value && (isNonEmptyText(value.name) || isNonEmptyText(value.type)))
+}
+
+function hasLocalOperationalTransactions(storedTransactions, syncQueue) {
+  if (!hasRows(storedTransactions)) return false
+
+  if (
+    Array.isArray(syncQueue) &&
+    syncQueue.some(
+      (item) => item.entityType === 'transaction' || item.entity_type === 'transaction',
+    )
+  ) {
+    return true
+  }
+
+  for (const tx of storedTransactions) {
+    if (!tx || typeof tx !== 'object') return true
+    if (!isUuid(tx.id)) return true
+  }
+
+  return false
+}
+
+function hasLocalOperationalCash(storedCash, syncQueue) {
+  const entries = storedCash?.entries
+  if (!hasRows(entries)) return false
+
+  if (
+    Array.isArray(syncQueue) &&
+    syncQueue.some(
+      (item) => item.entityType === 'cash_entry' || item.entity_type === 'cash_entry',
+    )
+  ) {
+    return true
+  }
+
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object' || !isUuid(entry.id)) return true
+  }
+
+  return false
+}
+
+function hasLocalOperationalShift(storedShift, syncQueue) {
+  if (!hasMeaningfulShift(storedShift)) return false
+
+  if (
+    Array.isArray(syncQueue) &&
+    syncQueue.some(
+      (item) => item.entityType === 'shift' || item.entity_type === 'shift',
+    )
+  ) {
+    return true
+  }
+
+  if (!isUuid(storedShift.id)) return true
+
+  return false
 }
 
 function hasPendingLocalOperation(value) {
@@ -494,10 +553,10 @@ export async function inspectCloudFirstWorkspace({
         reasons.push('cloud_initialization_context_mismatch')
       }
 
-      // Operational data MUST NEVER be present during recovery
-      if (hasRows(storedTransactions)) reasons.push('transactions')
-      if (hasRows(storedCash?.entries)) reasons.push('cash')
-      if (hasMeaningfulShift(storedShift)) reasons.push('shift')
+      // Operational data: Distinguish previously applied remote rows from newly created local operational data
+      if (hasLocalOperationalTransactions(storedTransactions, syncQueue)) reasons.push('transactions')
+      if (hasLocalOperationalCash(storedCash, syncQueue)) reasons.push('cash')
+      if (hasLocalOperationalShift(storedShift, syncQueue)) reasons.push('shift')
       if (hasRows(syncQueue)) reasons.push('sync_queue')
       if (pushBinding || inflight || bootstrap || (pullBinding && pullBinding.status === 'completed')) {
         reasons.push('sync_metadata')

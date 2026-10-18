@@ -1329,6 +1329,254 @@ describe('Cloud-First Sync Completion E2E (PR #60 Task 4)', () => {
     const matching = productStore.products.filter((p) => p.name === 'Kopi Tubruk')
     expect(matching).toHaveLength(1)
   })
+
+  it('15. Interrupted initial pull containing sales/transactions safely recovers and completes without being blocked by already-pulled remote transactions', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud', initialOnline: true })
+    const catUuid = '550e8400-e29b-41d4-a716-446655440001'
+    const prodUuid = '550e8400-e29b-41d4-a716-446655440002'
+    const saleUuid = '550e8400-e29b-41d4-a716-446655440003'
+    const itemUuid = '550e8400-e29b-41d4-a716-446655440004'
+
+    const cloudPayload = {
+      records: [
+        {
+          entity: 'categories',
+          sync_sequence: 1,
+          data: {
+            sync_id: catUuid,
+            name: 'Minuman Cloud',
+            sync_version: 1,
+          },
+        },
+        {
+          entity: 'products',
+          sync_sequence: 2,
+          data: {
+            sync_id: prodUuid,
+            name: 'Kopi Susu Cloud',
+            category_sync_id: catUuid,
+            price: 18000,
+            cost: 8000,
+            stock: 10,
+            status: 'active',
+            sync_version: 1,
+          },
+        },
+        {
+          entity: 'sales',
+          sync_sequence: 3,
+          data: {
+            sync_id: saleUuid,
+            sync_version: 1,
+            transaction_number: 'INV-20261018-001',
+            status: 'paid',
+            payment_status: 'paid',
+            subtotal: 18000,
+            tax_amount: 0,
+            total_amount: 18000,
+            sold_at: '2026-10-18T10:00:00Z',
+          },
+        },
+        {
+          entity: 'sale_items',
+          sync_sequence: 4,
+          data: {
+            sync_id: itemUuid,
+            sync_version: 1,
+            sale_sync_id: saleUuid,
+            product_sync_id: prodUuid,
+            product_name: 'Kopi Susu Cloud',
+            unit_price: 18000,
+            quantity: 1,
+            cost_snapshot: 8000,
+            line_cost: 8000,
+          },
+        },
+      ],
+      next_cursor: 4,
+      server_sequence: 4,
+      has_more: false,
+    }
+
+    mockServerHandler.handle = async () => ({
+      ok: true,
+      status: 200,
+      data: { data: cloudPayload },
+    })
+
+    const cloudContext = makeValidCloudContext({ role: 'owner', syncCapabilities: { push_mode: 'full' } })
+    useCloudSessionStore(scenario.pinia).$patch(cloudContext)
+    await scenario.adapter.saveCloudContext(cloudContext)
+
+    // Simulate failure during metadata persistence AFTER scheduler.flush() has already persisted transactions
+    const originalSaveVersions = scenario.adapter.saveSyncServerVersions.bind(scenario.adapter)
+    let shouldFailVersions = true
+    scenario.adapter.saveSyncServerVersions = async (versions) => {
+      if (shouldFailVersions) {
+        throw new Error('Simulated write failure while persisting server versions')
+      }
+      return originalSaveVersions(versions)
+    }
+
+    const pullStore = useSyncPullStore(scenario.pinia)
+    const firstResult = await pullStore.pullNow({ initialCloudRead: true })
+
+    expect(firstResult.ok).toBe(false)
+    expect(firstResult.code).toBe('SYNC_SERVER_VERSIONS_PERSIST_FAILED')
+
+    // Transactions were flushed and are durable in SQLite
+    const storedTrx = await scenario.adapter.loadTransactions()
+    expect(storedTrx).toHaveLength(1)
+    expect(storedTrx[0].id).toBe(saleUuid)
+
+    // Binding remains in initializing phase
+    const pullBinding = await scenario.adapter.loadSyncPullBinding()
+    expect(pullBinding?.status).toBe('initializing')
+
+    // Context guard reports device unbound
+    const guardService = createSyncContextGuardService({ adapter: scenario.adapter })
+    const guardReport = await guardService.inspect({ context: cloudContext })
+    expect(guardReport.status).toBe('unbound')
+
+    // Inspect reports workspace safe to initialize (recovery allowed)
+    const inspectReport = await inspectCloudFirstWorkspace({ adapter: scenario.adapter, context: cloudContext })
+    expect(inspectReport.ok).toBe(true)
+    expect(inspectReport.safeToInitialize).toBe(true)
+    expect(inspectReport.reasons).toEqual([])
+
+    // Now fix metadata persistence and retry pull
+    shouldFailVersions = false
+    const retryResult = await pullStore.pullNow({ initialCloudRead: true })
+    expect(retryResult.ok).toBe(true)
+
+    // Binding is now marked completed
+    const completedBinding = await scenario.adapter.loadSyncPullBinding()
+    expect(completedBinding?.status).toBe('completed')
+
+    // Journal is completed
+    const completedJournal = await scenario.adapter.loadCloudInitializationJournal()
+    expect(completedJournal?.phase).toBe('completed')
+
+    // Exactly one transaction exists (idempotent, no duplication)
+    const finalTrx = await scenario.adapter.loadTransactions()
+    expect(finalTrx).toHaveLength(1)
+    expect(finalTrx[0].id).toBe(saleUuid)
+    expect(finalTrx[0].invoiceNumber).toBe('INV-20261018-001')
+
+    // Products also intact without duplication
+    const finalProducts = await scenario.adapter.loadProducts()
+    expect(finalProducts.products).toHaveLength(1)
+    expect(finalProducts.products[0].name).toBe('Kopi Susu Cloud')
+
+    // Context guard now recognizes device as safe (bound and matching context)
+    const finalGuard = await guardService.inspect({ context: cloudContext })
+    expect(finalGuard.status).toBe('safe')
+  })
+
+  it('16. Interrupted initial pull with sales recovers after full restart without being blocked', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud', initialOnline: true })
+    const saleUuid = '660e8400-e29b-41d4-a716-446655440003'
+    const itemUuid = '660e8400-e29b-41d4-a716-446655440004'
+    const prodUuid = '660e8400-e29b-41d4-a716-446655440005'
+
+    const cloudContext = makeValidCloudContext({ role: 'owner', syncCapabilities: { push_mode: 'full' } })
+    useCloudSessionStore(scenario.pinia).$patch(cloudContext)
+    await scenario.adapter.saveCloudContext(cloudContext)
+
+    // Simulate interrupted state after crash with previously pulled sales
+    await scenario.adapter.saveCloudInitializationJournal({
+      version: 1,
+      phase: 'initializing',
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: cloudContext.deviceIdentifier,
+      registeredDeviceId: 55,
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      updatedAt: new Date().toISOString(),
+    })
+    await scenario.adapter.saveSyncPullBinding({
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: cloudContext.deviceIdentifier,
+      registeredDeviceId: 55,
+      boundAt: new Date().toISOString(),
+      mode: 'cloud_first_read',
+      status: 'initializing',
+    })
+    await scenario.adapter.saveTransactions([
+      {
+        id: saleUuid,
+        invoiceNumber: 'INV-20261018-002',
+        status: 'paid',
+        paymentStatus: 'paid',
+        total: 25000,
+        items: [],
+      },
+    ])
+
+    // Inspect check on restarted adapter
+    const report = await inspectCloudFirstWorkspace({ adapter: scenario.adapter, context: cloudContext })
+    expect(report.ok).toBe(true)
+    expect(report.safeToInitialize).toBe(true)
+    expect(report.reasons).toEqual([])
+
+    // Cloud returns the sale and sale_item again
+    mockServerHandler.handle = async () => ({
+      ok: true,
+      status: 200,
+      data: {
+        data: {
+          records: [
+            {
+              entity: 'sales',
+              sync_sequence: 1,
+              data: {
+                sync_id: saleUuid,
+                sync_version: 1,
+                transaction_number: 'INV-20261018-002',
+                status: 'paid',
+                payment_status: 'paid',
+                subtotal: 25000,
+                tax_amount: 0,
+                total_amount: 25000,
+                sold_at: '2026-10-18T11:00:00Z',
+              },
+            },
+            {
+              entity: 'sale_items',
+              sync_sequence: 2,
+              data: {
+                sync_id: itemUuid,
+                sync_version: 1,
+                sale_sync_id: saleUuid,
+                product_sync_id: prodUuid,
+                product_name: 'Item Cloud',
+                unit_price: 25000,
+                quantity: 1,
+                cost_snapshot: 10000,
+                line_cost: 10000,
+              },
+            },
+          ],
+          next_cursor: 2,
+          server_sequence: 2,
+          has_more: false,
+        },
+      },
+    })
+
+    const pullStore = useSyncPullStore(scenario.pinia)
+    const result = await pullStore.pullNow({ initialCloudRead: true })
+    expect(result.ok).toBe(true)
+
+    const binding = await scenario.adapter.loadSyncPullBinding()
+    expect(binding?.status).toBe('completed')
+
+    const trx = await scenario.adapter.loadTransactions()
+    expect(trx).toHaveLength(1)
+    expect(trx[0].id).toBe(saleUuid)
+  })
 })
 
 function scenarioHelperAdapter() {
