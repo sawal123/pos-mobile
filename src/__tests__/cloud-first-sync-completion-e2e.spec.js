@@ -341,6 +341,7 @@ describe('Cloud-First Sync Completion E2E (PR #60 Task 4)', () => {
       deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
       registeredDeviceId: 55,
       mode: 'cloud_first_read',
+      status: 'completed',
       boundAt: new Date().toISOString(),
     })
     await scenario.adapter.saveSyncPullState({
@@ -426,6 +427,7 @@ describe('Cloud-First Sync Completion E2E (PR #60 Task 4)', () => {
       deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
       registeredDeviceId: 55,
       mode: 'cloud_first_read',
+      status: 'completed',
       boundAt: new Date().toISOString(),
     })
     await scenario.adapter.saveSyncPullState({
@@ -517,6 +519,7 @@ describe('Cloud-First Sync Completion E2E (PR #60 Task 4)', () => {
       deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
       registeredDeviceId: 55,
       mode: 'cloud_first_read',
+      status: 'completed',
       boundAt: new Date().toISOString(),
     })
     await scenario.adapter.saveSyncPullState({
@@ -1892,6 +1895,165 @@ describe('Cloud-First Sync Completion E2E (PR #60 Task 4)', () => {
     // Local shift remains intact
     const storedShift = await scenario.adapter.loadShiftState()
     expect(storedShift.id).toBe(localShiftUuid)
+  })
+
+  it('21. Pending writes queued in persistence scheduler during Cloud download are flushed before final check, failing closed without overwriting local data', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud', initialOnline: true })
+    const localTxUuid = '660e8400-e29b-41d4-a716-446655440066'
+
+    const cloudContext = makeValidCloudContext({ role: 'owner', syncCapabilities: { push_mode: 'full' } })
+    useCloudSessionStore(scenario.pinia).$patch(cloudContext)
+    await scenario.adapter.saveCloudContext(cloudContext)
+
+    await scenario.adapter.saveCloudInitializationJournal({
+      version: 1,
+      phase: 'initializing',
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: cloudContext.deviceIdentifier,
+      registeredDeviceId: 55,
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      updatedAt: new Date().toISOString(),
+    })
+    await scenario.adapter.saveSyncPullBinding({
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: cloudContext.deviceIdentifier,
+      registeredDeviceId: 55,
+      boundAt: new Date().toISOString(),
+      mode: 'cloud_first_read',
+      status: 'initializing',
+    })
+
+    // Cloud returns 1 category record, but during download a cashier sale write is scheduled
+    mockServerHandler.handle = async () => {
+      // Queue a pending transaction write via scheduler's serialization queue
+      void scenario.scheduler.runSerialized(async () => {
+        await new Promise((r) => setTimeout(r, 20))
+        await scenario.adapter.saveTransactions([
+          {
+            id: localTxUuid,
+            total: 25000,
+            paymentMethod: 'cash',
+            createdAt: new Date().toISOString(),
+          },
+        ])
+      }, 'save_cashier_transaction')
+
+      return {
+        ok: true,
+        status: 200,
+        data: {
+          data: {
+            records: [
+              {
+                entity: 'categories',
+                sync_sequence: 1,
+                data: {
+                  sync_id: '12345678-1234-4234-8234-123456789abc',
+                  name: 'Cloud Pulled Category',
+                  sync_version: 1,
+                },
+              },
+            ],
+            next_cursor: 1,
+            server_sequence: 1,
+            has_more: false,
+          },
+        },
+      }
+    }
+
+    const pullStore = useSyncPullStore(scenario.pinia)
+    const result = await pullStore.pullNow({ initialCloudRead: true })
+
+    // MUST fail closed because the flushed local transaction is detected
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY')
+
+    // Local transaction was safely flushed and preserved intact
+    const storedTrx = await scenario.adapter.loadTransactions()
+    expect(storedTrx).toHaveLength(1)
+    expect(storedTrx[0].id).toBe(localTxUuid)
+
+    // Remote category was NOT committed to product store
+    const productStore = useProductStore(scenario.pinia)
+    expect(productStore.categories.some((c) => c.name === 'Cloud Pulled Category')).toBe(false)
+  })
+
+  it('22. Push readiness strictly requires status === "completed" for cloud_first_read and accepts legacy bindings', async () => {
+    const adapter = scenarioHelperAdapter()
+    const context = {
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: 'dev-123',
+      registeredDeviceId: 55,
+    }
+
+    // 1. Unknown or undefined status must be rejected
+    await adapter.saveSyncPullBinding({
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: 'dev-123',
+      registeredDeviceId: 55,
+      boundAt: new Date().toISOString(),
+      mode: 'cloud_first_read',
+      status: 'unknown_status_xyz',
+    })
+    await adapter.saveSyncPullState({
+      version: 1,
+      cursor: 1,
+      serverSequence: 1,
+      updatedAt: new Date().toISOString(),
+    })
+    await adapter.saveSyncServerVersions({ 'products:abc': { syncVersion: 1 } })
+
+    let readiness = await resolveCloudFirstPushReadiness({ adapter, context })
+    expect(readiness.ok).toBe(false)
+    expect(readiness.code).toBe('CLOUD_FIRST_INITIALIZATION_INCOMPLETE')
+
+    // 2. Initializing status must be rejected
+    await adapter.saveSyncPullBinding({
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: 'dev-123',
+      registeredDeviceId: 55,
+      boundAt: new Date().toISOString(),
+      mode: 'cloud_first_read',
+      status: 'initializing',
+    })
+    readiness = await resolveCloudFirstPushReadiness({ adapter, context })
+    expect(readiness.ok).toBe(false)
+    expect(readiness.code).toBe('CLOUD_FIRST_INITIALIZATION_INCOMPLETE')
+
+    // 3. Status "completed" is accepted
+    await adapter.saveSyncPullBinding({
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: 'dev-123',
+      registeredDeviceId: 55,
+      boundAt: new Date().toISOString(),
+      mode: 'cloud_first_read',
+      status: 'completed',
+    })
+    readiness = await resolveCloudFirstPushReadiness({ adapter, context })
+    expect(readiness.ok).toBe(true)
+    expect(readiness.cloudFirst).toBe(true)
+
+    // 4. Legacy binding (mode != cloud_first_read) retains compatibility
+    await adapter.saveSyncPullBinding({
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: 'dev-123',
+      registeredDeviceId: 55,
+      boundAt: new Date().toISOString(),
+      mode: 'legacy',
+      status: 'any_legacy_status',
+    })
+    readiness = await resolveCloudFirstPushReadiness({ adapter, context })
+    expect(readiness.ok).toBe(true)
+    expect(readiness.cloudFirst).toBe(false)
   })
 })
 

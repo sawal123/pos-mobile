@@ -638,6 +638,45 @@ export function createSyncPullService({
     // ── 6. Handle empty snapshot ──────────────────────────────────────────────
     if (allRecords.length === 0) {
       if (isInitialCloudPull) {
+        if (scheduler && typeof scheduler.flush === 'function') {
+          try {
+            await scheduler.flush()
+          } catch (err) {
+            return {
+              ok: false,
+              code: 'CLOUD_INITIALIZATION_PERSISTENCE_PENDING',
+              message: 'Local persistence has not finished. Complete recovery before loading Cloud data.',
+              error: {
+                code: 'CLOUD_INITIALIZATION_PERSISTENCE_PENDING',
+                message: err instanceof Error ? err.message : String(err),
+              },
+            }
+          }
+        }
+
+        const workspace = await inspectCloudFirstWorkspace({
+          adapter,
+          scheduler,
+          context: guardContext,
+        })
+        if (!workspace.ok || !workspace.safeToInitialize) {
+          return {
+            ok: false,
+            code: !workspace.ok
+              ? 'CLOUD_INITIALIZATION_SAFETY_CHECK_FAILED'
+              : 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+            message: !workspace.ok
+              ? 'Local workspace safety check failed. Complete recovery before loading Cloud data.'
+              : 'Cloud data can only be loaded into a new empty workspace. Existing local data remains unchanged.',
+            error: {
+              code: !workspace.ok
+                ? (workspace.code || 'CLOUD_INITIALIZATION_SAFETY_CHECK_FAILED')
+                : 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+              reasons: workspace.reasons ?? [],
+            },
+          }
+        }
+
         let freshQueueCount = 0
         if (activeQueueService && typeof activeQueueService.countPending === 'function') {
           freshQueueCount = await activeQueueService.countPending()
@@ -2009,6 +2048,45 @@ export function createSyncPullService({
     }
 
     if (isInitialCloudPull) {
+      if (scheduler && typeof scheduler.flush === 'function') {
+        try {
+          await scheduler.flush()
+        } catch (err) {
+          return {
+            ok: false,
+            code: 'CLOUD_INITIALIZATION_PERSISTENCE_PENDING',
+            message: 'Local persistence has not finished. Complete recovery before loading Cloud data.',
+            error: {
+              code: 'CLOUD_INITIALIZATION_PERSISTENCE_PENDING',
+              message: err instanceof Error ? err.message : String(err),
+            },
+          }
+        }
+      }
+
+      const workspace = await inspectCloudFirstWorkspace({
+        adapter,
+        scheduler,
+        context: guardContext,
+      })
+      if (!workspace.ok || !workspace.safeToInitialize) {
+        return {
+          ok: false,
+          code: !workspace.ok
+            ? 'CLOUD_INITIALIZATION_SAFETY_CHECK_FAILED'
+            : 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+          message: !workspace.ok
+            ? 'Local workspace safety check failed. Complete recovery before loading Cloud data.'
+            : 'Cloud data can only be loaded into a new empty workspace. Existing local data remains unchanged.',
+          error: {
+            code: !workspace.ok
+              ? (workspace.code || 'CLOUD_INITIALIZATION_SAFETY_CHECK_FAILED')
+              : 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+            reasons: workspace.reasons ?? [],
+          },
+        }
+      }
+
       let freshQueueCount = 0
       if (activeQueueService && typeof activeQueueService.countPending === 'function') {
         freshQueueCount = await activeQueueService.countPending()
@@ -2056,6 +2134,17 @@ export function createSyncPullService({
         const shiftState = await adapter.loadShiftState()
         if (shiftState && typeof shiftState === 'object' && (shiftState.id || shiftState.shiftNumber)) {
           activeShift = shiftState
+        }
+      }
+      if (!activeShift && shiftStore && (shiftStore.id || shiftStore.shiftNumber)) {
+        activeShift = {
+          id: shiftStore.id,
+          shiftNumber: shiftStore.shiftNumber,
+        }
+      } else if (!activeShift && stores?.shiftStore && (stores.shiftStore.id || stores.shiftStore.shiftNumber)) {
+        activeShift = {
+          id: stores.shiftStore.id,
+          shiftNumber: stores.shiftStore.shiftNumber,
         }
       }
 

@@ -38,7 +38,7 @@ function isValidCloudFirstPullBinding(
   return Boolean(
     binding &&
       binding.mode === 'cloud_first_read' &&
-      binding.status !== 'initializing' &&
+      binding.status === 'completed' &&
       Number(binding.businessId) === Number(businessId) &&
       Number(binding.outletId) === Number(outletId) &&
       String(binding.deviceIdentifier) === String(deviceIdentifier) &&
@@ -54,11 +54,15 @@ function isValidCompletedPullState(state) {
       state.version === 1 &&
       Number.isInteger(state.cursor) &&
       state.cursor >= 0 &&
-      Number.isInteger(state.serverSequence) &&
-      state.serverSequence >= 0 &&
+      Number.isInteger(serverSeq(state)) &&
+      serverSeq(state) >= 0 &&
       typeof state.updatedAt === 'string' &&
       state.updatedAt.trim().length > 0,
   )
+}
+
+function serverSeq(state) {
+  return state?.serverSequence ?? state?.server_sequence
 }
 
 export async function resolveCloudFirstPushReadiness({ adapter, context }) {
@@ -86,7 +90,7 @@ export async function resolveCloudFirstPushReadiness({ adapter, context }) {
       adapter.loadSyncPullState(),
       adapter.loadSyncServerVersions(),
     ])
-    if (binding.status === 'initializing') {
+    if (binding.status !== 'completed') {
       return { ok: false, cloudFirst: true, code: 'CLOUD_FIRST_INITIALIZATION_INCOMPLETE' }
     }
     if (!isValidCloudFirstPullBinding(binding, context)) {

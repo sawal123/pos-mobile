@@ -1548,6 +1548,7 @@ describe('P14: Bootstrap Context Verification & Dependency-Aware Push', () => {
       deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
       registeredDeviceId: 55,
       mode: 'cloud_first_read',
+      status: 'completed',
       boundAt: new Date().toISOString(),
     })
     await adapter.saveSyncPullState({
@@ -1607,6 +1608,7 @@ describe('P14: Bootstrap Context Verification & Dependency-Aware Push', () => {
       deviceIdentifier: '123e4567-e89b-12d3-a456-426614174000',
       registeredDeviceId: 55,
       mode: 'cloud_first_read',
+      status: 'completed',
       boundAt: new Date().toISOString(),
     })
     await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'p-1', {
