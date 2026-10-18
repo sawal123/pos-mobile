@@ -477,6 +477,60 @@ export function createSyncPullService({
           },
         }
       }
+
+      // ── 2.5. Push-only workspace initial pull gate ───────────────────────────
+      // A valid push binding without any pull binding is a legitimate legacy
+      // workspace. It pulls through the regular snapshot-safe path (existing
+      // local data is allowed; pending-outbox conflicts are enforced below), but
+      // only when persistence, in-flight push and conflict state are all clean.
+      // The push binding is never touched; a complete pull binding is written
+      // only after the pull succeeds.
+      if (pushBinding && !existingPullBinding && !isInitialCloudPull) {
+        const blocked = (code, message) => ({
+          ok: false,
+          code,
+          message,
+          error: { code, message },
+        })
+
+        if (scheduler && typeof scheduler.flush === 'function') {
+          try {
+            await scheduler.flush()
+          } catch {
+            return blocked(
+              'SYNC_PUSH_ONLY_PULL_PERSISTENCE_PENDING',
+              'Local persistence has not finished. Complete recovery before pulling Cloud data.',
+            )
+          }
+        }
+
+        try {
+          if (adapter && typeof adapter.loadSyncPushInflight === 'function') {
+            const inflight = await adapter.loadSyncPushInflight()
+            if (inflight) {
+              return blocked(
+                'SYNC_PUSH_ONLY_PULL_INFLIGHT_PENDING',
+                'A previous push is still awaiting recovery. Resolve it before pulling Cloud data.',
+              )
+            }
+          }
+          if (adapter && typeof adapter.loadSyncConflicts === 'function') {
+            const conflictState = await adapter.loadSyncConflicts()
+            const conflicts = Array.isArray(conflictState?.conflicts) ? conflictState.conflicts : []
+            if (conflicts.some((c) => c && c.status === 'open')) {
+              return blocked(
+                'SYNC_PUSH_ONLY_PULL_OPEN_CONFLICTS',
+                'Resolve open sync conflicts before pulling Cloud data.',
+              )
+            }
+          }
+        } catch {
+          return blocked(
+            'SYNC_PUSH_ONLY_PULL_SAFETY_CHECK_FAILED',
+            'Local sync safety check failed. Complete recovery before pulling Cloud data.',
+          )
+        }
+      }
     }
 
     // ── 3. P13 Pull Context Binding check ─────────────────────────────────────

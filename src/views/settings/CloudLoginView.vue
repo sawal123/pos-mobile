@@ -97,10 +97,23 @@ const isContextGuardMutationBlocked = computed(() => {
 
 const isInitialPullRunning = ref(false)
 
+// Push-only workspace: valid push binding, no pull binding. It is NOT a fresh
+// workspace, so it must use the regular pull rather than Muat Data Cloud.
+const isPushOnlyWorkspace = computed(() => {
+  const sources = syncContextGuardStore.sources ?? []
+  return (
+    canSync.value &&
+    syncContextGuardStore.status === 'unbound' &&
+    sources.includes('push_binding') &&
+    !sources.includes('pull_binding')
+  )
+})
+
 const canInitializeCloudData = computed(
   () =>
     canSync.value &&
     syncContextGuardStore.status === 'unbound' &&
+    !isPushOnlyWorkspace.value &&
     !syncBootstrapStore.isStaged &&
     !isInitialPullRunning.value,
 )
@@ -840,6 +853,7 @@ async function handlePullNow({ initialCloudRead = false } = {}) {
     pullMessage.value = ''
     const startedAt = new Date().toISOString()
     const ctx = snapshotCloudContext()
+    const wasPushOnly = isPushOnlyWorkspace.value
     let result
     try {
       result = await syncPullStore.pullNow({ initialCloudRead })
@@ -911,6 +925,16 @@ async function handlePullNow({ initialCloudRead = false } = {}) {
           pullMessage.value =
             'Data Cloud telah diterapkan, tetapi status sinkronisasi belum dapat diverifikasi. Pengiriman tetap diblokir sampai status aman.'
           return
+        }
+      }
+
+      if (wasPushOnly && !initialCloudRead) {
+        try {
+          await syncContextGuardStore.check()
+          await syncStatusStore.refresh()
+          await syncPushStore.refreshPendingCount()
+        } catch {
+          // Pull already succeeded; the next status refresh will reconcile the UI.
         }
       }
 
@@ -1930,7 +1954,7 @@ onMounted(async () => {
             :disabled="
               isAnySyncOperationBusy ||
               isContextGuardMutationBlocked ||
-              syncContextGuardStore.status === 'unbound'
+              (syncContextGuardStore.status === 'unbound' && !isPushOnlyWorkspace)
             "
             :loading="syncPullStore.loading"
             aria-label="Tarik Data Cloud"
@@ -1942,6 +1966,15 @@ onMounted(async () => {
             <span class="ml-1.5">Tarik</span>
           </BaseButton>
         </div>
+
+        <p
+          v-if="isPushOnlyWorkspace"
+          id="cloud-push-only-notice"
+          class="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800"
+        >
+          Perangkat ini sudah terhubung untuk mengirim data. Gunakan Tarik untuk mengambil data
+          Cloud pertama kali tanpa menghapus data lokal.
+        </p>
 
         <div
           v-if="canInitializeCloudData"
