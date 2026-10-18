@@ -46,6 +46,7 @@ export function createMemoryAdapter() {
     workspaceRegistry: null,
     workspaceSnapshots: {},
     workspaceSwitchJournal: null,
+    cloudInitializationJournal: null,
   }
 
   return {
@@ -283,6 +284,16 @@ export function createMemoryAdapter() {
     },
     async clearWorkspaceSwitchJournal() {
       state.workspaceSwitchJournal = null
+    },
+    // Cloud-first initialization journal (crash-safe recovery)
+    async loadCloudInitializationJournal() {
+      return state.cloudInitializationJournal ? cloneValue(state.cloudInitializationJournal) : null
+    },
+    async saveCloudInitializationJournal(journal) {
+      state.cloudInitializationJournal = cloneValue(journal)
+    },
+    async clearCloudInitializationJournal() {
+      state.cloudInitializationJournal = null
     },
     // PREM-M04: non-sensitive pending subscription payment (recovery only).
     async loadPendingSubscriptionPayment() {

@@ -327,4 +327,34 @@ describe('SQLite-backed workspace switching', () => {
     adapter = await forceStopAndRestart(adapter)
     expect(await adapter.getSchemaVersion()).toBe(DB_VERSION)
   })
+
+  it('durably persists, recovers across restarts, and clears the cloud initialization journal in SQLite', async () => {
+    let adapter = await openAdapter()
+    expect(await adapter.loadCloudInitializationJournal()).toBeNull()
+
+    const journal = {
+      version: 1,
+      phase: 'initializing',
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: 'dev-sqlite-crash-1',
+      registeredDeviceId: 55,
+      startedAt: '2026-10-18T00:00:00.000Z',
+      completedAt: null,
+      updatedAt: '2026-10-18T00:00:00.000Z',
+    }
+    await adapter.saveCloudInitializationJournal(journal)
+    expect(await adapter.loadCloudInitializationJournal()).toEqual(journal)
+
+    // Simulate crash and restart
+    adapter = await forceStopAndRestart(adapter)
+    expect(await adapter.loadCloudInitializationJournal()).toEqual(journal)
+
+    // Clear journal on completion
+    await adapter.clearCloudInitializationJournal()
+    expect(await adapter.loadCloudInitializationJournal()).toBeNull()
+
+    adapter = await forceStopAndRestart(adapter)
+    expect(await adapter.loadCloudInitializationJournal()).toBeNull()
+  })
 })

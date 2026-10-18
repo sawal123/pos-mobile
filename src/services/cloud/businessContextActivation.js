@@ -442,6 +442,7 @@ export async function inspectCloudFirstWorkspace({
       workspaceSwitchJournal,
       conflicts,
       pullState,
+      initJournal,
     ] = await Promise.all([
       adapter.loadProducts(),
       adapter.loadCustomers(),
@@ -462,22 +463,62 @@ export async function inspectCloudFirstWorkspace({
       adapter.loadWorkspaceSwitchJournal(),
       adapter.loadSyncConflicts(),
       adapter.loadSyncPullState(),
+      typeof adapter.loadCloudInitializationJournal === 'function'
+        ? adapter.loadCloudInitializationJournal()
+        : null,
     ])
 
     const reasons = []
     const products = storedProducts?.products ?? []
     const categories = storedProducts?.categories ?? []
     const stockMovements = storedProducts?.stockMovements ?? []
-    if (hasRows(products) || hasRows(categories) || hasRows(stockMovements)) reasons.push('catalog_or_stock')
-    if (hasRows(storedCustomers)) reasons.push('customers')
-    if (hasRows(storedExpenses)) reasons.push('expenses')
-    if (hasRows(storedTransactions)) reasons.push('transactions')
-    if (hasRows(storedCash?.entries)) reasons.push('cash')
-    if (hasMeaningfulShift(storedShift)) reasons.push('shift')
-    if (hasRows(syncQueue)) reasons.push('sync_queue')
-    if (pushBinding || pullBinding || inflight || bootstrap || identityMap || serverVersions) {
-      reasons.push('sync_metadata')
+
+    const isInterruptedInitialization = Boolean(
+      (initJournal && initJournal.phase === 'initializing') ||
+      (pullBinding && pullBinding.mode === 'cloud_first_read' && pullBinding.status === 'initializing')
+    )
+
+    if (isInterruptedInitialization) {
+      const interruptedContext = pullBinding?.businessId != null ? pullBinding : initJournal
+      const expected = extractContextIdentity(targetContext)
+      const contextMatches = Boolean(
+        interruptedContext &&
+        expected &&
+        Number(interruptedContext.businessId) === expected.businessId &&
+        Number(interruptedContext.outletId) === expected.outletId &&
+        Number(interruptedContext.registeredDeviceId) === expected.registeredDeviceId &&
+        String(interruptedContext.deviceIdentifier).trim() === expected.deviceIdentifier,
+      )
+
+      if (!contextMatches) {
+        reasons.push('cloud_initialization_context_mismatch')
+      }
+
+      // Operational data MUST NEVER be present during recovery
+      if (hasRows(storedTransactions)) reasons.push('transactions')
+      if (hasRows(storedCash?.entries)) reasons.push('cash')
+      if (hasMeaningfulShift(storedShift)) reasons.push('shift')
+      if (hasRows(syncQueue)) reasons.push('sync_queue')
+      if (pushBinding || inflight || bootstrap || (pullBinding && pullBinding.status === 'completed')) {
+        reasons.push('sync_metadata')
+      }
+    } else {
+      if (hasRows(products) || hasRows(categories) || hasRows(stockMovements)) reasons.push('catalog_or_stock')
+      if (hasRows(storedCustomers)) reasons.push('customers')
+      if (hasRows(storedExpenses)) reasons.push('expenses')
+      if (hasRows(storedTransactions)) reasons.push('transactions')
+      if (hasRows(storedCash?.entries)) reasons.push('cash')
+      if (hasMeaningfulShift(storedShift)) reasons.push('shift')
+      if (hasRows(syncQueue)) reasons.push('sync_queue')
+      if (pushBinding || pullBinding || inflight || bootstrap || identityMap || serverVersions) {
+        reasons.push('sync_metadata')
+      }
     }
+
+    if (initJournal && !['initializing', 'completed', 'rolled_back'].includes(initJournal.phase)) {
+      reasons.push('cloud_initialization_journal_pending')
+    }
+
     const autoSyncSafety = evaluateAutoSyncPreferenceSafety(autoSettings, targetContext)
     if (!autoSyncSafety.safe) {
       reasons.push(autoSyncSafety.reason)
@@ -488,7 +529,7 @@ export async function inspectCloudFirstWorkspace({
     if (hasOpenSyncConflict(conflicts)) reasons.push('sync_conflict_pending')
     if (hasInconsistentPullState(pullState, pullBinding)) {
       reasons.push('inconsistent_pull_state')
-    } else if (pullState) {
+    } else if (pullState && (!isInterruptedInitialization || (pullBinding && pullBinding.status === 'completed'))) {
       reasons.push('pull_state_present')
     }
 

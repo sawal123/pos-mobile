@@ -38,6 +38,7 @@ function isValidCloudFirstPullBinding(
   return Boolean(
     binding &&
       binding.mode === 'cloud_first_read' &&
+      binding.status !== 'initializing' &&
       Number(binding.businessId) === Number(businessId) &&
       Number(binding.outletId) === Number(outletId) &&
       String(binding.deviceIdentifier) === String(deviceIdentifier) &&
@@ -60,7 +61,7 @@ function isValidCompletedPullState(state) {
   )
 }
 
-async function resolveCloudFirstPushReadiness({ adapter, context }) {
+export async function resolveCloudFirstPushReadiness({ adapter, context }) {
   // Cloud-first evidence is additive: legacy/bootstrap callers without a
   // persistence adapter retain their established flow. Once a Cloud-first
   // binding is detected, though, every durability reader becomes mandatory.
@@ -85,6 +86,9 @@ async function resolveCloudFirstPushReadiness({ adapter, context }) {
       adapter.loadSyncPullState(),
       adapter.loadSyncServerVersions(),
     ])
+    if (binding.status === 'initializing') {
+      return { ok: false, cloudFirst: true, code: 'CLOUD_FIRST_INITIALIZATION_INCOMPLETE' }
+    }
     if (!isValidCloudFirstPullBinding(binding, context)) {
       return { ok: false, cloudFirst: true, code: 'CLOUD_FIRST_CONTEXT_MISMATCH' }
     }

@@ -188,10 +188,24 @@ export function createSyncPullService({
     if (adapter && typeof adapter.loadSyncPullBinding === 'function') {
       existingPullBinding = await adapter.loadSyncPullBinding()
     }
+    let existingInitJournal = null
+    if (adapter && typeof adapter.loadCloudInitializationJournal === 'function') {
+      try {
+        existingInitJournal = await adapter.loadCloudInitializationJournal()
+      } catch {
+        existingInitJournal = null
+      }
+    }
+
+    const isInitialCloudPull = Boolean(
+      options.initialCloudRead === true ||
+      (existingPullBinding && existingPullBinding.mode === 'cloud_first_read' && existingPullBinding.status === 'initializing') ||
+      (existingInitJournal && existingInitJournal.phase === 'initializing')
+    )
 
     if (adapter && typeof adapter.loadSyncPushBinding === 'function') {
       const pushBinding = await adapter.loadSyncPushBinding()
-      if (!pushBinding && !existingPullBinding && options.initialCloudRead === true) {
+      if (!pushBinding && isInitialCloudPull) {
         if (scheduler && typeof scheduler.flush === 'function') {
           try {
             await scheduler.flush()
@@ -231,14 +245,41 @@ export function createSyncPullService({
           }
         }
 
+        if (adapter && typeof adapter.saveCloudInitializationJournal === 'function') {
+          try {
+            await adapter.saveCloudInitializationJournal({
+              version: 1,
+              phase: 'initializing',
+              businessId: selectedBusiness.id,
+              outletId: selectedOutlet.id,
+              deviceIdentifier,
+              registeredDeviceId,
+              startedAt: existingInitJournal?.startedAt || new Date().toISOString(),
+              completedAt: null,
+              updatedAt: new Date().toISOString(),
+            })
+          } catch (err) {
+            return {
+              ok: false,
+              code: 'CLOUD_INITIALIZATION_JOURNAL_PERSIST_FAILED',
+              message: 'Failed to persist the Cloud initialization journal.',
+              error: {
+                code: 'CLOUD_INITIALIZATION_JOURNAL_PERSIST_FAILED',
+                message: err instanceof Error ? err.message : String(err),
+              },
+            }
+          }
+        }
+
         try {
           await adapter.saveSyncPullBinding({
             businessId: selectedBusiness.id,
             outletId: selectedOutlet.id,
             deviceIdentifier,
             registeredDeviceId,
-            boundAt: new Date().toISOString(),
+            boundAt: existingPullBinding?.boundAt || new Date().toISOString(),
             mode: 'cloud_first_read',
+            status: 'initializing',
           })
           existingPullBinding = await adapter.loadSyncPullBinding()
         } catch (err) {
@@ -255,19 +296,22 @@ export function createSyncPullService({
       }
 
       if (!pushBinding) {
-        if (existingPullBinding) {
-          // A durable Cloud-first read binding is sufficient for future pulls.
+        if (
+          existingPullBinding &&
+          (isInitialCloudPull || existingPullBinding.status !== 'initializing')
+        ) {
+          // A durable Cloud-first read binding is sufficient for future pulls once completed.
           // Push remains independently controlled by the push binding/policy.
         } else {
-        return {
-          ok: false,
-          code: 'SYNC_BUSINESS_NOT_BOUND',
-          message: 'This device has not initialized Cloud data. Choose Muat Data Cloud to begin.',
-          error: {
+          return {
+            ok: false,
             code: 'SYNC_BUSINESS_NOT_BOUND',
             message: 'This device has not initialized Cloud data. Choose Muat Data Cloud to begin.',
-          },
-        }
+            error: {
+              code: 'SYNC_BUSINESS_NOT_BOUND',
+              message: 'This device has not initialized Cloud data. Choose Muat Data Cloud to begin.',
+            },
+          }
         }
       }
 
@@ -442,29 +486,30 @@ export function createSyncPullService({
 
     // ── 6. Handle empty snapshot ──────────────────────────────────────────────
     if (allRecords.length === 0) {
-      if (!existingPullBinding && adapter && typeof adapter.saveSyncPullBinding === 'function') {
-        await adapter.saveSyncPullBinding({
-          businessId: selectedBusiness.id,
-          outletId: selectedOutlet.id,
-          deviceIdentifier,
-          registeredDeviceId,
-          boundAt: new Date().toISOString(),
-        })
-      }
-
       if (
         options.initialCloudRead === true &&
         adapter &&
-        typeof adapter.saveSyncServerVersions === 'function' &&
-        typeof adapter.loadSyncServerVersions === 'function'
+        typeof adapter.saveSyncServerVersions === 'function'
       ) {
         try {
-          const existingVersions = await adapter.loadSyncServerVersions()
-          if (!existingVersions) {
-            await adapter.saveSyncServerVersions({})
+          const existingVersions = typeof adapter.loadSyncServerVersions === 'function'
+            ? await adapter.loadSyncServerVersions()
+            : null
+          const versionsToSave =
+            existingVersions && typeof existingVersions === 'object' && !Array.isArray(existingVersions)
+              ? existingVersions
+              : {}
+          await adapter.saveSyncServerVersions(versionsToSave)
+        } catch (err) {
+          return {
+            ok: false,
+            code: 'SYNC_SERVER_VERSIONS_PERSIST_FAILED',
+            message: 'Failed to persist sync server versions metadata during initial pull.',
+            error: {
+              code: 'SYNC_SERVER_VERSIONS_PERSIST_FAILED',
+              message: err instanceof Error ? err.message : String(err),
+            },
           }
-        } catch {
-          // best-effort persistence of default versions map
         }
       }
 
@@ -490,6 +535,51 @@ export function createSyncPullService({
               message: err instanceof Error ? err.message : String(err),
             },
           }
+        }
+      }
+
+      if (adapter && typeof adapter.saveSyncPullBinding === 'function') {
+        try {
+          await adapter.saveSyncPullBinding({
+            businessId: selectedBusiness.id,
+            outletId: selectedOutlet.id,
+            deviceIdentifier,
+            registeredDeviceId,
+            boundAt: existingPullBinding?.boundAt || new Date().toISOString(),
+            mode: isInitialCloudPull ? 'cloud_first_read' : (existingPullBinding?.mode ?? undefined),
+            status: 'completed',
+          })
+        } catch (err) {
+          return {
+            ok: false,
+            code: 'SYNC_PULL_BINDING_PERSIST_FAILED',
+            message: 'Failed to persist completed sync pull binding.',
+            error: {
+              code: 'SYNC_PULL_BINDING_PERSIST_FAILED',
+              message: err instanceof Error ? err.message : String(err),
+            },
+          }
+        }
+      }
+
+      if (
+        isInitialCloudPull &&
+        adapter &&
+        typeof adapter.saveCloudInitializationJournal === 'function'
+      ) {
+        try {
+          await adapter.saveCloudInitializationJournal({
+            version: 1,
+            phase: 'completed',
+            businessId: selectedBusiness.id,
+            outletId: selectedOutlet.id,
+            deviceIdentifier,
+            registeredDeviceId,
+            completedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          })
+        } catch {
+          // Best-effort journal phase update
         }
       }
 
@@ -1651,6 +1741,43 @@ export function createSyncPullService({
       return preCommitConflict
     }
 
+    if (isInitialCloudPull) {
+      let freshQueueCount = 0
+      if (activeQueueService && typeof activeQueueService.countPending === 'function') {
+        freshQueueCount = await activeQueueService.countPending()
+      } else if (adapter && typeof adapter.listSyncQueueItems === 'function') {
+        const q = await adapter.listSyncQueueItems({ limit: 1 })
+        freshQueueCount = Array.isArray(q) ? q.length : 0
+      }
+      if (freshQueueCount > 0) {
+        return {
+          ok: false,
+          code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+          message: 'Local operations were created during Cloud initialization. Initial pull cannot merge local changes.',
+          error: {
+            code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+            reasons: ['sync_queue'],
+          },
+        }
+      }
+
+      let freshTrx = []
+      if (adapter && typeof adapter.loadTransactions === 'function') {
+        freshTrx = await adapter.loadTransactions()
+      }
+      if (Array.isArray(freshTrx) && freshTrx.length > 0) {
+        return {
+          ok: false,
+          code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+          message: 'Local transactions were created during Cloud initialization. Initial pull cannot merge local changes.',
+          error: {
+            code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+            reasons: ['transactions'],
+          },
+        }
+      }
+    }
+
     // ── 10. Apply mutations safely to Pinia stores via $patch ─────────────────
     // Remote apply always patches plain staged state: no user mutation action
     // is invoked, so pulled rows never create new outbox entries.
@@ -1720,21 +1847,22 @@ export function createSyncPullService({
 
     // ── 13. Persist server versions metadata ───────────────────────────────────
     if (adapter && typeof adapter.saveSyncServerVersions === 'function') {
-      await adapter.saveSyncServerVersions(serverVersionsToSave)
+      try {
+        await adapter.saveSyncServerVersions(serverVersionsToSave)
+      } catch (err) {
+        return {
+          ok: false,
+          code: 'SYNC_SERVER_VERSIONS_PERSIST_FAILED',
+          message: 'Failed to persist sync server versions metadata.',
+          error: {
+            code: 'SYNC_SERVER_VERSIONS_PERSIST_FAILED',
+            message: err instanceof Error ? err.message : String(err),
+          },
+        }
+      }
     }
 
-    // ── 14. Persist pull context binding if first pull ─────────────────────────
-    if (!existingPullBinding && adapter && typeof adapter.saveSyncPullBinding === 'function') {
-      await adapter.saveSyncPullBinding({
-        businessId: selectedBusiness.id,
-        outletId: selectedOutlet.id,
-        deviceIdentifier,
-        registeredDeviceId,
-        boundAt: new Date().toISOString(),
-      })
-    }
-
-    // ── 15. Advance cursor (LAST STEP!) ────────────────────────────────────────
+    // ── 14. Advance cursor (BEFORE marking binding as completed!) ──────────────
     if (adapter && typeof adapter.saveSyncPullState === 'function') {
       try {
         await adapter.saveSyncPullState({
@@ -1753,6 +1881,52 @@ export function createSyncPullService({
             message: err instanceof Error ? err.message : String(err),
           },
         }
+      }
+    }
+
+    // ── 15. Persist pull context binding as completed ──────────────────────────
+    if (adapter && typeof adapter.saveSyncPullBinding === 'function') {
+      try {
+        await adapter.saveSyncPullBinding({
+          businessId: selectedBusiness.id,
+          outletId: selectedOutlet.id,
+          deviceIdentifier,
+          registeredDeviceId,
+          boundAt: existingPullBinding?.boundAt || new Date().toISOString(),
+          mode: isInitialCloudPull ? 'cloud_first_read' : (existingPullBinding?.mode ?? undefined),
+          status: 'completed',
+        })
+      } catch (err) {
+        return {
+          ok: false,
+          code: 'SYNC_PULL_BINDING_PERSIST_FAILED',
+          message: 'Failed to persist completed sync pull binding.',
+          error: {
+            code: 'SYNC_PULL_BINDING_PERSIST_FAILED',
+            message: err instanceof Error ? err.message : String(err),
+          },
+        }
+      }
+    }
+
+    if (
+      isInitialCloudPull &&
+      adapter &&
+      typeof adapter.saveCloudInitializationJournal === 'function'
+    ) {
+      try {
+        await adapter.saveCloudInitializationJournal({
+          version: 1,
+          phase: 'completed',
+          businessId: selectedBusiness.id,
+          outletId: selectedOutlet.id,
+          deviceIdentifier,
+          registeredDeviceId,
+          completedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        })
+      } catch {
+        // Best-effort journal phase update
       }
     }
 

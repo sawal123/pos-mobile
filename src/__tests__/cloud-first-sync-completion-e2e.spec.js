@@ -18,6 +18,8 @@ import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { saveToken, _resetTokenStore } from '@/services/cloud/tokenRepository'
 import { SYNC_ENTITY_TYPES } from '@/services/sync/syncConstants'
 import { inspectCloudFirstWorkspace } from '@/services/cloud/businessContextActivation'
+import { createSyncContextGuardService } from '@/services/sync/syncContextGuardService'
+import { resolveCloudFirstPushReadiness } from '@/services/sync/syncPushService'
 
 const { mockServerHandler } = vi.hoisted(() => ({ mockServerHandler: { handle: null } }))
 
@@ -777,6 +779,492 @@ describe('Cloud-First Sync Completion E2E (PR #60 Task 4)', () => {
       pullCorrupt.code,
     )
   })
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // P1 Cloud Initialization Data Integrity (PR #60 Two-Finding Fix)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  it('1. Initial pull fails on network offline and leaves binding incomplete with no cursor advance', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud', initialOnline: true })
+    mockServerHandler.handle = async () => ({
+      ok: false,
+      status: 503,
+      error: { code: 'NETWORK_OFFLINE', message: 'Failed to reach cloud endpoint' },
+    })
+
+    const cloudContext = makeValidCloudContext({ role: 'owner', syncCapabilities: { push_mode: 'full' } })
+    useCloudSessionStore(scenario.pinia).$patch(cloudContext)
+    await scenario.adapter.saveCloudContext(cloudContext)
+    await scenario.adapter.saveDeviceIdentifier(cloudContext.deviceIdentifier)
+
+    const pullStore = useSyncPullStore(scenario.pinia)
+    const result = await pullStore.pullNow({ initialCloudRead: true })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('NETWORK_OFFLINE')
+
+    const pullBinding = await scenario.adapter.loadSyncPullBinding()
+    expect(pullBinding?.status).toBe('initializing')
+    expect(pullBinding?.status).not.toBe('completed')
+    expect(await scenario.adapter.loadSyncPullState()).toBeNull()
+  })
+
+  it('2. Initial pull fails on malformed response without marking binding completed', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud', initialOnline: true })
+    mockServerHandler.handle = async () => ({
+      ok: true,
+      status: 200,
+      data: {
+        data: {
+          records: 'invalid-not-array',
+          next_cursor: 1,
+          server_sequence: 1,
+          has_more: false,
+        },
+      },
+    })
+
+    const cloudContext = makeValidCloudContext({ role: 'owner', syncCapabilities: { push_mode: 'full' } })
+    useCloudSessionStore(scenario.pinia).$patch(cloudContext)
+    await scenario.adapter.saveCloudContext(cloudContext)
+    await scenario.adapter.saveDeviceIdentifier(cloudContext.deviceIdentifier)
+
+    const pullStore = useSyncPullStore(scenario.pinia)
+    const result = await pullStore.pullNow({ initialCloudRead: true })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('INVALID_PULL_RESPONSE')
+
+    const pullBinding = await scenario.adapter.loadSyncPullBinding()
+    expect(pullBinding?.status).toBe('initializing')
+    expect(await scenario.adapter.loadSyncPullState()).toBeNull()
+  })
+
+  it('3. Crash after preflight before download leaves unfinished binding and blocks push', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud', initialOnline: true })
+    const cloudContext = makeValidCloudContext({ role: 'owner', syncCapabilities: { push_mode: 'full' } })
+    useCloudSessionStore(scenario.pinia).$patch(cloudContext)
+    await scenario.adapter.saveCloudContext(cloudContext)
+    await scenario.adapter.saveDeviceIdentifier(cloudContext.deviceIdentifier)
+
+    // Simulate crash after saving preflight journal and initializing binding
+    await scenario.adapter.saveCloudInitializationJournal({
+      version: 1,
+      phase: 'initializing',
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: cloudContext.deviceIdentifier,
+      registeredDeviceId: 55,
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      updatedAt: new Date().toISOString(),
+    })
+    await scenario.adapter.saveSyncPullBinding({
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: cloudContext.deviceIdentifier,
+      registeredDeviceId: 55,
+      boundAt: new Date().toISOString(),
+      mode: 'cloud_first_read',
+      status: 'initializing',
+    })
+
+    const guardService = createSyncContextGuardService({ adapter: scenario.adapter })
+    const guardReport = await guardService.inspect({ context: cloudContext })
+    expect(guardReport.status).toBe('unbound')
+    expect(guardReport.status).not.toBe('safe')
+
+    const pushReadiness = await resolveCloudFirstPushReadiness({
+      adapter: scenario.adapter,
+      context: {
+        businessId: 10,
+        outletId: 101,
+        deviceIdentifier: cloudContext.deviceIdentifier,
+        registeredDeviceId: 55,
+      },
+    })
+    expect(pushReadiness.ok).toBe(false)
+    expect(pushReadiness.code).toBe('CLOUD_FIRST_INITIALIZATION_INCOMPLETE')
+  })
+
+  it('4. Crash after partial data applied leaves unfinished binding that is not safe', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud', initialOnline: true })
+    const cloudContext = makeValidCloudContext({ role: 'owner', syncCapabilities: { push_mode: 'full' } })
+    useCloudSessionStore(scenario.pinia).$patch(cloudContext)
+    await scenario.adapter.saveCloudContext(cloudContext)
+    await scenario.adapter.saveDeviceIdentifier(cloudContext.deviceIdentifier)
+
+    // Simulate partial products applied before crash
+    const prodUuid = '22222222-2222-4222-8222-222222222222'
+    await scenario.adapter.saveProducts(
+      [{ id: prodUuid, name: 'Espresso', price: 18000, category: 'Minuman' }],
+      ['Minuman'],
+    )
+    await scenario.adapter.saveCloudInitializationJournal({
+      version: 1,
+      phase: 'initializing',
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: cloudContext.deviceIdentifier,
+      registeredDeviceId: 55,
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      updatedAt: new Date().toISOString(),
+    })
+    await scenario.adapter.saveSyncPullBinding({
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: cloudContext.deviceIdentifier,
+      registeredDeviceId: 55,
+      boundAt: new Date().toISOString(),
+      mode: 'cloud_first_read',
+      status: 'initializing',
+    })
+
+    const guardService = createSyncContextGuardService({ adapter: scenario.adapter })
+    const guardReport = await guardService.inspect({ context: cloudContext })
+    expect(guardReport.status).toBe('unbound')
+    expect(guardReport.status).not.toBe('safe')
+  })
+
+  it('5 & 6. Restart with initialization journal pending does not treat unfinished binding as safe', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud', initialOnline: true })
+    const cloudContext = makeValidCloudContext({ role: 'owner', syncCapabilities: { push_mode: 'full' } })
+    useCloudSessionStore(scenario.pinia).$patch(cloudContext)
+    await scenario.adapter.saveCloudContext(cloudContext)
+    await scenario.adapter.saveDeviceIdentifier(cloudContext.deviceIdentifier)
+
+    await scenario.adapter.saveCloudInitializationJournal({
+      version: 1,
+      phase: 'initializing',
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: cloudContext.deviceIdentifier,
+      registeredDeviceId: 55,
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      updatedAt: new Date().toISOString(),
+    })
+    await scenario.adapter.saveSyncPullBinding({
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: cloudContext.deviceIdentifier,
+      registeredDeviceId: 55,
+      boundAt: new Date().toISOString(),
+      mode: 'cloud_first_read',
+      status: 'initializing',
+    })
+
+    // Restart app
+    const restarted = await restartAppScenario(scenario)
+    const journalAfterRestart = await restarted.adapter.loadCloudInitializationJournal()
+    expect(journalAfterRestart).toMatchObject({
+      version: 1,
+      phase: 'initializing',
+      businessId: 10,
+    })
+
+    const guardService = createSyncContextGuardService({ adapter: restarted.adapter })
+    const guardReport = await guardService.inspect({ context: cloudContext })
+    expect(guardReport.status).not.toBe('safe')
+    expect(guardReport.status).toBe('unbound')
+  })
+
+  it('7. Initial pull retry succeeds after interruption without duplicating products', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud', initialOnline: true })
+    mockServerHandler.handle = scenario.fakeServer.handleRequest
+
+    const cloudContext = makeValidCloudContext({ role: 'owner', syncCapabilities: { push_mode: 'full' } })
+    useCloudSessionStore(scenario.pinia).$patch(cloudContext)
+    await scenario.adapter.saveCloudContext(cloudContext)
+    await scenario.adapter.saveDeviceIdentifier(cloudContext.deviceIdentifier)
+
+    const catUuid = '33333333-3333-4333-8333-333333333333'
+    const prodUuid = '44444444-4444-4444-8444-444444444444'
+    scenario.fakeServer.db.categories.push({
+      sync_id: catUuid,
+      name: 'Makanan',
+      business_id: 10,
+      sync_version: 1,
+      sync_sequence: 1,
+      is_active: 1,
+    })
+    scenario.fakeServer.db.products.push({
+      sync_id: prodUuid,
+      category_sync_id: catUuid,
+      name: 'Nasi Goreng',
+      price: 20000,
+      stock: 10,
+      business_id: 10,
+      sync_version: 1,
+      sync_sequence: 2,
+      is_active: 1,
+    })
+
+    // Pre-populate partial product from an interrupted attempt
+    await scenario.adapter.saveProducts(
+      [{ id: prodUuid, name: 'Nasi Goreng', price: 20000, category: 'Makanan' }],
+      ['Makanan'],
+    )
+    await scenario.adapter.saveCloudInitializationJournal({
+      version: 1,
+      phase: 'initializing',
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: cloudContext.deviceIdentifier,
+      registeredDeviceId: 55,
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      updatedAt: new Date().toISOString(),
+    })
+    await scenario.adapter.saveSyncPullBinding({
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: cloudContext.deviceIdentifier,
+      registeredDeviceId: 55,
+      boundAt: new Date().toISOString(),
+      mode: 'cloud_first_read',
+      status: 'initializing',
+    })
+
+    // Retry initial pull
+    const pullStore = useSyncPullStore(scenario.pinia)
+    const retryResult = await pullStore.pullNow({ initialCloudRead: true })
+    expect(retryResult.ok).toBe(true)
+
+    const productStore = useProductStore(scenario.pinia)
+    const matchingProducts = productStore.products.filter((p) => p.name === 'Nasi Goreng')
+    expect(matchingProducts).toHaveLength(1)
+
+    const pullBinding = await scenario.adapter.loadSyncPullBinding()
+    expect(pullBinding.status).toBe('completed')
+
+    const journal = await scenario.adapter.loadCloudInitializationJournal()
+    expect(journal.phase).toBe('completed')
+  })
+
+  it('8. New local operational data blocks initial pull recovery and prevents silent mixing', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud', initialOnline: true })
+    mockServerHandler.handle = scenario.fakeServer.handleRequest
+
+    const cloudContext = makeValidCloudContext({ role: 'owner', syncCapabilities: { push_mode: 'full' } })
+    useCloudSessionStore(scenario.pinia).$patch(cloudContext)
+    await scenario.adapter.saveCloudContext(cloudContext)
+    await scenario.adapter.saveDeviceIdentifier(cloudContext.deviceIdentifier)
+
+    // Simulate interrupted state
+    await scenario.adapter.saveCloudInitializationJournal({
+      version: 1,
+      phase: 'initializing',
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: cloudContext.deviceIdentifier,
+      registeredDeviceId: 55,
+      startedAt: new Date().toISOString(),
+      completedAt: null,
+      updatedAt: new Date().toISOString(),
+    })
+    await scenario.adapter.saveSyncPullBinding({
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: cloudContext.deviceIdentifier,
+      registeredDeviceId: 55,
+      boundAt: new Date().toISOString(),
+      mode: 'cloud_first_read',
+      status: 'initializing',
+    })
+
+    // User created local transaction before retry
+    const transactionStore = useTransactionStore(scenario.pinia)
+    transactionStore.items = [
+      { id: 'local-trx-999', total: 75000, items: [] },
+    ]
+    await scenario.adapter.saveTransactions([
+      { id: 'local-trx-999', total: 75000, items: [] },
+    ])
+
+    const pullStore = useSyncPullStore(scenario.pinia)
+    const retryResult = await pullStore.pullNow({ initialCloudRead: true })
+
+    expect(retryResult.ok).toBe(false)
+    expect(retryResult.code).toBe('CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY')
+
+    // Local transaction remains completely intact
+    const remainingTrx = await scenario.adapter.loadTransactions()
+    expect(remainingTrx).toHaveLength(1)
+    expect(remainingTrx[0].id).toBe('local-trx-999')
+  })
+
+  it('9. Empty pull fails if saveSyncServerVersions throws and cursor does not advance', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud', initialOnline: true })
+    mockServerHandler.handle = async () => ({
+      ok: true,
+      status: 200,
+      data: {
+        data: {
+          records: [],
+          next_cursor: 0,
+          server_sequence: 0,
+          has_more: false,
+        },
+      },
+    })
+
+    const cloudContext = makeValidCloudContext({ role: 'owner', syncCapabilities: { push_mode: 'full' } })
+    useCloudSessionStore(scenario.pinia).$patch(cloudContext)
+    await scenario.adapter.saveCloudContext(cloudContext)
+    await scenario.adapter.saveDeviceIdentifier(cloudContext.deviceIdentifier)
+
+    // Inject saveSyncServerVersions failure
+    scenario.adapter.saveSyncServerVersions = async () => {
+      throw new Error('SQLite disk I/O write error on server versions')
+    }
+
+    const pullStore = useSyncPullStore(scenario.pinia)
+    const result = await pullStore.pullNow({ initialCloudRead: true })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_SERVER_VERSIONS_PERSIST_FAILED')
+
+    expect(await scenario.adapter.loadSyncPullState()).toBeNull()
+    const pullBinding = await scenario.adapter.loadSyncPullBinding()
+    expect(pullBinding?.status).not.toBe('completed')
+  })
+
+  it('10. Empty pull with positive server sequence stores valid version map before completed state', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud', initialOnline: true })
+    mockServerHandler.handle = async () => ({
+      ok: true,
+      status: 200,
+      data: {
+        data: {
+          records: [],
+          next_cursor: 12,
+          server_sequence: 12,
+          has_more: false,
+        },
+      },
+    })
+
+    const cloudContext = makeValidCloudContext({ role: 'owner', syncCapabilities: { push_mode: 'full' } })
+    useCloudSessionStore(scenario.pinia).$patch(cloudContext)
+    await scenario.adapter.saveCloudContext(cloudContext)
+    await scenario.adapter.saveDeviceIdentifier(cloudContext.deviceIdentifier)
+
+    const pullStore = useSyncPullStore(scenario.pinia)
+    const result = await pullStore.pullNow({ initialCloudRead: true })
+
+    expect(result.ok).toBe(true)
+    const versions = await scenario.adapter.loadSyncServerVersions()
+    expect(versions).toEqual({})
+
+    const pullState = await scenario.adapter.loadSyncPullState()
+    expect(pullState.serverSequence).toBe(12)
+    expect(pullState.cursor).toBe(12)
+
+    const pullBinding = await scenario.adapter.loadSyncPullBinding()
+    expect(pullBinding.status).toBe('completed')
+
+    const readiness = await resolveCloudFirstPushReadiness({
+      adapter: scenario.adapter,
+      context: {
+        businessId: 10,
+        outletId: 101,
+        deviceIdentifier: cloudContext.deviceIdentifier,
+        registeredDeviceId: 55,
+      },
+    })
+    expect(readiness.ok).toBe(true)
+    expect(readiness.cloudFirst).toBe(true)
+  })
+
+  it('11. Non-empty pull fails and does not advance cursor if server versions persistence fails', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud', initialOnline: true })
+    const catUuid = '55555555-5555-4555-8555-555555555555'
+    scenario.fakeServer.db.categories.push({
+      sync_id: catUuid,
+      name: 'Camilan',
+      business_id: 10,
+      sync_version: 1,
+      sync_sequence: 1,
+      is_active: 1,
+    })
+    mockServerHandler.handle = scenario.fakeServer.handleRequest
+
+    const cloudContext = makeValidCloudContext({ role: 'owner', syncCapabilities: { push_mode: 'full' } })
+    useCloudSessionStore(scenario.pinia).$patch(cloudContext)
+    await scenario.adapter.saveCloudContext(cloudContext)
+    await scenario.adapter.saveDeviceIdentifier(cloudContext.deviceIdentifier)
+
+    scenario.adapter.saveSyncServerVersions = async () => {
+      throw new Error('SQLite write fault')
+    }
+
+    const pullStore = useSyncPullStore(scenario.pinia)
+    const result = await pullStore.pullNow({ initialCloudRead: true })
+
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('SYNC_SERVER_VERSIONS_PERSIST_FAILED')
+    expect(await scenario.adapter.loadSyncPullState()).toBeNull()
+  })
+
+  it('12 & 13. Push is blocked before initialization completed and succeeds after completion', async () => {
+    const scenario = await createOfflineOnlineScenario({ businessMode: 'cloud', initialOnline: true })
+    mockServerHandler.handle = scenario.fakeServer.handleRequest
+
+    const cloudContext = makeValidCloudContext({ role: 'owner', syncCapabilities: { push_mode: 'full' } })
+    useCloudSessionStore(scenario.pinia).$patch(cloudContext)
+    await scenario.adapter.saveCloudContext(cloudContext)
+    await scenario.adapter.saveDeviceIdentifier(cloudContext.deviceIdentifier)
+
+    // Unfinished binding
+    await scenario.adapter.saveSyncPullBinding({
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: cloudContext.deviceIdentifier,
+      registeredDeviceId: 55,
+      boundAt: new Date().toISOString(),
+      mode: 'cloud_first_read',
+      status: 'initializing',
+    })
+    await scenario.foundation.queueService.enqueueUpsert(SYNC_ENTITY_TYPES.CUSTOMER, 'c-test-1', {
+      id: 'c-test-1',
+      name: 'Budi',
+    })
+
+    const pushStore = useSyncPushStore(scenario.pinia)
+    const pushBlocked = await pushStore.pushNow()
+    expect(pushBlocked.ok).toBe(false)
+    expect(pushBlocked.code).toBe('SYNC_CLOUD_FIRST_NOT_READY')
+    expect(await scenario.adapter.listSyncQueueItems()).toHaveLength(1)
+
+    // Complete initial pull
+    const catUuid = '66666666-6666-4666-8666-666666666666'
+    scenario.fakeServer.db.categories.push({
+      sync_id: catUuid,
+      name: 'Minuman',
+      business_id: 10,
+      sync_version: 1,
+      sync_sequence: 1,
+      is_active: 1,
+    })
+
+    // Clear outbox queue temporarily to allow clean pull
+    await scenario.adapter.replaceSyncQueueItems([])
+    const pullStore = useSyncPullStore(scenario.pinia)
+    const pullResult = await pullStore.pullNow({ initialCloudRead: true })
+    expect(pullResult.ok).toBe(true)
+
+    // Re-queue customer and push
+    await scenario.foundation.queueService.enqueueUpsert(SYNC_ENTITY_TYPES.CUSTOMER, 'c-test-1', {
+      id: 'c-test-1',
+      name: 'Budi',
+    })
+    const pushSuccess = await pushStore.pushNow()
+    expect(pushSuccess.ok).toBe(true)
+    expect(await scenario.adapter.listSyncQueueItems()).toHaveLength(0)
+  })
+
 })
 
 function scenarioHelperAdapter() {
