@@ -30,6 +30,7 @@ import { createMemoryAdapter } from '../services/database/memoryAdapter'
 import { createSyncQueueService } from '../services/sync/syncQueueService'
 import { createSyncIdentityRegistry, isUuid } from '../services/sync/syncIdentityRegistry'
 import { createSyncPullService } from '../services/sync/syncPullService'
+import { createSyncPushService } from '../services/sync/syncPushService'
 import { initializeSyncFoundation } from '../services/sync/index'
 import { pullSyncChanges } from '../services/sync/syncPullTransport'
 import { createSyncChangeTracker } from '../services/sync/syncTracker'
@@ -159,6 +160,153 @@ describe('P13: Sync Pull Service Preconditions & Bindings', () => {
     expect(res.ok).toBe(false)
     expect(res.code).toBe('SYNC_BUSINESS_NOT_BOUND')
     expect(transport).not.toHaveBeenCalled()
+  })
+
+  it('initializes a new Cloud workspace by binding and pulling without a fake push', async () => {
+    const freshAdapter = createMemoryAdapter()
+    await freshAdapter.initialize()
+    const categorySyncId = '11111111-1111-4111-8111-111111111111'
+    const productSyncId = '22222222-2222-4222-8222-222222222222'
+    const transport = vi.fn().mockImplementation(async ({ after }) => ({
+      ok: true,
+      data: {
+        data: {
+          records:
+            after === 0
+              ? [
+                  {
+                    entity: 'categories',
+                    sync_sequence: 1,
+                    data: {
+                      sync_id: categorySyncId,
+                      sync_version: 1,
+                      name: 'Minuman',
+                      status: 'active',
+                    },
+                  },
+                  {
+                    entity: 'products',
+                    sync_sequence: 2,
+                    data: {
+                      sync_id: productSyncId,
+                      sync_version: 1,
+                      category_sync_id: categorySyncId,
+                      name: 'Kopi Susu',
+                      sku: 'KOPI-01',
+                      price: 18000,
+                      stock: 12,
+                      unit: 'cup',
+                      status: 'active',
+                    },
+                  },
+                ]
+              : [],
+          next_cursor: after === 0 ? 2 : 2,
+          server_sequence: 2,
+          has_more: false,
+        },
+      },
+    }))
+    const freshQueueService = createSyncQueueService({ adapter: freshAdapter })
+    const freshRegistry = createSyncIdentityRegistry({ adapter: freshAdapter })
+    const pullService = createSyncPullService({
+      adapter: freshAdapter,
+      queueService: freshQueueService,
+      registry: freshRegistry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const result = await pullService.pullNow({
+      context: makeValidCloudContext(),
+      initialCloudRead: true,
+    })
+
+    expect(result).toMatchObject({ ok: true, fetched: 2, applied: 2, cursorAfter: 2 })
+    expect(await freshAdapter.loadSyncPushBinding()).toBeNull()
+    expect(await freshAdapter.loadSyncPullBinding()).toMatchObject({
+      businessId: 10,
+      outletId: 101,
+      registeredDeviceId: 55,
+      mode: 'cloud_first_read',
+    })
+    expect((await freshAdapter.loadSyncPullState()).cursor).toBe(2)
+    const products = useProductStore(pinia)
+    expect(products.categories).toContain('Minuman')
+    expect(products.products).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: productSyncId, name: 'Kopi Susu' })]),
+    )
+
+    const retry = await pullService.pullNow({ context: makeValidCloudContext() })
+    expect(retry).toMatchObject({ ok: true, fetched: 0, cursorAfter: 2 })
+    expect(products.products.filter((product) => product.id === productSyncId)).toHaveLength(1)
+
+    await freshQueueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, productSyncId, {
+      id: productSyncId,
+      name: 'Kopi Susu Baru',
+      category: 'Minuman',
+      price: 19000,
+      stock: 12,
+      unit: 'cup',
+    })
+    const pushTransport = vi.fn().mockImplementation(async ({ body }) => ({
+      ok: true,
+      status: 200,
+      data: { data: { request_id: body.request_id, duplicate: false } },
+    }))
+    const pushService = createSyncPushService({
+      adapter: freshAdapter,
+      queueService: freshQueueService,
+      registry: freshRegistry,
+      tokenFetcher: async () => 'test-token',
+      transport: pushTransport,
+      capabilityVerifier: async () => ({
+        ok: true,
+        role: 'owner',
+        syncCapabilities: { push_mode: 'full' },
+        capabilityState: 'verified',
+      }),
+    })
+    const push = await pushService.pushNow({ context: makeValidCloudContext() })
+    expect(push.ok).toBe(true)
+    expect(pushTransport).toHaveBeenCalledTimes(1)
+    expect(await freshAdapter.loadSyncPushBinding()).toMatchObject({
+      businessId: 10,
+      outletId: 101,
+      source: 'cloud_first_read',
+    })
+  })
+
+  it('refuses Cloud-first initialization when the target workspace already has local data', async () => {
+    const freshAdapter = createMemoryAdapter()
+    await freshAdapter.initialize()
+    await freshAdapter.saveProducts(
+      [{ id: 'local-product', name: 'Produk Offline', category: 'Lokal', price: 5000 }],
+      ['Lokal'],
+    )
+    const transport = vi.fn()
+    const pullService = createSyncPullService({
+      adapter: freshAdapter,
+      queueService: createSyncQueueService({ adapter: freshAdapter }),
+      registry: createSyncIdentityRegistry({ adapter: freshAdapter }),
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const result = await pullService.pullNow({
+      context: makeValidCloudContext(),
+      initialCloudRead: true,
+    })
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+    })
+    expect(transport).not.toHaveBeenCalled()
+    expect(await freshAdapter.loadSyncPushBinding()).toBeNull()
+    expect(await freshAdapter.loadSyncPullBinding()).toBeNull()
   })
 
   it('fails with SYNC_BUSINESS_BINDING_MISMATCH when current business differs from P12 binding', async () => {

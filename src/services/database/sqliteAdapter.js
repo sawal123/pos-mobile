@@ -721,6 +721,17 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
       const db = await ensureConnection()
       await db.run("DELETE FROM app_meta WHERE key = 'workspace_switch_journal_v1'", [])
     },
+    // Cloud-first initialization journal (crash-safe recovery)
+    async loadCloudInitializationJournal() {
+      return readMetaValue('cloud_initialization_journal_v1', null)
+    },
+    async saveCloudInitializationJournal(journal) {
+      await writeMetaValue('cloud_initialization_journal_v1', journal)
+    },
+    async clearCloudInitializationJournal() {
+      const db = await ensureConnection()
+      await db.run("DELETE FROM app_meta WHERE key = 'cloud_initialization_journal_v1'", [])
+    },
     async replaceSyncQueueItems(entries) {
       await withTransaction(async (db) => {
         await db.run('DELETE FROM sync_queue', [], false)

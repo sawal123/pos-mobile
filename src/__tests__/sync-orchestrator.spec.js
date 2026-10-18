@@ -599,7 +599,8 @@ describe('P16: UI Integration in CloudLoginView', () => {
     await flushPromises()
 
     expect(wrapper.find('#sync-all-btn').exists()).toBe(true)
-    expect(wrapper.find('#sync-all-btn').text()).toContain('Sinkronkan Semua')
+    expect(wrapper.find('#sync-all-btn').text()).toContain('Sync Semua')
+    expect(wrapper.find('#sync-all-btn').attributes('aria-label')).toBe('Sinkronkan Semua')
 
     // Existing buttons still exist
     expect(wrapper.find('#sync-now-btn').exists()).toBe(true)

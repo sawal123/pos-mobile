@@ -10,6 +10,12 @@ import { useCustomerStore } from '@/stores/customerStore'
 import { useExpenseStore } from '@/stores/expenseStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import { useTransactionStore } from '@/stores/transactionStore'
+import {
+  inspectCloudFirstWorkspace,
+  isTransactionMapped,
+  isCashEntryMapped,
+  isShiftMapped,
+} from '@/services/cloud/businessContextActivation'
 
 const KNOWN_ENTITIES = new Set([
   'categories',
@@ -35,6 +41,94 @@ export function isProductionApiConfigured() {
   }
 
   return /^https?:\/\//i.test(BASE_URL)
+}
+
+async function verifyProvenance({
+  baselineTransactionIds,
+  baselineCashEntryIds,
+  baselineShift,
+  allRecords = [],
+  serverVersionsToSave = {},
+  identityMap = null,
+  serverVersions = null,
+  activeRegistry = null,
+}) {
+  if (baselineTransactionIds && baselineTransactionIds.size > 0) {
+    for (const txId of baselineTransactionIds) {
+      const normId = String(txId).trim().toLowerCase()
+      const inAllRecords = allRecords.some(
+        (r) => r.entity === 'sales' && r.data && String(r.data.sync_id).trim().toLowerCase() === normId,
+      )
+      const inServerVersionsToSave = Boolean(
+        serverVersionsToSave && (serverVersionsToSave[`sales:${normId}`] || serverVersionsToSave[`sales:${txId}`]),
+      )
+      const inDurableMap = isTransactionMapped(txId, identityMap, serverVersions)
+      let inRegistry = false
+      if (!inAllRecords && !inServerVersionsToSave && !inDurableMap && activeRegistry) {
+        try {
+          inRegistry = await activeRegistry.hasSyncId('transaction', txId)
+        } catch {
+          inRegistry = false
+        }
+      }
+      if (!inAllRecords && !inServerVersionsToSave && !inDurableMap && !inRegistry) {
+        return { ok: false, reason: 'transactions' }
+      }
+    }
+  }
+
+  if (baselineCashEntryIds && baselineCashEntryIds.size > 0) {
+    for (const cashId of baselineCashEntryIds) {
+      const normId = String(cashId).trim().toLowerCase()
+      const inAllRecords = allRecords.some(
+        (r) => r.entity === 'cash_ledger' && r.data && String(r.data.sync_id).trim().toLowerCase() === normId,
+      )
+      const inServerVersionsToSave = Boolean(
+        serverVersionsToSave && (serverVersionsToSave[`cash_ledger:${normId}`] || serverVersionsToSave[`cash_ledger:${cashId}`]),
+      )
+      const inDurableMap = isCashEntryMapped(cashId, identityMap, serverVersions)
+      let inRegistry = false
+      if (!inAllRecords && !inServerVersionsToSave && !inDurableMap && activeRegistry) {
+        try {
+          inRegistry = await activeRegistry.hasSyncId('cash_entry', cashId)
+        } catch {
+          inRegistry = false
+        }
+      }
+      if (!inAllRecords && !inServerVersionsToSave && !inDurableMap && !inRegistry) {
+        return { ok: false, reason: 'cash' }
+      }
+    }
+  }
+
+  if (baselineShift) {
+    const normId = baselineShift.id ? String(baselineShift.id).trim().toLowerCase() : ''
+    const shiftNum = baselineShift.shiftNumber ? String(baselineShift.shiftNumber).trim() : ''
+    const inAllRecords = allRecords.some(
+      (r) =>
+        r.entity === 'shifts' &&
+        r.data &&
+        ((normId && String(r.data.sync_id).trim().toLowerCase() === normId) ||
+          (shiftNum && String(r.data.shift_number).trim() === shiftNum)),
+    )
+    const inServerVersionsToSave = Boolean(
+      serverVersionsToSave && normId && (serverVersionsToSave[`shifts:${normId}`] || serverVersionsToSave[`shifts:${baselineShift.id}`]),
+    )
+    const inDurableMap = isShiftMapped(baselineShift, identityMap, serverVersions)
+    let inRegistry = false
+    if (!inAllRecords && !inServerVersionsToSave && !inDurableMap && activeRegistry) {
+      try {
+        inRegistry = normId ? await activeRegistry.hasSyncId('shift', baselineShift.id) : false
+      } catch {
+        inRegistry = false
+      }
+    }
+    if (!inAllRecords && !inServerVersionsToSave && !inDurableMap && !inRegistry) {
+      return { ok: false, reason: 'shift' }
+    }
+  }
+
+  return { ok: true }
 }
 
 const MAX_PULL_PAGES = 1000
@@ -79,6 +173,8 @@ export function createSyncPullService({
       scheduler,
     })
 
+  let isInitialPulling = false
+
   async function resolveToken(overrideContext = {}) {
     if (overrideContext.token) return overrideContext.token
     if (typeof tokenFetcher === 'function') {
@@ -106,7 +202,20 @@ export function createSyncPullService({
    * @returns {Promise<{ok: boolean, fetched?: number, applied?: number, ignored?: number, warnings?: string[], cursorBefore?: number, cursorAfter?: number, serverSequence?: number, pages?: number, error?: any, code?: string, conflict?: any}>}
    */
   async function pullNow(options = {}) {
-    const overrideContext = options.context ?? {}
+    if (options.initialCloudRead === true) {
+      if (isInitialPulling) {
+        return {
+          ok: false,
+          code: 'INITIAL_PULL_ALREADY_IN_PROGRESS',
+          message: 'Initial Cloud pull is already in progress.',
+          error: { code: 'INITIAL_PULL_ALREADY_IN_PROGRESS' },
+        }
+      }
+      isInitialPulling = true
+    }
+
+    try {
+      const overrideContext = options.context ?? {}
     const activeCloudStore = cloudStore ?? (pinia ? useCloudSessionStore(pinia) : null)
 
     const token = await resolveToken(overrideContext)
@@ -168,22 +277,196 @@ export function createSyncPullService({
     }
 
     // ── 2. P12 Business Binding check ─────────────────────────────────────────
+    let existingPullBinding = null
+    if (adapter && typeof adapter.loadSyncPullBinding === 'function') {
+      existingPullBinding = await adapter.loadSyncPullBinding()
+    }
+    let existingInitJournal = null
+    if (adapter && typeof adapter.loadCloudInitializationJournal === 'function') {
+      try {
+        existingInitJournal = await adapter.loadCloudInitializationJournal()
+      } catch {
+        existingInitJournal = null
+      }
+    }
+
+    const isInitialCloudPull = Boolean(
+      options.initialCloudRead === true ||
+      (existingPullBinding && existingPullBinding.mode === 'cloud_first_read' && existingPullBinding.status === 'initializing') ||
+      (existingInitJournal && existingInitJournal.phase === 'initializing')
+    )
+
+    let baselineTransactionIds = new Set()
+    let baselineCashEntryIds = new Set()
+    let baselineShift = null
+
     if (adapter && typeof adapter.loadSyncPushBinding === 'function') {
       const pushBinding = await adapter.loadSyncPushBinding()
-      if (!pushBinding) {
-        return {
-          ok: false,
-          code: 'SYNC_BUSINESS_NOT_BOUND',
-          message: 'Business has not been bound to sync outbox yet. Push sync must be initialized first.',
-          error: {
-            code: 'SYNC_BUSINESS_NOT_BOUND',
-            message:
-              'Business has not been bound to sync outbox yet. Push sync must be initialized first.',
-          },
+      if (!pushBinding && isInitialCloudPull) {
+        if (scheduler && typeof scheduler.flush === 'function') {
+          try {
+            await scheduler.flush()
+          } catch (err) {
+            return {
+              ok: false,
+              code: 'CLOUD_INITIALIZATION_PERSISTENCE_PENDING',
+              message: 'Local persistence has not finished. Complete recovery before loading Cloud data.',
+              error: {
+                code: 'CLOUD_INITIALIZATION_PERSISTENCE_PENDING',
+                message: err instanceof Error ? err.message : String(err),
+              },
+            }
+          }
+        }
+
+        const workspace = await inspectCloudFirstWorkspace({
+          adapter,
+          scheduler,
+          context: guardContext,
+        })
+        if (!workspace.ok || !workspace.safeToInitialize) {
+          return {
+            ok: false,
+            code: !workspace.ok
+              ? 'CLOUD_INITIALIZATION_SAFETY_CHECK_FAILED'
+              : 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+            message: !workspace.ok
+              ? 'Local workspace safety check failed. Complete recovery before loading Cloud data.'
+              : 'Cloud data can only be loaded into a new empty workspace. Existing local data remains unchanged.',
+            error: {
+              code: !workspace.ok
+                ? (workspace.code || 'CLOUD_INITIALIZATION_SAFETY_CHECK_FAILED')
+                : 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+              reasons: workspace.reasons ?? [],
+            },
+          }
+        }
+
+        if (adapter && typeof adapter.loadTransactions === 'function') {
+          try {
+            const currentTrx = await adapter.loadTransactions()
+            if (Array.isArray(currentTrx)) {
+              for (const t of currentTrx) {
+                if (t && t.id) baselineTransactionIds.add(String(t.id))
+              }
+            }
+          } catch {
+            baselineTransactionIds = new Set()
+          }
+        }
+        if (stores?.transactionStore?.items && Array.isArray(stores.transactionStore.items)) {
+          for (const t of stores.transactionStore.items) {
+            if (t && t.id) baselineTransactionIds.add(String(t.id))
+          }
+        }
+
+        if (adapter && typeof adapter.loadCashState === 'function') {
+          try {
+            const currentCash = await adapter.loadCashState()
+            const entries = currentCash?.entries
+            if (Array.isArray(entries)) {
+              for (const e of entries) {
+                if (e && e.id) baselineCashEntryIds.add(String(e.id))
+              }
+            }
+          } catch {
+            baselineCashEntryIds = new Set()
+          }
+        }
+        if (stores?.cashStore?.entries && Array.isArray(stores.cashStore.entries)) {
+          for (const e of stores.cashStore.entries) {
+            if (e && e.id) baselineCashEntryIds.add(String(e.id))
+          }
+        }
+
+        if (adapter && typeof adapter.loadShiftState === 'function') {
+          try {
+            const currentShift = await adapter.loadShiftState()
+            if (currentShift && typeof currentShift === 'object' && (currentShift.id || currentShift.shiftNumber)) {
+              baselineShift = currentShift
+            }
+          } catch {
+            baselineShift = null
+          }
+        }
+        if (!baselineShift && stores?.shiftStore && (stores.shiftStore.id || stores.shiftStore.shiftNumber)) {
+          baselineShift = {
+            id: stores.shiftStore.id,
+            shiftNumber: stores.shiftStore.shiftNumber,
+          }
+        }
+
+        if (adapter && typeof adapter.saveCloudInitializationJournal === 'function') {
+          try {
+            await adapter.saveCloudInitializationJournal({
+              version: 1,
+              phase: 'initializing',
+              businessId: selectedBusiness.id,
+              outletId: selectedOutlet.id,
+              deviceIdentifier,
+              registeredDeviceId,
+              startedAt: existingInitJournal?.startedAt || new Date().toISOString(),
+              completedAt: null,
+              updatedAt: new Date().toISOString(),
+            })
+          } catch (err) {
+            return {
+              ok: false,
+              code: 'CLOUD_INITIALIZATION_JOURNAL_PERSIST_FAILED',
+              message: 'Failed to persist the Cloud initialization journal.',
+              error: {
+                code: 'CLOUD_INITIALIZATION_JOURNAL_PERSIST_FAILED',
+                message: err instanceof Error ? err.message : String(err),
+              },
+            }
+          }
+        }
+
+        try {
+          await adapter.saveSyncPullBinding({
+            businessId: selectedBusiness.id,
+            outletId: selectedOutlet.id,
+            deviceIdentifier,
+            registeredDeviceId,
+            boundAt: existingPullBinding?.boundAt || new Date().toISOString(),
+            mode: 'cloud_first_read',
+            status: 'initializing',
+          })
+          existingPullBinding = await adapter.loadSyncPullBinding()
+        } catch (err) {
+          return {
+            ok: false,
+            code: 'SYNC_PULL_BINDING_PERSIST_FAILED',
+            message: 'Failed to persist the Cloud data binding before download.',
+            error: {
+              code: 'SYNC_PULL_BINDING_PERSIST_FAILED',
+              message: err instanceof Error ? err.message : String(err),
+            },
+          }
         }
       }
 
-      if (Number(pushBinding.businessId) !== Number(selectedBusiness.id)) {
+      if (!pushBinding) {
+        if (
+          existingPullBinding &&
+          (isInitialCloudPull || existingPullBinding.status !== 'initializing')
+        ) {
+          // A durable Cloud-first read binding is sufficient for future pulls once completed.
+          // Push remains independently controlled by the push binding/policy.
+        } else {
+          return {
+            ok: false,
+            code: 'SYNC_BUSINESS_NOT_BOUND',
+            message: 'This device has not initialized Cloud data. Choose Muat Data Cloud to begin.',
+            error: {
+              code: 'SYNC_BUSINESS_NOT_BOUND',
+              message: 'This device has not initialized Cloud data. Choose Muat Data Cloud to begin.',
+            },
+          }
+        }
+      }
+
+      if (pushBinding && Number(pushBinding.businessId) !== Number(selectedBusiness.id)) {
         return {
           ok: false,
           code: 'SYNC_BUSINESS_BINDING_MISMATCH',
@@ -194,10 +477,63 @@ export function createSyncPullService({
           },
         }
       }
+
+      // ── 2.5. Push-only workspace initial pull gate ───────────────────────────
+      // A valid push binding without any pull binding is a legitimate legacy
+      // workspace. It pulls through the regular snapshot-safe path (existing
+      // local data is allowed; pending-outbox conflicts are enforced below), but
+      // only when persistence, in-flight push and conflict state are all clean.
+      // The push binding is never touched; a complete pull binding is written
+      // only after the pull succeeds.
+      if (pushBinding && !existingPullBinding && !isInitialCloudPull) {
+        const blocked = (code, message) => ({
+          ok: false,
+          code,
+          message,
+          error: { code, message },
+        })
+
+        if (scheduler && typeof scheduler.flush === 'function') {
+          try {
+            await scheduler.flush()
+          } catch {
+            return blocked(
+              'SYNC_PUSH_ONLY_PULL_PERSISTENCE_PENDING',
+              'Local persistence has not finished. Complete recovery before pulling Cloud data.',
+            )
+          }
+        }
+
+        try {
+          if (adapter && typeof adapter.loadSyncPushInflight === 'function') {
+            const inflight = await adapter.loadSyncPushInflight()
+            if (inflight) {
+              return blocked(
+                'SYNC_PUSH_ONLY_PULL_INFLIGHT_PENDING',
+                'A previous push is still awaiting recovery. Resolve it before pulling Cloud data.',
+              )
+            }
+          }
+          if (adapter && typeof adapter.loadSyncConflicts === 'function') {
+            const conflictState = await adapter.loadSyncConflicts()
+            const conflicts = Array.isArray(conflictState?.conflicts) ? conflictState.conflicts : []
+            if (conflicts.some((c) => c && c.status === 'open')) {
+              return blocked(
+                'SYNC_PUSH_ONLY_PULL_OPEN_CONFLICTS',
+                'Resolve open sync conflicts before pulling Cloud data.',
+              )
+            }
+          }
+        } catch {
+          return blocked(
+            'SYNC_PUSH_ONLY_PULL_SAFETY_CHECK_FAILED',
+            'Local sync safety check failed. Complete recovery before pulling Cloud data.',
+          )
+        }
+      }
     }
 
     // ── 3. P13 Pull Context Binding check ─────────────────────────────────────
-    let existingPullBinding = null
     if (adapter && typeof adapter.loadSyncPullBinding === 'function') {
       existingPullBinding = await adapter.loadSyncPullBinding()
       if (existingPullBinding) {
@@ -355,18 +691,155 @@ export function createSyncPullService({
 
     // ── 6. Handle empty snapshot ──────────────────────────────────────────────
     if (allRecords.length === 0) {
-      if (!existingPullBinding && adapter && typeof adapter.saveSyncPullBinding === 'function') {
-        await adapter.saveSyncPullBinding({
-          businessId: selectedBusiness.id,
-          outletId: selectedOutlet.id,
-          deviceIdentifier,
-          registeredDeviceId,
-          boundAt: new Date().toISOString(),
+      if (isInitialCloudPull) {
+        if (scheduler && typeof scheduler.flush === 'function') {
+          try {
+            await scheduler.flush()
+          } catch (err) {
+            return {
+              ok: false,
+              code: 'CLOUD_INITIALIZATION_PERSISTENCE_PENDING',
+              message: 'Local persistence has not finished. Complete recovery before loading Cloud data.',
+              error: {
+                code: 'CLOUD_INITIALIZATION_PERSISTENCE_PENDING',
+                message: err instanceof Error ? err.message : String(err),
+              },
+            }
+          }
+        }
+
+        const workspace = await inspectCloudFirstWorkspace({
+          adapter,
+          scheduler,
+          context: guardContext,
         })
+        if (!workspace.ok || !workspace.safeToInitialize) {
+          return {
+            ok: false,
+            code: !workspace.ok
+              ? 'CLOUD_INITIALIZATION_SAFETY_CHECK_FAILED'
+              : 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+            message: !workspace.ok
+              ? 'Local workspace safety check failed. Complete recovery before loading Cloud data.'
+              : 'Cloud data can only be loaded into a new empty workspace. Existing local data remains unchanged.',
+            error: {
+              code: !workspace.ok
+                ? (workspace.code || 'CLOUD_INITIALIZATION_SAFETY_CHECK_FAILED')
+                : 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+              reasons: workspace.reasons ?? [],
+            },
+          }
+        }
+
+        let freshQueueCount = 0
+        if (activeQueueService && typeof activeQueueService.countPending === 'function') {
+          freshQueueCount = await activeQueueService.countPending()
+        } else if (adapter && typeof adapter.listSyncQueueItems === 'function') {
+          const q = await adapter.listSyncQueueItems({ limit: 1 })
+          freshQueueCount = Array.isArray(q) ? q.length : 0
+        }
+        if (freshQueueCount > 0) {
+          return {
+            ok: false,
+            code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+            message: 'Local operations were created during Cloud initialization. Initial pull cannot merge local changes.',
+            error: {
+              code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+              reasons: ['sync_queue'],
+            },
+          }
+        }
+
+        let freshTrx = []
+        if (adapter && typeof adapter.loadTransactions === 'function') {
+          freshTrx = await adapter.loadTransactions()
+        }
+        const allTransactionIds = new Set(baselineTransactionIds)
+        if (Array.isArray(freshTrx)) {
+          for (const tx of freshTrx) {
+            if (tx && tx.id) allTransactionIds.add(String(tx.id))
+          }
+        }
+
+        let freshCash = []
+        if (adapter && typeof adapter.loadCashState === 'function') {
+          const cashState = await adapter.loadCashState()
+          freshCash = cashState?.entries ?? []
+        }
+        const allCashEntryIds = new Set(baselineCashEntryIds)
+        if (Array.isArray(freshCash)) {
+          for (const c of freshCash) {
+            if (c && c.id) allCashEntryIds.add(String(c.id))
+          }
+        }
+
+        let activeShift = baselineShift
+        if (adapter && typeof adapter.loadShiftState === 'function') {
+          const shiftState = await adapter.loadShiftState()
+          if (shiftState && typeof shiftState === 'object' && (shiftState.id || shiftState.shiftNumber)) {
+            activeShift = shiftState
+          }
+        }
+
+        const currentIdentityMap = adapter && typeof adapter.loadSyncIdentityMap === 'function'
+          ? await adapter.loadSyncIdentityMap()
+          : null
+        const currentServerVersions = adapter && typeof adapter.loadSyncServerVersions === 'function'
+          ? await adapter.loadSyncServerVersions()
+          : null
+
+        const provenanceCheck = await verifyProvenance({
+          baselineTransactionIds: allTransactionIds,
+          baselineCashEntryIds: allCashEntryIds,
+          baselineShift: activeShift,
+          allRecords: [],
+          serverVersionsToSave: {},
+          identityMap: currentIdentityMap,
+          serverVersions: currentServerVersions,
+          activeRegistry,
+        })
+
+        if (!provenanceCheck.ok) {
+          return {
+            ok: false,
+            code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+            message: `Unverified local ${provenanceCheck.reason} detected during Cloud initialization. Initial pull cannot merge local changes.`,
+            error: {
+              code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+              reasons: [provenanceCheck.reason],
+            },
+          }
+        }
+      }
+      if (
+        options.initialCloudRead === true &&
+        adapter &&
+        typeof adapter.saveSyncServerVersions === 'function'
+      ) {
+        try {
+          const existingVersions = typeof adapter.loadSyncServerVersions === 'function'
+            ? await adapter.loadSyncServerVersions()
+            : null
+          const versionsToSave =
+            existingVersions && typeof existingVersions === 'object' && !Array.isArray(existingVersions)
+              ? existingVersions
+              : {}
+          await adapter.saveSyncServerVersions(versionsToSave)
+        } catch (err) {
+          return {
+            ok: false,
+            code: 'SYNC_SERVER_VERSIONS_PERSIST_FAILED',
+            message: 'Failed to persist sync server versions metadata during initial pull.',
+            error: {
+              code: 'SYNC_SERVER_VERSIONS_PERSIST_FAILED',
+              message: err instanceof Error ? err.message : String(err),
+            },
+          }
+        }
       }
 
       if (
-        cursorAfter !== cursorBefore &&
+        (cursorAfter !== cursorBefore || options.initialCloudRead === true) &&
         adapter &&
         typeof adapter.saveSyncPullState === 'function'
       ) {
@@ -384,6 +857,59 @@ export function createSyncPullService({
             message: 'Failed to persist sync pull cursor after empty pull.',
             error: {
               code: 'SYNC_PULL_CURSOR_PERSIST_FAILED',
+              message: err instanceof Error ? err.message : String(err),
+            },
+          }
+        }
+      }
+
+      if (
+        isInitialCloudPull &&
+        adapter &&
+        typeof adapter.saveCloudInitializationJournal === 'function'
+      ) {
+        try {
+          await adapter.saveCloudInitializationJournal({
+            version: 1,
+            phase: 'completed',
+            businessId: selectedBusiness.id,
+            outletId: selectedOutlet.id,
+            deviceIdentifier,
+            registeredDeviceId,
+            completedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          })
+        } catch (err) {
+          return {
+            ok: false,
+            code: 'CLOUD_INITIALIZATION_JOURNAL_PERSIST_FAILED',
+            message: 'Failed to persist completed Cloud initialization journal.',
+            error: {
+              code: 'CLOUD_INITIALIZATION_JOURNAL_PERSIST_FAILED',
+              message: err instanceof Error ? err.message : String(err),
+            },
+          }
+        }
+      }
+
+      if (adapter && typeof adapter.saveSyncPullBinding === 'function') {
+        try {
+          await adapter.saveSyncPullBinding({
+            businessId: selectedBusiness.id,
+            outletId: selectedOutlet.id,
+            deviceIdentifier,
+            registeredDeviceId,
+            boundAt: existingPullBinding?.boundAt || new Date().toISOString(),
+            mode: isInitialCloudPull ? 'cloud_first_read' : (existingPullBinding?.mode ?? undefined),
+            status: 'completed',
+          })
+        } catch (err) {
+          return {
+            ok: false,
+            code: 'SYNC_PULL_BINDING_PERSIST_FAILED',
+            message: 'Failed to persist completed sync pull binding.',
+            error: {
+              code: 'SYNC_PULL_BINDING_PERSIST_FAILED',
               message: err instanceof Error ? err.message : String(err),
             },
           }
@@ -599,12 +1125,39 @@ export function createSyncPullService({
           isOpen: shiftStore.isOpen,
         }
       : null
-    const nextTransactions = transactionStore
-      ? transactionStore.items.map((t) => ({
-          ...t,
-          items: Array.isArray(t.items) ? t.items.map((it) => ({ ...it })) : [],
-        }))
-      : []
+    let prospectiveTransactions = []
+    if (isInitialCloudPull) {
+      if (adapter && typeof adapter.loadTransactions === 'function') {
+        try {
+          const storedTrx = await adapter.loadTransactions()
+          if (Array.isArray(storedTrx)) {
+            prospectiveTransactions = storedTrx
+          }
+        } catch {
+          prospectiveTransactions = []
+        }
+      }
+    } else {
+      prospectiveTransactions = transactionStore?.items ?? []
+      if (
+        prospectiveTransactions.length === 0 &&
+        adapter &&
+        typeof adapter.loadTransactions === 'function'
+      ) {
+        try {
+          const storedTrx = await adapter.loadTransactions()
+          if (Array.isArray(storedTrx) && storedTrx.length > 0) {
+            prospectiveTransactions = storedTrx
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+    const nextTransactions = prospectiveTransactions.map((t) => ({
+      ...t,
+      items: Array.isArray(t.items) ? t.items.map((it) => ({ ...it })) : [],
+    }))
 
     const warnings = []
     let appliedCount = 0
@@ -1548,6 +2101,138 @@ export function createSyncPullService({
       return preCommitConflict
     }
 
+    if (isInitialCloudPull) {
+      if (scheduler && typeof scheduler.flush === 'function') {
+        try {
+          await scheduler.flush()
+        } catch (err) {
+          return {
+            ok: false,
+            code: 'CLOUD_INITIALIZATION_PERSISTENCE_PENDING',
+            message: 'Local persistence has not finished. Complete recovery before loading Cloud data.',
+            error: {
+              code: 'CLOUD_INITIALIZATION_PERSISTENCE_PENDING',
+              message: err instanceof Error ? err.message : String(err),
+            },
+          }
+        }
+      }
+
+      const workspace = await inspectCloudFirstWorkspace({
+        adapter,
+        scheduler,
+        context: guardContext,
+      })
+      if (!workspace.ok || !workspace.safeToInitialize) {
+        return {
+          ok: false,
+          code: !workspace.ok
+            ? 'CLOUD_INITIALIZATION_SAFETY_CHECK_FAILED'
+            : 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+          message: !workspace.ok
+            ? 'Local workspace safety check failed. Complete recovery before loading Cloud data.'
+            : 'Cloud data can only be loaded into a new empty workspace. Existing local data remains unchanged.',
+          error: {
+            code: !workspace.ok
+              ? (workspace.code || 'CLOUD_INITIALIZATION_SAFETY_CHECK_FAILED')
+              : 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+            reasons: workspace.reasons ?? [],
+          },
+        }
+      }
+
+      let freshQueueCount = 0
+      if (activeQueueService && typeof activeQueueService.countPending === 'function') {
+        freshQueueCount = await activeQueueService.countPending()
+      } else if (adapter && typeof adapter.listSyncQueueItems === 'function') {
+        const q = await adapter.listSyncQueueItems({ limit: 1 })
+        freshQueueCount = Array.isArray(q) ? q.length : 0
+      }
+      if (freshQueueCount > 0) {
+        return {
+          ok: false,
+          code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+          message: 'Local operations were created during Cloud initialization. Initial pull cannot merge local changes.',
+          error: {
+            code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+            reasons: ['sync_queue'],
+          },
+        }
+      }
+
+      let freshTrx = []
+      if (adapter && typeof adapter.loadTransactions === 'function') {
+        freshTrx = await adapter.loadTransactions()
+      }
+      const allTransactionIds = new Set(baselineTransactionIds)
+      if (Array.isArray(freshTrx)) {
+        for (const tx of freshTrx) {
+          if (tx && tx.id) allTransactionIds.add(String(tx.id))
+        }
+      }
+
+      let freshCash = []
+      if (adapter && typeof adapter.loadCashState === 'function') {
+        const cashState = await adapter.loadCashState()
+        freshCash = cashState?.entries ?? []
+      }
+      const allCashEntryIds = new Set(baselineCashEntryIds)
+      if (Array.isArray(freshCash)) {
+        for (const c of freshCash) {
+          if (c && c.id) allCashEntryIds.add(String(c.id))
+        }
+      }
+
+      let activeShift = baselineShift
+      if (adapter && typeof adapter.loadShiftState === 'function') {
+        const shiftState = await adapter.loadShiftState()
+        if (shiftState && typeof shiftState === 'object' && (shiftState.id || shiftState.shiftNumber)) {
+          activeShift = shiftState
+        }
+      }
+      if (!activeShift && shiftStore && (shiftStore.id || shiftStore.shiftNumber)) {
+        activeShift = {
+          id: shiftStore.id,
+          shiftNumber: shiftStore.shiftNumber,
+        }
+      } else if (!activeShift && stores?.shiftStore && (stores.shiftStore.id || stores.shiftStore.shiftNumber)) {
+        activeShift = {
+          id: stores.shiftStore.id,
+          shiftNumber: stores.shiftStore.shiftNumber,
+        }
+      }
+
+      const currentIdentityMap = adapter && typeof adapter.loadSyncIdentityMap === 'function'
+        ? await adapter.loadSyncIdentityMap()
+        : null
+      const currentServerVersions = adapter && typeof adapter.loadSyncServerVersions === 'function'
+        ? await adapter.loadSyncServerVersions()
+        : null
+
+      const provenanceCheck = await verifyProvenance({
+        baselineTransactionIds: allTransactionIds,
+        baselineCashEntryIds: allCashEntryIds,
+        baselineShift: activeShift,
+        allRecords,
+        serverVersionsToSave,
+        identityMap: currentIdentityMap,
+        serverVersions: currentServerVersions,
+        activeRegistry,
+      })
+
+      if (!provenanceCheck.ok) {
+        return {
+          ok: false,
+          code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+          message: `Unverified local ${provenanceCheck.reason} detected during Cloud initialization. Initial pull cannot merge local changes.`,
+          error: {
+            code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+            reasons: [provenanceCheck.reason],
+          },
+        }
+      }
+    }
+
     // ── 10. Apply mutations safely to Pinia stores via $patch ─────────────────
     // Remote apply always patches plain staged state: no user mutation action
     // is invoked, so pulled rows never create new outbox entries.
@@ -1617,21 +2302,22 @@ export function createSyncPullService({
 
     // ── 13. Persist server versions metadata ───────────────────────────────────
     if (adapter && typeof adapter.saveSyncServerVersions === 'function') {
-      await adapter.saveSyncServerVersions(serverVersionsToSave)
+      try {
+        await adapter.saveSyncServerVersions(serverVersionsToSave)
+      } catch (err) {
+        return {
+          ok: false,
+          code: 'SYNC_SERVER_VERSIONS_PERSIST_FAILED',
+          message: 'Failed to persist sync server versions metadata.',
+          error: {
+            code: 'SYNC_SERVER_VERSIONS_PERSIST_FAILED',
+            message: err instanceof Error ? err.message : String(err),
+          },
+        }
+      }
     }
 
-    // ── 14. Persist pull context binding if first pull ─────────────────────────
-    if (!existingPullBinding && adapter && typeof adapter.saveSyncPullBinding === 'function') {
-      await adapter.saveSyncPullBinding({
-        businessId: selectedBusiness.id,
-        outletId: selectedOutlet.id,
-        deviceIdentifier,
-        registeredDeviceId,
-        boundAt: new Date().toISOString(),
-      })
-    }
-
-    // ── 15. Advance cursor (LAST STEP!) ────────────────────────────────────────
+    // ── 14. Advance cursor (BEFORE marking binding as completed!) ──────────────
     if (adapter && typeof adapter.saveSyncPullState === 'function') {
       try {
         await adapter.saveSyncPullState({
@@ -1653,17 +2339,76 @@ export function createSyncPullService({
       }
     }
 
-    return {
-      ok: true,
-      fetched: allRecords.length,
-      applied: appliedCount,
-      ignored: ignoredCount,
-      warnings,
-      cursorBefore,
-      cursorAfter,
-      serverSequence: finalServerSequence,
-      pages: pagesCount,
-      error: null,
+    // ── 15. Persist initialization journal completion & pull context binding as completed ──
+    if (
+      isInitialCloudPull &&
+      adapter &&
+      typeof adapter.saveCloudInitializationJournal === 'function'
+    ) {
+      try {
+        await adapter.saveCloudInitializationJournal({
+          version: 1,
+          phase: 'completed',
+          businessId: selectedBusiness.id,
+          outletId: selectedOutlet.id,
+          deviceIdentifier,
+          registeredDeviceId,
+          completedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        })
+      } catch (err) {
+        return {
+          ok: false,
+          code: 'CLOUD_INITIALIZATION_JOURNAL_PERSIST_FAILED',
+          message: 'Failed to persist completed Cloud initialization journal.',
+          error: {
+            code: 'CLOUD_INITIALIZATION_JOURNAL_PERSIST_FAILED',
+            message: err instanceof Error ? err.message : String(err),
+          },
+        }
+      }
+    }
+
+    if (adapter && typeof adapter.saveSyncPullBinding === 'function') {
+      try {
+        await adapter.saveSyncPullBinding({
+          businessId: selectedBusiness.id,
+          outletId: selectedOutlet.id,
+          deviceIdentifier,
+          registeredDeviceId,
+          boundAt: existingPullBinding?.boundAt || new Date().toISOString(),
+          mode: isInitialCloudPull ? 'cloud_first_read' : (existingPullBinding?.mode ?? undefined),
+          status: 'completed',
+        })
+      } catch (err) {
+        return {
+          ok: false,
+          code: 'SYNC_PULL_BINDING_PERSIST_FAILED',
+          message: 'Failed to persist completed sync pull binding.',
+          error: {
+            code: 'SYNC_PULL_BINDING_PERSIST_FAILED',
+            message: err instanceof Error ? err.message : String(err),
+          },
+        }
+      }
+    }
+
+      return {
+        ok: true,
+        fetched: allRecords.length,
+        applied: appliedCount,
+        ignored: ignoredCount,
+        warnings,
+        cursorBefore,
+        cursorAfter,
+        serverSequence: finalServerSequence,
+        pages: pagesCount,
+        error: null,
+      }
+    } finally {
+      if (options.initialCloudRead === true) {
+        isInitialPulling = false
+      }
     }
   }
 

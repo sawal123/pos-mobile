@@ -31,6 +31,87 @@ function isBootstrapContextMatch(
   )
 }
 
+function isValidCloudFirstPullBinding(
+  binding,
+  { businessId, outletId, deviceIdentifier, registeredDeviceId },
+) {
+  return Boolean(
+    binding &&
+      binding.mode === 'cloud_first_read' &&
+      binding.status === 'completed' &&
+      Number(binding.businessId) === Number(businessId) &&
+      Number(binding.outletId) === Number(outletId) &&
+      String(binding.deviceIdentifier) === String(deviceIdentifier) &&
+      String(binding.registeredDeviceId) === String(registeredDeviceId) &&
+      typeof binding.boundAt === 'string' &&
+      binding.boundAt.trim().length > 0,
+  )
+}
+
+function isValidCompletedPullState(state) {
+  return Boolean(
+    state &&
+      state.version === 1 &&
+      Number.isInteger(state.cursor) &&
+      state.cursor >= 0 &&
+      Number.isInteger(serverSeq(state)) &&
+      serverSeq(state) >= 0 &&
+      typeof state.updatedAt === 'string' &&
+      state.updatedAt.trim().length > 0,
+  )
+}
+
+function serverSeq(state) {
+  return state?.serverSequence ?? state?.server_sequence
+}
+
+export async function resolveCloudFirstPushReadiness({ adapter, context }) {
+  // Cloud-first evidence is additive: legacy/bootstrap callers without a
+  // persistence adapter retain their established flow. Once a Cloud-first
+  // binding is detected, though, every durability reader becomes mandatory.
+  if (!adapter || typeof adapter.loadSyncPullBinding !== 'function') {
+    return { ok: true, cloudFirst: false }
+  }
+
+  try {
+    const binding = await adapter.loadSyncPullBinding()
+
+    if (!binding || binding.mode !== 'cloud_first_read') {
+      return { ok: true, cloudFirst: false }
+    }
+    if (
+      typeof adapter.loadSyncPullState !== 'function' ||
+      typeof adapter.loadSyncServerVersions !== 'function'
+    ) {
+      return { ok: false, cloudFirst: true, code: 'CLOUD_FIRST_METADATA_UNAVAILABLE' }
+    }
+
+    const [pullState, serverVersions] = await Promise.all([
+      adapter.loadSyncPullState(),
+      adapter.loadSyncServerVersions(),
+    ])
+    if (binding.status !== 'completed') {
+      return { ok: false, cloudFirst: true, code: 'CLOUD_FIRST_INITIALIZATION_INCOMPLETE' }
+    }
+    if (!isValidCloudFirstPullBinding(binding, context)) {
+      return { ok: false, cloudFirst: true, code: 'CLOUD_FIRST_CONTEXT_MISMATCH' }
+    }
+    if (!isValidCompletedPullState(pullState)) {
+      return { ok: false, cloudFirst: true, code: 'CLOUD_FIRST_PULL_NOT_DURABLE' }
+    }
+    if (
+      pullState.serverSequence > 0 &&
+      (!serverVersions || typeof serverVersions !== 'object' || Array.isArray(serverVersions))
+    ) {
+      return { ok: false, cloudFirst: true, code: 'CLOUD_FIRST_SERVER_VERSIONS_MISSING' }
+    }
+
+    return { ok: true, cloudFirst: true, binding, pullState }
+  } catch {
+    return { ok: false, cloudFirst: false, code: 'CLOUD_FIRST_METADATA_READ_FAILED' }
+  }
+}
+
 /**
  * INT-02: deterministic fingerprint of the conditions that produced a push
  * envelope. Used to decide whether a previously rejected envelope may be safely
@@ -536,22 +617,58 @@ export function createSyncPushService({
           ? await adapter.loadSyncPushBinding()
           : null
 
-      if (existingBinding && existingBinding.businessId !== currentBusinessId) {
-        const remaining = await activeQueueService.countPending()
-        return {
-          ok: false,
-          code: 'SYNC_BUSINESS_BINDING_MISMATCH',
-          message: `Sync push blocked: local outbox is bound to business ID ${existingBinding.businessId}, but current business is ${currentBusinessId}.`,
-          error: {
+      if (existingBinding) {
+        if (Number(existingBinding.businessId) !== currentBusinessId) {
+          const remaining = await activeQueueService.countPending()
+          return {
+            ok: false,
             code: 'SYNC_BUSINESS_BINDING_MISMATCH',
             message: `Sync push blocked: local outbox is bound to business ID ${existingBinding.businessId}, but current business is ${currentBusinessId}.`,
-          },
-          remaining,
-          sentQueueIds: [],
-          removedQueueIds: [],
-          preservedQueueIds: [],
-          blocked: [],
-          warnings: [],
+            error: {
+              code: 'SYNC_BUSINESS_BINDING_MISMATCH',
+              message: `Sync push blocked: local outbox is bound to business ID ${existingBinding.businessId}, but current business is ${currentBusinessId}.`,
+            },
+            remaining,
+            sentQueueIds: [],
+            removedQueueIds: [],
+            preservedQueueIds: [],
+            blocked: [],
+            warnings: [],
+          }
+        }
+
+        const hasOutletMismatch =
+          existingBinding.outletId !== undefined &&
+          existingBinding.outletId !== null &&
+          Number(existingBinding.outletId) !== Number(selectedOutlet.id)
+        const hasDeviceMismatch =
+          existingBinding.deviceIdentifier !== undefined &&
+          existingBinding.deviceIdentifier !== null &&
+          String(existingBinding.deviceIdentifier) !== String(deviceIdentifier)
+        const hasRegisteredDeviceMismatch =
+          existingBinding.registeredDeviceId !== undefined &&
+          existingBinding.registeredDeviceId !== null &&
+          String(existingBinding.registeredDeviceId) !== String(registeredDeviceId)
+
+        if (hasOutletMismatch || hasDeviceMismatch || hasRegisteredDeviceMismatch) {
+          const remaining = await activeQueueService.countPending()
+          return {
+            ok: false,
+            code: 'SYNC_BUSINESS_BINDING_MISMATCH',
+            message:
+              'Sync push blocked: local push binding context does not match current cloud context.',
+            error: {
+              code: 'SYNC_BUSINESS_BINDING_MISMATCH',
+              message:
+                'Sync push blocked: local push binding context does not match current cloud context.',
+            },
+            remaining,
+            sentQueueIds: [],
+            removedQueueIds: [],
+            preservedQueueIds: [],
+            blocked: [],
+            warnings: [],
+          }
         }
       }
 
@@ -586,6 +703,50 @@ export function createSyncPushService({
             warnings: [],
           }
         }
+      }
+
+      const cloudFirstReadiness = await resolveCloudFirstPushReadiness({
+        adapter,
+        context: {
+          businessId: currentBusinessId,
+          outletId: selectedOutlet.id,
+          deviceIdentifier,
+          registeredDeviceId,
+        },
+      })
+      if (!cloudFirstReadiness.ok) {
+        const remaining = await activeQueueService.countPending()
+        return {
+          ok: false,
+          code: 'SYNC_CLOUD_FIRST_NOT_READY',
+          cloudFirstCode: cloudFirstReadiness.code,
+          message:
+            'Data Cloud awal belum tersimpan lengkap atau konteksnya tidak cocok. Tarik data Cloud kembali setelah pemulihan selesai.',
+          error: { code: 'SYNC_CLOUD_FIRST_NOT_READY' },
+          remaining,
+          sentQueueIds: [],
+          removedQueueIds: [],
+          preservedQueueIds: [],
+          blocked: [],
+          warnings: [],
+        }
+      }
+
+      const hasEligibleFirstPush =
+        cloudFirstReadiness.cloudFirst === true ||
+        (bootstrapState &&
+          (bootstrapState.status === 'staged' || bootstrapState.status === 'completed'))
+      const firstPushBinding = {
+        businessId: currentBusinessId,
+        ...(cloudFirstReadiness.cloudFirst
+          ? {
+              outletId: Number(selectedOutlet.id),
+              deviceIdentifier: String(deviceIdentifier),
+              registeredDeviceId,
+              source: 'cloud_first_read',
+            }
+          : {}),
+        boundAt: new Date().toISOString(),
       }
 
       // ── 3. Check for in-flight envelope (idempotent retry) ────────────────────
@@ -729,7 +890,6 @@ export function createSyncPushService({
 
       let requestId
       let envelope
-      let isReusedEnvelope = false
       const blocked = []
       const warnings = []
       const restricted = []
@@ -870,12 +1030,10 @@ export function createSyncPushService({
           }
         }
 
-        // When envelope exists but push binding is missing, validate that bootstrap state exists
+        // A first envelope may be retried only after either the historical
+        // Free-to-Cloud bootstrap or a fully durable Cloud-first read.
         if (!existingBinding) {
-          if (
-            !bootstrapState ||
-            (bootstrapState.status !== 'staged' && bootstrapState.status !== 'completed')
-          ) {
+          if (!hasEligibleFirstPush) {
             const remaining = await activeQueueService.countPending()
             return {
               ok: false,
@@ -894,7 +1052,6 @@ export function createSyncPushService({
 
         requestId = existingEnvelope.requestId
         envelope = existingEnvelope
-        isReusedEnvelope = true
       } else {
         // ── 4. Build new batch from outbox queue ────────────────────────────────
         const totalPending = await activeQueueService.countPending()
@@ -1353,12 +1510,9 @@ export function createSyncPushService({
           }
         }
 
-        // ── 4.5. Verify Bootstrap State when no existing push binding
+        // ── 4.5. Verify first-push readiness when no push binding exists
         if (!existingBinding) {
-          if (
-            !bootstrapState ||
-            (bootstrapState.status !== 'staged' && bootstrapState.status !== 'completed')
-          ) {
+          if (!hasEligibleFirstPush) {
             const remaining = await activeQueueService.countPending()
             return {
               ok: false,
@@ -1378,10 +1532,7 @@ export function createSyncPushService({
         // ── 4.6. Persist business binding on first real push before in-flight envelope and HTTP
         if (!existingBinding && adapter && typeof adapter.saveSyncPushBinding === 'function') {
           try {
-            await adapter.saveSyncPushBinding({
-              businessId: currentBusinessId,
-              boundAt: new Date().toISOString(),
-            })
+            await adapter.saveSyncPushBinding(firstPushBinding)
           } catch (err) {
             const remaining = await activeQueueService.countPending()
             return {
@@ -1447,10 +1598,7 @@ export function createSyncPushService({
       // If envelope is reused but binding was somehow missing, ensure it's saved before HTTP
       if (!existingBinding && adapter && typeof adapter.saveSyncPushBinding === 'function') {
         try {
-          await adapter.saveSyncPushBinding({
-            businessId: currentBusinessId,
-            boundAt: new Date().toISOString(),
-          })
+          await adapter.saveSyncPushBinding(firstPushBinding)
         } catch (err) {
           const remaining = await activeQueueService.countPending()
           return {
@@ -1743,7 +1891,7 @@ export function createSyncPushService({
                 warnings,
               }
             }
-          } catch (err) {
+          } catch {
             const remaining = await activeQueueService.countPending()
             return {
               ok: false,
@@ -1767,7 +1915,7 @@ export function createSyncPushService({
             if (typeof adapter.clearSyncPushInflight === 'function') {
               await adapter.clearSyncPushInflight()
             }
-          } catch (err) {
+          } catch {
             const remaining = await activeQueueService.countPending()
             return {
               ok: false,

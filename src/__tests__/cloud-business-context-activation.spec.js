@@ -21,8 +21,12 @@ import { _resetTokenStore } from '@/services/cloud/tokenRepository'
 import { createMemoryAdapter } from '@/services/database/memoryAdapter'
 import {
   buildBusinessSwitchConfirmation,
+  inspectCloudFirstWorkspace,
   inspectLocalBusinessWorkspace,
   WORKSPACE_CLASSIFICATION,
+  isTransactionMapped,
+  isCashEntryMapped,
+  isShiftMapped,
 } from '@/services/cloud/businessContextActivation'
 import {
   LOCAL_WORKSPACE_ID,
@@ -505,6 +509,293 @@ describe('12. unknown Cloud business_type is handled without a silent Café fall
     const report = await inspectLocalBusinessWorkspace({ adapter: null })
     expect(report.ok).toBe(false)
     expect(report.code).toBe(WORKSPACE_CLASSIFICATION.UNAVAILABLE)
+  })
+})
+
+describe('13. Cloud-first workspace safety journals', () => {
+  it('blocks initial Cloud reads while recovery, conflict, or operation journals are pending', async () => {
+    const cases = [
+      {
+        reason: 'local_operation_pending',
+        write: (adapter) =>
+          adapter.saveLocalOperationJournal({ version: 1, entries: [{ status: 'pending' }] }),
+      },
+      {
+        reason: 'restore_journal_pending',
+        write: (adapter) => adapter.saveRestoreJournal({ version: 1, phase: 'applying' }),
+      },
+      {
+        reason: 'workspace_switch_pending',
+        write: (adapter) => adapter.saveWorkspaceSwitchJournal({ version: 1, phase: 'applying' }),
+      },
+      {
+        reason: 'sync_conflict_pending',
+        write: (adapter) =>
+          adapter.saveSyncConflicts({ version: 1, conflicts: [{ id: 'c-1', status: 'open' }] }),
+      },
+      {
+        reason: 'inconsistent_pull_state',
+        write: (adapter) =>
+          adapter.saveSyncPullState({ version: 1, cursor: -1, serverSequence: 0, updatedAt: '2026-01-01' }),
+      },
+    ]
+
+    for (const scenario of cases) {
+      const adapter = createMemoryAdapter()
+      await adapter.initialize()
+      await scenario.write(adapter)
+
+      const report = await inspectCloudFirstWorkspace({ adapter })
+      expect(report.ok).toBe(true)
+      expect(report.safeToInitialize).toBe(false)
+      expect(report.reasons).toContain(scenario.reason)
+    }
+  })
+
+  it('fails closed when persistence flush fails during Cloud-first inspection', async () => {
+    const adapter = createMemoryAdapter()
+    await adapter.initialize()
+    const failingScheduler = {
+      flush: vi.fn().mockRejectedValue(new Error('disk write failed')),
+    }
+
+    const report = await inspectCloudFirstWorkspace({ adapter, scheduler: failingScheduler })
+    expect(report).toMatchObject({
+      ok: false,
+      safeToInitialize: false,
+      code: WORKSPACE_CLASSIFICATION.READ_FAILED,
+      reasons: ['persistence_operation_pending'],
+    })
+  })
+
+  it('fails closed when a Cloud-first journal reader is unavailable', async () => {
+    const adapter = createMemoryAdapter()
+    await adapter.initialize()
+    const { loadRestoreJournal, ...withoutRestoreReader } = adapter
+
+    const report = await inspectCloudFirstWorkspace({ adapter: withoutRestoreReader })
+    expect(report).toMatchObject({
+      ok: false,
+      safeToInitialize: false,
+      code: WORKSPACE_CLASSIFICATION.UNAVAILABLE,
+    })
+    expect(loadRestoreJournal).toBeTypeOf('function')
+  })
+
+  it('differentiates valid Auto Sync preference from operational sync metadata', async () => {
+    const validContext = {
+      businessId: 10,
+      outletId: 20,
+      registeredDeviceId: 77,
+      deviceIdentifier: 'dev-123',
+    }
+
+    // 1. Workspace kosong tanpa preferensi -> safe
+    const adapter1 = createMemoryAdapter()
+    await adapter1.initialize()
+    await adapter1.saveCloudContext({
+      selectedBusiness: { id: 10 },
+      selectedOutlet: { id: 20 },
+      registeredDeviceId: 77,
+      deviceIdentifier: 'dev-123',
+    })
+    const report1 = await inspectCloudFirstWorkspace({ adapter: adapter1 })
+    expect(report1.ok).toBe(true)
+    expect(report1.safeToInitialize).toBe(true)
+    expect(report1.reasons).toEqual([])
+
+    // 2. Workspace kosong dengan Auto Sync enabled yang valid -> safe
+    const adapter2 = createMemoryAdapter()
+    await adapter2.initialize()
+    await adapter2.saveCloudContext({
+      selectedBusiness: { id: 10 },
+      selectedOutlet: { id: 20 },
+      registeredDeviceId: 77,
+      deviceIdentifier: 'dev-123',
+    })
+    await adapter2.saveSyncAutoSettings({
+      version: 1,
+      enabled: true,
+      context: validContext,
+      updatedAt: '2026-10-18T00:00:00.000Z',
+    })
+    const report2 = await inspectCloudFirstWorkspace({ adapter: adapter2 })
+    expect(report2.ok).toBe(true)
+    expect(report2.safeToInitialize).toBe(true)
+    expect(report2.reasons).toEqual([])
+
+    // 3. Workspace kosong dengan Auto Sync disabled yang valid -> safe
+    const adapter3 = createMemoryAdapter()
+    await adapter3.initialize()
+    await adapter3.saveCloudContext({
+      selectedBusiness: { id: 10 },
+      selectedOutlet: { id: 20 },
+      registeredDeviceId: 77,
+      deviceIdentifier: 'dev-123',
+    })
+    await adapter3.saveSyncAutoSettings({
+      version: 1,
+      enabled: false,
+      context: validContext,
+      updatedAt: '2026-10-18T00:00:00.000Z',
+    })
+    const report3 = await inspectCloudFirstWorkspace({ adapter: adapter3 })
+    expect(report3.ok).toBe(true)
+    expect(report3.safeToInitialize).toBe(true)
+
+    // 4. Preferensi dari bisnis lain -> diblokir
+    const adapter4 = createMemoryAdapter()
+    await adapter4.initialize()
+    await adapter4.saveCloudContext({
+      selectedBusiness: { id: 10 },
+      selectedOutlet: { id: 20 },
+      registeredDeviceId: 77,
+      deviceIdentifier: 'dev-123',
+    })
+    await adapter4.saveSyncAutoSettings({
+      version: 1,
+      enabled: true,
+      context: { ...validContext, businessId: 999 },
+      updatedAt: '2026-10-18T00:00:00.000Z',
+    })
+    const report4 = await inspectCloudFirstWorkspace({ adapter: adapter4 })
+    expect(report4.ok).toBe(true)
+    expect(report4.safeToInitialize).toBe(false)
+    expect(report4.reasons).toContain('auto_sync_context_mismatch')
+
+    // 5. Preferensi corrupt -> fail-closed
+    const adapter5 = createMemoryAdapter()
+    await adapter5.initialize()
+    await adapter5.saveCloudContext({
+      selectedBusiness: { id: 10 },
+      selectedOutlet: { id: 20 },
+      registeredDeviceId: 77,
+      deviceIdentifier: 'dev-123',
+    })
+    await adapter5.saveSyncAutoSettings({
+      version: 99,
+      enabled: 'yes',
+      context: 'corrupt',
+    })
+    const report5 = await inspectCloudFirstWorkspace({ adapter: adapter5 })
+    expect(report5.ok).toBe(true)
+    expect(report5.safeToInitialize).toBe(false)
+    expect(report5.reasons).toContain('auto_sync_settings_invalid')
+
+    // 6. Data transaksi atau outbox pending tetap memblokir initial pull
+    const adapter6 = createMemoryAdapter()
+    await adapter6.initialize()
+    await adapter6.saveCloudContext({
+      selectedBusiness: { id: 10 },
+      selectedOutlet: { id: 20 },
+      registeredDeviceId: 77,
+      deviceIdentifier: 'dev-123',
+    })
+    await adapter6.saveSyncAutoSettings({
+      version: 1,
+      enabled: true,
+      context: validContext,
+      updatedAt: '2026-10-18T00:00:00.000Z',
+    })
+    await adapter6.saveTransactions([{ id: 'trx-1', total: 10000 }])
+    const report6 = await inspectCloudFirstWorkspace({ adapter: adapter6 })
+    expect(report6.ok).toBe(true)
+    expect(report6.safeToInitialize).toBe(false)
+    expect(report6.reasons).toContain('transactions')
+  })
+})
+
+describe('Cloud-first provenance classification & interrupted recovery', () => {
+  it('identifies mapped versus unmapped UUID records in durable bindings', () => {
+    const identityMap = {
+      'transaction:660e8400-e29b-41d4-a716-446655440001': '660e8400-e29b-41d4-a716-446655440001',
+      'cash_entry:660e8400-e29b-41d4-a716-446655440002': '660e8400-e29b-41d4-a716-446655440002',
+      'shift:SHIFT-001': '660e8400-e29b-41d4-a716-446655440003',
+    }
+    const serverVersions = {
+      'sales:660e8400-e29b-41d4-a716-446655440001': { syncVersion: 1 },
+      'cash_ledger:660e8400-e29b-41d4-a716-446655440002': { syncVersion: 1 },
+      'shifts:660e8400-e29b-41d4-a716-446655440003': { syncVersion: 1 },
+    }
+
+    // Mapped entries
+    expect(isTransactionMapped('660e8400-e29b-41d4-a716-446655440001', identityMap, serverVersions)).toBe(true)
+    expect(isCashEntryMapped('660e8400-e29b-41d4-a716-446655440002', identityMap, serverVersions)).toBe(true)
+    expect(isShiftMapped({ id: '660e8400-e29b-41d4-a716-446655440003', shiftNumber: 'SHIFT-001' }, identityMap, serverVersions)).toBe(true)
+
+    // Unmapped UUID entries (e.g. locally created)
+    expect(isTransactionMapped('770e8400-e29b-41d4-a716-446655440099', identityMap, serverVersions)).toBe(false)
+    expect(isCashEntryMapped('770e8400-e29b-41d4-a716-446655440099', identityMap, serverVersions)).toBe(false)
+    expect(isShiftMapped({ id: '770e8400-e29b-41d4-a716-446655440099', shiftNumber: 'SHIFT-LOCAL' }, identityMap, serverVersions)).toBe(false)
+  })
+
+  it('fresh workspace with UUID transactions is classified as local operational data and blocked from initial pull', async () => {
+    const adapter = createMemoryAdapter()
+    await adapter.initialize()
+    const validContext = {
+      selectedBusiness: { id: 10 },
+      selectedOutlet: { id: 101 },
+      registeredDeviceId: 55,
+      deviceIdentifier: 'dev-123',
+    }
+    await adapter.saveCloudContext(validContext)
+
+    // Local transaction with a valid UUID created offline
+    await adapter.saveTransactions([
+      {
+        id: '770e8400-e29b-41d4-a716-446655440099',
+        total: 20000,
+      },
+    ])
+
+    const report = await inspectCloudFirstWorkspace({ adapter, context: validContext })
+    expect(report.ok).toBe(true)
+    expect(report.safeToInitialize).toBe(false)
+    expect(report.reasons).toContain('transactions')
+  })
+
+  it('interrupted pull with unmapped UUID cash entry or shift fails closed when durable bindings exist', async () => {
+    const adapter = createMemoryAdapter()
+    await adapter.initialize()
+    const validContext = {
+      businessId: 10,
+      outletId: 101,
+      registeredDeviceId: 55,
+      deviceIdentifier: 'dev-123',
+    }
+    await adapter.saveCloudContext(validContext)
+    await adapter.saveCloudInitializationJournal({
+      version: 1,
+      phase: 'initializing',
+      ...validContext,
+      startedAt: new Date().toISOString(),
+    })
+    await adapter.saveSyncPullBinding({
+      ...validContext,
+      mode: 'cloud_first_read',
+      status: 'initializing',
+      boundAt: new Date().toISOString(),
+    })
+
+    // Durable bindings exist for a remote cash entry
+    const remoteCashId = '660e8400-e29b-41d4-a716-446655440002'
+    await adapter.saveSyncIdentityMap({
+      [`cash_entry:${remoteCashId}`]: remoteCashId,
+    })
+
+    // But local cash entry with valid UUID was added
+    const localCashId = '880e8400-e29b-41d4-a716-446655440088'
+    await adapter.saveCashState({
+      entries: [
+        { id: remoteCashId, amount: 10000 },
+        { id: localCashId, amount: 20000 },
+      ],
+    })
+
+    const report = await inspectCloudFirstWorkspace({ adapter, context: validContext })
+    expect(report.ok).toBe(true)
+    expect(report.safeToInitialize).toBe(false)
+    expect(report.reasons).toContain('cash')
   })
 })
 

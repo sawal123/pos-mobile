@@ -238,6 +238,7 @@ export function buildEmptyWorkspaceSnapshot() {
       bootstrap: null,
       conflicts: null,
       autoSettings: null,
+      initJournal: null,
     },
   }
 }
@@ -298,7 +299,7 @@ export async function captureActiveWorkspaceSnapshot(adapter) {
       adapter.listSyncQueueItems({ limit: 1000000 }),
     ])
 
-  const [identityMap, pushBinding, pushInflight, pullBinding, pullState, serverVersions, bootstrap, conflicts, autoSettings] =
+  const [identityMap, pushBinding, pushInflight, pullBinding, pullState, serverVersions, bootstrap, conflicts, autoSettings, initJournal] =
     await Promise.all([
       adapter.loadSyncIdentityMap?.() ?? null,
       adapter.loadSyncPushBinding?.() ?? null,
@@ -309,6 +310,7 @@ export async function captureActiveWorkspaceSnapshot(adapter) {
       adapter.loadSyncBootstrapState?.() ?? null,
       adapter.loadSyncConflicts?.() ?? null,
       adapter.loadSyncAutoSettings?.() ?? null,
+      adapter.loadCloudInitializationJournal?.() ?? null,
     ])
 
   return {
@@ -335,6 +337,7 @@ export async function captureActiveWorkspaceSnapshot(adapter) {
       bootstrap: bootstrap ?? null,
       conflicts: conflicts ?? null,
       autoSettings: autoSettings ?? null,
+      initJournal: initJournal ?? null,
     },
   }
 }
@@ -379,6 +382,15 @@ export async function applyWorkspaceSnapshot(adapter, snapshot) {
   if (typeof adapter.saveSyncBootstrapState === 'function') await adapter.saveSyncBootstrapState(cloneValue(sync.bootstrap))
   if (typeof adapter.saveSyncConflicts === 'function') await adapter.saveSyncConflicts(cloneValue(sync.conflicts))
   if (typeof adapter.saveSyncAutoSettings === 'function') await adapter.saveSyncAutoSettings(cloneValue(sync.autoSettings))
+  if (typeof adapter.clearCloudInitializationJournal === 'function') {
+    if (sync.initJournal) {
+      if (typeof adapter.saveCloudInitializationJournal === 'function') {
+        await adapter.saveCloudInitializationJournal(cloneValue(sync.initJournal))
+      }
+    } else {
+      await adapter.clearCloudInitializationJournal()
+    }
+  }
 
   return { ok: true }
 }
@@ -463,6 +475,17 @@ export async function evaluateWorkspaceSwitchBlockers({ adapter, autoSyncRunning
       }
     } catch {
       blockers.push('local_operation_unknown')
+    }
+  }
+
+  if (adapter && typeof adapter.loadCloudInitializationJournal === 'function') {
+    try {
+      const initJournal = await adapter.loadCloudInitializationJournal()
+      if (initJournal && initJournal.phase === 'initializing') {
+        blockers.push('cloud_initialization_pending')
+      }
+    } catch {
+      blockers.push('cloud_initialization_unknown')
     }
   }
 

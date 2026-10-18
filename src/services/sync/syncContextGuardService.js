@@ -179,11 +179,11 @@ export function createSyncContextGuardService({ adapter } = {}) {
       }
     }
 
-    let pushBinding = null
-    let pullBinding = null
-    let inflight = null
-    let bootstrapState = null
-    let autoSettings = null
+    let pushBinding
+    let pullBinding
+    let inflight
+    let bootstrapState
+    let autoSettings
 
     try {
       const results = await Promise.all([
@@ -208,6 +208,15 @@ export function createSyncContextGuardService({ adapter } = {}) {
         canonicalContext: null,
         sources: [],
         issues: [{ code: 'READ_FAILED', source: 'adapter' }],
+      }
+    }
+
+    let initJournal = null
+    if (typeof adapter.loadCloudInitializationJournal === 'function') {
+      try {
+        initJournal = await adapter.loadCloudInitializationJournal()
+      } catch {
+        initJournal = null
       }
     }
 
@@ -349,15 +358,21 @@ export function createSyncContextGuardService({ adapter } = {}) {
 
     if (pullBinding) {
       sources.push('pull_binding')
-      fullAnchors.push({
-        source: 'pull_binding',
-        context: {
-          businessId: pullBinding.businessId,
-          outletId: pullBinding.outletId,
-          deviceIdentifier: pullBinding.deviceIdentifier.trim(),
-          registeredDeviceId: pullBinding.registeredDeviceId,
-        },
-      })
+      const isCloudFirst = pullBinding.mode === 'cloud_first_read'
+      const isCompleted = !isCloudFirst || pullBinding.status === 'completed'
+      const isJournalPending = initJournal && initJournal.phase !== 'completed'
+
+      if (isCompleted && !isJournalPending) {
+        fullAnchors.push({
+          source: 'pull_binding',
+          context: {
+            businessId: pullBinding.businessId,
+            outletId: pullBinding.outletId,
+            deviceIdentifier: pullBinding.deviceIdentifier.trim(),
+            registeredDeviceId: pullBinding.registeredDeviceId,
+          },
+        })
+      }
     }
 
     if (inflight) {
@@ -471,6 +486,40 @@ export function createSyncContextGuardService({ adapter } = {}) {
             },
           ],
         }
+      }
+    }
+
+    if (pullBinding && pullBinding.businessId !== currentContext.businessId) {
+      return {
+        ok: false,
+        code: 'SYNC_CONTEXT_BUSINESS_MISMATCH',
+        status: 'blocked',
+        currentContext,
+        canonicalContext,
+        sources,
+        issues: [
+          {
+            code: 'BUSINESS_ID_MISMATCH',
+            source: 'pull_binding',
+          },
+        ],
+      }
+    }
+
+    if (initJournal && initJournal.businessId !== currentContext.businessId) {
+      return {
+        ok: false,
+        code: 'SYNC_CONTEXT_BUSINESS_MISMATCH',
+        status: 'blocked',
+        currentContext,
+        canonicalContext,
+        sources,
+        issues: [
+          {
+            code: 'BUSINESS_ID_MISMATCH',
+            source: 'cloud_initialization',
+          },
+        ],
       }
     }
 
