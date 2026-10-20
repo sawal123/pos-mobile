@@ -97,24 +97,40 @@ const isContextGuardMutationBlocked = computed(() => {
 
 const isInitialPullRunning = ref(false)
 
-// Push-only workspace: valid push binding, no pull binding. It is NOT a fresh
-// workspace, so it must use the regular pull rather than Muat Data Cloud.
 const isPushOnlyWorkspace = computed(() => {
   const sources = syncContextGuardStore.sources ?? []
   return (
     canSync.value &&
-    syncContextGuardStore.status === 'unbound' &&
+    !isContextGuardBlocked.value &&
     sources.includes('push_binding') &&
     !sources.includes('pull_binding')
   )
 })
 
+const hasMeaningfulStagedBootstrap = computed(() => {
+  if (!syncBootstrapStore.isStaged) return false
+  const counts = syncBootstrapStore.bootstrapState?.counts
+  if (!counts || typeof counts !== 'object') {
+    return (syncBootstrapStore.previewCounts?.total ?? 0) > 0
+  }
+  const total = Object.values(counts).reduce((sum, n) => sum + (Number(n) || 0), 0)
+  return total > 0
+})
+
+const isFreshWorkspace = computed(() => {
+  const sources = syncContextGuardStore.sources ?? []
+  return (
+    canSync.value &&
+    !isContextGuardBlocked.value &&
+    !sources.includes('pull_binding') &&
+    !sources.includes('push_binding')
+  )
+})
+
 const canInitializeCloudData = computed(
   () =>
-    canSync.value &&
-    syncContextGuardStore.status === 'unbound' &&
-    !isPushOnlyWorkspace.value &&
-    !syncBootstrapStore.isStaged &&
+    isFreshWorkspace.value &&
+    !hasMeaningfulStagedBootstrap.value &&
     !isInitialPullRunning.value,
 )
 
@@ -1868,7 +1884,8 @@ onMounted(async () => {
             :disabled="
               syncBootstrapStore.hasContextMismatch ||
               isAnySyncOperationBusy ||
-              isContextGuardMutationBlocked
+              isContextGuardMutationBlocked ||
+              isFreshWorkspace
             "
             :loading="syncOrchestratorStore.loading"
             aria-label="Sinkronkan Semua"
@@ -1954,7 +1971,7 @@ onMounted(async () => {
             :disabled="
               isAnySyncOperationBusy ||
               isContextGuardMutationBlocked ||
-              (syncContextGuardStore.status === 'unbound' && !isPushOnlyWorkspace)
+              isFreshWorkspace
             "
             :loading="syncPullStore.loading"
             aria-label="Tarik Data Cloud"
