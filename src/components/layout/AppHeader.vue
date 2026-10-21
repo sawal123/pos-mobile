@@ -44,6 +44,7 @@ const pageTitle = computed(() => {
     settings: 'Pengaturan',
     subscription: 'Langganan',
     cloud: 'Cloud Login',
+    'cloud-onboarding': 'Cloud Login',
     'premium-checkout': 'Pembayaran Premium',
     'premium-payment-status': 'Status Pembayaran',
   }

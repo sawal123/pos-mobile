@@ -12,6 +12,11 @@ vi.mock('vue-router', () => ({
     push: vi.fn(),
     replace: vi.fn(),
   }),
+  useRoute: () => ({
+    name: 'cloud',
+    path: '/cloud',
+    query: {},
+  }),
 }))
 
 function setupTestCloudContext(cloudStore) {

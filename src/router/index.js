@@ -81,6 +81,11 @@ const routes = [
     component: PinSetupView,
   },
   {
+    path: '/setup/cloud',
+    name: 'cloud-onboarding',
+    component: CloudLoginView,
+  },
+  {
     path: '/',
     component: AppLayout,
     children: [

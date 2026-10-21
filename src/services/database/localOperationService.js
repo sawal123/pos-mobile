@@ -269,7 +269,7 @@ export async function repairLegacySaleStockMovementLinks({
         await runSerialized(() =>
           adapter.upsertSyncQueueItem({
             ...queueRow,
-            payload: { ...(queueRow.payload ?? {}), transactionId: saleId },
+            payload: { ...queueRow.payload, transactionId: saleId },
             attemptCount: 0,
             lastError: null,
             updatedAt: new Date().toISOString(),
@@ -464,7 +464,7 @@ export function createLocalOperationService({ adapter = null, scheduler = null, 
 
     if (!transaction) {
       transaction = transactionStore.createTransaction({
-        ...(entry.payload?.checkout ?? {}),
+        ...entry.payload?.checkout,
         id: entry.operationId,
       })
       await flush()

@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import AppIcon from '@/components/base/AppIcon.vue'
 import { BUSINESS_TYPES, normalizeBusinessType } from '@/data/businessTemplates'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useProductStore } from '@/stores/productStore'
@@ -109,11 +110,36 @@ function saveBusinessProfile() {
           <div class="h-1 flex-1 rounded-full bg-primary/15"></div>
         </div>
 
+        <div class="mb-3">
+          <button
+            id="business-setup-back-btn"
+            type="button"
+            data-testid="business-setup-back"
+            class="inline-flex items-center gap-1.5 text-xs font-medium text-ink-secondary hover:text-ink-primary"
+            @click="router.push({ name: 'welcome' })"
+          >
+            <AppIcon name="chevron-left" class="size-3.5" />
+            <span>Kembali ke pilihan awal</span>
+          </button>
+        </div>
+
         <h1 class="text-[1.65rem] font-bold leading-tight tracking-tight sm:text-3xl">
           Siapkan profil toko
         </h1>
         <p class="mt-2 max-w-2xl text-sm leading-relaxed text-ink-secondary">
           Isi informasi dasar dan pilih jenis usaha agar POS sesuai kebutuhan toko Anda.
+        </p>
+        <p class="mt-2 text-xs text-ink-secondary">
+          Sudah punya akun Cloud?
+          <button
+            id="business-setup-switch-cloud-btn"
+            type="button"
+            data-testid="business-setup-switch-cloud"
+            class="font-semibold text-primary underline-offset-2 hover:underline"
+            @click="router.push({ name: 'cloud-onboarding' })"
+          >
+            Masuk di sini
+          </button>
         </p>
       </header>
 

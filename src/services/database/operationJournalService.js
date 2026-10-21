@@ -107,7 +107,7 @@ export function createOperationJournal({ adapter = null } = {}) {
         phase,
         updatedAt: new Date().toISOString(),
         artifacts: artifacts ? { ...current.artifacts, ...artifacts } : current.artifacts,
-        ...(extra ? { recovery: { ...(current.recovery ?? {}), ...extra } } : {}),
+        ...(extra ? { recovery: { ...current.recovery, ...extra } } : {}),
       }
 
       const nextEntries = [...state.entries]

@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
 import { Capacitor } from '@capacitor/core'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
@@ -10,6 +10,7 @@ import BaseModal from '@/components/base/BaseModal.vue'
 import AppIcon from '@/components/base/AppIcon.vue'
 import { describeLoginError } from '@/services/cloud/cloudLoginErrors'
 import { useBusinessStore } from '@/stores/businessStore'
+import { useCashierStore } from '@/stores/cashierStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useSubscriptionStore } from '@/stores/subscriptionStore'
 import { useSyncPushStore } from '@/stores/syncPushStore'
@@ -25,10 +26,26 @@ import { useSyncContextGuardStore } from '@/stores/syncContextGuardStore'
 import { useSyncStatusStore } from '@/stores/syncStatusStore'
 import { useSyncReconciliationStore } from '@/stores/syncReconciliationStore'
 
+let route = null
+try {
+  route = typeof useRoute === 'function' ? useRoute() : null
+} catch {
+  route = null
+}
+
+let router = null
+try {
+  router = typeof useRouter === 'function' ? useRouter() : null
+} catch {
+  router = null
+}
 const businessStore = useBusinessStore()
+const cashierStore = useCashierStore()
 const cloudStore = useCloudSessionStore()
 const subscriptionStore = useSubscriptionStore()
-const router = useRouter()
+const isOnboarding = computed(
+  () => route?.name === 'cloud-onboarding' || route?.path === '/setup/cloud',
+)
 const syncPushStore = useSyncPushStore()
 const syncPullStore = useSyncPullStore()
 const syncBootstrapStore = useSyncBootstrapStore()
@@ -118,13 +135,20 @@ const hasMeaningfulStagedBootstrap = computed(() => {
 })
 
 const isFreshWorkspace = computed(() => {
+  if (!canSync.value || isContextGuardBlocked.value) return false
+  const status = syncContextGuardStore.status
   const sources = syncContextGuardStore.sources ?? []
-  return (
-    canSync.value &&
-    !isContextGuardBlocked.value &&
-    !sources.includes('pull_binding') &&
-    !sources.includes('push_binding')
-  )
+
+  if (status === 'unbound') {
+    return !sources.includes('push_binding')
+  }
+
+  if (status === 'safe') {
+    if (sources.length === 0) return false
+    return !sources.includes('pull_binding') && !sources.includes('push_binding')
+  }
+
+  return false
 })
 
 const canInitializeCloudData = computed(
@@ -1252,6 +1276,9 @@ async function handleSelectOutlet(outletId) {
 function applyActivationResult(activation) {
   if (activation.ok) {
     step.value = 'done'
+    if (canSync.value) {
+      void syncContextGuardStore.check()
+    }
     return true
   }
   if (activation.code === 'BUSINESS_SWITCH_CONFIRMATION_REQUIRED') {
@@ -1272,6 +1299,9 @@ async function handleConfirmBusinessSwitch() {
   if (result.ok) {
     showSwitchModal.value = false
     step.value = 'done'
+    if (canSync.value) {
+      void syncContextGuardStore.check()
+    }
     return
   }
   switchErrorMessage.value = result.message ?? result.error?.message ?? 'Perpindahan bisnis gagal.'
@@ -1392,30 +1422,87 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="mx-auto max-w-3xl space-y-5">
-    <div>
-      <p class="text-sm font-medium uppercase tracking-[0.18em] text-primary">Cloud</p>
-      <h2 class="mt-2 text-2xl font-semibold text-ink-primary">Cloud Login</h2>
-    </div>
+  <div :class="isOnboarding ? 'min-h-dvh bg-[#F7F8FC] px-4 py-8 sm:px-6' : ''">
+    <div class="mx-auto max-w-3xl space-y-5">
+      <!-- Back button during onboarding login step -->
+      <div v-if="isOnboarding && step === 'login'" class="mb-2">
+        <button
+          id="cloud-onboarding-back-btn"
+          type="button"
+          data-testid="cloud-onboarding-back"
+          class="inline-flex items-center gap-1.5 text-xs font-medium text-ink-secondary hover:text-ink-primary"
+          @click="router.push({ name: 'welcome' })"
+        >
+          <AppIcon name="chevron-left" class="size-3.5" />
+          <span>Kembali ke pilihan awal</span>
+        </button>
+      </div>
 
-    <!-- ZERO BUSINESS STATE (Reachable when authenticated but has 0 businesses) -->
-    <BaseCard v-if="isZeroBusiness" id="cloud-no-business" class="space-y-3">
-      <p class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger">
-        Akun Anda belum memiliki Business. Buat Business terlebih dahulu di dashboard web.
-      </p>
-      <BaseButton
-        id="cloud-logout-btn"
-        variant="danger"
-        :disabled="isAnySyncOperationBusy"
-        :loading="cloudStore.loading"
-        @click="requestDisconnect"
-      >
-        Putuskan Cloud
-      </BaseButton>
-    </BaseCard>
+      <div>
+        <p class="text-sm font-medium uppercase tracking-[0.18em] text-primary">
+          {{ isOnboarding ? 'Onboarding Cloud' : 'Cloud' }}
+        </p>
+        <h2 class="mt-2 text-2xl font-semibold text-ink-primary">
+          {{ isOnboarding ? 'Masuk ke Akun Cloud' : 'Cloud Login' }}
+        </h2>
+        <p v-if="isOnboarding" class="mt-1 text-sm text-ink-secondary">
+          Hubungkan bisnis yang sudah terdaftar di Cloud untuk memuat produk dan data toko ke perangkat ini.
+        </p>
+      </div>
 
-    <!-- LOGGED IN STATE -->
-    <BaseCard v-else-if="isLinked && step === 'done'" id="cloud-logged-in" class="space-y-4">
+      <!-- ZERO BUSINESS STATE (Reachable when authenticated but has 0 businesses) -->
+      <BaseCard v-if="isZeroBusiness" id="cloud-no-business" class="space-y-3">
+        <p class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger">
+          Akun Anda belum memiliki Business. Buat Business terlebih dahulu di dashboard web.
+        </p>
+        <BaseButton
+          id="cloud-logout-btn"
+          variant="danger"
+          :disabled="isAnySyncOperationBusy"
+          :loading="cloudStore.loading"
+          @click="requestDisconnect"
+        >
+          Putuskan Cloud
+        </BaseButton>
+      </BaseCard>
+
+      <!-- LOGGED IN STATE -->
+      <BaseCard v-else-if="isLinked && step === 'done'" id="cloud-logged-in" class="space-y-4">
+        <!-- Onboarding Next Step Guidance Card -->
+        <div
+          v-if="isOnboarding || !cashierStore.activeCashier.pinConfigured"
+          id="cloud-onboarding-next-card"
+          data-testid="cloud-onboarding-next"
+          class="rounded-2xl border border-primary/20 bg-primary/5 p-4 sm:p-5"
+        >
+          <div class="flex items-start gap-3.5">
+            <span class="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary text-white">
+              <AppIcon name="store" class="size-5" />
+            </span>
+            <div class="min-w-0 flex-1">
+              <h3 class="text-base font-bold text-ink-primary">
+                Bisnis Cloud Terhubung!
+              </h3>
+              <p class="mt-1 text-sm leading-relaxed text-ink-secondary">
+                Bisnis <strong class="text-ink-primary">{{ cloudStore.selectedBusiness?.name }}</strong>
+                ({{ cloudStore.selectedOutlet?.name }}) telah aktif di perangkat ini.
+              </p>
+              <p class="mt-2 text-xs leading-relaxed text-ink-secondary">
+                Anda dapat menekan <strong>Muat Data Cloud</strong> di bawah untuk menarik katalog produk &amp; kategori, lalu lanjutkan ke pembuatan PIN kasir untuk mulai transaksi.
+              </p>
+              <div class="mt-4 flex flex-wrap gap-2.5">
+                <BaseButton
+                  id="cloud-onboarding-continue-pin-btn"
+                  data-testid="cloud-onboarding-continue-pin"
+                  variant="primary"
+                  @click="router.push({ name: 'pin-setup' })"
+                >
+                  Lanjut ke Setup PIN Kasir
+                </BaseButton>
+              </div>
+            </div>
+          </div>
+        </div>
       <!-- PREM-M03: link status summary -->
       <div
         id="cloud-link-summary"
@@ -2324,6 +2411,17 @@ onMounted(async () => {
       <p v-if="cloudStore.error" class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger">
         {{ cloudStore.error }}
       </p>
+
+      <div class="pt-1">
+        <BaseButton
+          id="cloud-cancel-select-business-btn"
+          variant="ghost"
+          size="sm"
+          @click="confirmDisconnect"
+        >
+          Kembali ke Login
+        </BaseButton>
+      </div>
     </BaseCard>
 
     <!-- SELECT OUTLET -->
@@ -2354,6 +2452,17 @@ onMounted(async () => {
       <p v-if="cloudStore.error" class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger">
         {{ cloudStore.error }}
       </p>
+
+      <div class="pt-1">
+        <BaseButton
+          id="cloud-cancel-select-outlet-btn"
+          variant="ghost"
+          size="sm"
+          @click="step = cloudStore.businesses.length > 1 ? 'select-business' : 'login'"
+        >
+          Kembali
+        </BaseButton>
+      </div>
     </BaseCard>
 
     <!-- CONFIRM LINK (PREM-M03) -->
@@ -2567,5 +2676,6 @@ onMounted(async () => {
         </div>
       </div>
     </BaseModal>
+    </div>
   </div>
 </template>
