@@ -233,28 +233,21 @@ function handleCloudLocked() {
 
 const settingsMenu = computed(() => [
   {
+    key: 'sync',
+    icon: 'sync',
+    title: 'Sinkronisasi',
+    subtitle: isPremium.value ? 'Sinkronkan data ke cloud' : 'Memerlukan Premium',
+    testid: 'settings-menu-sync',
+    locked: !isPremium.value,
+    to: { name: 'sync' },
+  },
+  {
     key: 'cloud',
     icon: 'cloud',
     title: 'Akun Cloud',
     subtitle: cloudAccountSubtitle.value,
     testid: 'settings-menu-cloud',
     to: { name: 'cloud' },
-  },
-  {
-    key: 'customers',
-    icon: 'customers',
-    title: 'Kelola Pelanggan',
-    subtitle: 'Data pelanggan dan riwayat',
-    testid: 'settings-menu-customers',
-    to: { name: 'customers' },
-  },
-  {
-    key: 'expenses',
-    icon: 'expenses',
-    title: 'Kelola Pengeluaran',
-    subtitle: 'Biaya operasional toko',
-    testid: 'settings-menu-expenses',
-    to: { name: 'expenses' },
   },
   {
     key: 'backup',
@@ -271,15 +264,6 @@ const settingsMenu = computed(() => [
     subtitle: 'Pulihkan data dari file backup',
     testid: 'settings-menu-restore',
     action: 'restore',
-  },
-  {
-    key: 'sync',
-    icon: 'sync',
-    title: 'Sinkronisasi',
-    subtitle: isPremium.value ? 'Sinkronkan data ke cloud' : 'Memerlukan Premium',
-    testid: 'settings-menu-sync',
-    locked: !isPremium.value,
-    to: { name: 'cloud' },
   },
 ])
 

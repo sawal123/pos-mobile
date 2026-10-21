@@ -32,6 +32,7 @@ import PremiumCheckoutView from '../views/subscription/PremiumCheckoutView.vue'
 import PremiumPaymentStatusView from '../views/subscription/PremiumPaymentStatusView.vue'
 import StockView from '../views/stock/StockView.vue'
 import CloudLoginView from '../views/settings/CloudLoginView.vue'
+import SyncView from '../views/sync/SyncView.vue'
 import ReceiptView from '../views/transactions/ReceiptView.vue'
 import TransactionDetailView from '../views/transactions/TransactionDetailView.vue'
 import TransactionsView from '../views/transactions/TransactionsView.vue'
@@ -225,6 +226,11 @@ const routes = [
         component: CloudLoginView,
       },
       {
+        path: 'sync',
+        name: 'sync',
+        component: SyncView,
+      },
+      {
         path: 'premium/checkout',
         name: 'premium-checkout',
         component: PremiumCheckoutView,
@@ -282,6 +288,7 @@ const businessRequiredRoutes = new Set([
   'transaction-receipt',
   'reports',
   'settings',
+  'sync',
   'subscription',
   'my-subscription',
   'premium-checkout',
@@ -316,6 +323,7 @@ const pinRequiredRoutes = new Set([
   'transaction-receipt',
   'reports',
   'settings',
+  'sync',
   'subscription',
   'my-subscription',
   'premium-checkout',

@@ -73,6 +73,13 @@ export function getOperationalMenuItems(businessType) {
       to: '/reports',
     },
     {
+      key: 'sync',
+      icon: 'sync',
+      title: 'Sinkronisasi',
+      subtitle: 'Sinkron cloud & data',
+      to: '/sync',
+    },
+    {
       key: 'settings',
       icon: 'settings',
       title: 'Pengaturan',
@@ -104,6 +111,7 @@ export function getMoreMenuItems(businessType) {
     { key: 'expenses', icon: 'expenses', label: 'Pengeluaran', to: '/expenses' },
     { key: 'shift', icon: 'shift', label: 'Shift', to: '/shift' },
     { key: 'reports', icon: 'reports', label: 'Laporan', to: '/reports' },
+    { key: 'sync', icon: 'sync', label: 'Sinkronisasi', to: '/sync' },
     { key: 'settings', icon: 'settings', label: 'Settings', to: '/settings' },
   ]
 }
