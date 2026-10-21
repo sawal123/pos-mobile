@@ -902,6 +902,22 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       operationalContext.value?.cloudBusinessId === business.id &&
       operationalContext.value?.outletId === outlet.id
     if (alreadyActive) {
+      try {
+        const bStore = useBusinessStore()
+        if (bStore.mode !== 'cloud') {
+          bStore.mode = 'cloud'
+          await _adapter?.saveBusiness({
+            name: bStore.name,
+            type: bStore.type,
+            owner: bStore.owner,
+            phone: bStore.phone,
+            outlet: bStore.outlet,
+            mode: 'cloud',
+          })
+        }
+      } catch {
+        // non-blocking
+      }
       return { ok: true, code: 'OPERATIONAL_CONTEXT_ACTIVE' }
     }
 
@@ -951,6 +967,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       name: business.name,
       type: business.business_type,
       outlet: outlet.name,
+      mode: 'cloud',
     }
     const targetMeta = {
       name: business.name,
@@ -1274,6 +1291,28 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
               operationalResult.code !== 'NO_CLOUD_BUSINESS_SELECTED'
             ) {
               await persistCloudContext()
+            } else if (
+              selectedBusiness.value &&
+              operationalContext.value?.status === 'active'
+            ) {
+              try {
+                const bStore = useBusinessStore()
+                if (bStore.mode !== 'cloud') {
+                  bStore.mode = 'cloud'
+                  if (targetAdapter && typeof targetAdapter.saveBusiness === 'function') {
+                    void targetAdapter.saveBusiness({
+                      name: bStore.name,
+                      type: bStore.type,
+                      owner: bStore.owner,
+                      phone: bStore.phone,
+                      outlet: bStore.outlet,
+                      mode: 'cloud',
+                    })
+                  }
+                }
+              } catch {
+                // non-blocking
+              }
             }
           }
         } catch {

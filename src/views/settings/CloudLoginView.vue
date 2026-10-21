@@ -1276,6 +1276,7 @@ async function handleSelectOutlet(outletId) {
 function applyActivationResult(activation) {
   if (activation.ok) {
     step.value = 'done'
+    businessStore.mode = 'cloud'
     if (canSync.value) {
       void syncContextGuardStore.check()
     }
@@ -1299,6 +1300,7 @@ async function handleConfirmBusinessSwitch() {
   if (result.ok) {
     showSwitchModal.value = false
     step.value = 'done'
+    businessStore.mode = 'cloud'
     if (canSync.value) {
       void syncContextGuardStore.check()
     }

@@ -367,6 +367,21 @@ export async function bootstrapApp({
         console.error('Failed to repair legacy sale stock movements.', error)
       }
 
+      // Backfill any local transactions created while offline or in Free mode
+      if (syncFoundation?.queueService) {
+        try {
+          const { backfillUnsyncedTransactions } = await import(
+            './services/sync/syncBackfillService'
+          )
+          await backfillUnsyncedTransactions({
+            pinia,
+            queueService: syncFoundation.queueService,
+          })
+        } catch (error) {
+          console.warn('Failed to backfill unsynced transactions.', error)
+        }
+      }
+
       // P22: Single shared runtime signal bridge for native & browser events
       runtimeSignalService = runtimeSignalFactory()
       runtimeSignalService.subscribe((event) => {

@@ -14,12 +14,18 @@ import { useCartStore } from '@/stores/cartStore'
 import { useCustomerStore } from '@/stores/customerStore'
 import { useProductStore } from '@/stores/productStore'
 import { useTaxStore } from '@/stores/taxStore'
+import { useSyncPushStore } from '@/stores/syncPushStore'
+import { useSyncStatusStore } from '@/stores/syncStatusStore'
+import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { resolveLocalOperationService } from '@/services/database/localOperationService'
 import { formatCurrency } from '@/utils/formatters'
 
 const QUICK_CASH_AMOUNTS = [20000, 50000, 100000, 200000, 500000]
 
 const businessStore = useBusinessStore()
+const cloudStore = useCloudSessionStore()
+const syncPushStore = useSyncPushStore()
+const syncStatusStore = useSyncStatusStore()
 const cartStore = useCartStore()
 const taxStore = useTaxStore()
 const customerStore = useCustomerStore()
@@ -298,6 +304,20 @@ async function completePayment() {
 
     cartStore.clearCart()
     isCashModalOpen.value = false
+
+    // Direct Cloud push when online in Cloud mode
+    const isCloudMode =
+      businessStore.mode === 'cloud' || (cloudStore.isLinked && cloudStore.hasCloudAccess)
+    if (isCloudMode && syncStatusStore.online) {
+      void (async () => {
+        try {
+          await syncPushStore.pushNow()
+          await syncStatusStore.refresh()
+        } catch {
+          // If network drops, data remains safely queued in local SQLite
+        }
+      })()
+    }
   } catch (error) {
     // Failure before/while committing: surface the error, keep the cart, and
     // never show the success modal or navigate. There is no automatic retry — a
