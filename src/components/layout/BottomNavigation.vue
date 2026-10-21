@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { RouterLink, useRoute } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 import AppIcon from '@/components/base/AppIcon.vue'
 import BaseSheet from '@/components/base/BaseSheet.vue'
@@ -8,6 +8,7 @@ import { getBottomNavItems, getMoreMenuItems } from '@/navigation/operationalMen
 import { useBusinessStore } from '@/stores/businessStore'
 
 const route = useRoute()
+const router = useRouter()
 const businessStore = useBusinessStore()
 const showMore = ref(false)
 
@@ -16,6 +17,11 @@ const moreItems = computed(() => getMoreMenuItems(businessStore.normalizedType))
 
 function isActive(path) {
   return route.path === path || route.path.startsWith(`${path}/`)
+}
+
+function handleMoreNavigate(to) {
+  showMore.value = false
+  router.push(to)
 }
 
 const isMoreActive = computed(() => moreItems.value.some((item) => isActive(item.to)))
@@ -68,7 +74,7 @@ const isMoreActive = computed(() => moreItems.value.some((item) => isActive(item
         :key="item.key"
         :to="item.to"
         class="flex min-h-14 items-center gap-3 rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm font-medium text-ink-primary shadow-soft"
-        @click="showMore = false"
+        @click.prevent="handleMoreNavigate(item.to)"
       >
         <span class="flex h-9 w-9 items-center justify-center rounded-2xl bg-primary/10 text-primary">
           <AppIcon :name="item.icon" />
