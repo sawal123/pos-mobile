@@ -33,9 +33,15 @@ export const useShiftStore = defineStore('shift', {
 
       return this.id
     },
-    closeShift() {
+    closeShift(closingBalance = null, notes = null) {
       this.isOpen = false
       this.status = 'closed'
+      if (closingBalance !== null && !Number.isNaN(Number(closingBalance))) {
+        this.closingBalance = Number(closingBalance)
+      }
+      if (notes !== null && notes !== undefined) {
+        this.notes = notes
+      }
       this.closedAt = new Date().toISOString()
     },
     setShiftSnapshot(snapshot) {
