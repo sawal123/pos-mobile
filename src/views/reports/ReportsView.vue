@@ -20,6 +20,13 @@ const selectedPeriod = ref('all')
 const showReceiptModal = ref(false)
 const copiedNotice = ref(false)
 
+const periods = [
+  { id: 'all', label: 'Semua Waktu' },
+  { id: 'today', label: 'Hari Ini' },
+  { id: '7days', label: '7 Hari' },
+  { id: 'month', label: 'Bulan Ini' },
+]
+
 function isSameDay(d1, d2) {
   return (
     d1.getFullYear() === d2.getFullYear() &&
@@ -104,34 +111,24 @@ const totalExpenses = computed(() =>
   filteredExpenses.value.reduce((sum, e) => sum + Number(e.amount || 0), 0),
 )
 
-// Net Profit (Laba Bersih) = Gross Profit - Total Expenses
+// Net Profit = Gross Profit - Total Expenses
 const netProfit = computed(() => grossProfit.value - totalExpenses.value)
 
-// Total HPP (Cost of Goods Sold) = Omzet - Gross Profit
+// Total HPP = Omzet - Gross Profit
 const totalHpp = computed(() => Math.max(0, revenue.value - grossProfit.value))
 
-// Margins
-const grossMargin = computed(() =>
-  revenue.value > 0 ? Math.round((grossProfit.value / revenue.value) * 100) : 0,
-)
-
+// Margin (%)
 const netMargin = computed(() =>
   revenue.value > 0 ? Math.round((netProfit.value / revenue.value) * 100) : 0,
-)
-
-const averageBasket = computed(() =>
-  paidTransactions.value.length > 0
-    ? Math.round(revenue.value / paidTransactions.value.length)
-    : 0,
 )
 
 // Payment Methods Breakdown
 const paymentBreakdown = computed(() => {
   const result = {
-    cash: { count: 0, total: 0, label: 'Tunai (Cash)', icon: 'cash', color: 'emerald' },
-    qris: { count: 0, total: 0, label: 'QRIS', icon: 'pos', color: 'blue' },
-    transfer: { count: 0, total: 0, label: 'Transfer Bank', icon: 'sync', color: 'indigo' },
-    other: { count: 0, total: 0, label: 'Lainnya', icon: 'more', color: 'zinc' },
+    cash: { count: 0, total: 0, label: 'Tunai (Cash)', icon: 'cash' },
+    qris: { count: 0, total: 0, label: 'QRIS', icon: 'pos' },
+    transfer: { count: 0, total: 0, label: 'Transfer Bank', icon: 'sync' },
+    other: { count: 0, total: 0, label: 'Lainnya', icon: 'more' },
   }
 
   for (const trx of paidTransactions.value) {
@@ -159,7 +156,7 @@ const paymentBreakdown = computed(() => {
   }))
 })
 
-// Top Selling Products / Services
+// Top Selling Products
 const topSellingItems = computed(() => {
   const map = new Map()
 
@@ -230,15 +227,11 @@ function copyReportReceipt() {
     `Total Transaksi : ${filteredTransactions.value.length} (${paidTransactions.value.length} lunas)`,
     `Omzet Penjualan : ${formatCurrency(revenue.value)}`,
     `Estimasi HPP    : ${formatCurrency(totalHpp.value)}`,
-    `Laba Kotor (GP) : ${formatCurrency(grossProfit.value)} (Margin ${grossMargin.value}%)`,
-    `Total Biaya     : ${formatCurrency(totalExpenses.value)} (${filteredExpenses.value.length} pos)`,
+    `Laba Kotor (GP) : ${formatCurrency(grossProfit.value)}`,
+    `Total Biaya     : ${formatCurrency(totalExpenses.value)}`,
     `----------------------------------`,
     `LABA BERSIH     : ${formatCurrency(netProfit.value)} (Margin ${netMargin.value}%)`,
     `==================================`,
-    `Metode Pembayaran:`,
-    ...paymentBreakdown.value
-      .filter((p) => p.count > 0)
-      .map((p) => `- ${p.label}: ${formatCurrency(p.total)} (${p.count}x, ${p.percent}%)`),
   ]
 
   const text = lines.join('\n')
@@ -251,367 +244,214 @@ function copyReportReceipt() {
 </script>
 
 <template>
-  <div class="space-y-5 pb-28">
-    <!-- Header Minimalist & Sticky -->
-    <header class="flex items-center justify-between gap-3">
-      <div class="flex items-center gap-3">
+  <div class="mx-auto max-w-xl space-y-4 pb-36">
+    <!-- Header Minimalis & Simple -->
+    <header class="flex items-center justify-between gap-1.5">
+      <div class="flex items-center gap-2 min-w-0">
         <button
           type="button"
-          class="flex h-10 w-10 items-center justify-center rounded-2xl border border-zinc-200/80 bg-white text-ink-primary shadow-xs transition hover:bg-zinc-50 active:scale-95"
+          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-zinc-200 bg-white text-ink-primary shadow-xs transition hover:bg-zinc-50 active:scale-95"
           aria-label="Kembali ke Home"
           @click="router.push('/home')"
         >
-          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
           </svg>
         </button>
 
-        <div>
-          <div class="flex items-center gap-2">
-            <span class="text-[11px] font-bold uppercase tracking-widest text-primary">Finansial & Analitik</span>
-            <span class="inline-flex h-1.5 w-1.5 rounded-full bg-primary" />
-          </div>
-          <h1 class="text-xl font-black tracking-tight text-ink-primary sm:text-2xl">Laporan Keuangan</h1>
+        <div class="min-w-0">
+          <p class="text-[9px] font-bold uppercase tracking-wider text-primary">Finansial</p>
+          <h1 class="text-xs sm:text-sm font-bold tracking-tight text-ink-primary whitespace-nowrap">Laporan Keuangan</h1>
         </div>
       </div>
 
       <button
         type="button"
-        class="inline-flex items-center gap-1.5 rounded-2xl border border-zinc-200 bg-white px-3 py-2 text-xs font-semibold text-zinc-700 shadow-xs transition hover:bg-zinc-50 active:scale-95"
+        class="inline-flex shrink-0 items-center gap-1 rounded-xl border border-zinc-200 bg-white px-2 py-1 text-[11px] font-semibold text-zinc-700 shadow-xs transition hover:bg-zinc-50 active:scale-95"
         @click="showReceiptModal = true"
       >
-        <svg class="h-4 w-4 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="h-3.5 w-3.5 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
         </svg>
-        Ringkasan Struk
+        <span class="whitespace-nowrap">Ringkasan Struk</span>
       </button>
     </header>
 
-    <!-- Period Filter Switcher (Eyecatching Chips) -->
-    <section class="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs">
+    <!-- Period Segmented Control (Minimal & Simple) -->
+    <section class="flex rounded-2xl bg-zinc-100 p-1 text-[11px]">
       <button
+        v-for="p in periods"
+        :key="p.id"
         type="button"
-        class="rounded-xl px-3 py-1.5 font-semibold transition active:scale-95 shrink-0"
-        :class="selectedPeriod === 'all' ? 'bg-primary text-white shadow-soft' : 'bg-white border border-zinc-200/80 text-zinc-600 hover:bg-zinc-50'"
-        @click="selectedPeriod = 'all'"
+        class="flex-1 py-1.5 px-1 text-center font-medium rounded-xl transition-all whitespace-nowrap"
+        :class="selectedPeriod === p.id ? 'bg-white font-bold text-ink-primary shadow-xs' : 'text-zinc-500 hover:text-ink-primary'"
+        @click="selectedPeriod = p.id"
       >
-        Semua Waktu
-      </button>
-
-      <button
-        type="button"
-        class="rounded-xl px-3 py-1.5 font-semibold transition active:scale-95 shrink-0"
-        :class="selectedPeriod === 'today' ? 'bg-primary text-white shadow-soft' : 'bg-white border border-zinc-200/80 text-zinc-600 hover:bg-zinc-50'"
-        @click="selectedPeriod = 'today'"
-      >
-        Hari Ini
-      </button>
-
-      <button
-        type="button"
-        class="rounded-xl px-3 py-1.5 font-semibold transition active:scale-95 shrink-0"
-        :class="selectedPeriod === '7days' ? 'bg-primary text-white shadow-soft' : 'bg-white border border-zinc-200/80 text-zinc-600 hover:bg-zinc-50'"
-        @click="selectedPeriod = '7days'"
-      >
-        7 Hari Terakhir
-      </button>
-
-      <button
-        type="button"
-        class="rounded-xl px-3 py-1.5 font-semibold transition active:scale-95 shrink-0"
-        :class="selectedPeriod === 'month' ? 'bg-primary text-white shadow-soft' : 'bg-white border border-zinc-200/80 text-zinc-600 hover:bg-zinc-50'"
-        @click="selectedPeriod = 'month'"
-      >
-        Bulan Ini
+        {{ p.label }}
       </button>
     </section>
 
-    <!-- Eyecatching Hero Card: Net Profit & Health -->
-    <section class="relative overflow-hidden rounded-3xl border border-zinc-200/80 bg-white p-5 shadow-soft space-y-4">
-      <div class="flex items-start justify-between gap-3">
-        <div>
-          <span class="text-xs font-bold uppercase tracking-wider text-ink-secondary">
-            Estimasi Laba Bersih (Net Profit)
-          </span>
-          <p
-            class="mt-1 font-mono text-3xl font-black tracking-tight"
-            :class="netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'"
-            data-testid="reports-net-profit"
-          >
-            {{ formatCurrency(netProfit) }}
-          </p>
-          <p class="mt-1 text-xs text-ink-secondary">
-            Periode: <strong class="text-ink-primary">{{ periodLabel }}</strong> &bull; Margin Bersih:
-            <strong :class="netMargin >= 0 ? 'text-emerald-700' : 'text-rose-700'">{{ netMargin }}%</strong>
-          </p>
-        </div>
+    <!-- Unified Minimalist Financial Card -->
+    <section class="rounded-3xl border border-zinc-200/80 bg-white p-4 sm:p-5 shadow-soft space-y-3">
+      <!-- Top: Label & Status Badge -->
+      <div class="flex items-center justify-between gap-2">
+        <p class="text-[11px] font-medium text-ink-secondary">
+          Estimasi Laba Bersih
+        </p>
 
         <span
-          class="shrink-0 inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold shadow-xs"
+          class="shrink-0 inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold"
           :class="netProfit >= 0 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200/60' : 'bg-rose-50 text-rose-700 border border-rose-200/60'"
         >
-          <span class="h-2 w-2 rounded-full" :class="netProfit >= 0 ? 'bg-emerald-500' : 'bg-rose-500'" />
+          <span class="h-1.5 w-1.5 rounded-full" :class="netProfit >= 0 ? 'bg-emerald-500' : 'bg-rose-500'" />
           {{ netProfit >= 0 ? 'Profit Bersih' : 'Defisit Usaha' }}
         </span>
       </div>
 
-      <!-- Quick Breakdown Strip -->
-      <div class="rounded-2xl bg-surface/70 p-3 text-xs text-ink-secondary flex items-center justify-between border border-zinc-100">
-        <span>Formula: Laba Kotor - Pengeluaran</span>
-        <span class="font-mono font-semibold text-ink-primary">
-          {{ formatCurrency(grossProfit) }} - {{ formatCurrency(totalExpenses) }}
-        </span>
-      </div>
-    </section>
-
-    <!-- 2x2 Core Metrics Grid (Omzet, Transaksi, Gross Profit, Pengeluaran) -->
-    <section class="grid grid-cols-2 gap-3">
-      <!-- Omzet -->
-      <div class="rounded-3xl border border-zinc-200/80 bg-white p-4 shadow-soft">
-        <div class="flex items-center justify-between">
-          <p class="text-xs font-bold uppercase tracking-wider text-ink-secondary">Omzet</p>
-          <span class="flex h-7 w-7 items-center justify-center rounded-xl bg-primary/10 text-primary">
-            <AppIcon name="transactions" class="h-4 w-4" />
-          </span>
-        </div>
-        <p class="mt-2 break-words font-mono text-xl font-black text-ink-primary sm:text-2xl" data-testid="reports-revenue">
-          {{ formatCurrency(revenue) }}
-        </p>
-        <span class="text-[11px] text-ink-secondary mt-1 block">
-          {{ paidTransactions.length }} order lunas
-        </span>
-      </div>
-
-      <!-- Transaksi -->
-      <div class="rounded-3xl border border-zinc-200/80 bg-white p-4 shadow-soft">
-        <div class="flex items-center justify-between">
-          <p class="text-xs font-bold uppercase tracking-wider text-ink-secondary">Transaksi</p>
-          <span class="flex h-7 w-7 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600">
-            <AppIcon name="pos" class="h-4 w-4" />
-          </span>
-        </div>
-        <p class="mt-2 text-xl font-black text-ink-primary sm:text-2xl" data-testid="reports-transactions-count">
-          {{ filteredTransactions.length }}
-        </p>
-        <span class="text-[11px] text-ink-secondary mt-1 block">
-          Rata-rata: {{ formatCurrency(averageBasket) }}
-        </span>
-      </div>
-
-      <!-- Gross Profit -->
-      <div class="rounded-3xl border border-zinc-200/80 bg-white p-4 shadow-soft">
-        <div class="flex items-center justify-between">
-          <p class="text-xs font-bold uppercase tracking-wider text-ink-secondary">Gross Profit</p>
-          <span class="flex h-7 w-7 items-center justify-center rounded-xl bg-emerald-50 text-emerald-600">
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-            </svg>
-          </span>
-        </div>
-        <p class="mt-2 break-words font-mono text-xl font-black text-success sm:text-2xl" data-testid="reports-gross-profit">
-          {{ formatCurrency(grossProfit) }}
-        </p>
-        <span class="text-[11px] text-emerald-700 font-semibold mt-1 block">
-          Margin kotor: {{ grossMargin }}%
-        </span>
-      </div>
-
-      <!-- Pengeluaran -->
-      <div class="rounded-3xl border border-zinc-200/80 bg-white p-4 shadow-soft">
-        <div class="flex items-center justify-between">
-          <p class="text-xs font-bold uppercase tracking-wider text-ink-secondary">Pengeluaran</p>
-          <span class="flex h-7 w-7 items-center justify-center rounded-xl bg-rose-50 text-rose-600">
-            <AppIcon name="expenses" class="h-4 w-4" />
-          </span>
-        </div>
-        <p class="mt-2 break-words font-mono text-xl font-black text-danger sm:text-2xl" data-testid="reports-expenses">
-          {{ formatCurrency(totalExpenses) }}
-        </p>
-        <span class="text-[11px] text-rose-700 font-semibold mt-1 block">
-          {{ filteredExpenses.length }} pencatatan biaya
-        </span>
-      </div>
-    </section>
-
-    <!-- Visual Waterfall Bar: Alur Omzet -> HPP -> Beban -> Laba -->
-    <section class="rounded-3xl border border-zinc-200/80 bg-white p-5 shadow-soft space-y-3">
-      <div class="flex items-center justify-between">
-        <h3 class="text-sm font-bold text-ink-primary">Struktur Alokasi Pendapatan</h3>
-        <span class="text-xs font-semibold text-primary">{{ periodLabel }}</span>
-      </div>
-
-      <!-- Proportional Bar -->
-      <div class="h-4 w-full overflow-hidden rounded-full bg-zinc-100 flex shadow-inner">
-        <!-- HPP Bar -->
-        <div
-          class="bg-indigo-500 transition-all duration-500"
-          :style="{ width: `${revenue > 0 ? Math.min(100, Math.round((totalHpp / revenue) * 100)) : 0}%` }"
-          title="HPP"
-        />
-        <!-- Expense Bar -->
-        <div
-          class="bg-rose-500 transition-all duration-500"
-          :style="{ width: `${revenue > 0 ? Math.min(100, Math.round((totalExpenses / revenue) * 100)) : 0}%` }"
-          title="Pengeluaran"
-        />
-        <!-- Net Profit Bar -->
-        <div
-          class="bg-emerald-500 transition-all duration-500"
-          :style="{ width: `${revenue > 0 && netProfit > 0 ? Math.min(100, Math.round((netProfit / revenue) * 100)) : 0}%` }"
-          title="Laba Bersih"
-        />
-      </div>
-
-      <!-- Legend -->
-      <div class="grid grid-cols-3 gap-2 pt-2 border-t border-zinc-100 text-xs">
-        <div>
-          <span class="inline-flex items-center gap-1 font-semibold text-indigo-700">
-            <span class="h-2 w-2 rounded-full bg-indigo-500" />
-            Modal HPP
-          </span>
-          <p class="font-mono text-[11px] text-zinc-600 mt-0.5">{{ formatCurrency(totalHpp) }}</p>
-        </div>
-
-        <div>
-          <span class="inline-flex items-center gap-1 font-semibold text-rose-700">
-            <span class="h-2 w-2 rounded-full bg-rose-500" />
-            Biaya Usaha
-          </span>
-          <p class="font-mono text-[11px] text-zinc-600 mt-0.5">{{ formatCurrency(totalExpenses) }}</p>
-        </div>
-
-        <div>
-          <span class="inline-flex items-center gap-1 font-semibold text-emerald-700">
-            <span class="h-2 w-2 rounded-full bg-emerald-500" />
-            Sisa Bersih
-          </span>
-          <p class="font-mono text-[11px] text-zinc-600 mt-0.5">{{ formatCurrency(netProfit) }}</p>
-        </div>
-      </div>
-    </section>
-
-    <!-- Payment Channels Breakdown -->
-    <section class="rounded-3xl border border-zinc-200/80 bg-white p-5 shadow-soft space-y-3.5">
-      <div class="flex items-center justify-between">
-        <div>
-          <h3 class="text-sm font-bold text-ink-primary">Metode Pembayaran</h3>
-          <p class="text-xs text-ink-secondary mt-0.5">Distribusi penerimaan kas & digital</p>
-        </div>
-        <span class="text-xs font-semibold text-ink-secondary">{{ paidTransactions.length }} nota lunas</span>
-      </div>
-
-      <div class="space-y-3">
-        <div
-          v-for="payment in paymentBreakdown"
-          :key="payment.label"
-          class="rounded-2xl border border-zinc-100 bg-surface/60 p-3.5 space-y-2"
+      <!-- Net Profit Number & Margin -->
+      <div class="flex items-baseline justify-between gap-2">
+        <h2
+          class="font-mono text-xl sm:text-2xl font-bold tracking-tight"
+          :class="netProfit >= 0 ? 'text-emerald-600' : 'text-rose-600'"
+          data-testid="reports-net-profit"
         >
-          <div class="flex items-center justify-between">
-            <div class="flex items-center gap-2">
-              <span class="flex h-7 w-7 items-center justify-center rounded-xl bg-white border border-zinc-200 shadow-xs text-primary">
-                <AppIcon :name="payment.icon" class="h-3.5 w-3.5" />
-              </span>
-              <div>
-                <p class="text-xs font-bold text-ink-primary">{{ payment.label }}</p>
-                <p class="text-[10px] text-ink-secondary">{{ payment.count }} transaksi</p>
-              </div>
-            </div>
+          {{ formatCurrency(netProfit) }}
+        </h2>
+        <p class="text-[11px] text-ink-secondary shrink-0">
+          Margin: <span class="font-semibold" :class="netMargin >= 0 ? 'text-emerald-700' : 'text-rose-700'">{{ netMargin }}%</span>
+        </p>
+      </div>
 
-            <div class="text-right">
-              <p class="font-mono text-sm font-bold text-ink-primary">{{ formatCurrency(payment.total) }}</p>
-              <p class="text-[10px] font-semibold text-primary">{{ payment.percent }}%</p>
+      <!-- 4 Core Metrics Grid -->
+      <div class="grid grid-cols-2 gap-2 pt-3 border-t border-zinc-100">
+        <!-- Omzet -->
+        <div class="rounded-2xl bg-zinc-50/70 p-2.5 sm:p-3 border border-zinc-100 min-w-0">
+          <p class="text-[11px] font-medium text-ink-secondary">Omzet</p>
+          <p class="mt-0.5 font-mono text-xs sm:text-sm font-bold text-ink-primary truncate" data-testid="reports-revenue">
+            {{ formatCurrency(revenue) }}
+          </p>
+          <span class="text-[10px] text-zinc-400 mt-0.5 block truncate">
+            {{ paidTransactions.length }} lunas
+          </span>
+        </div>
+
+        <!-- Transaksi -->
+        <div class="rounded-2xl bg-zinc-50/70 p-2.5 sm:p-3 border border-zinc-100 min-w-0">
+          <p class="text-[11px] font-medium text-ink-secondary">Transaksi</p>
+          <p class="mt-0.5 text-xs sm:text-sm font-bold text-ink-primary truncate" data-testid="reports-transactions-count">
+            {{ filteredTransactions.length }}
+          </p>
+          <span class="text-[10px] text-zinc-400 mt-0.5 block truncate">
+            Total nota
+          </span>
+        </div>
+
+        <!-- Gross Profit -->
+        <div class="rounded-2xl bg-zinc-50/70 p-2.5 sm:p-3 border border-zinc-100 min-w-0">
+          <p class="text-[11px] font-medium text-ink-secondary">Gross Profit</p>
+          <p class="mt-0.5 font-mono text-xs sm:text-sm font-bold text-emerald-600 truncate" data-testid="reports-gross-profit">
+            {{ formatCurrency(grossProfit) }}
+          </p>
+          <span class="text-[10px] text-emerald-600/80 mt-0.5 block truncate">
+            Laba kotor
+          </span>
+        </div>
+
+        <!-- Pengeluaran -->
+        <div class="rounded-2xl bg-zinc-50/70 p-2.5 sm:p-3 border border-zinc-100 min-w-0">
+          <p class="text-[11px] font-medium text-ink-secondary">Pengeluaran</p>
+          <p class="mt-0.5 font-mono text-xs sm:text-sm font-bold text-rose-600 truncate" data-testid="reports-expenses">
+            {{ formatCurrency(totalExpenses) }}
+          </p>
+          <span class="text-[10px] text-rose-600/80 mt-0.5 block truncate">
+            {{ filteredExpenses.length }} catatan biaya
+          </span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Metode Pembayaran (Clean & Simple) -->
+    <section class="rounded-3xl border border-zinc-200/80 bg-white p-4 sm:p-5 shadow-soft space-y-3">
+      <div class="flex items-center justify-between">
+        <h3 class="text-sm font-bold text-ink-primary">Metode Pembayaran</h3>
+        <span class="text-xs text-ink-secondary">{{ paidTransactions.length }} nota lunas</span>
+      </div>
+
+      <div class="divide-y divide-zinc-100">
+        <div
+          v-for="p in paymentBreakdown"
+          :key="p.label"
+          class="flex items-center justify-between py-2.5 first:pt-0 last:pb-0 text-xs"
+        >
+          <div class="flex items-center gap-2.5 min-w-0">
+            <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-zinc-100 text-zinc-600">
+              <AppIcon :name="p.icon" class="h-3.5 w-3.5" />
+            </span>
+            <div class="min-w-0">
+              <p class="truncate font-semibold text-ink-primary">{{ p.label }}</p>
+              <p class="text-[10px] text-ink-secondary">{{ p.count }} transaksi</p>
             </div>
           </div>
-
-          <!-- Mini Progress Bar -->
-          <div class="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200/80">
-            <div
-              class="h-full bg-primary rounded-full transition-all duration-300"
-              :style="{ width: `${payment.percent}%` }"
-            />
+          <div class="text-right shrink-0">
+            <p class="font-mono font-bold text-ink-primary">{{ formatCurrency(p.total) }}</p>
+            <p class="text-[10px] text-ink-secondary">{{ p.percent }}%</p>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- Top Selling Products / Services -->
-    <section class="rounded-3xl border border-zinc-200/80 bg-white p-5 shadow-soft space-y-3.5">
+    <!-- Produk Terlaris (Clean & Simple List) -->
+    <section class="rounded-3xl border border-zinc-200/80 bg-white p-4 sm:p-5 shadow-soft space-y-3">
       <div class="flex items-center justify-between">
-        <div>
-          <h3 class="text-sm font-bold text-ink-primary">Produk / Layanan Terlaris</h3>
-          <p class="text-xs text-ink-secondary mt-0.5">Berdasarkan volume penjualan</p>
-        </div>
+        <h3 class="text-sm font-bold text-ink-primary">Produk Terlaris</h3>
         <span class="text-xs font-semibold text-primary">Top {{ topSellingItems.length }}</span>
       </div>
 
-      <div v-if="topSellingItems.length" class="space-y-2.5">
+      <div v-if="topSellingItems.length" class="divide-y divide-zinc-100">
         <div
           v-for="(item, idx) in topSellingItems"
           :key="item.name"
-          class="flex items-center justify-between rounded-2xl border border-zinc-100 bg-surface/50 p-3 transition hover:bg-surface"
+          class="flex items-center justify-between py-2.5 first:pt-0 last:pb-0 text-xs"
         >
-          <div class="flex items-center gap-3 min-w-0">
-            <!-- Rank Badge -->
-            <span
-              class="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl text-xs font-black shadow-xs"
-              :class="
-                idx === 0
-                  ? 'bg-amber-100 text-amber-800 border border-amber-200'
-                  : idx === 1
-                  ? 'bg-zinc-200 text-zinc-800 border border-zinc-300'
-                  : idx === 2
-                  ? 'bg-amber-50 text-amber-900 border border-amber-200'
-                  : 'bg-zinc-100 text-zinc-500'
-              "
-            >
+          <div class="flex items-center gap-2.5 min-w-0">
+            <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-[10px] font-bold text-zinc-600">
               {{ idx + 1 }}
             </span>
-
             <div class="min-w-0">
-              <p class="truncate text-xs font-bold text-ink-primary">{{ item.name }}</p>
-              <p class="text-[10px] text-ink-secondary">{{ item.category }} &bull; {{ item.qty }} terjual</p>
+              <p class="truncate font-semibold text-ink-primary">{{ item.name }}</p>
+              <p class="text-[10px] text-ink-secondary">{{ item.qty }} terjual</p>
             </div>
           </div>
-
           <div class="text-right shrink-0">
-            <p class="font-mono text-xs font-bold text-ink-primary">{{ formatCurrency(item.total) }}</p>
+            <p class="font-mono font-bold text-ink-primary">{{ formatCurrency(item.total) }}</p>
           </div>
         </div>
       </div>
-
-      <div v-else class="rounded-2xl border border-dashed border-zinc-200 p-6 text-center text-xs text-zinc-400 italic">
+      <div v-else class="py-4 text-center text-xs text-zinc-400">
         Belum ada item penjualan tercatat pada periode ini.
       </div>
     </section>
 
-    <!-- Expense Categories Breakdown -->
-    <section v-if="expenseCategoryBreakdown.length" class="rounded-3xl border border-zinc-200/80 bg-white p-5 shadow-soft space-y-3.5">
+    <!-- Pos Pengeluaran (Clean & Simple List, jika ada) -->
+    <section v-if="expenseCategoryBreakdown.length" class="rounded-3xl border border-zinc-200/80 bg-white p-4 sm:p-5 shadow-soft space-y-3">
       <div class="flex items-center justify-between">
-        <div>
-          <h3 class="text-sm font-bold text-ink-primary">Pos Biaya & Pengeluaran</h3>
-          <p class="text-xs text-ink-secondary mt-0.5">Klasifikasi beban operasional</p>
-        </div>
-        <span class="font-mono text-xs font-bold text-danger">{{ formatCurrency(totalExpenses) }}</span>
+        <h3 class="text-sm font-bold text-ink-primary">Pos Pengeluaran</h3>
+        <span class="font-mono text-xs font-bold text-rose-600">{{ formatCurrency(totalExpenses) }}</span>
       </div>
 
-      <div class="space-y-2">
+      <div class="divide-y divide-zinc-100">
         <div
           v-for="cat in expenseCategoryBreakdown"
           :key="cat.category"
-          class="rounded-2xl border border-zinc-100 bg-surface/50 p-3 space-y-1.5"
+          class="flex items-center justify-between py-2.5 first:pt-0 last:pb-0 text-xs"
         >
-          <div class="flex items-center justify-between text-xs">
-            <span class="font-semibold text-ink-primary">{{ cat.category }}</span>
-            <span class="font-mono font-bold text-zinc-700">
-              {{ formatCurrency(cat.total) }} ({{ cat.percent }}%)
-            </span>
+          <div>
+            <p class="font-semibold text-ink-primary">{{ cat.category }}</p>
+            <p class="text-[10px] text-ink-secondary">{{ cat.count }} catatan</p>
           </div>
-
-          <div class="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200/80">
-            <div
-              class="h-full bg-rose-500 rounded-full transition-all duration-300"
-              :style="{ width: `${cat.percent}%` }"
-            />
+          <div class="text-right">
+            <p class="font-mono font-bold text-ink-primary">{{ formatCurrency(cat.total) }}</p>
+            <p class="text-[10px] text-ink-secondary">{{ cat.percent }}%</p>
           </div>
         </div>
       </div>
