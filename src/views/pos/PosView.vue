@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 
@@ -13,17 +13,27 @@ import ProductCard from '@/components/pos/ProductCard.vue'
 import { useCartStore } from '@/stores/cartStore'
 import { useProductStore } from '@/stores/productStore'
 import { useTaxStore } from '@/stores/taxStore'
+import { useCloudSessionStore } from '@/stores/cloudSessionStore'
+import { useSyncPullStore } from '@/stores/syncPullStore'
 import { formatCurrency } from '@/utils/formatters'
 
 const productStore = useProductStore()
 const cartStore = useCartStore()
 const taxStore = useTaxStore()
+const cloudStore = useCloudSessionStore()
+const syncPullStore = useSyncPullStore()
 const router = useRouter()
 
 const { filterCategories, filteredProducts, searchQuery, selectedCategory } = storeToRefs(productStore)
 const { items, subtotal, tax, total } = storeToRefs(cartStore)
 
 const showCartSheet = ref(false)
+
+onMounted(async () => {
+  if (cloudStore.isLinked && cloudStore.isOperationalCloudAccess && productStore.products.length === 0) {
+    await syncPullStore.ensureCatalogLoaded()
+  }
+})
 
 function openCartSheet() {
   if (!items.value.length) {
@@ -79,6 +89,16 @@ function handleCheckout() {
             @add="cartStore.addItem"
           />
         </div>
+        <BaseCard v-else-if="syncPullStore.loading" class="py-12 text-center space-y-3">
+          <div class="inline-flex size-10 items-center justify-center rounded-full bg-primary/10 text-primary animate-spin">
+            <svg class="size-5" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+          </div>
+          <p class="text-base font-semibold text-ink-primary">Memuat menu dari Cloud...</p>
+          <p class="text-xs text-ink-secondary">Mengambil katalog produk &amp; kategori terbaru dari server...</p>
+        </BaseCard>
         <BaseCard v-else class="py-10 text-center">
           <p class="text-base font-semibold text-ink-primary">Produk tidak ditemukan</p>
           <p class="mt-2 text-sm text-ink-secondary">

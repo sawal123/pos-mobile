@@ -18,6 +18,57 @@
 import { apiRequest } from './apiClient'
 
 /**
+ * Register a new Cloud account with name, email, password, and optional business_name.
+ *
+ * @param {object} payload
+ * @param {string} payload.name
+ * @param {string} payload.email
+ * @param {string} payload.password
+ * @param {string} [payload.password_confirmation]
+ * @param {string} [payload.business_name]
+ * @returns {Promise<{ok: boolean, token?: string, user?: object, error?: object}>}
+ */
+export async function cloudRegister({
+  name,
+  email,
+  password,
+  password_confirmation,
+  business_name,
+}) {
+  const result = await apiRequest('/api/auth/register', {
+    method: 'POST',
+    body: {
+      name,
+      email,
+      password,
+      password_confirmation: password_confirmation || password,
+      business_name,
+    },
+  })
+
+  if (!result.ok) {
+    return { ok: false, error: result.error }
+  }
+
+  const token = result.data?.data?.token
+  const user = result.data?.data?.user
+
+  if (!token) {
+    return {
+      ok: false,
+      error: {
+        status: 0,
+        code: 'MISSING_TOKEN',
+        message: 'Token not returned by server',
+        data: null,
+      },
+    }
+  }
+
+  return { ok: true, token, user }
+}
+
+/**
  * Login with email + password.
  * Only saves the returned token after a confirmed success response.
  *

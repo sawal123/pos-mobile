@@ -82,28 +82,9 @@ export function createSyncChangeTracker({ pinia, queueService, stores = {} }) {
   }
 
   // ---- BUSINESS ----
-  // Capture cloud-syncable profile fields before the action; after success,
-  // only queue when those fields actually changed AND the resulting mode is
-  // cloud. A mode-only change is never a business cloud mutation.
-  track(businessStore, 'setBusiness', ({ after }) => {
-    const before = captureCloudSyncableBusiness(businessStore)
-
-    after(() => {
-      if (!isCloudMode()) {
-        return
-      }
-
-      const current = captureCloudSyncableBusiness(businessStore)
-
-      if (cloudSyncableBusinessChanged(before, current)) {
-        void queueService.enqueueUpsert(
-          SYNC_ENTITY_TYPES.BUSINESS,
-          SYNC_BUSINESS_ENTITY_ID,
-          current,
-        )
-      }
-    })
-  })
+  // Business profile sync is not supported in server contract v1 (see contractMapper.js).
+  // Profile is managed on the Cloud Dashboard and adopting business identity locally
+  // must never poison the durable sync outbox or block initial Cloud downloads.
 
   // ---- PRODUCT ----
   track(productStore, 'createProduct', ({ after }) => {

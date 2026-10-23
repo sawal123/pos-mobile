@@ -24,18 +24,26 @@ export const useShiftStore = defineStore('shift', {
         ? globalThis.crypto.randomUUID()
         : `shift-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 
+      this.shiftNumber = null
       this.isOpen = true
       this.openingBalance = Number(balance) || 0
       this.openedAt = now
       this.status = 'open'
       this.closingBalance = null
       this.closedAt = null
+      this.notes = ''
 
       return this.id
     },
-    closeShift() {
+    closeShift(closingBalance = null, notes = null) {
       this.isOpen = false
       this.status = 'closed'
+      if (closingBalance !== null && !Number.isNaN(Number(closingBalance))) {
+        this.closingBalance = Number(closingBalance)
+      }
+      if (notes !== null && notes !== undefined) {
+        this.notes = notes
+      }
       this.closedAt = new Date().toISOString()
     },
     setShiftSnapshot(snapshot) {

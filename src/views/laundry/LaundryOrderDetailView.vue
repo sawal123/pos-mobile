@@ -151,7 +151,7 @@ async function submitPayment() {
     <!-- Top actions -->
     <div class="flex flex-wrap items-center justify-between gap-3">
       <BaseButton variant="ghost" size="sm" @click="router.push('/laundry/orders')">
-        ← Kembali ke Daftar
+        Kembali
       </BaseButton>
 
       <div class="flex items-center gap-2">
@@ -162,7 +162,7 @@ async function submitPayment() {
           data-testid="btn-view-receipt"
           @click="router.push(`/transactions/${order.id}/receipt`)"
         >
-          Lihat / Cetak Struk
+          Struk
         </BaseButton>
       </div>
     </div>
@@ -244,7 +244,7 @@ async function submitPayment() {
                 class="w-full sm:w-auto"
                 @click="openPaymentModal"
               >
-                Bayar Sekarang
+                Bayar
               </BaseButton>
             </div>
             <div v-else class="text-xs font-semibold text-success">
@@ -329,7 +329,7 @@ async function submitPayment() {
     <BaseCard v-else class="py-12 text-center">
       <p class="text-sm text-ink-secondary">Order tidak ditemukan.</p>
       <div class="mt-4">
-        <BaseButton @click="router.push('/laundry/orders')">Kembali ke Daftar</BaseButton>
+        <BaseButton @click="router.push('/laundry/orders')">Kembali</BaseButton>
       </div>
     </BaseCard>
 
@@ -430,7 +430,7 @@ async function submitPayment() {
             data-testid="btn-confirm-payment"
             @click="submitPayment"
           >
-            {{ isProcessingPayment ? 'Memproses...' : 'Konfirmasi Pembayaran' }}
+            {{ isProcessingPayment ? 'Memproses...' : 'Bayar' }}
           </BaseButton>
         </div>
       </div>

@@ -293,7 +293,11 @@ export async function bootstrapApp({
       }
       if (syncFoundation?.pullService) {
         const syncPullStore = useSyncPullStore(pinia)
-        syncPullStore.init({ pullService: syncFoundation.pullService })
+        syncPullStore.init({
+          pullService: syncFoundation.pullService,
+          adapter,
+          scheduler: persistence,
+        })
       }
       if (syncFoundation?.bootstrapService) {
         const syncBootstrapStore = useSyncBootstrapStore(pinia)
@@ -365,6 +369,22 @@ export async function bootstrapApp({
         }
       } catch (error) {
         console.error('Failed to repair legacy sale stock movements.', error)
+      }
+
+      // Backfill any local transactions created while offline or in Free mode
+      if (syncFoundation?.queueService) {
+        try {
+          const { backfillUnsyncedTransactions } = await import(
+            './services/sync/syncBackfillService'
+          )
+          await backfillUnsyncedTransactions({
+            pinia,
+            queueService: syncFoundation.queueService,
+            adapter: persistence.adapter,
+          })
+        } catch (error) {
+          console.warn('Failed to backfill unsynced transactions.', error)
+        }
       }
 
       // P22: Single shared runtime signal bridge for native & browser events

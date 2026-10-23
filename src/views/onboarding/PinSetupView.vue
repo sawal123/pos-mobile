@@ -38,7 +38,7 @@ function savePin() {
     </BaseCard>
 
     <div class="flex justify-end">
-      <BaseButton size="lg" @click="savePin">Simpan dan Buka Shift</BaseButton>
+      <BaseButton size="lg" @click="savePin">Simpan</BaseButton>
     </div>
   </div>
 </template>

@@ -64,9 +64,8 @@ function hasMeaningfulShift(value) {
     value &&
       (value.isOpen === true ||
         value.id ||
-        value.shiftNumber ||
-        value.status ||
-        value.openedAt ||
+        (value.shiftNumber && value.openedAt) ||
+        value.status === 'open' ||
         value.closedAt),
   )
 }
@@ -626,6 +625,10 @@ export async function inspectCloudFirstWorkspace({
       (pullBinding && pullBinding.mode === 'cloud_first_read' && pullBinding.status === 'initializing')
     )
 
+    const meaningfulQueue = (syncQueue ?? []).filter(
+      (item) => item && item.entityType !== 'business' && item.entity_type !== 'business',
+    )
+
     if (isInterruptedInitialization) {
       const interruptedContext = pullBinding?.businessId != null ? pullBinding : initJournal
       const expected = extractContextIdentity(targetContext)
@@ -643,10 +646,10 @@ export async function inspectCloudFirstWorkspace({
       }
 
       // Operational data: Distinguish previously applied remote rows from newly created local operational data
-      if (hasLocalOperationalTransactions(storedTransactions, syncQueue, identityMap, serverVersions)) reasons.push('transactions')
-      if (hasLocalOperationalCash(storedCash, syncQueue, identityMap, serverVersions)) reasons.push('cash')
-      if (hasLocalOperationalShift(storedShift, syncQueue, identityMap, serverVersions)) reasons.push('shift')
-      if (hasRows(syncQueue)) reasons.push('sync_queue')
+      if (hasLocalOperationalTransactions(storedTransactions, meaningfulQueue, identityMap, serverVersions)) reasons.push('transactions')
+      if (hasLocalOperationalCash(storedCash, meaningfulQueue, identityMap, serverVersions)) reasons.push('cash')
+      if (hasLocalOperationalShift(storedShift, meaningfulQueue, identityMap, serverVersions)) reasons.push('shift')
+      if (hasRows(meaningfulQueue)) reasons.push('sync_queue')
       if (pushBinding || inflight || bootstrap || (pullBinding && pullBinding.status === 'completed')) {
         reasons.push('sync_metadata')
       }
@@ -657,7 +660,7 @@ export async function inspectCloudFirstWorkspace({
       if (hasRows(storedTransactions)) reasons.push('transactions')
       if (hasRows(storedCash?.entries)) reasons.push('cash')
       if (hasMeaningfulShift(storedShift)) reasons.push('shift')
-      if (hasRows(syncQueue)) reasons.push('sync_queue')
+      if (hasRows(meaningfulQueue)) reasons.push('sync_queue')
       if (pushBinding || pullBinding || inflight || bootstrap || identityMap || serverVersions) {
         reasons.push('sync_metadata')
       }

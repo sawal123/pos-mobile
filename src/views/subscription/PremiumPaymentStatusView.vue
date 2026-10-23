@@ -139,7 +139,7 @@ onBeforeUnmount(() => {
         Tidak ada pembayaran Premium yang sedang diproses.
       </p>
       <BaseButton data-testid="status-back-cta" @click="goToSettings">
-        Kembali ke Pengaturan
+        Kembali
       </BaseButton>
     </BaseCard>
 
@@ -216,7 +216,7 @@ onBeforeUnmount(() => {
           </div>
         </dl>
         <BaseButton data-testid="success-back-cta" @click="goToSettings">
-          Kembali ke Pengaturan
+          Kembali
         </BaseButton>
       </BaseCard>
 
@@ -226,7 +226,7 @@ onBeforeUnmount(() => {
           data-testid="payment-resume-cta"
           @click="handleResume"
         >
-          Lanjutkan Pembayaran
+          Lanjut
         </BaseButton>
         <BaseButton
           variant="secondary"
@@ -234,10 +234,10 @@ onBeforeUnmount(() => {
           :disabled="checkoutStore.isCreating"
           @click="handleRefresh"
         >
-          Perbarui Status
+          Perbarui
         </BaseButton>
         <BaseButton variant="ghost" data-testid="payment-back-cta" @click="goToSettings">
-          Kembali ke Pengaturan
+          Kembali
         </BaseButton>
       </div>
     </template>

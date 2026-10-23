@@ -134,7 +134,7 @@ function handleDeleteCategory(category) {
 
           <div class="flex flex-wrap gap-2">
             <BaseButton size="sm" variant="secondary" @click="openEditModal(category)">Edit</BaseButton>
-            <BaseButton size="sm" variant="danger" @click="handleDeleteCategory(category)">Delete</BaseButton>
+            <BaseButton size="sm" variant="danger" @click="handleDeleteCategory(category)">Hapus</BaseButton>
           </div>
         </div>
       </div>

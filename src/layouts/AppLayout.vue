@@ -5,6 +5,7 @@ import { RouterView, useRoute } from 'vue-router'
 import AppHeader from '@/components/layout/AppHeader.vue'
 import BottomNavigation from '@/components/layout/BottomNavigation.vue'
 import TabletNavRail from '@/components/layout/TabletNavRail.vue'
+import OfflineSyncPromptModal from '@/components/sync/OfflineSyncPromptModal.vue'
 
 const route = useRoute()
 const isSidebarDrawerOpen = ref(false)
@@ -80,6 +81,9 @@ onUnmounted(() => {
         <BottomNavigation />
       </div>
     </div>
+
+    <!-- Modal to prompt sync when internet reconnects with unsynced transactions -->
+    <OfflineSyncPromptModal />
   </div>
 </template>
 

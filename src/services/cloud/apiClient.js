@@ -14,8 +14,9 @@
  */
 
 export function resolveBaseUrl(customBase) {
+  const envBase = import.meta.env?.VITE_API_BASE_URL
   const raw = (
-    customBase !== undefined ? customBase : (import.meta.env?.VITE_API_BASE_URL ?? '')
+    customBase !== undefined ? customBase : (envBase && envBase.trim() ? envBase : 'https://pos.eradig.my.id')
   ).trim()
   return raw.replace(/\/+$/, '').replace(/\/api$/, '')
 }

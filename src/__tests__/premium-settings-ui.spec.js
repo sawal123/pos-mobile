@@ -370,7 +370,7 @@ describe('Settings — Premium state', () => {
     expect(wrapper.find('[data-testid="cloud-access-status"]').text()).toContain('Tidak aktif')
   })
 
-  it('unlocks the sync feature and routes to the cloud page', async () => {
+  it('unlocks the sync feature and routes to the sync page', async () => {
     const context = prepareContext()
     setCloudContext(context, { subscription: { plan: 'pro', status: 'active' } })
     const wrapper = await mountSettings(context)
@@ -382,7 +382,7 @@ describe('Settings — Premium state', () => {
     await sync.trigger('click')
     await flushPromises()
 
-    expect(context.router.currentRoute.value.name).toBe('cloud')
+    expect(context.router.currentRoute.value.name).toBe('sync')
   })
 })
 
