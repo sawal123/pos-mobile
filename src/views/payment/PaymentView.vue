@@ -509,7 +509,7 @@ function goToTransactions() {
           data-testid="desktop-submit-payment"
           @click="completePayment"
         >
-          Selesaikan Pembayaran
+          <span>Bayar<span class="sr-only"> (Selesaikan Pembayaran)</span></span>
         </BaseButton>
       </div>
 
@@ -538,7 +538,7 @@ function goToTransactions() {
           data-testid="mobile-submit-payment"
           @click="completePayment"
         >
-          Selesaikan Pembayaran
+          <span>Bayar<span class="sr-only"> (Selesaikan Pembayaran)</span></span>
         </BaseButton>
       </div>
     </div>
@@ -636,7 +636,7 @@ function goToTransactions() {
             @click="fillExactAmount"
             class="flex-1 shrink-0 rounded-xl bg-primary/10 border border-primary/20 px-2.5 py-1.5 text-xs font-bold text-primary hover:bg-primary/20 active:scale-95 transition cursor-pointer"
           >
-            Uang Pas
+            <span><span class="sr-only">Uang </span>Pas</span>
           </button>
           <button
             v-for="amount in quickCashAmounts"
@@ -708,7 +708,7 @@ function goToTransactions() {
             @click="isCashModalOpen = false"
             class="flex-1 h-10 rounded-xl bg-zinc-800 text-xs font-bold text-white hover:bg-zinc-900 active:scale-95 transition cursor-pointer"
           >
-            Simpan Nominal
+            Simpan
           </button>
         </div>
       </div>

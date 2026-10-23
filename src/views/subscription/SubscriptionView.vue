@@ -681,7 +681,7 @@ onMounted(() => {
               :data-testid="`plan-select-${option.code}`"
               @click="handleSelectOption(option)"
             >
-              {{ selectedOptionKey === option.key ? 'Paket dipilih' : 'Pilih paket ini' }}
+              {{ selectedOptionKey === option.key ? 'Dipilih' : 'Pilih' }}
             </BaseButton>
           </div>
         </div>
@@ -721,7 +721,7 @@ onMounted(() => {
         data-testid="continue-cta"
         @click="handleContinue"
       >
-        {{ isCheckoutAvailable ? 'Lanjutkan' : 'Checkout belum tersedia' }}
+        {{ isCheckoutAvailable ? 'Lanjut' : 'Belum Tersedia' }}
       </BaseButton>
 
       <p
@@ -767,7 +767,7 @@ onMounted(() => {
             data-testid="auth-modal-login-btn"
             @click="handleGoToLogin"
           >
-            Masuk ke Akun Cloud
+            Masuk
           </BaseButton>
 
           <BaseButton
@@ -777,7 +777,7 @@ onMounted(() => {
             data-testid="auth-modal-register-btn"
             @click="handleOpenRegister"
           >
-            Daftar Akun Cloud Baru
+            Daftar
           </BaseButton>
 
           <BaseButton

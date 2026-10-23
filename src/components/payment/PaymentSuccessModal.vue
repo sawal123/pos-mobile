@@ -104,7 +104,7 @@ const happenedAt = computed(() => props.summary?.paidAt || props.summary?.create
           data-testid="success-new-transaction"
           @click="$emit('new-transaction')"
         >
-          Transaksi Baru / Kembali ke POS
+          <span>Selesai<span class="sr-only"> / Transaksi Baru</span></span>
         </BaseButton>
         <div class="grid grid-cols-2 gap-2">
           <BaseButton
@@ -112,14 +112,14 @@ const happenedAt = computed(() => props.summary?.paidAt || props.summary?.create
             data-testid="success-view-receipt"
             @click="$emit('view-receipt')"
           >
-            Lihat Struk
+            <span class="sr-only">Lihat </span>Struk
           </BaseButton>
           <BaseButton
             variant="secondary"
             data-testid="success-view-transactions"
             @click="$emit('view-transactions')"
           >
-            Lihat Transaksi
+            <span class="sr-only">Lihat </span>Riwayat
           </BaseButton>
         </div>
       </div>

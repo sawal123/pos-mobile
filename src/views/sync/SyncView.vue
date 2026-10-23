@@ -386,7 +386,7 @@ function handleBack() {
           data-testid="btn-login-cloud"
           @click="router.push('/cloud')"
         >
-          Masuk ke Akun Cloud
+          Masuk
         </BaseButton>
 
         <template v-else>
@@ -396,7 +396,7 @@ function handleBack() {
             data-testid="btn-manage-cloud"
             @click="router.push('/cloud')"
           >
-            Kelola Akun Cloud
+            Kelola
           </BaseButton>
           <BaseButton
             size="sm"
@@ -466,8 +466,8 @@ function handleBack() {
             :disabled="isClearingCache || isSyncing"
             @click="handleClearAndPull"
           >
-            <span v-if="isClearingCache">Membersihkan Cache & Memuat...</span>
-            <span v-else>Bersihkan Cache & Muat Data Cloud</span>
+            <span v-if="isClearingCache">Memuat...</span>
+            <span v-else>Bersihkan</span>
           </BaseButton>
         </div>
       </div>
@@ -482,11 +482,11 @@ function handleBack() {
         >
           <span v-if="isSyncing" class="flex items-center justify-center gap-2">
             <span class="h-4 w-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />
-            <span>Sedang Menyinkronkan Data...</span>
+            <span>Sinkronisasi...</span>
           </span>
           <span v-else class="flex items-center justify-center gap-2">
             <AppIcon name="sync" class="h-4 w-4" />
-            <span>Sinkronkan Sekarang</span>
+            <span>Sync</span>
           </span>
         </BaseButton>
 
@@ -500,11 +500,11 @@ function handleBack() {
           >
             <span v-if="isPulling" class="flex items-center justify-center gap-2">
               <span class="h-4 w-4 rounded-full border-2 border-primary/30 border-t-primary animate-spin" />
-              <span>Mengunduh Menu & Data Cloud...</span>
+              <span>Mengunduh...</span>
             </span>
             <span v-else class="flex items-center justify-center gap-2">
               <AppIcon name="download" class="h-4 w-4" />
-              <span>Tarik Menu Dari Cloud (Download)</span>
+              <span>Tarik</span>
             </span>
           </BaseButton>
 
@@ -517,8 +517,8 @@ function handleBack() {
             :disabled="isPulling || isSyncing || isClearingCache"
             @click="handleClearAndPull"
           >
-            <span v-if="isClearingCache">Sedang Reset Cache...</span>
-            <span v-else>Bersihkan Cache & Ambil Ulang Menu Cloud</span>
+            <span v-if="isClearingCache">Reset...</span>
+            <span v-else>Bersihkan</span>
           </BaseButton>
         </div>
 
@@ -599,7 +599,7 @@ function handleBack() {
             data-testid="sync-disconnect-confirm"
             @click="confirmDisconnect"
           >
-            Ya, Putuskan & Hapus Cache
+            Putuskan
           </BaseButton>
           <BaseButton
             variant="ghost"

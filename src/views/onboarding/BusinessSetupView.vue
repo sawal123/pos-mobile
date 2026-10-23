@@ -364,7 +364,7 @@ function saveBusinessProfile() {
               <p class="mt-0.5 text-xs text-ink-secondary">Nama toko dan jenis bisnis wajib diisi.</p>
             </div>
             <BaseButton type="submit" size="lg" :disabled="!canContinue" class="w-full sm:w-auto">
-              Lanjut Setup PIN
+              <span>Lanjut<span class="sr-only"> Setup PIN</span></span>
               <svg class="ml-2" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="m9 18 6-6-6-6"/>
               </svg>

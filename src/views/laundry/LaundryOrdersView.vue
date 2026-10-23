@@ -115,7 +115,7 @@ function formatEstimatedCompletion(datetime) {
         data-testid="btn-create-order"
         @click="router.push('/laundry/orders/create')"
       >
-        + Order Baru
+        Tambah
       </BaseButton>
     </div>
 
@@ -226,7 +226,7 @@ function formatEstimatedCompletion(datetime) {
       </p>
       <div class="mt-4">
         <BaseButton @click="router.push('/laundry/orders/create')">
-          Buat Order Sekarang
+          Tambah
         </BaseButton>
       </div>
     </BaseCard>

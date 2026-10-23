@@ -779,7 +779,7 @@ async function submitOrder() {
           class="w-full sm:w-auto px-8 py-3.5 text-base font-semibold"
           @click="submitOrder"
         >
-          {{ isSubmitting ? 'Menyimpan...' : 'Simpan Order' }}
+          {{ isSubmitting ? 'Menyimpan...' : 'Simpan' }}
         </BaseButton>
       </div>
     </BaseCard>
@@ -798,7 +798,7 @@ async function submitOrder() {
           class="flex shrink-0 items-center gap-1.5 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-white shadow-md transition active:scale-95 disabled:opacity-50"
           @click="submitOrder"
         >
-          <span>{{ isSubmitting ? 'Menyimpan...' : 'Simpan Order' }}</span>
+          <span>{{ isSubmitting ? 'Menyimpan...' : 'Simpan' }}</span>
           <span aria-hidden="true">&rarr;</span>
         </button>
       </div>

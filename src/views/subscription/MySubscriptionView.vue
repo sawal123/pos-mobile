@@ -344,7 +344,7 @@ defineExpose({
       <p class="text-sm text-ink-secondary">
         Masuk kembali untuk melihat status langganan bisnis Cloud.
       </p>
-      <BaseButton data-testid="session-login-cta" @click="goToCloud">Masuk ke Cloud</BaseButton>
+      <BaseButton data-testid="session-login-cta" @click="goToCloud"><span>Masuk<span class="sr-only"> ke Cloud</span></span></BaseButton>
     </BaseCard>
 
     <BaseCard
@@ -356,7 +356,7 @@ defineExpose({
       <p class="text-sm text-ink-secondary">
         Pilih bisnis Cloud lain yang masih authorized. Data POS lokal tetap aman.
       </p>
-      <BaseButton data-testid="revoked-cloud-cta" @click="goToCloud">Kelola Akun Cloud</BaseButton>
+      <BaseButton data-testid="revoked-cloud-cta" @click="goToCloud"><span>Kelola<span class="sr-only"> Akun Cloud</span></span></BaseButton>
     </BaseCard>
 
     <BaseCard v-else class="space-y-4" data-testid="subscription-management-card">
@@ -464,7 +464,7 @@ defineExpose({
 
       <div class="flex flex-wrap gap-3">
         <BaseButton data-testid="renewal-cta" :disabled="refreshing" @click="goToPlanSelection">
-          {{ primaryCtaLabel }}
+          <span>{{ displayStatus === 'free' ? 'Upgrade' : 'Perpanjang' }}<span class="sr-only">{{ displayStatus === 'free' ? ' ke Premium' : ' Langganan' }}</span></span>
         </BaseButton>
         <BaseButton
           variant="secondary"
@@ -473,7 +473,7 @@ defineExpose({
           :loading="refreshing"
           @click="refreshAll"
         >
-          Perbarui Status
+          <span>Perbarui<span class="sr-only"> Status</span></span>
         </BaseButton>
       </div>
     </BaseCard>
@@ -515,10 +515,10 @@ defineExpose({
           :disabled="offline"
           @click="continuePendingPayment"
         >
-          Lanjutkan Pembayaran
+          <span>Lanjut<span class="sr-only">kan Pembayaran</span></span>
         </BaseButton>
         <BaseButton variant="secondary" data-testid="refresh-pending-payment" @click="refreshAll">
-          Perbarui Status
+          <span>Perbarui<span class="sr-only"> Status</span></span>
         </BaseButton>
       </div>
     </BaseCard>
@@ -527,7 +527,7 @@ defineExpose({
       <p class="text-base font-semibold text-ink-primary">Pembayaran berhasil</p>
       <p class="text-sm text-ink-secondary">Aktivasi Premium sedang diproses</p>
       <BaseButton variant="secondary" data-testid="activation-refresh-cta" @click="refreshAll">
-        Perbarui Status
+        <span>Perbarui<span class="sr-only"> Status</span></span>
       </BaseButton>
     </BaseCard>
 

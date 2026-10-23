@@ -671,7 +671,7 @@ async function handleRestoreFileChange(event) {
           data-testid="cloud-login-entry"
           @click="goToCloud"
         >
-          Masuk ke Cloud
+          Masuk
         </BaseButton>
         <template v-else>
           <BaseButton
@@ -680,7 +680,7 @@ async function handleRestoreFileChange(event) {
             data-testid="settings-my-subscription-entry"
             @click="goToSubscription"
           >
-            Langganan Saya
+            Langganan
           </BaseButton>
           <BaseButton
             size="sm"
@@ -688,7 +688,7 @@ async function handleRestoreFileChange(event) {
             data-testid="cloud-disconnect"
             @click="showDisconnectConfirm = true"
           >
-            Putuskan Cloud
+            Putuskan
           </BaseButton>
         </template>
       </div>
@@ -831,7 +831,7 @@ async function handleRestoreFileChange(event) {
         </div>
 
         <BaseButton data-testid="local-backup-now" @click="handleBackup">
-          Buat Backup Lokal
+          Backup
         </BaseButton>
       </div>
 
@@ -865,7 +865,7 @@ async function handleRestoreFileChange(event) {
           data-testid="btn-clear-cache"
           @click="showClearCacheConfirm = true"
         >
-          Hapus Data Cache
+          Hapus
         </BaseButton>
       </div>
     </BaseCard>
@@ -972,7 +972,7 @@ async function handleRestoreFileChange(event) {
 
         <div class="flex flex-wrap items-center gap-3">
           <BaseButton type="submit" data-testid="save-tax-settings" :disabled="!taxRateValid">
-            Simpan Pengaturan
+            Simpan
           </BaseButton>
           <span
             v-if="taxFeedback"
@@ -1047,7 +1047,7 @@ async function handleRestoreFileChange(event) {
           data-testid="btn-select-printer"
           @click="handleSelectPrinterClick"
         >
-          Pilih Printer
+          Pilih
         </BaseButton>
         <BaseButton
           variant="secondary"
@@ -1055,7 +1055,7 @@ async function handleRestoreFileChange(event) {
           data-testid="btn-test-print"
           @click="handleTestPrint"
         >
-          Tes Print
+          Tes
         </BaseButton>
         <BaseButton
           variant="ghost"
@@ -1063,7 +1063,7 @@ async function handleRestoreFileChange(event) {
           data-testid="btn-forget-printer"
           @click="handleForgetPrinter"
         >
-          Lupakan Printer
+          Lupakan
         </BaseButton>
       </div>
 
@@ -1090,7 +1090,7 @@ async function handleRestoreFileChange(event) {
         </div>
 
         <BaseButton block data-testid="locked-feature-cta" @click="goToSubscription">
-          Lihat Paket Premium
+          Upgrade
         </BaseButton>
       </div>
     </BaseModal>
@@ -1143,7 +1143,7 @@ async function handleRestoreFileChange(event) {
             data-testid="settings-disconnect-confirm"
             @click="confirmDisconnect"
           >
-            Ya, Putuskan & Hapus Cache
+            Putuskan
           </BaseButton>
           <BaseButton
             variant="ghost"
@@ -1175,7 +1175,7 @@ async function handleRestoreFileChange(event) {
             :loading="isClearingCache"
             @click="handleClearCache"
           >
-            Ya, Hapus Cache
+            Hapus
           </BaseButton>
           <BaseButton
             variant="ghost"

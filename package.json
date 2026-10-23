@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "android:live": "npx cap run android -l --host localhost --port 5173 --forwardPorts 5173:5173",
+    "android": "npm run build && npx cap sync android && npx cap run android",
     "build": "vite build",
     "preview": "vite preview",
     "test:unit": "vitest",

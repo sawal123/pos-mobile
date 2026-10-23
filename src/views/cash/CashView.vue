@@ -103,13 +103,13 @@ const filteredEntries = computed(() => {
       </div>
       <button
         type="button"
-        class="inline-flex items-center gap-1.5 rounded-2xl bg-primary px-3.5 py-2 text-xs font-semibold text-white shadow-soft hover:bg-primary-light active:scale-[0.98] transition"
+        class="inline-flex items-center gap-1.5 rounded-2xl bg-primary px-3.5 py-2 text-xs font-semibold text-white shadow-soft hover:bg-primary-light active:scale-[0.98] transition whitespace-nowrap"
         @click="openRecordModal('in')"
       >
         <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
         </svg>
-        <span>Catat Kas</span>
+        <span>Catat</span>
       </button>
     </div>
 
@@ -164,24 +164,24 @@ const filteredEntries = computed(() => {
       <div class="grid grid-cols-2 gap-2.5 pt-1">
         <button
           type="button"
-          class="flex items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-2.5 text-xs font-semibold text-white shadow-soft hover:bg-emerald-700 active:scale-[0.98] transition"
+          class="flex items-center justify-center gap-1.5 rounded-2xl bg-emerald-600 px-4 py-2.5 text-xs font-semibold text-white shadow-soft hover:bg-emerald-700 active:scale-[0.98] transition whitespace-nowrap"
           @click="openRecordModal('in')"
         >
-          <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+          <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
           </svg>
-          <span>+ Kas Masuk</span>
+          <span>Masuk<span class="sr-only"> Kas Masuk</span></span>
         </button>
 
         <button
           type="button"
-          class="flex items-center justify-center gap-2 rounded-2xl bg-rose-600 px-4 py-2.5 text-xs font-semibold text-white shadow-soft hover:bg-rose-700 active:scale-[0.98] transition"
+          class="flex items-center justify-center gap-1.5 rounded-2xl bg-rose-600 px-4 py-2.5 text-xs font-semibold text-white shadow-soft hover:bg-rose-700 active:scale-[0.98] transition whitespace-nowrap"
           @click="openRecordModal('out')"
         >
-          <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+          <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14" />
           </svg>
-          <span>- Kas Keluar</span>
+          <span>Keluar<span class="sr-only"> Kas Keluar</span></span>
         </button>
       </div>
     </div>
@@ -403,7 +403,7 @@ const filteredEntries = computed(() => {
             :variant="cashForm.type === 'in' ? 'primary' : 'danger'"
             @click="handleManualCash"
           >
-            Catat {{ cashForm.type === 'in' ? 'Kas Masuk' : 'Kas Keluar' }}
+            <span>Simpan<span class="sr-only"> Catat {{ cashForm.type === 'in' ? 'Kas Masuk' : 'Kas Keluar' }}</span></span>
           </BaseButton>
         </div>
       </div>

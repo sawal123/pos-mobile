@@ -100,7 +100,7 @@ function getCategoryBadgeClass(category) {
         <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
         </svg>
-        <span class="whitespace-nowrap">Catat Biaya</span>
+        <span class="whitespace-nowrap">Catat</span>
       </button>
     </header>
 
@@ -252,7 +252,7 @@ function getCategoryBadgeClass(category) {
         </div>
         <div v-if="!searchQuery && selectedCategory === 'all'" class="pt-2">
           <BaseButton size="sm" @click="goToCreate">
-            + Catat Pengeluaran Pertama
+            + Catat
           </BaseButton>
         </div>
       </div>

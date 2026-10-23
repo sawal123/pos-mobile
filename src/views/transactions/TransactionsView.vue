@@ -113,7 +113,7 @@ const filteredTransactions = computed(() => {
         "
         @click="activeFilter = 'cash'"
       >
-        Tunai (Cash)
+        Tunai
       </button>
       <button
         type="button"

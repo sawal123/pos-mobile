@@ -34,7 +34,7 @@ defineProps({
   },
   actionLabel: {
     type: String,
-    default: 'Kunci Pesanan',
+    default: 'Bayar',
   },
 })
 

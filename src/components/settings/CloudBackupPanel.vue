@@ -60,7 +60,7 @@ const busyLabel = computed(() => {
     case CLOUD_BACKUP_PHASE.UPLOADING:
       return 'Mengunggah…'
     default:
-      return 'Backup Sekarang'
+      return 'Backup'
   }
 })
 
@@ -261,7 +261,7 @@ watch(
         data-testid="cloud-backup-locked-cta"
         @click="emit('locked')"
       >
-        Lihat Paket Premium
+        Upgrade
       </BaseButton>
     </div>
 
@@ -278,7 +278,7 @@ watch(
           :disabled="store.isBusy"
           @click="store.retry()"
         >
-          Coba Lagi
+          Retry
         </BaseButton>
       </div>
 
@@ -435,7 +435,7 @@ watch(
                 :disabled="!restoreStore.canConfirm"
                 @click="handleConfirmRestore"
               >
-                Konfirmasi Restore
+                Restore
               </BaseButton>
               <BaseButton
                 size="sm"

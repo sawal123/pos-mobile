@@ -222,7 +222,7 @@ watch(
             Batal
           </BaseButton>
           <BaseButton type="submit">
-            {{ isEditMode ? 'Simpan Perubahan' : 'Simpan Customer' }}
+            Simpan
           </BaseButton>
         </div>
       </form>

@@ -1606,7 +1606,7 @@ async function handleOpenRegister() {
           :loading="cloudStore.loading"
           @click="requestDisconnect"
         >
-          Putuskan Cloud
+          Putuskan
         </BaseButton>
       </BaseCard>
 
@@ -1641,7 +1641,7 @@ async function handleOpenRegister() {
                   variant="primary"
                   @click="router.push({ name: 'pin-setup' })"
                 >
-                  Lanjut ke Setup PIN Kasir
+                  Lanjut
                 </BaseButton>
               </div>
             </div>
@@ -1693,7 +1693,7 @@ async function handleOpenRegister() {
             variant="secondary"
             @click="goToSubscription"
           >
-            Langganan Saya
+            Langganan
           </BaseButton>
           <BaseButton
             id="cloud-disconnect-btn"
@@ -1702,7 +1702,7 @@ async function handleOpenRegister() {
             :disabled="isAnySyncOperationBusy"
             @click="requestDisconnect"
           >
-            Putuskan Cloud
+            Putuskan
           </BaseButton>
         </div>
       </div>
@@ -2080,7 +2080,7 @@ async function handleOpenRegister() {
           :loading="syncReconciliationStore.loading"
           @click="handleReconcileRequests"
         >
-          Periksa Ulang Status Pengiriman
+          Periksa
         </BaseButton>
 
         <p
@@ -2125,7 +2125,7 @@ async function handleOpenRegister() {
             @click="handleSyncAll"
           >
             <AppIcon name="sync" class="h-4 w-4" />
-            <span class="ml-1.5">Sync Semua</span>
+            <span class="ml-1.5">Sync</span>
           </BaseButton>
         </div>
 
@@ -2244,7 +2244,7 @@ async function handleOpenRegister() {
             @click="handlePullNow({ initialCloudRead: true })"
           >
             <AppIcon name="download" class="h-4 w-4" />
-            <span class="ml-1.5">Muat Data Cloud</span>
+            <span class="ml-1.5">Muat</span>
           </BaseButton>
         </div>
 
@@ -2275,7 +2275,7 @@ async function handleOpenRegister() {
             @click="handleClearAndPull"
           >
             <AppIcon name="trash" class="h-4 w-4 text-amber-700" />
-            <span class="ml-1.5 font-medium">Bersihkan Cache & Muat Data Cloud</span>
+            <span class="ml-1.5 font-medium">Bersihkan</span>
           </BaseButton>
         </div>
       </div>
@@ -2319,7 +2319,7 @@ async function handleOpenRegister() {
                 :loading="syncConflictStore.loading"
                 @click="handleUseServer(conflict.id)"
               >
-                Gunakan Cloud
+                Cloud
               </BaseButton>
               <BaseButton
                 :id="`keep-local-btn-${conflict.id}`"
@@ -2329,7 +2329,7 @@ async function handleOpenRegister() {
                 :loading="syncConflictStore.loading"
                 @click="handleKeepLocal(conflict.id)"
               >
-                Pertahankan Lokal
+                Lokal
               </BaseButton>
             </div>
           </div>
@@ -2426,7 +2426,7 @@ async function handleOpenRegister() {
               @click="handleRefreshActivityLog"
             >
               <AppIcon name="refresh" class="h-4 w-4" />
-              <span class="ml-1.5">Muat Ulang</span>
+              <span class="ml-1.5">Refresh</span>
             </BaseButton>
             <BaseButton
               v-if="syncActivityLogStore.entries.length > 0"
@@ -2464,7 +2464,7 @@ async function handleOpenRegister() {
               :disabled="isAnySyncOperationBusy"
               @click="handleConfirmClearActivityLog"
             >
-              Ya, Hapus Riwayat
+              Hapus
             </BaseButton>
             <BaseButton
               id="sync-activity-cancel-clear-btn"
@@ -2556,7 +2556,7 @@ async function handleOpenRegister() {
         :loading="cloudStore.loading"
         @click="requestDisconnect"
       >
-        Putuskan Cloud
+        Putuskan
       </BaseButton>
     </BaseCard>
 
@@ -2585,7 +2585,7 @@ async function handleOpenRegister() {
           size="sm"
           @click="confirmDisconnect"
         >
-          Kembali ke Login
+          Kembali
         </BaseButton>
       </div>
     </BaseCard>
@@ -2672,7 +2672,7 @@ async function handleOpenRegister() {
           :disabled="cloudStore.loading"
           @click="handleConfirmLink"
         >
-          Hubungkan Bisnis
+          Hubungkan
         </BaseButton>
         <BaseButton
           id="cloud-cancel-link-btn"
@@ -2706,7 +2706,7 @@ async function handleOpenRegister() {
           :disabled="cloudStore.loading"
           @click="handleRelink"
         >
-          Pilih Bisnis Cloud
+          Pilih
         </BaseButton>
         <BaseButton
           id="cloud-unlinked-disconnect"
@@ -2714,7 +2714,7 @@ async function handleOpenRegister() {
           :disabled="isAnySyncOperationBusy"
           @click="requestDisconnect"
         >
-          Putuskan Cloud
+          Putuskan
         </BaseButton>
       </div>
     </BaseCard>
@@ -2734,7 +2734,7 @@ async function handleOpenRegister() {
           "
           @click="authMode = 'login'"
         >
-          Masuk Akun
+          Masuk
         </button>
         <button
           id="cloud-tab-register"
@@ -2747,7 +2747,7 @@ async function handleOpenRegister() {
           "
           @click="authMode = 'register'"
         >
-          Daftar Akun Baru
+          Daftar
         </button>
       </div>
 
@@ -2802,7 +2802,7 @@ async function handleOpenRegister() {
           :disabled="!email || !password || cloudStore.loading"
           @click="handleLogin"
         >
-          Masuk ke Cloud
+          Masuk
         </BaseButton>
 
         <div class="pt-2 text-center">
@@ -2897,7 +2897,7 @@ async function handleOpenRegister() {
           :disabled="!registerName || !registerEmail || !registerPassword || !registerPasswordConfirmation || cloudStore.loading"
           @click="handleRegister"
         >
-          Daftar Akun Cloud
+          Daftar
         </BaseButton>
 
         <div class="pt-2 text-center">
@@ -2933,7 +2933,7 @@ async function handleOpenRegister() {
             :loading="cloudStore.loading"
             @click="confirmDisconnect"
           >
-            Ya, Putuskan & Hapus Cache
+            Putuskan
           </BaseButton>
           <BaseButton
             id="cloud-disconnect-cancel"
@@ -2970,7 +2970,7 @@ async function handleOpenRegister() {
             :disabled="isAnySyncOperationBusy"
             @click="handleConfirmBusinessSwitch"
           >
-            {{ switchPrompt?.confirmLabel ?? 'Simpan & Beralih' }}
+            {{ switchPrompt?.confirmLabel ?? 'Beralih' }}
           </BaseButton>
           <BaseButton
             id="business-switch-cancel"

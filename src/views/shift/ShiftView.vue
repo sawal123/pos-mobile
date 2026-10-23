@@ -311,19 +311,21 @@ function submitQuickMutation() {
             size="sm"
             variant="secondary"
             data-testid="btn-quick-mutation"
+            class="whitespace-nowrap"
             @click="openQuickMutation('in')"
           >
             <AppIcon name="cash" class="h-4 w-4 mr-1.5 text-emerald-600" />
-            Mutasi Kas
+            Mutasi
           </BaseButton>
 
           <BaseButton
             size="sm"
             variant="danger"
             data-testid="btn-trigger-close-shift"
+            class="whitespace-nowrap"
             @click="openCloseShiftFlow"
           >
-            Tutup Shift
+            Tutup
           </BaseButton>
         </div>
       </BaseCard>
@@ -540,7 +542,7 @@ function submitQuickMutation() {
         </div>
 
         <BaseButton block size="lg" data-testid="btn-open-shift" @click="handleOpenShift">
-          Buka Shift Sekarang
+          Buka
         </BaseButton>
       </BaseCard>
     </template>
@@ -654,7 +656,7 @@ function submitQuickMutation() {
             data-testid="btn-confirm-close"
             @click="confirmCloseShift"
           >
-            Konfirmasi Tutup
+            Tutup
           </BaseButton>
         </div>
       </div>
@@ -723,7 +725,7 @@ function submitQuickMutation() {
             data-testid="btn-summary-home"
             @click="showCloseSummaryModal = false; router.push('/home')"
           >
-            Kembali ke Beranda
+            Beranda
           </BaseButton>
         </div>
       </div>
@@ -746,7 +748,7 @@ function submitQuickMutation() {
             :class="mutationType === 'in' ? 'bg-white text-emerald-700 shadow-xs' : 'text-ink-secondary'"
             @click="mutationType = 'in'; mutationCategory = 'Kas Masuk Laci'"
           >
-            Kas Masuk (+)
+            Masuk
           </button>
           <button
             type="button"
@@ -754,7 +756,7 @@ function submitQuickMutation() {
             :class="mutationType === 'out' ? 'bg-white text-danger shadow-xs' : 'text-ink-secondary'"
             @click="mutationType = 'out'; mutationCategory = 'Pengeluaran Laci'"
           >
-            Kas Keluar (-)
+            Keluar
           </button>
         </div>
 
@@ -801,7 +803,7 @@ function submitQuickMutation() {
             data-testid="btn-submit-mutation"
             @click="submitQuickMutation"
           >
-            Simpan Mutasi
+            Simpan
           </BaseButton>
         </div>
       </div>

@@ -170,7 +170,7 @@ async function handlePay() {
           :loading="checkoutStore.isCreating"
           @click="handlePay"
         >
-          Lanjut ke Pembayaran
+          Bayar
         </BaseButton>
         <BaseButton variant="ghost" data-testid="checkout-cancel" @click="goToSubscription">
           Batal
