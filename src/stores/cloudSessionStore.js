@@ -5,6 +5,7 @@ import { normalizeCloudBusinessType } from '@/data/businessTemplates'
 import { useBusinessStore } from '@/stores/businessStore'
 import {
   cloudLogin,
+  cloudRegister,
   fetchMobileContext,
   registerDevice,
   cloudLogout,
@@ -338,6 +339,14 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     if (scheduler) {
       _scheduler = scheduler
     }
+  }
+
+  function getPersistenceAdapter() {
+    return _adapter
+  }
+
+  function getPersistenceScheduler() {
+    return _scheduler
   }
 
   function toSelectedBusiness(business) {
@@ -749,6 +758,84 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   }
 
   /**
+   * Register flow:
+   * 1. Register with /api/auth/register
+   * 2. Save token to secure storage
+   * 3. Fetch /api/mobile/context
+   * 4. Store context in state
+   * 5. Persist initial cloud context
+   *
+   * Returns { ok, businesses, error }.
+   */
+  async function register(payload) {
+    loading.value = true
+    error.value = null
+
+    try {
+      const regResult = await cloudRegister(payload)
+
+      if (!regResult.ok) {
+        error.value = regResult.error?.message ?? 'Registrasi gagal'
+        return { ok: false, error: regResult.error }
+      }
+
+      await saveToken(regResult.token)
+
+      user.value = regResult.user
+        ? {
+            id: regResult.user.id,
+            name: regResult.user.name,
+            email: regResult.user.email,
+          }
+        : null
+
+      const contextDeviceId = await ensureDeviceIdentifier()
+      const contextResult = await fetchMobileContext(regResult.token, {
+        deviceIdentifier: contextDeviceId,
+      })
+
+      if (!contextResult.ok) {
+        if (isUnauthorizedError(contextResult.error)) {
+          await handleInvalidToken()
+          return { ok: false, error: { ...contextResult.error, code: 'TOKEN_INVALID' } }
+        }
+
+        await removeToken()
+        user.value = null
+        error.value = contextResult.error?.message ?? 'Gagal mengambil context'
+        return { ok: false, error: contextResult.error }
+      }
+
+      const parsed = extractBusinesses(contextResult.data)
+
+      if (!parsed.ok) {
+        await removeToken()
+        user.value = null
+        error.value = 'Context cloud dari server tidak valid.'
+        return {
+          ok: false,
+          error: { status: 0, code: 'MALFORMED_CONTEXT', message: error.value, data: null },
+        }
+      }
+
+      businesses.value = parsed.businesses
+      hasResolvedBusinessContext.value = true
+      hasResolvedZeroBusiness.value = businesses.value.length === 0
+      sessionInvalid.value = false
+
+      capabilityState.value = 'verified'
+      capabilitiesVerifiedAt.value = new Date().toISOString()
+      contextCheckedAt.value = capabilitiesVerifiedAt.value
+
+      await persistCloudContext()
+
+      return { ok: true, businesses: businesses.value }
+    } finally {
+      loading.value = false
+    }
+  }
+
+  /**
    * Select a business from the context list.
    * Business MUST be sourced from businesses state – no arbitrary IDs.
    * Persists cloud context on change.
@@ -1033,6 +1120,13 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       activeWorkspaceId.value = result.activeWorkspaceId
       workspaceRegistry.value = result.registry
       error.value = null
+      try {
+        const { useCashierStore } = await import('@/stores/cashierStore')
+        const cashierStore = useCashierStore()
+        if (cashierStore?.activeCashier) {
+          cashierStore.activeCashier.pinConfigured = true
+        }
+      } catch {}
       return {
         ok: true,
         code: 'OPERATIONAL_CONTEXT_ACTIVATED',
@@ -1050,6 +1144,13 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       markActive()
       await persistCloudContext(_adapter, { throwOnError: true })
       error.value = null
+      try {
+        const { useCashierStore } = await import('@/stores/cashierStore')
+        const cashierStore = useCashierStore()
+        if (cashierStore?.activeCashier) {
+          cashierStore.activeCashier.pinConfigured = true
+        }
+      } catch {}
       return {
         ok: true,
         code: 'OPERATIONAL_CONTEXT_ACTIVATED',
@@ -1208,6 +1309,25 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       }
 
       clearSession()
+
+      try {
+        const bStore = useBusinessStore()
+        if (bStore.mode !== 'free') {
+          bStore.mode = 'free'
+          if (_adapter && typeof _adapter.saveBusiness === 'function') {
+            void _adapter.saveBusiness({
+              name: bStore.name,
+              type: bStore.type,
+              owner: bStore.owner,
+              phone: bStore.phone,
+              outlet: bStore.outlet,
+              mode: 'free',
+            })
+          }
+        }
+      } catch {
+        // non-blocking
+      }
 
       return { ok: true }
     } finally {
@@ -1718,10 +1838,14 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     canPerformCloudPush,
     isCashierContext,
     syncCapabilitySummary,
-    // actions
     setPersistenceAdapter,
+    getPersistenceAdapter,
+    getPersistenceScheduler,
+    adapter: computed(() => _adapter),
+    scheduler: computed(() => _scheduler),
     invalidateCloudSession: handleInvalidToken,
     login,
+    register,
     selectBusiness,
     selectOutlet,
     activateOperationalContext,

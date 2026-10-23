@@ -560,6 +560,30 @@ describe('P21: Global Sync Status & Offline Awareness', () => {
     expect(wrapper.text()).toContain('Free Mode')
   })
 
+  it('88b. displays Free Mode in AppHeader when unauthenticated even if businessStore.mode is cloud', async () => {
+    const cloudStore = useCloudSessionStore()
+    cloudStore.user = null // Not authenticated
+
+    const businessStore = useBusinessStore()
+    businessStore.mode = 'cloud'
+    businessStore.name = 'Toko Lokal'
+    businessStore.outlet = 'Utama'
+
+    const testRouter = createTestRouter()
+    await testRouter.push('/pos')
+
+    const wrapper = mount(AppHeader, {
+      global: {
+        plugins: [testRouter],
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('#sync-status-badge').exists()).toBe(false)
+    expect(wrapper.text()).toContain('Free Mode')
+    expect(wrapper.text()).not.toContain('Cloud Mode')
+  })
+
   // 89. Test AppHeader CLOUD mode
   it('89. displays SyncStatusBadge in AppHeader when authenticated in Cloud Mode', async () => {
     const cloudStore = useCloudSessionStore()

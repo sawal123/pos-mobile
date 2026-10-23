@@ -9,6 +9,7 @@ import BaseModal from '@/components/base/BaseModal.vue'
 import BaseSheet from '@/components/base/BaseSheet.vue'
 import SettingsMenuItem from '@/components/settings/SettingsMenuItem.vue'
 import CloudBackupPanel from '@/components/settings/CloudBackupPanel.vue'
+import { clearLocalCache } from '@/services/localCacheService'
 import {
   RESTORE_CONFIRMATION_MESSAGE,
   createBackupPayload,
@@ -33,6 +34,8 @@ import { useProductStore } from '@/stores/productStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import { useSubscriptionStore } from '@/stores/subscriptionStore'
 import { useSyncStatusStore } from '@/stores/syncStatusStore'
+import { useSyncPullStore } from '@/stores/syncPullStore'
+import { useSyncContextGuardStore } from '@/stores/syncContextGuardStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import { isValidTaxRate, useTaxStore } from '@/stores/taxStore'
 
@@ -47,6 +50,8 @@ const productStore = useProductStore()
 const shiftStore = useShiftStore()
 const subscriptionStore = useSubscriptionStore()
 const syncStatusStore = useSyncStatusStore()
+const syncPullStore = useSyncPullStore()
+const syncContextGuardStore = useSyncContextGuardStore()
 const transactionStore = useTransactionStore()
 const taxStore = useTaxStore()
 const router = useRouter()
@@ -216,6 +221,8 @@ const cloudCheckedLabel = computed(() => {
 })
 
 const showDisconnectConfirm = ref(false)
+const showClearCacheConfirm = ref(false)
+const isClearingCache = ref(false)
 
 function goToCloud() {
   lockedFeature.value = null
@@ -224,7 +231,42 @@ function goToCloud() {
 
 async function confirmDisconnect() {
   showDisconnectConfirm.value = false
+  await clearLocalCache({
+    adapter: cloudStore.adapter,
+    scheduler: cloudStore.scheduler,
+    resetBusiness: true,
+  })
   await cloudStore.logout()
+  setFeedback('success', 'Akun Cloud berhasil diputuskan dan data cache lokal telah dibersihkan.')
+}
+
+async function handleClearCache() {
+  isClearingCache.value = true
+  try {
+    await clearLocalCache({
+      adapter: cloudStore.adapter,
+      scheduler: cloudStore.scheduler,
+      resetBusiness: false,
+    })
+    showClearCacheConfirm.value = false
+    setFeedback('success', 'Data cache lokal berhasil dibersihkan.')
+
+    if (cloudStore.isLinked && cloudStore.isOperationalCloudAccess) {
+      try {
+        await syncContextGuardStore.check()
+        const pullRes = await syncPullStore.pullNow({ initialCloudRead: true })
+        if (pullRes.ok) {
+          setFeedback('success', 'Data cache dibersihkan dan menu produk Cloud berhasil dimuat ulang!')
+        }
+      } catch (pullErr) {
+        console.warn('Auto-pull after clear cache error:', pullErr)
+      }
+    }
+  } catch (err) {
+    setFeedback('error', 'Gagal menghapus data cache: ' + (err?.message || err))
+  } finally {
+    isClearingCache.value = false
+  }
 }
 
 function handleCloudLocked() {
@@ -265,6 +307,14 @@ const settingsMenu = computed(() => [
     testid: 'settings-menu-restore',
     action: 'restore',
   },
+  {
+    key: 'clear-cache',
+    icon: 'trash',
+    title: 'Hapus Data Cache',
+    subtitle: 'Bersihkan data cache menu produk, transaksi, dan riwayat',
+    testid: 'settings-menu-clear-cache',
+    action: 'clearCache',
+  },
 ])
 
 const lockedFeatureMessage = computed(() => {
@@ -294,6 +344,11 @@ function handleMenuSelect(item) {
 
   if (item.action === 'restore') {
     handleRestoreClick()
+    return
+  }
+
+  if (item.action === 'clearCache') {
+    showClearCacheConfirm.value = true
     return
   }
 
@@ -783,6 +838,38 @@ async function handleRestoreFileChange(event) {
       <CloudBackupPanel @locked="handleCloudLocked" />
     </BaseCard>
 
+    <!-- Local Data Cache Management -->
+    <BaseCard class="space-y-4" data-testid="cache-settings-card">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <span
+            class="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-danger/10 text-danger"
+          >
+            <AppIcon name="trash" />
+          </span>
+          <div class="min-w-0">
+            <h3 class="text-base font-semibold text-ink-primary">Data Cache Lokal</h3>
+            <p class="text-xs text-ink-secondary">
+              Bersihkan cache menu, produk, dan transaksi langsung dari aplikasi tanpa perlu ke pengaturan sistem HP.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div class="space-y-3 rounded-3xl border border-zinc-200 bg-surface/60 p-4">
+        <p class="text-xs text-ink-secondary">
+          Gunakan tombol ini untuk membersihkan cache lokal pada perangkat ini agar data segar kembali.
+        </p>
+        <BaseButton
+          variant="danger"
+          data-testid="btn-clear-cache"
+          @click="showClearCacheConfirm = true"
+        >
+          Hapus Data Cache
+        </BaseButton>
+      </div>
+    </BaseCard>
+
     <p
       v-if="feedbackMessage"
       class="rounded-2xl px-4 py-3 text-sm"
@@ -1048,8 +1135,7 @@ async function handleRestoreFileChange(event) {
     >
       <div class="space-y-4" data-testid="settings-disconnect-modal">
         <p class="text-sm text-ink-secondary">
-          Sesi Cloud akan diputuskan dari POS ini. Data lokal (produk, transaksi, pelanggan, kas,
-          dan pengaturan) tidak akan dihapus.
+          Apakah Anda yakin ingin memutuskan akun Cloud? Sesi Cloud akan diputuskan dan seluruh data cache lokal (menu produk, transaksi, riwayat kas, dan shift) akan dibersihkan agar data tidak tumpang tindih saat login dengan akun lain.
         </p>
         <div class="flex flex-wrap gap-2">
           <BaseButton
@@ -1057,12 +1143,44 @@ async function handleRestoreFileChange(event) {
             data-testid="settings-disconnect-confirm"
             @click="confirmDisconnect"
           >
-            Ya, Putuskan
+            Ya, Putuskan & Hapus Cache
           </BaseButton>
           <BaseButton
             variant="ghost"
             data-testid="settings-disconnect-cancel"
             @click="showDisconnectConfirm = false"
+          >
+            Batal
+          </BaseButton>
+        </div>
+      </div>
+    </BaseModal>
+
+    <BaseModal
+      :open="showClearCacheConfirm"
+      title="Hapus Data Cache"
+      @close="showClearCacheConfirm = false"
+    >
+      <div class="space-y-4" data-testid="clear-cache-modal">
+        <p class="text-sm text-ink-secondary">
+          Apakah Anda yakin ingin menghapus data cache lokal? Semua data menu produk, transaksi, riwayat kas, dan shift yang tersimpan di perangkat ini akan dibersihkan.
+        </p>
+        <p class="text-xs text-amber-600 bg-amber-50 p-2.5 rounded-xl border border-amber-200">
+          Pastikan transaksi penting sudah disinkronkan ke Cloud atau dibackup sebelum menghapus cache.
+        </p>
+        <div class="flex flex-wrap gap-2">
+          <BaseButton
+            variant="danger"
+            data-testid="btn-confirm-clear-cache"
+            :loading="isClearingCache"
+            @click="handleClearCache"
+          >
+            Ya, Hapus Cache
+          </BaseButton>
+          <BaseButton
+            variant="ghost"
+            data-testid="btn-cancel-clear-cache"
+            @click="showClearCacheConfirm = false"
           >
             Batal
           </BaseButton>

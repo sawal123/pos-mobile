@@ -101,7 +101,15 @@ async function verifyProvenance({
     }
   }
 
-  if (baselineShift) {
+  const isActualShift = Boolean(
+    baselineShift &&
+      (baselineShift.id ||
+        baselineShift.openedAt ||
+        baselineShift.isOpen === true ||
+        baselineShift.status === 'open' ||
+        baselineShift.closedAt),
+  )
+  if (isActualShift) {
     const normId = baselineShift.id ? String(baselineShift.id).trim().toLowerCase() : ''
     const shiftNum = baselineShift.shiftNumber ? String(baselineShift.shiftNumber).trim() : ''
     const inAllRecords = allRecords.some(
@@ -382,17 +390,28 @@ export function createSyncPullService({
         if (adapter && typeof adapter.loadShiftState === 'function') {
           try {
             const currentShift = await adapter.loadShiftState()
-            if (currentShift && typeof currentShift === 'object' && (currentShift.id || currentShift.shiftNumber)) {
+            if (
+              currentShift &&
+              typeof currentShift === 'object' &&
+              (currentShift.id || currentShift.openedAt || currentShift.isOpen === true || currentShift.status === 'open')
+            ) {
               baselineShift = currentShift
             }
           } catch {
             baselineShift = null
           }
         }
-        if (!baselineShift && stores?.shiftStore && (stores.shiftStore.id || stores.shiftStore.shiftNumber)) {
+        if (
+          !baselineShift &&
+          stores?.shiftStore &&
+          (stores.shiftStore.id || stores.shiftStore.openedAt || stores.shiftStore.isOpen === true || stores.shiftStore.status === 'open')
+        ) {
           baselineShift = {
             id: stores.shiftStore.id,
             shiftNumber: stores.shiftStore.shiftNumber,
+            openedAt: stores.shiftStore.openedAt,
+            isOpen: stores.shiftStore.isOpen,
+            status: stores.shiftStore.status,
           }
         }
 
@@ -731,14 +750,16 @@ export function createSyncPullService({
           }
         }
 
-        let freshQueueCount = 0
-        if (activeQueueService && typeof activeQueueService.countPending === 'function') {
-          freshQueueCount = await activeQueueService.countPending()
+        let freshQueue = []
+        if (activeQueueService && typeof activeQueueService.listPending === 'function') {
+          freshQueue = await activeQueueService.listPending()
         } else if (adapter && typeof adapter.listSyncQueueItems === 'function') {
-          const q = await adapter.listSyncQueueItems({ limit: 1 })
-          freshQueueCount = Array.isArray(q) ? q.length : 0
+          freshQueue = await adapter.listSyncQueueItems()
         }
-        if (freshQueueCount > 0) {
+        const freshOperationalQueue = (Array.isArray(freshQueue) ? freshQueue : []).filter(
+          (item) => item && item.entityType !== 'business' && item.entity_type !== 'business',
+        )
+        if (freshOperationalQueue.length > 0) {
           return {
             ok: false,
             code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
@@ -776,7 +797,11 @@ export function createSyncPullService({
         let activeShift = baselineShift
         if (adapter && typeof adapter.loadShiftState === 'function') {
           const shiftState = await adapter.loadShiftState()
-          if (shiftState && typeof shiftState === 'object' && (shiftState.id || shiftState.shiftNumber)) {
+          if (
+            shiftState &&
+            typeof shiftState === 'object' &&
+            (shiftState.id || shiftState.openedAt || shiftState.isOpen === true || shiftState.status === 'open')
+          ) {
             activeShift = shiftState
           }
         }
@@ -1572,21 +1597,41 @@ export function createSyncPullService({
         } = data
 
         if (nextShift) {
+          const isIncomingOpen = (shiftStatus ?? '').toLowerCase() === 'open'
+          const isCurrentOpen = (nextShift.status ?? '').toLowerCase() === 'open'
+
+          let shouldApplyToNextShift = false
           if (!nextShift.id) {
-            nextShift.id = syncId
+            shouldApplyToNextShift = true
+          } else if (isIncomingOpen && !isCurrentOpen) {
+            // An incoming open shift ALWAYS supersedes a closed shift
+            shouldApplyToNextShift = true
+          } else if (isIncomingOpen === isCurrentOpen) {
+            // Both open or both closed: the more recent opened_at wins
+            const incomingTime = opened_at ? new Date(opened_at).getTime() : 0
+            const currentTime = nextShift.openedAt ? new Date(nextShift.openedAt).getTime() : 0
+            if (incomingTime >= currentTime) {
+              shouldApplyToNextShift = true
+            }
           }
-          nextShift.shiftNumber = shift_number ?? nextShift.shiftNumber
-          nextShift.status = shiftStatus ?? nextShift.status
-          nextShift.openingBalance = opening_cash !== null && opening_cash !== undefined
-            ? Number(opening_cash)
-            : nextShift.openingBalance
-          nextShift.openedAt = opened_at ?? nextShift.openedAt
-          nextShift.closingBalance = closing_cash !== null && closing_cash !== undefined
-            ? Number(closing_cash)
-            : nextShift.closingBalance
-          nextShift.closedAt = closed_at ?? nextShift.closedAt
-          nextShift.notes = shiftNotes ?? nextShift.notes
-          nextShift.isOpen = (shiftStatus ?? nextShift.status) === 'open'
+
+          if (shouldApplyToNextShift) {
+            nextShift.id = syncId
+            nextShift.shiftNumber = shift_number ?? nextShift.shiftNumber
+            nextShift.status = shiftStatus ?? nextShift.status
+            nextShift.openingBalance =
+              opening_cash !== null && opening_cash !== undefined
+                ? Number(opening_cash)
+                : nextShift.openingBalance
+            nextShift.openedAt = opened_at ?? nextShift.openedAt
+            nextShift.closingBalance =
+              closing_cash !== null && closing_cash !== undefined
+                ? Number(closing_cash)
+                : nextShift.closingBalance
+            nextShift.closedAt = closed_at ?? nextShift.closedAt
+            nextShift.notes = shiftNotes ?? nextShift.notes
+            nextShift.isOpen = (shiftStatus ?? nextShift.status) === 'open'
+          }
         }
 
         plannedRegistryBinds.push({
@@ -1956,6 +2001,8 @@ export function createSyncPullService({
             ? estimated_completed_at
             : null
           existingTrx.note = typeof note === 'string' ? note : ''
+          existingTrx.synced = true
+          existingTrx.isSynced = true
         } else {
           nextTransactions.push({
             id: syncId,
@@ -1982,6 +2029,8 @@ export function createSyncPullService({
               : null,
             note: typeof note === 'string' ? note : '',
             createdAt: sold_at,
+            synced: true,
+            isSynced: true,
           })
           plannedRegistryBinds.push({
             type: 'bind',
@@ -2141,14 +2190,16 @@ export function createSyncPullService({
         }
       }
 
-      let freshQueueCount = 0
-      if (activeQueueService && typeof activeQueueService.countPending === 'function') {
-        freshQueueCount = await activeQueueService.countPending()
+      let freshQueue = []
+      if (activeQueueService && typeof activeQueueService.listPending === 'function') {
+        freshQueue = await activeQueueService.listPending()
       } else if (adapter && typeof adapter.listSyncQueueItems === 'function') {
-        const q = await adapter.listSyncQueueItems({ limit: 1 })
-        freshQueueCount = Array.isArray(q) ? q.length : 0
+        freshQueue = await adapter.listSyncQueueItems()
       }
-      if (freshQueueCount > 0) {
+      const freshOperationalQueue = (Array.isArray(freshQueue) ? freshQueue : []).filter(
+        (item) => item && item.entityType !== 'business' && item.entity_type !== 'business',
+      )
+      if (freshOperationalQueue.length > 0) {
         return {
           ok: false,
           code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
@@ -2186,19 +2237,37 @@ export function createSyncPullService({
       let activeShift = baselineShift
       if (adapter && typeof adapter.loadShiftState === 'function') {
         const shiftState = await adapter.loadShiftState()
-        if (shiftState && typeof shiftState === 'object' && (shiftState.id || shiftState.shiftNumber)) {
+        if (
+          shiftState &&
+          typeof shiftState === 'object' &&
+          (shiftState.id || shiftState.openedAt || shiftState.isOpen === true || shiftState.status === 'open')
+        ) {
           activeShift = shiftState
         }
       }
-      if (!activeShift && shiftStore && (shiftStore.id || shiftStore.shiftNumber)) {
+      if (
+        !activeShift &&
+        shiftStore &&
+        (shiftStore.id || shiftStore.openedAt || shiftStore.isOpen === true || shiftStore.status === 'open')
+      ) {
         activeShift = {
           id: shiftStore.id,
           shiftNumber: shiftStore.shiftNumber,
+          openedAt: shiftStore.openedAt,
+          isOpen: shiftStore.isOpen,
+          status: shiftStore.status,
         }
-      } else if (!activeShift && stores?.shiftStore && (stores.shiftStore.id || stores.shiftStore.shiftNumber)) {
+      } else if (
+        !activeShift &&
+        stores?.shiftStore &&
+        (stores.shiftStore.id || stores.shiftStore.openedAt || stores.shiftStore.isOpen === true || stores.shiftStore.status === 'open')
+      ) {
         activeShift = {
           id: stores.shiftStore.id,
           shiftNumber: stores.shiftStore.shiftNumber,
+          openedAt: stores.shiftStore.openedAt,
+          isOpen: stores.shiftStore.isOpen,
+          status: stores.shiftStore.status,
         }
       }
 

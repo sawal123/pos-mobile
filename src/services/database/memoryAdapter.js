@@ -170,13 +170,16 @@ export function createMemoryAdapter() {
     async listSyncQueueItems({ limit = 100 } = {}) {
       return cloneValue(
         state.syncQueue
+          .filter((item) => item.entityType !== 'business' && item.entity_type !== 'business')
           .slice()
           .sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0))
           .slice(0, Number(limit)),
       )
     },
     async countSyncQueueItems() {
-      return state.syncQueue.length
+      return state.syncQueue.filter(
+        (item) => item.entityType !== 'business' && item.entity_type !== 'business',
+      ).length
     },
     async markSyncQueueItemFailed(id, error) {
       const item = state.syncQueue.find((entry) => entry.id === id)

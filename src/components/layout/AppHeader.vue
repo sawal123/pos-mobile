@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 
 import { useBusinessStore } from '@/stores/businessStore'
+import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import SyncStatusBadge from '@/components/sync/SyncStatusBadge.vue'
 
 defineProps({
@@ -16,6 +17,11 @@ const emit = defineEmits(['toggleSidebar'])
 
 const route = useRoute()
 const businessStore = useBusinessStore()
+const cloudStore = useCloudSessionStore()
+
+const isCloudMode = computed(() => {
+  return Boolean(cloudStore.isAuthenticated && businessStore.mode === 'cloud')
+})
 
 const pageTitle = computed(() => {
   const titleMap = {
@@ -102,7 +108,7 @@ const pageTitle = computed(() => {
             {{ businessStore.outlet }}
           </p>
           <p class="text-[10px] uppercase tracking-[0.14em] sm:text-xs">
-            {{ businessStore.mode === 'cloud' ? 'Cloud Mode' : 'Free Mode' }}
+            {{ isCloudMode ? 'Cloud Mode' : 'Free Mode' }}
           </p>
         </div>
       </div>

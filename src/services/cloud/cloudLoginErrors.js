@@ -60,6 +60,54 @@ export function describeLoginError(error) {
 
 /**
  * @param {object|null|undefined} error Raw error from `apiClient`.
+ * @returns {{kind: string, message: string}}
+ */
+export function describeRegisterError(error) {
+  const status = Number(error?.status) || 0
+  const code = typeof error?.code === 'string' ? error.code.toUpperCase() : ''
+
+  if (status === 0 || code === 'NETWORK_ERROR') {
+    return { kind: CLOUD_LOGIN_ERROR_KIND.OFFLINE, message: MESSAGES.offline }
+  }
+
+  if (status === 422) {
+    const errors = error?.data?.errors
+    if (errors && typeof errors === 'object') {
+      if (errors.email && errors.email.length > 0) {
+        return {
+          kind: 'validation',
+          message: 'Email sudah terdaftar. Silakan gunakan email lain atau masuk ke akun Anda.',
+        }
+      }
+      if (errors.password && errors.password.length > 0) {
+        return {
+          kind: 'validation',
+          message: errors.password[0] || 'Password minimal 8 karakter dan konfirmasi harus cocok.',
+        }
+      }
+      const firstKey = Object.keys(errors)[0]
+      if (firstKey && errors[firstKey]?.[0]) {
+        return { kind: 'validation', message: errors[firstKey][0] }
+      }
+    }
+    return {
+      kind: 'validation',
+      message: error?.data?.message || 'Data pendaftaran belum lengkap atau tidak valid.',
+    }
+  }
+
+  if (status >= 500 || code === 'MISSING_TOKEN') {
+    return { kind: CLOUD_LOGIN_ERROR_KIND.SERVER, message: MESSAGES.server }
+  }
+
+  return {
+    kind: CLOUD_LOGIN_ERROR_KIND.UNKNOWN,
+    message: error?.message || 'Pendaftaran Cloud gagal. Silakan periksa data Anda dan coba lagi.',
+  }
+}
+
+/**
+ * @param {object|null|undefined} error Raw error from `apiClient`.
  * @returns {boolean}
  */
 export function isOfflineError(error) {

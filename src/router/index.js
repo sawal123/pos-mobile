@@ -45,7 +45,7 @@ export function resolveStartupRoute({ businessStore, cashierStore, shiftStore })
     return { name: 'splash' }
   }
 
-  if (!cashierStore.activeCashier.pinConfigured) {
+  if (!cashierStore.activeCashier?.pinConfigured) {
     return { name: 'pin-setup' }
   }
 
@@ -364,7 +364,7 @@ export function createAppRouter() {
       return { name: 'business-setup' }
     }
 
-    if (!cashierStore.activeCashier.pinConfigured && pinRequiredRoutes.has(to.name)) {
+    if (!cashierStore.activeCashier?.pinConfigured && pinRequiredRoutes.has(to.name)) {
       return { name: 'pin-setup' }
     }
 

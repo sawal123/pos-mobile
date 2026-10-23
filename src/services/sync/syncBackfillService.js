@@ -12,7 +12,7 @@ import { useCloudSessionStore } from '@/stores/cloudSessionStore'
  * @param {object} options.queueService
  * @returns {Promise<number>} Count of newly enqueued transactions.
  */
-export async function backfillUnsyncedTransactions({ pinia, queueService } = {}) {
+export async function backfillUnsyncedTransactions({ pinia, queueService, adapter = null } = {}) {
   if (!queueService || typeof queueService.enqueueUpsert !== 'function') {
     return 0
   }
@@ -30,6 +30,15 @@ export async function backfillUnsyncedTransactions({ pinia, queueService } = {})
 
   if (businessStore.mode !== 'cloud') {
     businessStore.mode = 'cloud'
+  }
+
+  let serverVersions = {}
+  try {
+    if (adapter && typeof adapter.loadSyncServerVersions === 'function') {
+      serverVersions = (await adapter.loadSyncServerVersions()) || {}
+    }
+  } catch {
+    serverVersions = {}
   }
 
   let existingQueue = []
@@ -55,6 +64,10 @@ export async function backfillUnsyncedTransactions({ pinia, queueService } = {})
     const idStr = String(trx.id)
     // Skip static sample mockup data if any
     if (idStr === 'TRX-1001' || idStr === 'TRX-1002') continue
+
+    // Remote synced sales must never be backfilled into outbox
+    if (trx.synced === true || trx.isSynced === true) continue
+    if (serverVersions[`sales:${idStr.toLowerCase()}`] || serverVersions[`sales:${idStr}`]) continue
 
     if (!queuedTrxIds.has(idStr)) {
       try {

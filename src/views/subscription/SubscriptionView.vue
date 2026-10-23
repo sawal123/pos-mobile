@@ -1,10 +1,14 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { Browser } from '@capacitor/browser'
+import { Capacitor } from '@capacitor/core'
 
 import AppIcon from '@/components/base/AppIcon.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
+import BaseModal from '@/components/base/BaseModal.vue'
+import { resolveBaseUrl } from '@/services/cloud/apiClient'
 import {
   BENEFIT_AVAILABILITY,
   BENEFIT_AVAILABILITY_LABELS,
@@ -17,6 +21,47 @@ import { useSubscriptionStore } from '@/stores/subscriptionStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { usePremiumCheckoutStore } from '@/stores/premiumCheckoutStore'
 
+const PUBLIC_PREVIEW_OPTIONS = Object.freeze([
+  {
+    key: 'cloud::monthly',
+    code: 'cloud',
+    name: 'Cloud',
+    period: 'monthly',
+    periodLabel: 'Bulanan',
+    currency: 'IDR',
+    priceMinor: 49000,
+    priceLabel: 'Rp 49.000',
+    hasPrice: true,
+    available: true,
+    purchasable: true,
+    benefits: [
+      'Sinkronisasi cloud multi-perangkat real-time',
+      'Akses dashboard web dan analitik usaha',
+      'Backup cloud otomatis dan aman',
+      'Laporan penjualan lengkap & riwayat shift',
+    ],
+  },
+  {
+    key: 'cloud::yearly',
+    code: 'cloud',
+    name: 'Cloud',
+    period: 'yearly',
+    periodLabel: 'Tahunan',
+    currency: 'IDR',
+    priceMinor: 490000,
+    priceLabel: 'Rp 490.000',
+    hasPrice: true,
+    available: true,
+    purchasable: true,
+    benefits: [
+      'Sinkronisasi cloud multi-perangkat real-time',
+      'Akses dashboard web dan analitik usaha',
+      'Backup cloud otomatis dan aman',
+      'Laporan penjualan lengkap & riwayat shift',
+    ],
+  },
+])
+
 const router = useRouter()
 const route = useRoute()
 const subscriptionStore = useSubscriptionStore()
@@ -28,6 +73,10 @@ const benefits = PREMIUM_BENEFITS
 const localGuarantees = LOCAL_GUARANTEES
 const periods = PLAN_PERIOD_LABELS
 const checkoutNotice = ref('')
+
+const previewPeriod = ref('monthly')
+const previewSelectedKey = ref('cloud::monthly')
+const showAuthRequiredModal = ref(false)
 
 const subscriptionStatus = computed(() => subscriptionStore.status)
 const isPremium = computed(() => subscriptionStore.isPremium)
@@ -101,9 +150,69 @@ const showStatusSkeleton = computed(() => subscriptionStatus.value === 'loading'
 
 // ── Catalog ─────────────────────────────────────────────────────────────────
 
-const showCatalogSkeleton = computed(() => planStore.isIdle || planStore.isLoading)
-const showPeriodSelector = computed(() => planStore.supportsBothPeriods)
-const visibleOptions = computed(() => planStore.visibleOptions)
+const isUsingPreview = computed(() => !cloudStore.isAuthenticated)
+
+const showCatalogSkeleton = computed(() => {
+  if (isUsingPreview.value) return false
+  return planStore.isIdle || planStore.isLoading
+})
+
+const showPeriodSelector = computed(() => {
+  if (isUsingPreview.value) return true
+  return planStore.supportsBothPeriods
+})
+
+const activePeriod = computed(() => {
+  if (isUsingPreview.value) return previewPeriod.value
+  return planStore.selectedPeriod
+})
+
+const availablePeriods = computed(() => {
+  if (isUsingPreview.value) return ['monthly', 'yearly']
+  return planStore.availablePeriods
+})
+
+const visibleOptions = computed(() => {
+  if (isUsingPreview.value) {
+    return PUBLIC_PREVIEW_OPTIONS.filter((opt) => opt.period === previewPeriod.value)
+  }
+  return planStore.visibleOptions
+})
+
+const selectedOption = computed(() => {
+  if (isUsingPreview.value) {
+    return PUBLIC_PREVIEW_OPTIONS.find((opt) => opt.key === previewSelectedKey.value) ?? null
+  }
+  return planStore.selectedOption
+})
+
+const selectedOptionKey = computed(() => {
+  if (isUsingPreview.value) return previewSelectedKey.value
+  return planStore.selectedOptionKey
+})
+
+const isCatalogUnavailable = computed(() => {
+  if (isUsingPreview.value) return false
+  return planStore.isUnavailable
+})
+
+const isCatalogEmpty = computed(() => {
+  if (isUsingPreview.value) return false
+  return planStore.isEmpty
+})
+
+const canContinueCheckout = computed(() => {
+  if (isUsingPreview.value) {
+    return selectedOption.value !== null
+  }
+  return planStore.canContinue
+})
+
+const isCheckoutAvailable = computed(() => {
+  if (isUsingPreview.value) return true
+  return planStore.checkoutAvailable
+})
+
 const renewalMode = computed(() => planStore.renewalMode)
 
 const unavailableHint = computed(() => {
@@ -122,10 +231,12 @@ const unavailableHint = computed(() => {
 })
 
 function isCurrentPlan(option) {
+  if (isUsingPreview.value) return false
   return planStore.isCurrentPlan(option)
 }
 
 function isPlanSelectable(option) {
+  if (isUsingPreview.value) return true
   return planStore.isSelectable(option)
 }
 
@@ -141,12 +252,21 @@ function unavailablePlanNote(option) {
 }
 
 function handleSelectPeriod(period) {
+  if (isUsingPreview.value) {
+    previewPeriod.value = period
+    previewSelectedKey.value = `cloud::${period}`
+    return
+  }
   planStore.selectPeriod(period)
 }
 
 function handleSelectOption(option) {
   if (!isPlanSelectable(option)) return
   checkoutNotice.value = ''
+  if (isUsingPreview.value) {
+    previewSelectedKey.value = option.key
+    return
+  }
   planStore.selectOption(option.key)
 }
 
@@ -160,10 +280,10 @@ function handleRetry() {
  * still never activated here — only the backend activates after payment.
  */
 function handleContinue() {
-  if (!planStore.canContinue) return
+  if (!canContinueCheckout.value) return
 
   if (!cloudStore.isAuthenticated) {
-    router.push({ name: 'cloud' })
+    showAuthRequiredModal.value = true
     return
   }
   if (!cloudStore.isLinked) {
@@ -172,6 +292,16 @@ function handleContinue() {
   }
 
   router.push({ name: 'premium-checkout' })
+}
+
+function handleGoToLogin() {
+  showAuthRequiredModal.value = false
+  router.push({ name: 'cloud', query: { tab: 'login' } })
+}
+
+function handleOpenRegister() {
+  showAuthRequiredModal.value = false
+  router.push({ name: 'cloud', query: { tab: 'register' } })
 }
 
 function goToPaymentStatus() {
@@ -400,8 +530,8 @@ onMounted(() => {
 
       <!-- Not offered by the backend yet -->
       <div
-        v-else-if="planStore.isUnavailable"
-        class="space-y-2 rounded-2xl border border-dashed border-zinc-300 p-4"
+        v-else-if="isCatalogUnavailable"
+        class="space-y-3 rounded-2xl border border-dashed border-zinc-300 p-4"
         data-testid="plan-catalog-unavailable"
       >
         <div class="flex items-center gap-2">
@@ -411,14 +541,24 @@ onMounted(() => {
         <p class="text-xs leading-relaxed text-ink-secondary" data-testid="plan-catalog-hint">
           {{ unavailableHint }}
         </p>
-        <BaseButton variant="secondary" data-testid="plan-catalog-retry" @click="handleRetry">
-          Muat Ulang
-        </BaseButton>
+        <div class="flex flex-wrap items-center gap-2 pt-1">
+          <BaseButton
+            v-if="!cloudStore.isAuthenticated"
+            variant="primary"
+            data-testid="plan-catalog-login"
+            @click="router.push({ name: 'cloud' })"
+          >
+            Masuk ke Cloud
+          </BaseButton>
+          <BaseButton variant="secondary" data-testid="plan-catalog-retry" @click="handleRetry">
+            Muat Ulang
+          </BaseButton>
+        </div>
       </div>
 
       <!-- Empty -->
       <div
-        v-else-if="planStore.isEmpty"
+        v-else-if="isCatalogEmpty"
         class="space-y-2 rounded-2xl border border-dashed border-zinc-300 p-4"
         data-testid="plan-catalog-empty"
       >
@@ -441,14 +581,14 @@ onMounted(() => {
           data-testid="period-toggle"
         >
           <button
-            v-for="period in planStore.availablePeriods"
+            v-for="period in availablePeriods"
             :key="period"
             type="button"
             :data-testid="`period-option-${period}`"
-            :aria-pressed="planStore.selectedPeriod === period"
+            :aria-pressed="activePeriod === period"
             class="h-11 rounded-2xl border text-sm font-semibold transition"
             :class="
-              planStore.selectedPeriod === period
+              activePeriod === period
                 ? 'border-primary bg-primary/10 text-primary'
                 : 'border-zinc-200 bg-white text-ink-secondary'
             "
@@ -464,7 +604,7 @@ onMounted(() => {
             :key="option.key"
             class="rounded-2xl border p-4 transition"
             :class="
-              planStore.selectedOptionKey === option.key
+              selectedOptionKey === option.key
                 ? 'border-primary bg-primary/5'
                 : 'border-zinc-200 bg-white'
             "
@@ -536,12 +676,12 @@ onMounted(() => {
             <BaseButton
               class="mt-3"
               block
-              :variant="planStore.selectedOptionKey === option.key ? 'primary' : 'secondary'"
-              :disabled="!isPlanSelectable(option) || planStore.selectedOptionKey === option.key"
+              :variant="selectedOptionKey === option.key ? 'primary' : 'secondary'"
+              :disabled="!isPlanSelectable(option) || selectedOptionKey === option.key"
               :data-testid="`plan-select-${option.code}`"
               @click="handleSelectOption(option)"
             >
-              {{ planStore.selectedOptionKey === option.key ? 'Paket dipilih' : 'Pilih paket ini' }}
+              {{ selectedOptionKey === option.key ? 'Paket dipilih' : 'Pilih paket ini' }}
             </BaseButton>
           </div>
         </div>
@@ -550,15 +690,15 @@ onMounted(() => {
 
     <!-- Summary + CTA -->
     <BaseCard class="space-y-3" data-testid="plan-summary">
-      <div v-if="planStore.selectedOption" class="space-y-1" data-testid="selected-plan-summary">
+      <div v-if="selectedOption" class="space-y-1" data-testid="selected-plan-summary">
         <p class="text-xs uppercase tracking-[0.16em] text-ink-secondary">Paket dipilih</p>
         <p class="text-sm font-semibold text-ink-primary" data-testid="selected-plan-name">
-          {{ planStore.selectedOption.name }}
+          {{ selectedOption.name }}
         </p>
         <p class="text-xs text-ink-secondary" data-testid="selected-plan-price">
-          {{ planStore.selectedOption.priceLabel || 'Harga belum tersedia' }}
-          <template v-if="planStore.selectedOption.periodLabel">
-            / {{ planStore.selectedOption.periodLabel }}
+          {{ selectedOption.priceLabel || 'Harga belum tersedia' }}
+          <template v-if="selectedOption.periodLabel">
+            / {{ selectedOption.periodLabel }}
           </template>
         </p>
       </div>
@@ -568,7 +708,7 @@ onMounted(() => {
       </p>
 
       <p
-        v-if="planStore.selectionNotPurchasable"
+        v-if="planStore.selectionNotPurchasable && !isUsingPreview"
         class="text-xs leading-relaxed text-ink-secondary"
         data-testid="plan-not-purchasable-note"
       >
@@ -577,15 +717,15 @@ onMounted(() => {
 
       <BaseButton
         block
-        :disabled="!planStore.canContinue"
+        :disabled="!canContinueCheckout"
         data-testid="continue-cta"
         @click="handleContinue"
       >
-        {{ planStore.checkoutAvailable ? 'Lanjutkan' : 'Checkout belum tersedia' }}
+        {{ isCheckoutAvailable ? 'Lanjutkan' : 'Checkout belum tersedia' }}
       </BaseButton>
 
       <p
-        v-if="!planStore.checkoutAvailable"
+        v-if="!isCheckoutAvailable"
         class="text-xs leading-relaxed text-ink-secondary"
         data-testid="checkout-unavailable-note"
       >
@@ -605,5 +745,52 @@ onMounted(() => {
     <BaseButton block variant="secondary" data-testid="subscription-back-cta" @click="goBack">
       Kembali
     </BaseButton>
+
+    <!-- AUTH REQUIRED MODAL -->
+    <BaseModal
+      :open="showAuthRequiredModal"
+      title="Akun Cloud Diperlukan"
+      @close="showAuthRequiredModal = false"
+    >
+      <div class="space-y-4" data-testid="auth-required-modal">
+        <p class="text-sm leading-relaxed text-ink-secondary">
+          Untuk melanjutkan pembelian paket langganan
+          <strong class="text-ink-primary">{{ selectedOption?.name }} ({{ selectedOption?.periodLabel }})</strong>
+          dan mengaktifkan sinkronisasi cloud, silakan masuk ke akun Cloud atau daftar akun baru.
+        </p>
+
+        <div class="space-y-2 pt-2">
+          <BaseButton
+            id="auth-modal-login-btn"
+            block
+            variant="primary"
+            data-testid="auth-modal-login-btn"
+            @click="handleGoToLogin"
+          >
+            Masuk ke Akun Cloud
+          </BaseButton>
+
+          <BaseButton
+            id="auth-modal-register-btn"
+            block
+            variant="secondary"
+            data-testid="auth-modal-register-btn"
+            @click="handleOpenRegister"
+          >
+            Daftar Akun Cloud Baru
+          </BaseButton>
+
+          <BaseButton
+            id="auth-modal-cancel-btn"
+            block
+            variant="ghost"
+            size="sm"
+            @click="showAuthRequiredModal = false"
+          >
+            Batal
+          </BaseButton>
+        </div>
+      </div>
+    </BaseModal>
   </div>
 </template>

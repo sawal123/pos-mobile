@@ -293,7 +293,11 @@ export async function bootstrapApp({
       }
       if (syncFoundation?.pullService) {
         const syncPullStore = useSyncPullStore(pinia)
-        syncPullStore.init({ pullService: syncFoundation.pullService })
+        syncPullStore.init({
+          pullService: syncFoundation.pullService,
+          adapter,
+          scheduler: persistence,
+        })
       }
       if (syncFoundation?.bootstrapService) {
         const syncBootstrapStore = useSyncBootstrapStore(pinia)
@@ -376,6 +380,7 @@ export async function bootstrapApp({
           await backfillUnsyncedTransactions({
             pinia,
             queueService: syncFoundation.queueService,
+            adapter: persistence.adapter,
           })
         } catch (error) {
           console.warn('Failed to backfill unsynced transactions.', error)

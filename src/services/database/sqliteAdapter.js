@@ -276,6 +276,12 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
         },
         version,
       )
+
+      try {
+        await db.run("DELETE FROM sync_queue WHERE entity_type = 'business';")
+      } catch {
+        // non-blocking
+      }
     },
     async getSchemaVersion() {
       const db = await ensureConnection()
@@ -587,6 +593,7 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
       const { values = [] } = await db.query(
         `SELECT id, entity_type, entity_id, operation, payload, created_at, updated_at, attempt_count, last_error
          FROM sync_queue
+         WHERE entity_type != 'business'
          ORDER BY created_at ASC, rowid ASC
          LIMIT ?`,
         [Number(limit)],
@@ -606,7 +613,7 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
     },
     async countSyncQueueItems() {
       const db = await ensureConnection()
-      const { values = [] } = await db.query('SELECT COUNT(*) AS total FROM sync_queue')
+      const { values = [] } = await db.query("SELECT COUNT(*) AS total FROM sync_queue WHERE entity_type != 'business'")
       return Number(values[0]?.total ?? 0)
     },
     async markSyncQueueItemFailed(id, error) {

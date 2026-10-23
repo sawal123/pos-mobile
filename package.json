@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "android:live": "npx cap run android -l --host localhost --port 5173 --forwardPorts 5173:5173",
     "build": "vite build",
     "preview": "vite preview",
     "test:unit": "vitest",

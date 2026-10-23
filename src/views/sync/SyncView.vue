@@ -15,8 +15,11 @@ import { useSubscriptionStore } from '@/stores/subscriptionStore'
 import { useSyncAutoSyncStore } from '@/stores/syncAutoSyncStore'
 import { useSyncOrchestratorStore } from '@/stores/syncOrchestratorStore'
 import { useSyncPushStore } from '@/stores/syncPushStore'
+import { useSyncPullStore } from '@/stores/syncPullStore'
+import { useSyncContextGuardStore } from '@/stores/syncContextGuardStore'
 import { useSyncStatusStore } from '@/stores/syncStatusStore'
 import { useTransactionStore } from '@/stores/transactionStore'
+import { clearLocalCache } from '@/services/localCacheService'
 
 const router = useRouter()
 const businessStore = useBusinessStore()
@@ -28,10 +31,14 @@ const subscriptionStore = useSubscriptionStore()
 const syncAutoSyncStore = useSyncAutoSyncStore()
 const syncOrchestratorStore = useSyncOrchestratorStore()
 const syncPushStore = useSyncPushStore()
+const syncPullStore = useSyncPullStore()
+const syncContextGuardStore = useSyncContextGuardStore()
 const syncStatusStore = useSyncStatusStore()
 const transactionStore = useTransactionStore()
 
 const isSyncing = ref(false)
+const isPulling = ref(false)
+const isClearingCache = ref(false)
 const syncFeedback = ref(null) // { type: 'success' | 'error', message: string }
 const showDisconnectConfirm = ref(false)
 const autoSyncDraft = ref(syncAutoSyncStore.enabled)
@@ -93,7 +100,7 @@ const lastSyncFormatted = computed(() => {
 })
 
 async function handleSyncNow() {
-  if (isSyncing.value) return
+  if (isSyncing.value || isPulling.value || isClearingCache.value) return
   isSyncing.value = true
   syncFeedback.value = null
 
@@ -109,8 +116,21 @@ async function handleSyncNow() {
     await syncStatusStore.refresh()
 
     if (result && result.ok === false) {
+      if (
+        result.code === 'CLOUD_FIRST_INITIALIZATION_INCOMPLETE' ||
+        result.code === 'SYNC_CLOUD_FIRST_NOT_READY' ||
+        result.code === 'SYNC_BUSINESS_NOT_BOUND'
+      ) {
+        const hasTransactions = transactionStore.items && transactionStore.items.length > 0
+        if (!hasTransactions) {
+          await handleClearAndPull()
+          return
+        }
+      }
+
       syncFeedback.value = {
         type: 'error',
+        code: result.code,
         message: result.message || 'Sinkronisasi gagal. Pastikan koneksi internet stabil.',
       }
     } else {
@@ -129,12 +149,108 @@ async function handleSyncNow() {
   }
 }
 
+async function handlePullNow(opts = {}) {
+  if (isSyncing.value || isPulling.value || isClearingCache.value) return
+  isPulling.value = true
+  syncFeedback.value = null
+
+  try {
+    await syncContextGuardStore.check()
+    const isInitial = Boolean(
+      (typeof opts === 'object' && opts && opts.initialCloudRead === true) ||
+      !cloudStore.pushBinding ||
+      (cloudStore.pullBinding?.status === 'initializing')
+    )
+    const result = await syncPullStore.pullNow({ initialCloudRead: isInitial })
+    await syncPushStore.refreshPendingCount()
+    await syncStatusStore.refresh()
+
+    if (result && !result.ok) {
+      if (result.code === 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY') {
+        const hasTransactions = transactionStore.items && transactionStore.items.length > 0
+        if (!hasTransactions) {
+          await handleClearAndPull()
+          return
+        }
+        syncFeedback.value = {
+          type: 'error',
+          code: result.code,
+          message:
+            'Terdapat data lokal belum tersinkron (misal: shift/kas yang sedang berjalan). Bersihkan cache jika ingin memuat ulang dari Cloud.',
+        }
+      } else {
+        syncFeedback.value = {
+          type: 'error',
+          code: result.code,
+          message: result.message || 'Gagal menarik data cloud.',
+        }
+      }
+    } else {
+      syncFeedback.value = {
+        type: 'success',
+        message: 'Data Cloud berhasil dimuat ke perangkat!',
+      }
+    }
+  } catch (err) {
+    syncFeedback.value = {
+      type: 'error',
+      message: err.message || 'Gagal menarik data cloud.',
+    }
+  } finally {
+    isPulling.value = false
+  }
+}
+
+async function handleClearAndPull() {
+  if (isSyncing.value || isClearingCache.value) return
+  isClearingCache.value = true
+  syncFeedback.value = null
+
+  try {
+    await clearLocalCache({
+      pinia: null,
+      adapter: cloudStore.adapter,
+      scheduler: cloudStore.scheduler,
+      resetBusiness: false,
+    })
+    await syncContextGuardStore.check()
+    const pullRes = await syncPullStore.pullNow({ initialCloudRead: true })
+    await syncPushStore.refreshPendingCount()
+    await syncStatusStore.refresh()
+
+    if (pullRes.ok) {
+      syncFeedback.value = {
+        type: 'success',
+        message: 'Cache dibersihkan dan menu produk Cloud berhasil dimuat ulang!',
+      }
+    } else {
+      syncFeedback.value = {
+        type: 'error',
+        message: pullRes.message || 'Gagal memuat data dari Cloud setelah membersihkan cache.',
+      }
+    }
+  } catch (err) {
+    syncFeedback.value = {
+      type: 'error',
+      message: 'Gagal membersihkan cache: ' + (err?.message || err),
+    }
+  } finally {
+    isClearingCache.value = false
+  }
+}
+
 async function confirmDisconnect() {
   showDisconnectConfirm.value = false
+  await clearLocalCache({
+    pinia: null,
+    adapter: cloudStore.adapter,
+    scheduler: cloudStore.scheduler,
+    resetBusiness: true,
+  })
   await cloudStore.logout()
   syncFeedback.value = {
     type: 'success',
-    message: 'Hubungan Cloud berhasil diputuskan. Data lokal tetap aman.',
+    message: 'Hubungan Cloud berhasil diputuskan dan data cache lokal telah dibersihkan.',
   }
 }
 
@@ -334,12 +450,26 @@ function handleBack() {
       <!-- Feedback alert -->
       <div
         v-if="syncFeedback"
-        class="rounded-2xl p-3 text-xs flex items-center gap-2"
+        class="rounded-2xl p-3 text-xs flex flex-col gap-2"
         :class="syncFeedback.type === 'error' ? 'bg-danger/10 text-danger' : 'bg-emerald-50 text-emerald-800 border border-emerald-200/60'"
         data-testid="sync-feedback-banner"
       >
-        <span class="text-sm font-bold">{{ syncFeedback.type === 'error' ? '!' : '✓' }}</span>
-        <span>{{ syncFeedback.message }}</span>
+        <div class="flex items-center gap-2">
+          <span class="text-sm font-bold">{{ syncFeedback.type === 'error' ? '!' : '✓' }}</span>
+          <span class="flex-1">{{ syncFeedback.message }}</span>
+        </div>
+        <div v-if="syncFeedback.type === 'error' && (syncFeedback.code === 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY' || syncFeedback.message?.includes('Bersihkan cache'))" class="mt-1">
+          <BaseButton
+            size="sm"
+            variant="danger"
+            data-testid="btn-clear-and-pull"
+            :disabled="isClearingCache || isSyncing"
+            @click="handleClearAndPull"
+          >
+            <span v-if="isClearingCache">Membersihkan Cache & Memuat...</span>
+            <span v-else>Bersihkan Cache & Muat Data Cloud</span>
+          </BaseButton>
+        </div>
       </div>
 
       <!-- Trigger Button -->
@@ -359,6 +489,38 @@ function handleBack() {
             <span>Sinkronkan Sekarang</span>
           </span>
         </BaseButton>
+
+        <div class="mt-2.5 flex flex-col gap-2">
+          <BaseButton
+            variant="secondary"
+            block
+            data-testid="btn-pull-cloud"
+            :disabled="isPulling || isSyncing || isClearingCache || (!isOnline && !cloudStore.isLinked)"
+            @click="handlePullNow"
+          >
+            <span v-if="isPulling" class="flex items-center justify-center gap-2">
+              <span class="h-4 w-4 rounded-full border-2 border-primary/30 border-t-primary animate-spin" />
+              <span>Mengunduh Menu & Data Cloud...</span>
+            </span>
+            <span v-else class="flex items-center justify-center gap-2">
+              <AppIcon name="download" class="h-4 w-4" />
+              <span>Tarik Menu Dari Cloud (Download)</span>
+            </span>
+          </BaseButton>
+
+          <BaseButton
+            variant="ghost"
+            size="sm"
+            block
+            class="text-xs text-danger hover:bg-danger/10"
+            data-testid="btn-manual-clear-cache"
+            :disabled="isPulling || isSyncing || isClearingCache"
+            @click="handleClearAndPull"
+          >
+            <span v-if="isClearingCache">Sedang Reset Cache...</span>
+            <span v-else>Bersihkan Cache & Ambil Ulang Menu Cloud</span>
+          </BaseButton>
+        </div>
 
         <p v-if="!isOnline" class="text-center text-[11px] text-zinc-400 mt-2">
           Perangkat sedang offline. Sambungkan WiFi atau data seluler untuk sinkronisasi.
@@ -429,8 +591,7 @@ function handleBack() {
     >
       <div class="space-y-4" data-testid="sync-disconnect-modal">
         <p class="text-sm text-ink-secondary">
-          Sesi Cloud akan diputuskan dari POS ini. Data lokal (produk, transaksi, pelanggan, kas,
-          dan pengaturan) tetap aman dan tidak akan dihapus.
+          Sesi Cloud akan diputuskan dari POS ini. Seluruh data cache lokal (menu produk, transaksi, dan sesi kasir lokal) akan dibersihkan agar aman saat berganti akun.
         </p>
         <div class="flex flex-wrap gap-2">
           <BaseButton
@@ -438,7 +599,7 @@ function handleBack() {
             data-testid="sync-disconnect-confirm"
             @click="confirmDisconnect"
           >
-            Ya, Putuskan
+            Ya, Putuskan & Hapus Cache
           </BaseButton>
           <BaseButton
             variant="ghost"

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import AppIcon from '@/components/base/AppIcon.vue'
@@ -12,6 +12,8 @@ import { useCashStore } from '@/stores/cashStore'
 import { useProductStore } from '@/stores/productStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import { useSyncStatusStore } from '@/stores/syncStatusStore'
+import { useCloudSessionStore } from '@/stores/cloudSessionStore'
+import { useSyncPullStore } from '@/stores/syncPullStore'
 import { isPaidTransaction, useTransactionStore } from '@/stores/transactionStore'
 import { formatCurrency } from '@/utils/formatters'
 
@@ -21,7 +23,15 @@ const productStore = useProductStore()
 const shiftStore = useShiftStore()
 const syncStatusStore = useSyncStatusStore()
 const transactionStore = useTransactionStore()
+const cloudStore = useCloudSessionStore()
+const syncPullStore = useSyncPullStore()
 const refreshRoot = ref(null)
+
+onMounted(async () => {
+  if (cloudStore.isLinked && cloudStore.isOperationalCloudAccess && productStore.products.length === 0) {
+    void syncPullStore.ensureCatalogLoaded()
+  }
+})
 
 async function refreshHome() {
   return syncStatusStore.refresh()

@@ -24,12 +24,14 @@ export const useShiftStore = defineStore('shift', {
         ? globalThis.crypto.randomUUID()
         : `shift-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 
+      this.shiftNumber = null
       this.isOpen = true
       this.openingBalance = Number(balance) || 0
       this.openedAt = now
       this.status = 'open'
       this.closingBalance = null
       this.closedAt = null
+      this.notes = ''
 
       return this.id
     },

@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
 import { Capacitor } from '@capacitor/core'
+import { Browser } from '@capacitor/browser'
 import { useRoute, useRouter } from 'vue-router'
 
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -8,7 +9,9 @@ import BaseInput from '@/components/base/BaseInput.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import AppIcon from '@/components/base/AppIcon.vue'
-import { describeLoginError } from '@/services/cloud/cloudLoginErrors'
+import { describeLoginError, describeRegisterError } from '@/services/cloud/cloudLoginErrors'
+import { resolveBaseUrl } from '@/services/cloud/apiClient'
+import { clearLocalCache } from '@/services/localCacheService'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCashierStore } from '@/stores/cashierStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
@@ -25,6 +28,8 @@ import { useSyncAutoSyncStore } from '@/stores/syncAutoSyncStore'
 import { useSyncContextGuardStore } from '@/stores/syncContextGuardStore'
 import { useSyncStatusStore } from '@/stores/syncStatusStore'
 import { useSyncReconciliationStore } from '@/stores/syncReconciliationStore'
+import { useProductStore } from '@/stores/productStore'
+import { useTransactionStore } from '@/stores/transactionStore'
 
 let route = null
 try {
@@ -43,6 +48,8 @@ const businessStore = useBusinessStore()
 const cashierStore = useCashierStore()
 const cloudStore = useCloudSessionStore()
 const subscriptionStore = useSubscriptionStore()
+const productStore = useProductStore()
+const transactionStore = useTransactionStore()
 const isOnboarding = computed(
   () => route?.name === 'cloud-onboarding' || route?.path === '/setup/cloud',
 )
@@ -60,12 +67,34 @@ const syncStatusStore = useSyncStatusStore()
 const syncReconciliationStore = useSyncReconciliationStore()
 
 // ── Form state ──────────────────────────────────────────────────────────────
+const authMode = ref(route?.query?.tab === 'register' ? 'register' : 'login')
 const email = ref('')
 const password = ref('')
 const showPassword = ref(false)
 const step = ref('login') // 'login' | 'select-business' | 'confirm-link' | 'select-outlet' | 'done'
 const pendingBusiness = ref(null)
 const loginErrorMessage = ref('')
+
+// In-app Cloud Registration state
+const registerName = ref('')
+const registerEmail = ref('')
+const registerPassword = ref('')
+const registerPasswordConfirmation = ref('')
+const registerBusinessName = ref('')
+const registerErrorMessage = ref('')
+const showRegisterPassword = ref(false)
+
+watch(
+  () => route?.query?.tab,
+  (newTab) => {
+    if (newTab === 'register') {
+      authMode.value = 'register'
+    } else if (newTab === 'login') {
+      authMode.value = 'login'
+    }
+  },
+)
+
 const showDisconnectConfirm = ref(false)
 const syncAllMessage = ref('')
 const syncAllSuccess = ref(false)
@@ -880,10 +909,45 @@ async function handleSyncNow() {
   }
 }
 
+async function autoPullAfterActivation() {
+  if (isInitialPullRunning.value || syncPullStore.loading) return
+  try {
+    await syncContextGuardStore.check()
+    await handlePullNow({ initialCloudRead: true })
+    if (!pullSuccess.value && pullMessage.value && pullMessage.value.includes('Bersihkan cache')) {
+      const hasTransactions = transactionStore.items && transactionStore.items.length > 0
+      if (!hasTransactions) {
+        await handleClearAndPull()
+      }
+    }
+  } catch (err) {
+    console.warn('Auto-pull after activation error:', err)
+  }
+}
+
+async function handleClearAndPull() {
+  if (isAnySyncOperationBusy.value) return
+  try {
+    await clearLocalCache({
+      pinia: null,
+      adapter: cloudStore.adapter,
+      scheduler: cloudStore.scheduler,
+      resetBusiness: false,
+    })
+    pullMessage.value = ''
+    await syncContextGuardStore.check()
+    await handlePullNow({ initialCloudRead: true })
+  } catch (err) {
+    pullSuccess.value = false
+    pullMessage.value = 'Gagal membersihkan cache: ' + (err?.message || err)
+  }
+}
+
 async function handlePullNow({ initialCloudRead = false } = {}) {
   if (isAnySyncOperationBusy.value || isContextGuardMutationBlocked.value) return
-  if (initialCloudRead && isInitialPullRunning.value) return
-  if (initialCloudRead) {
+  const isInitial = Boolean(initialCloudRead || isFreshWorkspace.value)
+  if (isInitial && isInitialPullRunning.value) return
+  if (isInitial) {
     isInitialPullRunning.value = true
   }
 
@@ -896,7 +960,7 @@ async function handlePullNow({ initialCloudRead = false } = {}) {
     const wasPushOnly = isPushOnlyWorkspace.value
     let result
     try {
-      result = await syncPullStore.pullNow({ initialCloudRead })
+      result = await syncPullStore.pullNow({ initialCloudRead: isInitial })
     } catch (err) {
       const finishedAt = new Date().toISOString()
       void syncActivityLogStore.record({
@@ -989,10 +1053,15 @@ async function handlePullNow({ initialCloudRead = false } = {}) {
       }
     } else {
       pullSuccess.value = false
-      pullMessage.value = result.error?.message ?? result.message ?? 'Gagal menarik data cloud.'
+      if (result.code === 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY') {
+        pullMessage.value =
+          'Data lokal belum tersinkron (misal: shift/kas yang sedang berjalan). Bersihkan cache lokal jika ingin memuat ulang dari Cloud.'
+      } else {
+        pullMessage.value = result.error?.message ?? result.message ?? 'Gagal menarik data cloud.'
+      }
     }
   } finally {
-    if (initialCloudRead) {
+    if (isInitial) {
       isInitialPullRunning.value = false
     }
   }
@@ -1191,6 +1260,49 @@ async function handleLogin() {
   step.value = businesses.length === 1 ? 'confirm-link' : 'select-business'
 }
 
+// ── In-App Registration flow ─────────────────────────────────────────────────
+async function handleRegister() {
+  registerErrorMessage.value = ''
+
+  if (!registerName.value.trim() || !registerEmail.value.trim() || !registerPassword.value) {
+    registerErrorMessage.value = 'Mohon isi nama lengkap, email, dan password.'
+    return
+  }
+
+  if (registerPassword.value.length < 8) {
+    registerErrorMessage.value = 'Password minimal 8 karakter.'
+    return
+  }
+
+  if (registerPassword.value !== registerPasswordConfirmation.value) {
+    registerErrorMessage.value = 'Konfirmasi password tidak cocok.'
+    return
+  }
+
+  const result = await cloudStore.register({
+    name: registerName.value.trim(),
+    email: registerEmail.value.trim(),
+    password: registerPassword.value,
+    password_confirmation: registerPasswordConfirmation.value,
+    business_name: registerBusinessName.value.trim() || undefined,
+  })
+
+  if (!result.ok) {
+    registerErrorMessage.value = describeRegisterError(result.error).message
+    return
+  }
+
+  const { businesses } = result
+
+  if (businesses.length === 0) {
+    step.value = 'done'
+    return
+  }
+
+  pendingBusiness.value = businesses.length === 1 ? businesses[0] : null
+  step.value = businesses.length === 1 ? 'confirm-link' : 'select-business'
+}
+
 function handleSelectBusiness(businessId) {
   const biz = cloudStore.businesses.find((b) => b.id === businessId)
   if (!biz) return
@@ -1278,7 +1390,7 @@ function applyActivationResult(activation) {
     step.value = 'done'
     businessStore.mode = 'cloud'
     if (canSync.value) {
-      void syncContextGuardStore.check()
+      void autoPullAfterActivation()
     }
     return true
   }
@@ -1302,7 +1414,7 @@ async function handleConfirmBusinessSwitch() {
     step.value = 'done'
     businessStore.mode = 'cloud'
     if (canSync.value) {
-      void syncContextGuardStore.check()
+      void autoPullAfterActivation()
     }
     return
   }
@@ -1359,6 +1471,9 @@ async function finishDeviceStep(outletResult = null) {
   }
 
   step.value = 'done'
+  if (canSync.value) {
+    void autoPullAfterActivation()
+  }
 }
 
 function requestDisconnect() {
@@ -1373,6 +1488,14 @@ async function confirmDisconnect() {
   autoSyncMessage.value = ''
   autoSyncSuccess.value = false
   syncAutoSyncStore.resetPresentation()
+
+  await clearLocalCache({
+    pinia: null,
+    adapter: cloudStore.adapter,
+    scheduler: cloudStore.scheduler,
+    resetBusiness: true,
+  })
+
   await cloudStore.logout()
   email.value = ''
   password.value = ''
@@ -1420,7 +1543,26 @@ onMounted(async () => {
       // Non-blocking best-effort refresh
     }
   }
+
+  if (canSync.value && productStore.products.length === 0 && !syncPullStore.loading) {
+    void autoPullAfterActivation()
+  }
 })
+
+async function handleOpenRegister() {
+  const registerUrl = `${resolveBaseUrl()}/register`
+  try {
+    if (Capacitor.isNativePlatform()) {
+      await Browser.open({ url: registerUrl })
+    } else if (typeof window !== 'undefined') {
+      window.open(registerUrl, '_blank')
+    }
+  } catch {
+    if (typeof window !== 'undefined') {
+      window.open(registerUrl, '_blank')
+    }
+  }
+}
 </script>
 
 <template>
@@ -1472,7 +1614,7 @@ onMounted(async () => {
       <BaseCard v-else-if="isLinked && step === 'done'" id="cloud-logged-in" class="space-y-4">
         <!-- Onboarding Next Step Guidance Card -->
         <div
-          v-if="isOnboarding || !cashierStore.activeCashier.pinConfigured"
+          v-if="isOnboarding || !cashierStore.activeCashier?.pinConfigured"
           id="cloud-onboarding-next-card"
           data-testid="cloud-onboarding-next"
           class="rounded-2xl border border-primary/20 bg-primary/5 p-4 sm:p-5"
@@ -2114,6 +2256,28 @@ onMounted(async () => {
         >
           {{ pullMessage }}
         </p>
+
+        <div
+          v-if="syncPullStore.lastResult?.code === 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY'"
+          id="clear-and-pull-section"
+          class="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3.5 space-y-2"
+        >
+          <p class="text-xs text-amber-800">
+            Ada data lokal yang belum tersinkron (seperti kas/shift). Jika Anda ingin menggunakan data Cloud sepenuhnya di perangkat ini, bersihkan cache lokal lalu muat ulang dari Cloud.
+          </p>
+          <BaseButton
+            id="clear-and-pull-btn"
+            variant="secondary"
+            size="sm"
+            class="w-full sm:w-auto text-amber-800 border-amber-300 hover:bg-amber-100"
+            :disabled="isAnySyncOperationBusy || isInitialPullRunning"
+            :loading="isInitialPullRunning"
+            @click="handleClearAndPull"
+          >
+            <AppIcon name="trash" class="h-4 w-4 text-amber-700" />
+            <span class="ml-1.5 font-medium">Bersihkan Cache & Muat Data Cloud</span>
+          </BaseButton>
+        </div>
       </div>
 
       <!-- P15: Manual Conflict Resolution Section -->
@@ -2555,59 +2719,201 @@ onMounted(async () => {
       </div>
     </BaseCard>
 
-    <!-- LOGIN FORM -->
+    <!-- AUTH FORM (LOGIN & IN-APP REGISTER) -->
     <BaseCard v-else class="space-y-4" id="cloud-login-form">
-      <p class="rounded-2xl bg-surface px-4 py-3 text-xs leading-relaxed text-ink-secondary">
-        Cloud Login menghubungkan POS ini dengan akun Cloud dan Dashboard. POS tetap dapat digunakan
-        tanpa Cloud Login.
-      </p>
-
-      <BaseInput
-        id="cloud-email"
-        v-model="email"
-        label="Email"
-        type="email"
-        placeholder="email@domain.com"
-        :disabled="cloudStore.loading"
-      />
-
-      <div class="space-y-2">
-        <BaseInput
-          id="cloud-password"
-          v-model="password"
-          label="Password"
-          :type="showPassword ? 'text' : 'password'"
-          placeholder="••••••••"
-          :disabled="cloudStore.loading"
-        />
+      <!-- Tab Switcher -->
+      <div class="grid grid-cols-2 rounded-2xl bg-surface p-1">
         <button
-          id="cloud-toggle-password"
+          id="cloud-tab-login"
           type="button"
-          class="text-xs font-medium text-primary underline-offset-2 hover:underline"
-          @click="showPassword = !showPassword"
+          class="rounded-xl py-2 text-xs font-semibold transition"
+          :class="
+            authMode === 'login'
+              ? 'bg-white text-ink-primary shadow-sm'
+              : 'text-ink-secondary hover:text-ink-primary'
+          "
+          @click="authMode = 'login'"
         >
-          {{ showPassword ? 'Sembunyikan password' : 'Tampilkan password' }}
+          Masuk Akun
+        </button>
+        <button
+          id="cloud-tab-register"
+          type="button"
+          class="rounded-xl py-2 text-xs font-semibold transition"
+          :class="
+            authMode === 'register'
+              ? 'bg-white text-ink-primary shadow-sm'
+              : 'text-ink-secondary hover:text-ink-primary'
+          "
+          @click="authMode = 'register'"
+        >
+          Daftar Akun Baru
         </button>
       </div>
 
-      <p
-        v-if="loginErrorMessage"
-        id="cloud-login-error"
-        class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger"
-        role="status"
-      >
-        {{ loginErrorMessage }}
-      </p>
+      <!-- LOGIN MODE -->
+      <template v-if="authMode === 'login'">
+        <p class="rounded-2xl bg-surface px-4 py-3 text-xs leading-relaxed text-ink-secondary">
+          Cloud Login menghubungkan POS ini dengan akun Cloud dan Dashboard. POS tetap dapat digunakan
+          tanpa Cloud Login.
+        </p>
 
-      <BaseButton
-        id="cloud-login-btn"
-        block
-        :loading="cloudStore.loading"
-        :disabled="!email || !password || cloudStore.loading"
-        @click="handleLogin"
-      >
-        Masuk ke Cloud
-      </BaseButton>
+        <BaseInput
+          id="cloud-email"
+          v-model="email"
+          label="Email"
+          type="email"
+          placeholder="email@domain.com"
+          :disabled="cloudStore.loading"
+        />
+
+        <div class="space-y-2">
+          <BaseInput
+            id="cloud-password"
+            v-model="password"
+            label="Password"
+            :type="showPassword ? 'text' : 'password'"
+            placeholder="••••••••"
+            :disabled="cloudStore.loading"
+          />
+          <button
+            id="cloud-toggle-password"
+            type="button"
+            class="text-xs font-medium text-primary underline-offset-2 hover:underline"
+            @click="showPassword = !showPassword"
+          >
+            {{ showPassword ? 'Sembunyikan password' : 'Tampilkan password' }}
+          </button>
+        </div>
+
+        <p
+          v-if="loginErrorMessage"
+          id="cloud-login-error"
+          class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger"
+          role="status"
+        >
+          {{ loginErrorMessage }}
+        </p>
+
+        <BaseButton
+          id="cloud-login-btn"
+          block
+          :loading="cloudStore.loading"
+          :disabled="!email || !password || cloudStore.loading"
+          @click="handleLogin"
+        >
+          Masuk ke Cloud
+        </BaseButton>
+
+        <div class="pt-2 text-center">
+          <p class="text-xs text-ink-secondary">
+            Belum punya akun Cloud?
+            <button
+              id="cloud-register-link-btn"
+              type="button"
+              class="font-semibold text-primary underline-offset-2 hover:underline ml-1 cursor-pointer"
+              @click="authMode = 'register'"
+            >
+              Daftar Sekarang
+            </button>
+          </p>
+        </div>
+      </template>
+
+      <!-- REGISTER MODE -->
+      <template v-else>
+        <p class="rounded-2xl bg-surface px-4 py-3 text-xs leading-relaxed text-ink-secondary">
+          Daftarkan akun Cloud baru langsung dari aplikasi untuk sinkronisasi data multi-device, cadangan online, dan integrasi pembayaran.
+        </p>
+
+        <BaseInput
+          id="cloud-register-name"
+          v-model="registerName"
+          label="Nama Lengkap"
+          type="text"
+          placeholder="Nama Anda"
+          :disabled="cloudStore.loading"
+        />
+
+        <BaseInput
+          id="cloud-register-business"
+          v-model="registerBusinessName"
+          label="Nama Toko / Usaha (Opsional)"
+          type="text"
+          placeholder="Misal: Toko Berkah"
+          :disabled="cloudStore.loading"
+        />
+
+        <BaseInput
+          id="cloud-register-email"
+          v-model="registerEmail"
+          label="Email"
+          type="email"
+          placeholder="email@domain.com"
+          :disabled="cloudStore.loading"
+        />
+
+        <div class="space-y-2">
+          <BaseInput
+            id="cloud-register-password"
+            v-model="registerPassword"
+            label="Password"
+            :type="showRegisterPassword ? 'text' : 'password'"
+            placeholder="Minimal 8 karakter"
+            :disabled="cloudStore.loading"
+          />
+          <button
+            id="cloud-toggle-register-password"
+            type="button"
+            class="text-xs font-medium text-primary underline-offset-2 hover:underline"
+            @click="showRegisterPassword = !showRegisterPassword"
+          >
+            {{ showRegisterPassword ? 'Sembunyikan password' : 'Tampilkan password' }}
+          </button>
+        </div>
+
+        <BaseInput
+          id="cloud-register-password-confirmation"
+          v-model="registerPasswordConfirmation"
+          label="Konfirmasi Password"
+          :type="showRegisterPassword ? 'text' : 'password'"
+          placeholder="Ulangi password"
+          :disabled="cloudStore.loading"
+        />
+
+        <p
+          v-if="registerErrorMessage"
+          id="cloud-register-error"
+          class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger"
+          role="status"
+        >
+          {{ registerErrorMessage }}
+        </p>
+
+        <BaseButton
+          id="cloud-register-submit-btn"
+          block
+          :loading="cloudStore.loading"
+          :disabled="!registerName || !registerEmail || !registerPassword || !registerPasswordConfirmation || cloudStore.loading"
+          @click="handleRegister"
+        >
+          Daftar Akun Cloud
+        </BaseButton>
+
+        <div class="pt-2 text-center">
+          <p class="text-xs text-ink-secondary">
+            Sudah punya akun Cloud?
+            <button
+              id="cloud-login-link-btn"
+              type="button"
+              class="font-semibold text-primary underline-offset-2 hover:underline ml-1 cursor-pointer"
+              @click="authMode = 'login'"
+            >
+              Masuk di sini
+            </button>
+          </p>
+        </div>
+      </template>
     </BaseCard>
 
     <!-- DISCONNECT CONFIRMATION (PREM-M03) -->
@@ -2618,8 +2924,7 @@ onMounted(async () => {
     >
       <div class="space-y-4" data-testid="cloud-disconnect-modal">
         <p class="text-sm text-ink-secondary">
-          Sesi Cloud akan diputuskan dari POS ini. Data lokal (produk, transaksi, pelanggan, kas,
-          dan pengaturan) tidak akan dihapus.
+          Apakah Anda yakin ingin memutuskan akun Cloud? Sesi Cloud akan diputuskan dan seluruh data cache lokal (menu produk, transaksi, riwayat kas, dan shift) akan dibersihkan agar data tidak tumpang tindih saat login dengan akun lain.
         </p>
         <div class="flex flex-wrap gap-2">
           <BaseButton
@@ -2628,7 +2933,7 @@ onMounted(async () => {
             :loading="cloudStore.loading"
             @click="confirmDisconnect"
           >
-            Ya, Putuskan
+            Ya, Putuskan & Hapus Cache
           </BaseButton>
           <BaseButton
             id="cloud-disconnect-cancel"
