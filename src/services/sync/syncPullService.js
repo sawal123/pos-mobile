@@ -708,7 +708,16 @@ export function createSyncPullService({
 
     const cursorAfter = currentAfter
 
-    // ── 6. Handle empty snapshot ──────────────────────────────────────────────
+    // ── 6. Resolve domain stores ──────────────────────────────────────────────
+    const productStore = stores?.productStore ?? (pinia ? useProductStore(pinia) : null)
+    const cashStore = stores?.cashStore ?? (pinia ? useCashStore(pinia) : null)
+    const customerStore = stores?.customerStore ?? (pinia ? useCustomerStore(pinia) : null)
+    const expenseStore = stores?.expenseStore ?? (pinia ? useExpenseStore(pinia) : null)
+    const transactionStore =
+      stores?.transactionStore ?? (pinia ? useTransactionStore(pinia) : null)
+    const shiftStore = stores?.shiftStore ?? (pinia ? useShiftStore(pinia) : null)
+
+    // ── 6.5. Handle empty snapshot ────────────────────────────────────────────
     if (allRecords.length === 0) {
       if (isInitialCloudPull) {
         if (scheduler && typeof scheduler.flush === 'function') {
@@ -835,6 +844,24 @@ export function createSyncPullService({
             },
           }
         }
+
+        // When initializing from Cloud into a fresh/linked workspace and Cloud is empty,
+        // clear any offline template/dummy products so the workspace accurately mirrors Cloud.
+        if (productStore) {
+          const remoteProducts = productStore.products.filter((p) => isUuid(p.id))
+          if (remoteProducts.length === 0 && productStore.products.length > 0) {
+            productStore.$patch({
+              products: [],
+              categories: [],
+              stockMovements: [],
+            })
+            if (scheduler && typeof scheduler.flush === 'function') {
+              await scheduler.flush()
+            } else if (adapter && typeof adapter.saveProducts === 'function') {
+              await adapter.saveProducts([], [], [])
+            }
+          }
+        }
       }
       if (
         options.initialCloudRead === true &&
@@ -958,14 +985,7 @@ export function createSyncPullService({
     // ── 7. Sort records by sync_sequence ASC ──────────────────────────────────
     allRecords.sort((a, b) => a.sync_sequence - b.sync_sequence)
 
-    // ── 8. Resolve domain stores and build prospective next state ─────────────
-    const productStore = stores?.productStore ?? (pinia ? useProductStore(pinia) : null)
-    const cashStore = stores?.cashStore ?? (pinia ? useCashStore(pinia) : null)
-    const customerStore = stores?.customerStore ?? (pinia ? useCustomerStore(pinia) : null)
-    const expenseStore = stores?.expenseStore ?? (pinia ? useExpenseStore(pinia) : null)
-    const transactionStore =
-      stores?.transactionStore ?? (pinia ? useTransactionStore(pinia) : null)
-    const shiftStore = stores?.shiftStore ?? (pinia ? useShiftStore(pinia) : null)
+    // ── 8. Build prospective next state and check conflicts ──────────────────
 
     // Helper to scan for conflicts against all pending outbox mutations
     async function checkForPendingConflicts(records) {
@@ -1129,8 +1149,15 @@ export function createSyncPullService({
       return earlyConflict
     }
 
-    const nextCategories = productStore ? [...productStore.categories] : []
-    const nextProducts = productStore ? productStore.products.map((p) => ({ ...p })) : []
+    const hasRemoteProducts = Boolean(productStore?.products?.some((p) => isUuid(p.id)))
+    const nextCategories = (isInitialCloudPull && !hasRemoteProducts)
+      ? []
+      : (productStore ? [...productStore.categories] : [])
+    const nextProducts = productStore
+      ? productStore.products
+          .filter((p) => !isInitialCloudPull || isUuid(p.id))
+          .map((p) => ({ ...p }))
+      : []
     const nextCustomers = customerStore ? customerStore.customers.map((c) => ({ ...c })) : []
     const nextExpenses = expenseStore ? expenseStore.expenses.map((e) => ({ ...e })) : []
     const nextCashEntries = cashStore ? cashStore.entries.map((e) => ({ ...e })) : []

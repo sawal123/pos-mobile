@@ -1127,6 +1127,18 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
           cashierStore.activeCashier.pinConfigured = true
         }
       } catch {}
+      try {
+        const { useProductStore } = await import('@/stores/productStore')
+        const pStore = useProductStore()
+        if (_adapter && typeof _adapter.loadProducts === 'function') {
+          const loaded = await _adapter.loadProducts()
+          pStore.$patch({
+            products: loaded?.products ?? [],
+            categories: loaded?.categories ?? [],
+            stockMovements: loaded?.stockMovements ?? [],
+          })
+        }
+      } catch {}
       return {
         ok: true,
         code: 'OPERATIONAL_CONTEXT_ACTIVATED',

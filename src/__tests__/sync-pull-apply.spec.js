@@ -2088,4 +2088,120 @@ describe('P13: Shared Registry & Production Wiring', () => {
     expect(localB).toBe('legacy-customer-b')
     expect(resolvedC).toBe(uuidC)
   })
+
+  it('initial Cloud pull with 0 records cleans unmapped offline dummy template products', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const productStore = useProductStore(pinia)
+    // Initially productStore has the 4 dummy cafe products
+    expect(productStore.products.map((p) => p.name)).toEqual([
+      'Es Kopi Susu',
+      'Americano',
+      'Croissant Butter',
+      'Chicken Sandwich',
+    ])
+
+    const adapter = createMemoryAdapter()
+    await adapter.initialize()
+
+    const transport = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: {
+        records: [],
+        next_cursor: 0,
+        server_sequence: 0,
+        has_more: false,
+      },
+    })
+
+    const queueService = createSyncQueueService({ adapter })
+    const registry = createSyncIdentityRegistry({ adapter })
+    const pullService = createSyncPullService({
+      adapter,
+      queueService,
+      registry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const result = await pullService.pullNow({
+      context: makeValidCloudContext(),
+      initialCloudRead: true,
+    })
+
+    expect(result.ok).toBe(true)
+    expect(result.applied).toBe(0)
+    // Dummy products must be completely wiped
+    expect(productStore.products).toEqual([])
+    expect((await adapter.loadProducts()).products).toEqual([])
+  })
+
+  it('initial Cloud pull with server records discards unmapped offline dummy template products and only keeps Cloud products', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const productStore = useProductStore(pinia)
+    expect(productStore.products.length).toBe(4)
+
+    const adapter = createMemoryAdapter()
+    await adapter.initialize()
+
+    const catUuid = '11111111-1111-4111-8111-111111111111'
+    const prodUuid = '22222222-2222-4222-8222-222222222222'
+
+    const transport = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: {
+        records: [
+          {
+            entity: 'categories',
+            sync_sequence: 1,
+            data: { sync_id: catUuid, sync_version: 1, name: 'Sembako', status: 'active' },
+          },
+          {
+            entity: 'products',
+            sync_sequence: 2,
+            data: {
+              sync_id: prodUuid,
+              sync_version: 1,
+              category_sync_id: catUuid,
+              name: 'Beras Ramos 5kg',
+              price: 75000,
+              cost: 65000,
+              stock: 10,
+              unit: 'sak',
+              status: 'active',
+            },
+          },
+        ],
+        next_cursor: 2,
+        server_sequence: 2,
+        has_more: false,
+      },
+    })
+
+    const queueService = createSyncQueueService({ adapter })
+    const registry = createSyncIdentityRegistry({ adapter })
+    const pullService = createSyncPullService({
+      adapter,
+      queueService,
+      registry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const result = await pullService.pullNow({
+      context: makeValidCloudContext(),
+      initialCloudRead: true,
+    })
+
+    expect(result.ok).toBe(true)
+    expect(result.applied).toBe(2)
+    // Only Cloud products are present
+    expect(productStore.products.map((p) => p.name)).toEqual(['Beras Ramos 5kg'])
+    expect((await adapter.loadProducts()).products.map((p) => p.name)).toEqual(['Beras Ramos 5kg'])
+  })
 })
