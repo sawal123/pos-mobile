@@ -343,6 +343,14 @@ const shiftRequiredRoutes = new Set([
   'payment-success',
 ])
 
+if (import.meta.env.DEV) {
+  routes.push({
+    path: '/dev/cloud-auth-preview',
+    name: 'dev-cloud-auth-preview',
+    component: () => import('@/views/dev/CloudAuthPreviewView.vue'),
+  })
+}
+
 export function createAppRouter() {
   const router = createRouter({
     history: createWebHistory(import.meta.env.BASE_URL),
