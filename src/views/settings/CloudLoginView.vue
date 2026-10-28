@@ -100,9 +100,11 @@ const otpErrorMessage = ref('')
 const otpVerifiedMessage = ref('')
 const pendingRegistration = ref(null)
 const googleLoading = ref(false)
+let googleOperationSequence = 0
 
 onUnmounted(() => {
-  cancelGoogleSignIn()
+  googleOperationSequence += 1
+  void cancelGoogleSignIn()
 })
 
 watch(
@@ -1407,12 +1409,15 @@ function handleOtpOffline() {
 async function handleGoogleClick() {
   if (googleLoading.value || cloudStore.loading) return
 
+  const operationId = ++googleOperationSequence
+  const isCurrentOperation = () => googleOperationSequence === operationId
   googleLoading.value = true
   loginErrorMessage.value = ''
   registerErrorMessage.value = ''
 
   try {
     const providerResult = await signInWithGoogle()
+    if (!isCurrentOperation()) return
     if (!providerResult.ok) {
       const description = describeGoogleLoginError(providerResult)
       if (description.message) {
@@ -1424,10 +1429,16 @@ async function handleGoogleClick() {
 
     let idToken = providerResult.idToken
     try {
-      const result = await cloudStore.loginWithGoogle(idToken, 'android')
+      if (!isCurrentOperation()) return
+      const result = await cloudStore.loginWithGoogle(idToken, 'android', {
+        isActive: isCurrentOperation,
+      })
+      if (!isCurrentOperation()) return
       if (!result.ok) {
         if (result.state === 'two_factor_required') {
-          loginErrorMessage.value = describeGoogleLoginError(result.error).message
+          const message = describeGoogleLoginError(result.error).message
+          loginErrorMessage.value = message
+          registerErrorMessage.value = message
           return
         }
 
@@ -1444,8 +1455,14 @@ async function handleGoogleClick() {
       idToken = null
       providerResult.idToken = null
     }
+  } catch (error) {
+    if (isCurrentOperation()) {
+      const description = describeGoogleLoginError(error)
+      loginErrorMessage.value = description.message
+      registerErrorMessage.value = description.message
+    }
   } finally {
-    googleLoading.value = false
+    if (isCurrentOperation()) googleLoading.value = false
   }
 }
 

@@ -1,6 +1,7 @@
 package com.posoffline.app;
 
 import android.app.Activity;
+import android.os.CancellationSignal;
 import android.util.Base64;
 
 import androidx.annotation.NonNull;
@@ -45,6 +46,8 @@ public class GoogleNativeAuthPlugin extends Plugin {
     private CredentialManager credentialManager;
     private String webClientId;
     private PluginCall activeCall;
+    private String activeOperationKey;
+    private CancellationSignal activeCancellationSignal;
 
     @PluginMethod
     public void initialize(PluginCall call) {
@@ -79,14 +82,20 @@ public class GoogleNativeAuthPlugin extends Plugin {
         }
 
         final long operationId = operationSequence.incrementAndGet();
+        final String operationKey = call.getString("operationId", String.valueOf(operationId));
         activeCall = call;
+        activeOperationKey = operationKey;
         final Activity activity = getActivity();
         if (activity == null) {
             operationActive.set(false);
             activeCall = null;
+            activeOperationKey = null;
             call.reject("Google Sign-In tidak tersedia saat ini.", ERROR_UNAVAILABLE);
             return;
         }
+
+        final CancellationSignal cancellationSignal = new CancellationSignal();
+        activeCancellationSignal = cancellationSignal;
 
         try {
             GetSignInWithGoogleOption googleOption = new GetSignInWithGoogleOption.Builder(webClientId)
@@ -99,7 +108,7 @@ public class GoogleNativeAuthPlugin extends Plugin {
             credentialManager.getCredentialAsync(
                 activity,
                 request,
-                null,
+                cancellationSignal,
                 ContextCompat.getMainExecutor(activity),
                 new androidx.credentials.CredentialManagerCallback<GetCredentialResponse, GetCredentialException>() {
                     @Override
@@ -150,13 +159,45 @@ public class GoogleNativeAuthPlugin extends Plugin {
         }
     }
 
+    @PluginMethod
+    public void cancel(PluginCall call) {
+        String requestedOperationKey = call.getString("operationId", "");
+        if (!operationActive.get()
+            || activeOperationKey == null
+            || !activeOperationKey.equals(requestedOperationKey)) {
+            call.resolve();
+            return;
+        }
+
+        operationActive.set(false);
+        operationSequence.incrementAndGet();
+        PluginCall pendingCall = activeCall;
+        activeCall = null;
+        activeOperationKey = null;
+        CancellationSignal cancellationSignal = activeCancellationSignal;
+        activeCancellationSignal = null;
+        if (cancellationSignal != null && !cancellationSignal.isCanceled()) {
+            cancellationSignal.cancel();
+        }
+        if (pendingCall != null) {
+            pendingCall.reject("Google Sign-In dibatalkan.", ERROR_CANCELLED);
+        }
+        call.resolve();
+    }
+
     @Override
     public void handleOnDestroy() {
         // Abandoned/recreated Activity callbacks must never activate a session.
         operationActive.set(false);
         operationSequence.incrementAndGet();
         PluginCall abandonedCall = activeCall;
+        CancellationSignal cancellationSignal = activeCancellationSignal;
         activeCall = null;
+        activeOperationKey = null;
+        activeCancellationSignal = null;
+        if (cancellationSignal != null && !cancellationSignal.isCanceled()) {
+            cancellationSignal.cancel();
+        }
         credentialManager = null;
         webClientId = null;
         if (abandonedCall != null) {
@@ -173,6 +214,8 @@ public class GoogleNativeAuthPlugin extends Plugin {
         if (!isCurrentOperation(operationId)) return;
         operationActive.set(false);
         activeCall = null;
+        activeOperationKey = null;
+        activeCancellationSignal = null;
         call.resolve(result);
     }
 
@@ -180,6 +223,8 @@ public class GoogleNativeAuthPlugin extends Plugin {
         if (!isCurrentOperation(operationId)) return;
         operationActive.set(false);
         activeCall = null;
+        activeOperationKey = null;
+        activeCancellationSignal = null;
         call.reject(message, code);
     }
 

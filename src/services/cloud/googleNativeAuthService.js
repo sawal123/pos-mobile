@@ -82,17 +82,23 @@ export async function signInWithGoogle({ webClientId = getGoogleWebClientId() } 
 
   try {
     await initialize(clientId)
+    if (activeOperation !== operationId) {
+      return { ok: false, state: 'provider_error', code: 'STALE_OPERATION' }
+    }
 
     let result
     try {
-      result = await GoogleNativeAuth.signIn()
+      result = await GoogleNativeAuth.signIn({ operationId: String(operationId) })
     } catch (error) {
       // Activity recreation can reset the native plugin while the WebView
       // survives. Reinitialize once; no assertion has been received yet.
       if (providerErrorCode(error) === 'NOT_INITIALIZED') {
         initializedClientId = null
         await initialize(clientId)
-        result = await GoogleNativeAuth.signIn()
+        if (activeOperation !== operationId) {
+          return { ok: false, state: 'provider_error', code: 'STALE_OPERATION' }
+        }
+        result = await GoogleNativeAuth.signIn({ operationId: String(operationId) })
       } else {
         throw error
       }
@@ -120,8 +126,14 @@ export async function signInWithGoogle({ webClientId = getGoogleWebClientId() } 
 
 /** Invalidate a provider callback when the login page is left or destroyed. */
 export function cancelGoogleSignIn() {
+  const cancelledOperation = activeOperation
   operationSequence += 1
   activeOperation = null
+  if (cancelledOperation === null) return Promise.resolve()
+
+  return Promise.resolve(
+    GoogleNativeAuth.cancel({ operationId: String(cancelledOperation) }),
+  ).catch(() => undefined)
 }
 
 /** Test-only reset; it does not expose or persist any credential. */

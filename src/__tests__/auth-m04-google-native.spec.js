@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
+import { flushPromises, mount } from '@vue/test-utils'
 
 const nativeGooglePlugin = vi.hoisted(() => ({
   initialize: vi.fn(),
   signIn: vi.fn(),
+  cancel: vi.fn(),
 }))
 const capacitorApi = vi.hoisted(() => ({
   getPlatform: vi.fn(() => 'android'),
@@ -25,10 +27,12 @@ import {
 } from '@/services/cloud/authService'
 import {
   _resetGoogleNativeAuthForTests,
+  cancelGoogleSignIn,
   signInWithGoogle,
 } from '@/services/cloud/googleNativeAuthService'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { _resetTokenStore, getToken } from '@/services/cloud/tokenRepository'
+import CloudLoginView from '@/views/settings/CloudLoginView.vue'
 
 const WEB_CLIENT_ID = '1234567890-authm04.apps.googleusercontent.com'
 const GOOGLE_ID_TOKEN = 'google-id-token-memory-only'
@@ -61,6 +65,7 @@ beforeEach(() => {
   capacitorApi.getPlatform.mockReturnValue('android')
   nativeGooglePlugin.initialize.mockReset().mockResolvedValue(undefined)
   nativeGooglePlugin.signIn.mockReset()
+  nativeGooglePlugin.cancel.mockReset().mockResolvedValue(undefined)
   apiRequest.mockReset()
   _resetGoogleNativeAuthForTests()
   _resetTokenStore()
@@ -133,6 +138,45 @@ describe('AUTH-M04 native Google provider adapter', () => {
 
     resolveSignIn({ idToken: GOOGLE_ID_TOKEN })
     await expect(first).resolves.toMatchObject({ ok: true, state: 'success' })
+  })
+
+  it('does not launch the picker after cancellation during initialization', async () => {
+    let resolveInitialize
+    nativeGooglePlugin.initialize.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveInitialize = resolve
+      }),
+    )
+
+    const pending = signInWithGoogle({ webClientId: WEB_CLIENT_ID })
+    await Promise.resolve()
+    await cancelGoogleSignIn()
+    resolveInitialize()
+
+    await expect(pending).resolves.toMatchObject({ code: 'STALE_OPERATION' })
+    expect(nativeGooglePlugin.signIn).not.toHaveBeenCalled()
+    expect(nativeGooglePlugin.cancel).toHaveBeenCalledWith({ operationId: '1' })
+  })
+
+  it('does not relaunch the picker after cancellation during reinitialization', async () => {
+    let resolveReinitialize
+    nativeGooglePlugin.initialize
+      .mockResolvedValueOnce(undefined)
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveReinitialize = resolve
+        }),
+      )
+    nativeGooglePlugin.signIn.mockRejectedValueOnce({ code: 'NOT_INITIALIZED' })
+
+    const pending = signInWithGoogle({ webClientId: WEB_CLIENT_ID })
+    await vi.waitFor(() => expect(nativeGooglePlugin.initialize).toHaveBeenCalledTimes(2))
+
+    await cancelGoogleSignIn()
+    resolveReinitialize()
+
+    await expect(pending).resolves.toMatchObject({ code: 'STALE_OPERATION' })
+    expect(nativeGooglePlugin.signIn).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -261,5 +305,57 @@ describe('AUTH-M04 Cloud session handoff', () => {
 
     expect(result.error.code).toBe('SESSION_ALREADY_ACTIVE')
     expect(apiRequest).not.toHaveBeenCalled()
+  })
+
+  it('rolls back a Google session if the view becomes stale during context finalization', async () => {
+    let resolveContext
+    apiRequest
+      .mockResolvedValueOnce(googleSuccessResponse())
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveContext = resolve
+        }),
+      )
+    const store = useCloudSessionStore()
+    let active = true
+
+    const pending = store.loginWithGoogle(GOOGLE_ID_TOKEN, 'android', {
+      isActive: () => active,
+    })
+    await vi.waitFor(() => expect(apiRequest).toHaveBeenCalledWith('/api/mobile/context', expect.anything()))
+
+    active = false
+    resolveContext(contextResponse())
+
+    await expect(pending).resolves.toMatchObject({ state: 'stale_operation' })
+    expect(await getToken()).toBeNull()
+    expect(store.isAuthenticated).toBe(false)
+  })
+
+  it('shows the Google 2FA message on the active registration tab without exposing task context', async () => {
+    vi.stubEnv('VITE_GOOGLE_WEB_CLIENT_ID', WEB_CLIENT_ID)
+    nativeGooglePlugin.signIn.mockResolvedValueOnce({ idToken: GOOGLE_ID_TOKEN })
+    apiRequest.mockResolvedValueOnce({
+      ok: true,
+      status: 202,
+      data: {
+        code: 'TWO_FACTOR_REQUIRED',
+        data: {
+          challenge_id: 'challenge-ui',
+          expires_at: '2099-01-01T00:30:00Z',
+          methods: ['totp'],
+        },
+      },
+      error: null,
+    })
+
+    const wrapper = mount(CloudLoginView)
+    await wrapper.find('#cloud-tab-register').trigger('click')
+    await wrapper.find('[data-testid="register-google-button"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Akun memerlukan verifikasi dua langkah.')
+    expect(wrapper.text()).not.toContain('AUTH-M08')
+    expect(wrapper.find('[data-testid="register-google-button"]').exists()).toBe(true)
   })
 })

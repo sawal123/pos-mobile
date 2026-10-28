@@ -99,7 +99,7 @@ export function describeGoogleLoginError(error) {
     return { kind: 'identity-conflict', message: 'Identitas Google tidak dapat dihubungkan dengan aman ke akun ini.' }
   }
   if (status === 202 || code === 'TWO_FACTOR_REQUIRED') {
-    return { kind: 'two-factor', message: 'Akun memerlukan verifikasi dua langkah. Penyelesaian interaktif tersedia pada AUTH-M08.' }
+    return { kind: 'two-factor', message: 'Akun memerlukan verifikasi dua langkah. Selesaikan verifikasi melalui alur yang tersedia.' }
   }
   if (status === 401 || code === 'GOOGLE_TOKEN_INVALID' || code === 'GOOGLE_TOKEN_EXPIRED' || code === 'GOOGLE_AUDIENCE_INVALID') {
     return { kind: 'invalid-token', message: 'Verifikasi Google gagal. Coba masuk dengan Google kembali.' }

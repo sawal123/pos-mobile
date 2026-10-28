@@ -102,6 +102,10 @@ registers `GoogleNativeAuthPlugin` before the Capacitor bridge is created.
 - validates the public Web Client ID before native invocation;
 - initializes the native provider idempotently;
 - allows one active provider operation at a time;
+- checks the operation identity after every initialization wait and before each
+  native picker launch, including the activity-recovery reinitialization path;
+- cancels the active Android Credential Manager request with a keyed
+  `CancellationSignal`, so an old page cannot cancel a newer picker;
 - maps cancel, unavailable credential/provider, configuration, and provider
   failures to typed states;
 - invalidates callbacks when the login view is destroyed or the activity is
@@ -140,6 +144,12 @@ The returned Sanctum token is saved only through the existing secure
 Cloud Session store. Business confirmation, outlet selection, device policy,
 entitlement, workspace alignment, and sync guards remain unchanged.
 
+The complete Google flow carries a page-operation guard through native token
+acquisition, the v2 exchange, context loading, and finalization. If the page is
+unmounted or the operation becomes stale, no new session is activated. If a
+token was already saved, the store removes only that same token and clears only
+Cloud session/context state; local POS data is not touched.
+
 ## Response handling
 
 - Native cancel: loading closes; the user remains on the login screen.
@@ -153,8 +163,9 @@ entitlement, workspace alignment, and sync guards remain unchanged.
 - `409 IDENTITY_CONFLICT`: show a separate safe conflict message; no linking is
   attempted.
 - `202 TWO_FACTOR_REQUIRED`: validate `challenge_id`, `expires_at`, and
-  non-empty `methods`; keep the session unauthenticated and hand off to
-  AUTH-M08.
+  non-empty `methods`; keep the session unauthenticated, show the message on
+  whichever auth tab started Google Sign-In, and hand off to AUTH-M08 without
+  exposing internal task identifiers in the user-facing copy.
 - `429`: show safe cooldown guidance; no assertion replay.
 - `503`: show provider/provisioning unavailable guidance.
 - Network timeout: do not claim success or silently retry; the user may start a
@@ -186,13 +197,13 @@ workspace alignment.
 Targeted AUTH-M04 plus AUTH-M02/AUTH-M03/API/Cloud Session tests:
 
 ```text
-94 passed
+98 passed
 ```
 
 Full branch run:
 
 ```text
-1,865 passed
+1,869 passed
 11 failed
 4 skipped
 ```
@@ -206,7 +217,7 @@ The 11 failures are the existing unrelated baseline failures. A fresh detached
 4 skipped
 ```
 
-The branch adds 16 AUTH-M04 tests and introduces no additional failure.
+The branch adds 20 AUTH-M04 tests and introduces no additional failure.
 
 Build results:
 

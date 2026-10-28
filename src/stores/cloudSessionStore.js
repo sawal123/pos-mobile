@@ -687,7 +687,50 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
    *
    * Returns { ok, businesses, error }.
    */
-  async function finalizeAuthenticatedLogin(loginResult) {
+  function staleGoogleLoginResult() {
+    return {
+      ok: false,
+      state: 'stale_operation',
+      error: {
+        status: 0,
+        code: 'STALE_OPERATION',
+        message: 'Login Google dibatalkan karena halaman sudah tidak aktif.',
+        data: null,
+      },
+    }
+  }
+
+  async function rollbackStaleGoogleSession(savedToken) {
+    let currentToken
+    try {
+      currentToken = await getToken()
+    } catch {
+      return
+    }
+
+    // Never remove a token belonging to a newer operation or session.
+    if (currentToken !== savedToken) return
+
+    try {
+      await removeToken()
+    } catch {
+      // The in-memory session is still cleared below.
+    }
+    clearSession()
+
+    if (_adapter) {
+      try {
+        await _adapter.clearCloudContext()
+      } catch {
+        // Local POS data is intentionally untouched.
+      }
+    }
+  }
+
+  async function finalizeAuthenticatedLogin(loginResult, { isActive = () => true, rollbackOnStale = false } = {}) {
+    const stale = () => rollbackOnStale && !isActive()
+
+    if (stale()) return staleGoogleLoginResult()
 
       if (loginResult.state === 'two_factor_required') {
         error.value = 'Verifikasi dua faktor tambahan diperlukan. Selesaikan melalui alur AUTH-M08.'
@@ -704,8 +747,15 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         return { ok: false, error: loginResult.error }
       }
 
+      if (stale()) return staleGoogleLoginResult()
+
       // Token is only persisted after confirmed success
       await saveToken(loginResult.token)
+
+      if (stale()) {
+        await rollbackStaleGoogleSession(loginResult.token)
+        return staleGoogleLoginResult()
+      }
 
       user.value = loginResult.user
         ? {
@@ -715,12 +765,26 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
           }
         : null
 
+      if (stale()) {
+        await rollbackStaleGoogleSession(loginResult.token)
+        return staleGoogleLoginResult()
+      }
+
       // INT-02: the context request must carry this device's stable identifier
       // so the backend can return the owner-pre-registered `device_context`.
       const contextDeviceId = await ensureDeviceIdentifier()
+      if (stale()) {
+        await rollbackStaleGoogleSession(loginResult.token)
+        return staleGoogleLoginResult()
+      }
       const contextResult = await fetchMobileContext(loginResult.token, {
         deviceIdentifier: contextDeviceId,
       })
+
+      if (stale()) {
+        await rollbackStaleGoogleSession(loginResult.token)
+        return staleGoogleLoginResult()
+      }
 
       if (!contextResult.ok) {
         if (isUnauthorizedError(contextResult.error)) {
@@ -736,6 +800,11 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       }
 
       const parsed = extractBusinesses(contextResult.data)
+
+      if (stale()) {
+        await rollbackStaleGoogleSession(loginResult.token)
+        return staleGoogleLoginResult()
+      }
 
       if (!parsed.ok) {
         // Fail closed: a malformed context must not grant any Cloud access.
@@ -761,6 +830,11 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       // Persist cloud context on successful login + context
       await persistCloudContext()
 
+      if (stale()) {
+        await rollbackStaleGoogleSession(loginResult.token)
+        return staleGoogleLoginResult()
+      }
+
       return { ok: true, businesses: businesses.value }
   }
 
@@ -778,8 +852,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   }
 
   /** Exchange a fresh native Google assertion through the same session path. */
-  async function loginWithGoogle(idToken, platform = 'android') {
+  async function loginWithGoogle(idToken, platform = 'android', { isActive = () => true } = {}) {
     if (loading.value) return { ok: false, error: { status: 0, code: 'REQUEST_IN_PROGRESS' } }
+    if (!isActive()) return staleGoogleLoginResult()
     if (isAuthenticated.value) {
       return {
         ok: false,
@@ -795,7 +870,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     loading.value = true
     error.value = null
     try {
-      return await finalizeAuthenticatedLogin(await cloudGoogleLogin(idToken, platform))
+      const loginResult = await cloudGoogleLogin(idToken, platform)
+      if (!isActive()) return staleGoogleLoginResult()
+      return await finalizeAuthenticatedLogin(loginResult, { isActive, rollbackOnStale: true })
     } finally {
       loading.value = false
     }
