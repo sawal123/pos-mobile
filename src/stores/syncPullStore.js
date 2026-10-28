@@ -56,6 +56,35 @@ export const useSyncPullStore = defineStore('syncPull', () => {
     loading.value = true
     lastError.value = null
 
+    // A restored capability cache is display-only. Reconfirm the Cloud
+    // session before any pull can apply tenant data to the local workspace.
+    if (options.refreshContext !== false && cloudStore.isAuthenticated) {
+      let verification
+      try {
+        verification = await cloudStore.ensureVerifiedContext()
+      } catch {
+        verification = { ok: false, code: 'CONTEXT_REFRESH_FAILED' }
+      }
+      if (!verification.ok && verification.skipped !== true) {
+        const blocked = {
+          ok: false,
+          code: 'SYNC_CAPABILITIES_UNVERIFIED',
+          authorizationCode: verification.code ?? 'CONTEXT_REFRESH_FAILED',
+          message:
+            verification.message ??
+            'Izin sinkronisasi belum dapat diverifikasi ulang. Data lokal tetap aman dan menunggu koneksi.',
+          error: {
+            code: 'SYNC_CAPABILITIES_UNVERIFIED',
+            message: 'Izin sinkronisasi belum dapat diverifikasi ulang.',
+          },
+        }
+        lastResult.value = blocked
+        lastError.value = blocked.message
+        loading.value = false
+        return blocked
+      }
+    }
+
     const resolvedContext = options.context ?? {
       user: cloudStore.user,
       selectedBusiness: cloudStore.selectedBusiness,
@@ -112,7 +141,7 @@ export const useSyncPullStore = defineStore('syncPull', () => {
     try {
       productStore = useProductStore()
     } catch {
-      productStore = null
+      // unavailable outside a Pinia component context
     }
 
     if (!force && productStore && productStore.products.length > 0) {
@@ -146,7 +175,7 @@ export const useSyncPullStore = defineStore('syncPull', () => {
         const { useTransactionStore } = await import('./transactionStore')
         transactionStore = useTransactionStore()
       } catch {
-        transactionStore = null
+        // unavailable outside a Pinia component context
       }
       if (!transactionStore?.items || transactionStore.items.length === 0) {
         try {

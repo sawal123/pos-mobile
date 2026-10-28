@@ -295,13 +295,15 @@ export async function cloudLogin(email, password) {
   const token = data?.token
   const user = data?.user
 
-  if (!token) {
+  if (!token || !isValidAuthenticatedUser(user)) {
     return {
       ok: false,
       error: {
-        status: 0,
-        code: 'MISSING_TOKEN',
-        message: 'Token not returned by server',
+        status: result.status,
+        code: !token ? 'MISSING_TOKEN' : 'MALFORMED_LOGIN_SUCCESS',
+        message: !token
+          ? 'Token not returned by server'
+          : 'Respons login tidak valid.',
         data: null,
       },
     }
@@ -310,7 +312,7 @@ export async function cloudLogin(email, password) {
   return { ok: true, token, user }
 }
 
-function isValidGoogleUser(user) {
+function isValidAuthenticatedUser(user) {
   return (
     user &&
     (typeof user.id === 'string' || typeof user.id === 'number') &&
@@ -411,7 +413,7 @@ export async function cloudGoogleLogin(idToken, platform = 'android') {
     tokenType !== 'Bearer' ||
     typeof token !== 'string' ||
     token.trim() === '' ||
-    !isValidGoogleUser(user)
+    !isValidAuthenticatedUser(user)
   ) {
     return {
       ok: false,
