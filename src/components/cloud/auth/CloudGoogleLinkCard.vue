@@ -130,6 +130,25 @@ function restartAfterInvalidGrant(result) {
   return true
 }
 
+function clearCachedAuthenticationMethods() {
+  authMethods.value = null
+  methodsError.value = ''
+}
+
+function returnToUnverifiedStatus(message) {
+  flowSequence += 1
+  clearCachedAuthenticationMethods()
+  clearSensitiveFields()
+  flowError.value = message
+  flowMessage.value = ''
+  requiresTotp.value = false
+  pickerLoading.value = false
+  reauthLoading.value = false
+  void cancelGoogleSignIn()
+  cloudStore.cancelGoogleAccountLinking()
+  flowState.value = 'idle'
+}
+
 function continueToReauthentication() {
   flowError.value = ''
   flowState.value = 'reauthenticating'
@@ -211,11 +230,20 @@ async function pickGoogleAccount() {
     }
     if (!result.ok) {
       if (restartAfterInvalidGrant(result)) return
+      const code = result?.error?.code ?? result?.code
+      if (result?.code === 'LINK_STATUS_UNVERIFIED' || code === 'LINK_STATUS_UNVERIFIED') {
+        returnToUnverifiedStatus(
+          'Status penghubungan belum dapat dipastikan. Periksa metode login sebelum mencoba lagi.',
+        )
+        return
+      }
       flowError.value = describeError(result.error ?? result)
       return
     }
 
-    if (Array.isArray(result.authenticationMethods)) {
+    if (result.methodsVerified === false) {
+      clearCachedAuthenticationMethods()
+    } else if (Array.isArray(result.authenticationMethods)) {
       authMethods.value = result.authenticationMethods
     }
     flowMessage.value = result.methodsVerified

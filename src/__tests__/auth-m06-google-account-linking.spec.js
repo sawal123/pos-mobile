@@ -374,6 +374,108 @@ describe('AUTH-M06 authenticated linking lifecycle', () => {
     },
   )
 
+  it('invalidates cached methods after HTTP 200 when read-only verification fails, then recovers by refresh', async () => {
+    const store = prepareAuthenticatedStore()
+    await saveToken(TOKEN)
+    let methodCalls = 0
+    let reauthCalls = 0
+    let linkCalls = 0
+    apiRequest.mockImplementation(async (path) => {
+      if (path === '/api/v2/auth/me') {
+        methodCalls += 1
+        if (methodCalls === 1) return authMethods(['manual'])
+        if (methodCalls === 2) return fail(0, 'NETWORK_ERROR')
+        return authMethods(['manual', 'google'])
+      }
+      if (path === '/api/v2/auth/reauthenticate') {
+        reauthCalls += 1
+        return ok({ reauthentication_token: GRANT, expires_in: 300, purpose: 'google_link' })
+      }
+      if (path === '/api/v2/auth/google/link') {
+        linkCalls += 1
+        return ok({ provider: 'google', linked: true })
+      }
+      throw new Error(`Unexpected request ${path}`)
+    })
+    nativeSignIn.mockResolvedValue({ ok: true, state: 'success', idToken: GOOGLE_ID_TOKEN })
+
+    const wrapper = mount(CloudLoginView)
+    await advanceToGooglePicker(wrapper)
+    await wrapper.get('[data-testid="google-link-picker-button"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="google-link-success"]').text()).toContain(
+      'status metode login belum dapat diverifikasi',
+    )
+    expect(wrapper.find('[data-testid="google-link-open"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="google-link-refresh-methods"]').exists()).toBe(true)
+    expect(linkCalls).toBe(1)
+    expect(reauthCalls).toBe(1)
+    expect(nativeSignIn).toHaveBeenCalledTimes(1)
+    expect(await getToken()).toBe(TOKEN)
+    expect(store.selectedBusiness).toMatchObject({ id: BUSINESS.id, name: BUSINESS.name })
+    expect(store.selectedOutlet).toMatchObject(OUTLET)
+
+    await wrapper.get('[data-testid="google-link-refresh-methods"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="google-linked-status"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="google-link-open"]').exists()).toBe(false)
+    expect(methodCalls).toBe(3)
+    expect(linkCalls).toBe(1)
+    expect(reauthCalls).toBe(1)
+    expect(nativeSignIn).toHaveBeenCalledTimes(1)
+  })
+
+  it('closes the picker and keeps methods unverified when link and status verification are uncertain', async () => {
+    const store = prepareAuthenticatedStore()
+    await saveToken(TOKEN)
+    let methodCalls = 0
+    let reauthCalls = 0
+    let linkCalls = 0
+    apiRequest.mockImplementation(async (path) => {
+      if (path === '/api/v2/auth/me') {
+        methodCalls += 1
+        if (methodCalls === 1) return authMethods(['manual'])
+        if (methodCalls === 2) return fail(0, 'NETWORK_ERROR')
+        return authMethods(['manual'])
+      }
+      if (path === '/api/v2/auth/reauthenticate') {
+        reauthCalls += 1
+        return ok({ reauthentication_token: GRANT, expires_in: 300, purpose: 'google_link' })
+      }
+      if (path === '/api/v2/auth/google/link') {
+        linkCalls += 1
+        return fail(0, 'NETWORK_ERROR')
+      }
+      throw new Error(`Unexpected request ${path}`)
+    })
+    nativeSignIn.mockResolvedValue({ ok: true, state: 'success', idToken: GOOGLE_ID_TOKEN })
+
+    const wrapper = mount(CloudGoogleLinkCard)
+    await advanceToGooglePicker(wrapper)
+    await wrapper.get('[data-testid="google-link-picker-button"]').trigger('click')
+    await vi.waitFor(() => expect(wrapper.get('[data-testid="google-link-error"]').text()).toContain(
+      'Periksa metode login sebelum mencoba lagi',
+    ))
+
+    expect(wrapper.find('[data-testid="google-link-picker-step"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="google-link-refresh-methods"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="google-link-open"]').exists()).toBe(false)
+    expect(linkCalls).toBe(1)
+    expect(reauthCalls).toBe(1)
+    expect(nativeSignIn).toHaveBeenCalledTimes(1)
+    expect(await getToken()).toBe(TOKEN)
+    expect(store.selectedBusiness).toMatchObject({ id: BUSINESS.id, name: BUSINESS.name })
+
+    await wrapper.get('[data-testid="google-link-refresh-methods"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="google-link-refresh-methods"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="google-link-open"]').exists()).toBe(true)
+    expect(linkCalls).toBe(1)
+    expect(reauthCalls).toBe(1)
+    expect(nativeSignIn).toHaveBeenCalledTimes(1)
+  })
+
   it('shows an explicit manual-account CTA after a Google collision without creating a session', async () => {
     apiRequest.mockResolvedValueOnce(fail(409, 'ACCOUNT_LINK_REQUIRED'))
     nativeSignIn.mockResolvedValue({ ok: true, state: 'success', idToken: GOOGLE_ID_TOKEN })

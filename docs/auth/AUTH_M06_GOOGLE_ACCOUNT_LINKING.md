@@ -77,6 +77,16 @@ session, active business/outlet, workspace, and local operational data are not
 cleared or replaced. A new Google assertion is requested only after the new
 reauthentication grant succeeds.
 
+When the link endpoint succeeds but the follow-up methods read is unavailable,
+the cached methods list is invalidated instead of being interpreted as
+`manual`/not-linked. The UI keeps the link acknowledgement while showing the
+read-only **Periksa metode login** action. An uncertain link request followed by
+an unsuccessful status read closes the picker and reports that the status is
+unverified; it does not claim success or failure, and it never replays the
+Google assertion or grant. A later authoritative refresh can show **Google
+Terhubung** or return to the explicit **Hubungkan Google** flow when Google is
+absent.
+
 ## Error handling
 
 Backend error codes are mapped to safe Indonesian messages. Password errors,
