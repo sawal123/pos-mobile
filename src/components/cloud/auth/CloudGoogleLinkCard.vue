@@ -105,6 +105,31 @@ function closeFlow() {
   flowState.value = 'idle'
 }
 
+function restartAfterInvalidGrant(result) {
+  const code = result?.error?.code ?? result?.code
+  if (![
+    'REAUTHENTICATION_EXPIRED',
+    'REAUTHENTICATION_ALREADY_USED',
+    'REAUTHENTICATION_REQUIRED',
+  ].includes(code)) {
+    return false
+  }
+
+  // The store has already discarded the grant after a link attempt. Reset the
+  // UI to an explicit restart point without touching the active session.
+  flowSequence += 1
+  clearSensitiveFields()
+  flowError.value = describeError(result.error ?? result)
+  flowMessage.value = ''
+  requiresTotp.value = false
+  pickerLoading.value = false
+  reauthLoading.value = false
+  void cancelGoogleSignIn()
+  cloudStore.cancelGoogleAccountLinking()
+  flowState.value = 'idle'
+  return true
+}
+
 function continueToReauthentication() {
   flowError.value = ''
   flowState.value = 'reauthenticating'
@@ -185,11 +210,8 @@ async function pickGoogleAccount() {
       return
     }
     if (!result.ok) {
+      if (restartAfterInvalidGrant(result)) return
       flowError.value = describeError(result.error ?? result)
-      if (result.code === 'REAUTHENTICATION_EXPIRED') {
-        flowState.value = 'idle'
-        clearSensitiveFields()
-      }
       return
     }
 

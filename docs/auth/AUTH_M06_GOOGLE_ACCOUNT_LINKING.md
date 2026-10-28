@@ -68,6 +68,15 @@ uncertainty does not replay the grant or Google assertion; the client performs
 one status verification through `/api/v2/auth/me` and reports an unverified
 outcome when the server state cannot be established.
 
+If the link response reports `REAUTHENTICATION_EXPIRED`,
+`REAUTHENTICATION_ALREADY_USED`, or `REAUTHENTICATION_REQUIRED`, the picker is
+closed and the UI returns to the explicit **Hubungkan Google** restart point.
+The user must choose the confirmation and reauthentication steps again before
+another native Google picker can open. The current Sanctum token, Cloud
+session, active business/outlet, workspace, and local operational data are not
+cleared or replaced. A new Google assertion is requested only after the new
+reauthentication grant succeeds.
+
 ## Error handling
 
 Backend error codes are mapped to safe Indonesian messages. Password errors,

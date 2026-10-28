@@ -79,6 +79,17 @@ function prepareAuthenticatedStore() {
   return store
 }
 
+async function advanceToGooglePicker(wrapper) {
+  await wrapper.get('[data-testid="google-link-refresh-methods"]').trigger('click')
+  await flushPromises()
+  await wrapper.get('[data-testid="google-link-open"]').trigger('click')
+  await wrapper.get('[data-testid="google-link-continue"]').trigger('click')
+  await wrapper.get('[data-testid="google-link-password"]').setValue('password')
+  await wrapper.get('[data-testid="google-link-reauth-form"]').trigger('submit')
+  await flushPromises()
+  expect(wrapper.get('[data-testid="google-link-picker-step"]').exists()).toBe(true)
+}
+
 beforeEach(() => {
   setActivePinia(createPinia())
   apiRequest.mockReset()
@@ -274,6 +285,94 @@ describe('AUTH-M06 authenticated linking lifecycle', () => {
       cloud_access: BUSINESS.cloud_access,
     })
   })
+
+  it('restarts verification after an expired grant response without unmounting the parent flow', async () => {
+    const store = prepareAuthenticatedStore()
+    await saveToken(TOKEN)
+    let reauthCalls = 0
+    let linkCalls = 0
+    apiRequest.mockImplementation(async (path) => {
+      if (path === '/api/v2/auth/me') return authMethods(['manual'])
+      if (path === '/api/v2/auth/reauthenticate') {
+        reauthCalls += 1
+        return ok({
+          reauthentication_token: `${GRANT}-${reauthCalls}`,
+          expires_in: 300,
+          purpose: 'google_link',
+        })
+      }
+      if (path === '/api/v2/auth/google/link') {
+        linkCalls += 1
+        return linkCalls === 1
+          ? fail(409, 'REAUTHENTICATION_EXPIRED')
+          : ok({ provider: 'google', linked: true })
+      }
+      throw new Error(`Unexpected request ${path}`)
+    })
+    nativeSignIn
+      .mockResolvedValueOnce({ ok: true, state: 'success', idToken: GOOGLE_ID_TOKEN })
+      .mockResolvedValueOnce({ ok: true, state: 'success', idToken: 'fresh-google-id-token-2' })
+
+    const wrapper = mount(CloudLoginView)
+    await advanceToGooglePicker(wrapper)
+    await wrapper.get('[data-testid="google-link-picker-button"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="cloud-google-link-card"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="google-link-picker-step"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="google-link-open"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="google-link-error"]').text()).toContain('Verifikasi ulang')
+    expect(linkCalls).toBe(1)
+    expect(nativeSignIn).toHaveBeenCalledTimes(1)
+    expect(await getToken()).toBe(TOKEN)
+    expect(store.selectedBusiness).toMatchObject({ id: BUSINESS.id, name: BUSINESS.name })
+
+    // Recovery is explicit: reauthentication happens before a new picker call.
+    await wrapper.get('[data-testid="google-link-open"]').trigger('click')
+    await wrapper.get('[data-testid="google-link-continue"]').trigger('click')
+    await wrapper.get('[data-testid="google-link-password"]').setValue('password')
+    await wrapper.get('[data-testid="google-link-reauth-form"]').trigger('submit')
+    await flushPromises()
+    expect(reauthCalls).toBe(2)
+    expect(nativeSignIn).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-testid="google-link-picker-step"]').exists()).toBe(true)
+
+    await wrapper.get('[data-testid="google-link-picker-button"]').trigger('click')
+    await flushPromises()
+    expect(nativeSignIn).toHaveBeenCalledTimes(2)
+    expect(linkCalls).toBe(2)
+    expect(wrapper.get('[data-testid="google-link-success"]').text()).toContain('berhasil')
+  })
+
+  it.each(['REAUTHENTICATION_ALREADY_USED', 'REAUTHENTICATION_REQUIRED'])(
+    'treats %s as an invalid grant and never reopens the picker automatically',
+    async (invalidGrantCode) => {
+      const store = prepareAuthenticatedStore()
+      await saveToken(TOKEN)
+      apiRequest.mockImplementation(async (path) => {
+        if (path === '/api/v2/auth/me') return authMethods(['manual'])
+        if (path === '/api/v2/auth/reauthenticate') {
+          return ok({ reauthentication_token: GRANT, expires_in: 300, purpose: 'google_link' })
+        }
+        if (path === '/api/v2/auth/google/link') return fail(409, invalidGrantCode)
+        throw new Error(`Unexpected request ${path}`)
+      })
+      nativeSignIn.mockResolvedValue({ ok: true, state: 'success', idToken: GOOGLE_ID_TOKEN })
+
+      const wrapper = mount(CloudGoogleLinkCard)
+      await advanceToGooglePicker(wrapper)
+      await wrapper.get('[data-testid="google-link-picker-button"]').trigger('click')
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="google-link-picker-step"]').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="google-link-open"]').exists()).toBe(true)
+      expect(wrapper.get('[data-testid="google-link-error"]').text()).toContain('Verifikasi ulang')
+      expect(nativeSignIn).toHaveBeenCalledTimes(1)
+      expect(apiRequest.mock.calls.filter(([path]) => path === '/api/v2/auth/google/link')).toHaveLength(1)
+      expect(store.isAuthenticated).toBe(true)
+      expect(await getToken()).toBe(TOKEN)
+    },
+  )
 
   it('shows an explicit manual-account CTA after a Google collision without creating a session', async () => {
     apiRequest.mockResolvedValueOnce(fail(409, 'ACCOUNT_LINK_REQUIRED'))
