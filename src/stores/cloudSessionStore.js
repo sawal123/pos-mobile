@@ -10,12 +10,18 @@ import {
   cloudVerifyOtp,
   cloudResendOtp,
   savePendingRegistrationMetadata,
+  getPendingRegistrationMetadata,
   clearPendingRegistrationMetadata,
   fetchMobileContext,
   registerDevice,
   cloudLogout,
 } from '@/services/cloud/authService'
-import { saveToken, getToken, removeToken } from '@/services/cloud/tokenRepository'
+import {
+  saveToken,
+  getToken,
+  removeToken,
+  removeTokenIfMatches,
+} from '@/services/cloud/tokenRepository'
 import { resolveDeviceIdentifier } from '@/services/cloud/deviceIdentifier'
 import {
   ROLE_CASHIER,
@@ -70,6 +76,37 @@ function mapBusinessEntry(b) {
   }
 }
 
+function isValidBusinessEntry(business) {
+  if (!business || typeof business !== 'object' || Array.isArray(business)) return false
+  if (business.id === null || business.id === undefined || String(business.id).trim() === '') {
+    return false
+  }
+  if (typeof business.name !== 'string' || business.name.trim() === '') return false
+  if (business.outlets !== undefined && !Array.isArray(business.outlets)) return false
+  return (business.outlets ?? []).every(
+    (outlet) =>
+      outlet &&
+      typeof outlet === 'object' &&
+      outlet.id !== null &&
+      outlet.id !== undefined &&
+      typeof outlet.name === 'string' &&
+      outlet.name.trim() !== '' &&
+      typeof outlet.status === 'string',
+  )
+}
+
+function isValidSessionUser(user) {
+  return (
+    user &&
+    (typeof user.id === 'string' || typeof user.id === 'number') &&
+    String(user.id).trim() !== '' &&
+    typeof user.name === 'string' &&
+    user.name.trim() !== '' &&
+    typeof user.email === 'string' &&
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(user.email)
+  )
+}
+
 /**
  * PREM-M03: parse the `businesses` payload defensively. A malformed payload
  * (present but not an array) fails closed instead of throwing or granting
@@ -86,6 +123,10 @@ function extractBusinesses(data) {
   }
 
   if (!Array.isArray(raw)) {
+    return { ok: false, businesses: [] }
+  }
+
+  if (!raw.every(isValidBusinessEntry)) {
     return { ok: false, businesses: [] }
   }
 
@@ -227,6 +268,45 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   /** Last cloud error string – cleared on each new operation */
   const error = ref(null)
 
+  /** Logical session state derived from the authoritative store facts below. */
+  const pendingAuthState = ref(null)
+
+  /** One ownership record for restore/auth/context operations. */
+  const activeSessionOperation = ref(null)
+  let sessionOperationSequence = 0
+
+  function beginSessionOperation(kind, { replace = false } = {}) {
+    if (activeSessionOperation.value && !replace) return null
+    const operation = { id: ++sessionOperationSequence, kind }
+    activeSessionOperation.value = operation
+    return operation
+  }
+
+  function isCurrentSessionOperation(operation) {
+    return Boolean(
+      operation &&
+        activeSessionOperation.value &&
+        activeSessionOperation.value.id === operation.id,
+    )
+  }
+
+  function finishSessionOperation(operation) {
+    if (isCurrentSessionOperation(operation)) activeSessionOperation.value = null
+  }
+
+  function staleSessionResult(message = 'Operasi sesi Cloud sudah tidak berlaku.') {
+    return {
+      ok: false,
+      state: 'stale_operation',
+      error: {
+        status: 0,
+        code: 'STALE_SESSION_OPERATION',
+        message,
+        data: null,
+      },
+    }
+  }
+
   /** Reference to persistence adapter */
   let _adapter = null
 
@@ -236,6 +316,30 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   // ── Computed ───────────────────────────────────────────────────────────────
 
   const isAuthenticated = computed(() => user.value !== null)
+
+  const sessionState = computed(() => {
+    if (sessionInvalid.value) return 'session_invalid'
+    if (pendingAuthState.value === 'pending_email') return 'pending_email'
+    if (pendingAuthState.value === 'pending_two_factor') return 'pending_two_factor'
+    if (
+      activeSessionOperation.value?.kind === 'restore' ||
+      activeSessionOperation.value?.kind === 'manual_login' ||
+      activeSessionOperation.value?.kind === 'google_login'
+    ) {
+      return 'authenticating'
+    }
+    if (!isAuthenticated.value) return 'unauthenticated'
+    if (!selectedBusiness.value) return 'authenticated_unlinked'
+    if (
+      capabilityState.value !== 'verified' ||
+      !isOperationalCloudAccess.value ||
+      pendingSwitch.value ||
+      workspaceRecoveryRequired.value
+    ) {
+      return 'linked_unverified'
+    }
+    return 'linked_ready'
+  })
 
   /** PREM-M03: a Cloud business is explicitly linked to this POS. */
   const isLinked = computed(() => isAuthenticated.value && selectedBusiness.value !== null)
@@ -572,11 +676,21 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
    * a "login again" state. Local POS data is never touched and there is no
    * retry loop (apiClient never retries).
    */
-  async function handleInvalidToken() {
+  async function handleInvalidToken({ token = null, operation = null } = {}) {
+    if (operation && !isCurrentSessionOperation(operation)) {
+      return { ok: false, code: 'STALE_SESSION_OPERATION', stale: true }
+    }
+
+    let removed = null
     try {
-      await removeToken()
+      removed = token ? await removeTokenIfMatches(token) : (await removeToken(), true)
     } catch {
       // ignore – the local Cloud session is cleared regardless
+    }
+
+    if (removed === null) removed = false
+    if (token && !removed) {
+      return { ok: false, code: 'TOKEN_OWNERSHIP_CHANGED' }
     }
 
     if (_adapter) {
@@ -589,7 +703,10 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
 
     clearSession()
     sessionInvalid.value = true
-    error.value = 'Sesi Cloud tidak valid. Silakan masuk kembali untuk menghubungkan ulang.'
+    error.value = removed
+      ? 'Sesi Cloud tidak valid. Silakan masuk kembali untuk menghubungkan ulang.'
+      : 'Sesi Cloud belum dapat dicabut dengan aman. Silakan coba lagi.'
+    return { ok: removed, code: removed ? 'TOKEN_INVALID' : 'TOKEN_REMOVAL_FAILED' }
   }
 
   function clearSession() {
@@ -611,6 +728,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     hasResolvedZeroBusiness.value = false
     operationalContext.value = null
     pendingSwitch.value = null
+    pendingAuthState.value = null
     error.value = null
     // deviceIdentifier, activeWorkspaceId and workspaceRegistry are device-local
     // and intentionally NOT cleared on logout — the active local workspace keeps
@@ -687,37 +805,23 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
    *
    * Returns { ok, businesses, error }.
    */
-  function staleGoogleLoginResult() {
-    return {
-      ok: false,
-      state: 'stale_operation',
-      error: {
-        status: 0,
-        code: 'STALE_OPERATION',
-        message: 'Login Google dibatalkan karena halaman sudah tidak aktif.',
-        data: null,
-      },
-    }
-  }
-
-  async function rollbackStaleGoogleSession(savedToken) {
-    let currentToken
+  async function rollbackStaleSession(savedToken) {
+    let removed
     try {
-      currentToken = await getToken()
+      removed = await removeTokenIfMatches(savedToken)
     } catch {
-      return
+      // Storage removal failure is fail-closed: memory is cleared and the
+      // session is marked invalid, while offline data remains untouched.
+      clearSession()
+      sessionInvalid.value = true
+      error.value = 'Sesi Cloud belum dapat dicabut dengan aman. Silakan coba lagi.'
+      return { ok: false, code: 'TOKEN_REMOVAL_FAILED' }
     }
 
-    // Never remove a token belonging to a newer operation or session.
-    if (currentToken !== savedToken) return
+    // Never clear a newer account's in-memory session when ownership changed.
+    if (!removed) return { ok: false, code: 'TOKEN_OWNERSHIP_CHANGED' }
 
-    try {
-      await removeToken()
-    } catch {
-      // The in-memory session is still cleared below.
-    }
     clearSession()
-
     if (_adapter) {
       try {
         await _adapter.clearCloudContext()
@@ -725,14 +829,21 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         // Local POS data is intentionally untouched.
       }
     }
+    return { ok: true }
   }
 
-  async function finalizeAuthenticatedLogin(loginResult, { isActive = () => true, rollbackOnStale = false } = {}) {
-    const stale = () => rollbackOnStale && !isActive()
+  async function finalizeAuthenticatedLogin(
+    loginResult,
+    { isActive = () => true, operation = null, rollbackOnStale = false } = {},
+  ) {
+    const stale = () =>
+      (operation && !isCurrentSessionOperation(operation)) ||
+      (rollbackOnStale && !isActive())
 
-    if (stale()) return staleGoogleLoginResult()
+    if (stale()) return staleSessionResult()
 
       if (loginResult.state === 'two_factor_required') {
+        pendingAuthState.value = 'pending_two_factor'
         error.value = 'Verifikasi dua faktor tambahan diperlukan. Selesaikan melalui alur AUTH-M08.'
         return {
           ok: false,
@@ -743,18 +854,21 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       }
 
       if (!loginResult.ok) {
+        pendingAuthState.value = null
         error.value = loginResult.error?.message ?? 'Login gagal'
         return { ok: false, error: loginResult.error }
       }
 
-      if (stale()) return staleGoogleLoginResult()
+      if (stale()) return staleSessionResult()
+
+      pendingAuthState.value = null
 
       // Token is only persisted after confirmed success
       await saveToken(loginResult.token)
 
       if (stale()) {
-        await rollbackStaleGoogleSession(loginResult.token)
-        return staleGoogleLoginResult()
+        await rollbackStaleSession(loginResult.token)
+        return staleSessionResult()
       }
 
       user.value = loginResult.user
@@ -766,29 +880,29 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         : null
 
       if (stale()) {
-        await rollbackStaleGoogleSession(loginResult.token)
-        return staleGoogleLoginResult()
+        await rollbackStaleSession(loginResult.token)
+        return staleSessionResult()
       }
 
       // INT-02: the context request must carry this device's stable identifier
       // so the backend can return the owner-pre-registered `device_context`.
       const contextDeviceId = await ensureDeviceIdentifier()
       if (stale()) {
-        await rollbackStaleGoogleSession(loginResult.token)
-        return staleGoogleLoginResult()
+        await rollbackStaleSession(loginResult.token)
+        return staleSessionResult()
       }
       const contextResult = await fetchMobileContext(loginResult.token, {
         deviceIdentifier: contextDeviceId,
       })
 
       if (stale()) {
-        await rollbackStaleGoogleSession(loginResult.token)
-        return staleGoogleLoginResult()
+        await rollbackStaleSession(loginResult.token)
+        return staleSessionResult()
       }
 
       if (!contextResult.ok) {
         if (isUnauthorizedError(contextResult.error)) {
-          await handleInvalidToken()
+          await handleInvalidToken({ token: loginResult.token, operation })
           return { ok: false, error: { ...contextResult.error, code: 'TOKEN_INVALID' } }
         }
 
@@ -802,8 +916,8 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       const parsed = extractBusinesses(contextResult.data)
 
       if (stale()) {
-        await rollbackStaleGoogleSession(loginResult.token)
-        return staleGoogleLoginResult()
+        await rollbackStaleSession(loginResult.token)
+        return staleSessionResult()
       }
 
       if (!parsed.ok) {
@@ -828,11 +942,11 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       contextCheckedAt.value = capabilitiesVerifiedAt.value
 
       // Persist cloud context on successful login + context
-      await persistCloudContext()
+      await persistCloudContext(_adapter, { throwOnError: true })
 
       if (stale()) {
-        await rollbackStaleGoogleSession(loginResult.token)
-        return staleGoogleLoginResult()
+        await rollbackStaleSession(loginResult.token)
+        return staleSessionResult()
       }
 
       return { ok: true, businesses: businesses.value }
@@ -841,20 +955,37 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   /** Login with email/password through the shared authenticated session path. */
   async function login(email, password) {
     if (loading.value) return { ok: false, error: { status: 0, code: 'REQUEST_IN_PROGRESS' } }
+    const operation = beginSessionOperation('manual_login')
+    if (!operation) return { ok: false, error: { status: 0, code: 'REQUEST_IN_PROGRESS' } }
     loading.value = true
     error.value = null
+    pendingAuthState.value = null
+    let loginResult = null
 
     try {
-      return await finalizeAuthenticatedLogin(await cloudLogin(email, password))
+      loginResult = await cloudLogin(email, password)
+      if (!isCurrentSessionOperation(operation)) return staleSessionResult()
+      return await finalizeAuthenticatedLogin(loginResult, {
+        operation,
+        rollbackOnStale: true,
+      })
+    } catch (exception) {
+      if (loginResult?.ok) await rollbackStaleSession(loginResult.token)
+      if (!isCurrentSessionOperation(operation)) return staleSessionResult()
+      const message = exception?.message ?? 'Login gagal. Coba lagi.'
+      error.value = message
+      return { ok: false, error: { status: 0, code: 'LOGIN_FAILED', message, data: null } }
     } finally {
-      loading.value = false
+      const ownsLoading = isCurrentSessionOperation(operation)
+      finishSessionOperation(operation)
+      if (ownsLoading) loading.value = false
     }
   }
 
   /** Exchange a fresh native Google assertion through the same session path. */
   async function loginWithGoogle(idToken, platform = 'android', { isActive = () => true } = {}) {
     if (loading.value) return { ok: false, error: { status: 0, code: 'REQUEST_IN_PROGRESS' } }
-    if (!isActive()) return staleGoogleLoginResult()
+    if (!isActive()) return staleSessionResult('Login Google dibatalkan karena halaman sudah tidak aktif.')
     if (isAuthenticated.value) {
       return {
         ok: false,
@@ -867,18 +998,23 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       }
     }
 
+    const operation = beginSessionOperation('google_login')
+    if (!operation) return { ok: false, error: { status: 0, code: 'REQUEST_IN_PROGRESS' } }
     loading.value = true
     error.value = null
+    pendingAuthState.value = null
     let loginResult = null
     try {
       loginResult = await cloudGoogleLogin(idToken, platform)
-      if (!isActive()) return staleGoogleLoginResult()
-      return await finalizeAuthenticatedLogin(loginResult, { isActive, rollbackOnStale: true })
+      if (!isCurrentSessionOperation(operation) || !isActive()) return staleSessionResult()
+      return await finalizeAuthenticatedLogin(loginResult, {
+        isActive,
+        operation,
+        rollbackOnStale: true,
+      })
     } catch (exception) {
-      if (loginResult?.ok) {
-        await rollbackStaleGoogleSession(loginResult.token)
-      }
-      if (!isActive()) return staleGoogleLoginResult()
+      if (loginResult?.ok) await rollbackStaleSession(loginResult.token)
+      if (!isCurrentSessionOperation(operation) || !isActive()) return staleSessionResult()
 
       const message = exception?.message ?? 'Login Google gagal. Coba lagi dengan akun Google.'
       error.value = message
@@ -887,7 +1023,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         error: { status: 0, code: 'GOOGLE_LOGIN_FAILED', message, data: null },
       }
     } finally {
-      loading.value = false
+      const ownsLoading = isCurrentSessionOperation(operation)
+      finishSessionOperation(operation)
+      if (ownsLoading) loading.value = false
     }
   }
 
@@ -899,6 +1037,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     if (loading.value) return { ok: false, error: { status: 0, code: 'REQUEST_IN_PROGRESS' } }
     loading.value = true
     error.value = null
+    pendingAuthState.value = null
 
     try {
       const regResult = await cloudRegister(payload)
@@ -909,6 +1048,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       }
 
       savePendingRegistrationMetadata(regResult.registration)
+      pendingAuthState.value = 'pending_email'
       return { ok: true, state: 'pending_email', registration: regResult.registration }
     } finally {
       loading.value = false
@@ -921,7 +1061,10 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     error.value = null
     try {
       const result = await cloudVerifyOtp(registrationId, code)
-      if (result.ok) clearPendingRegistrationMetadata()
+      if (result.ok) {
+        clearPendingRegistrationMetadata()
+        pendingAuthState.value = null
+      }
       else error.value = result.error?.message ?? 'Verifikasi email gagal.'
       return result
     } finally {
@@ -933,6 +1076,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     if (loading.value) return { ok: false, error: { status: 0, code: 'REQUEST_IN_PROGRESS' } }
     loading.value = true
     error.value = null
+    pendingAuthState.value = 'pending_email'
     try {
       const result = await cloudResendOtp(registrationId, email)
       if (result.ok) savePendingRegistrationMetadata(result.registration)
@@ -1413,18 +1557,25 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
    * NEVER deletes POS data, sync_queue, backup, or device_identifier.
    */
   async function logout() {
+    const operation = beginSessionOperation('logout', { replace: true })
     loading.value = true
     error.value = null
+    let token
+    let removed = true
 
     try {
-      const token = await getToken()
+      token = await getToken()
 
       if (token) {
         // Best-effort server notification – network failure is acceptable
         await cloudLogout(token).catch(() => {})
       }
 
-      await removeToken()
+      if (token) {
+        removed = await removeTokenIfMatches(token)
+      } else {
+        await removeToken()
+      }
 
       if (_adapter) {
         try {
@@ -1435,6 +1586,10 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       }
 
       clearSession()
+      if (!removed) {
+        sessionInvalid.value = true
+        error.value = 'Sesi Cloud belum dapat dicabut dengan aman. Silakan coba lagi.'
+      }
 
       try {
         const bStore = useBusinessStore()
@@ -1455,9 +1610,11 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         // non-blocking
       }
 
-      return { ok: true }
+      return { ok: removed, code: removed ? 'LOGGED_OUT' : 'TOKEN_REMOVAL_FAILED' }
     } finally {
-      loading.value = false
+      const ownsLoading = isCurrentSessionOperation(operation)
+      finishSessionOperation(operation)
+      if (ownsLoading) loading.value = false
     }
   }
 
@@ -1467,6 +1624,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
    * Called from bootstrapApp after persistence is ready.
    */
   async function hydrateFromStorage(adapter) {
+    const operation = beginSessionOperation('restore', { replace: true })
+    if (!operation) return { ok: false, code: 'REQUEST_IN_PROGRESS' }
+
     if (adapter) {
       setPersistenceAdapter(adapter)
     }
@@ -1487,6 +1647,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
 
       // Restore the active workspace identity + registry (device-local).
       await loadWorkspaceState()
+      if (!isCurrentSessionOperation(operation)) return staleSessionResult()
     }
 
     // Check if there's a valid token in secure storage
@@ -1495,8 +1656,18 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
 
       if (!token) {
         // FREE mode – POS continues offline
-        return { ok: true, authenticated: false }
+        clearSession()
+        try {
+          await targetAdapter?.clearCloudContext?.()
+        } catch {
+          // Best effort; the in-memory session is already unauthenticated.
+        }
+        pendingAuthState.value = getPendingRegistrationMetadata() ? 'pending_email' : null
+        finishSessionOperation(operation)
+        return { ok: true, authenticated: false, state: sessionState.value }
       }
+
+      if (!isCurrentSessionOperation(operation)) return staleSessionResult()
 
       // Restore stored cloud context (non-sensitive)
       if (targetAdapter) {
@@ -1504,7 +1675,18 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
           const ctx = await targetAdapter.loadCloudContext()
 
           if (ctx) {
-            user.value = ctx.user ?? null
+            if (!isCurrentSessionOperation(operation)) return staleSessionResult()
+            if (!isValidSessionUser(ctx.user)) {
+              clearSession()
+              await targetAdapter.clearCloudContext()
+              finishSessionOperation(operation)
+              return { ok: true, authenticated: false, state: sessionState.value }
+            }
+            user.value = {
+              id: ctx.user.id,
+              name: ctx.user.name,
+              email: ctx.user.email,
+            }
             selectedBusiness.value = ctx.selectedBusiness
               ? toSelectedBusiness({
                   ...ctx.selectedBusiness,
@@ -1531,6 +1713,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
             // A cached Cloud selection alone is not proof that it owns the
             // singleton local database. Re-evaluate before any sync can run.
             const operationalResult = await validateOperationalContext()
+            if (!isCurrentSessionOperation(operation)) return staleSessionResult()
             if (
               selectedBusiness.value &&
               operationalResult.code !== 'OPERATIONAL_CONTEXT_ACTIVE' &&
@@ -1566,10 +1749,13 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         }
       }
 
-      return { ok: true, authenticated: user.value !== null }
+      finishSessionOperation(operation)
+      return { ok: true, authenticated: user.value !== null, state: sessionState.value }
     } catch {
       // token read failure → still allow POS to start
-      return { ok: true, authenticated: false }
+      clearSession()
+      finishSessionOperation(operation)
+      return { ok: true, authenticated: false, state: sessionState.value }
     }
   }
 
@@ -1686,6 +1872,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       return { ok: false, code: 'NOT_AUTHENTICATED' }
     }
 
+    const operation = beginSessionOperation('context_refresh')
+    if (!operation) return { ok: false, code: 'REQUEST_IN_PROGRESS' }
+
     let token = null
     try {
       token = await getToken()
@@ -1694,6 +1883,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     }
 
     if (!token) {
+      finishSessionOperation(operation)
       return { ok: false, code: 'NO_TOKEN' }
     }
 
@@ -1703,11 +1893,13 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       const deviceIdUsed = deviceIdentifierOverride ?? (await ensureDeviceIdentifier())
       const result = await fetchMobileContext(token, { deviceIdentifier: deviceIdUsed })
 
+      if (!isCurrentSessionOperation(operation)) return staleSessionResult()
+
       if (!result.ok) {
         // PREM-M03: an invalid/expired token clears the Cloud session (but never
         // local POS data) and asks the user to sign in again.
         if (isUnauthorizedError(result.error)) {
-          await handleInvalidToken()
+          await handleInvalidToken({ token, operation })
           return {
             ok: false,
             code: 'TOKEN_INVALID',
@@ -1731,6 +1923,8 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       }
 
       const parsed = extractBusinesses(result.data)
+
+      if (!isCurrentSessionOperation(operation)) return staleSessionResult()
 
       if (!parsed.ok) {
         // Fail closed: keep the previous context but drop the verified stamp.
@@ -1799,6 +1993,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         }
 
         const operationalResult = await validateOperationalContext()
+        if (!isCurrentSessionOperation(operation)) return staleSessionResult()
         if (!operationalResult.ok) {
           await persistCloudContext()
           return {
@@ -1817,6 +2012,8 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
 
       await persistCloudContext()
 
+      if (!isCurrentSessionOperation(operation)) return staleSessionResult()
+
       return {
         ok: true,
         businesses: businesses.value,
@@ -1826,7 +2023,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         device: deviceResolution,
       }
     } finally {
-      loading.value = false
+      const ownsLoading = isCurrentSessionOperation(operation)
+      finishSessionOperation(operation)
+      if (ownsLoading) loading.value = false
     }
   }
 
@@ -1927,6 +2126,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   return {
     // state
     user,
+    sessionState,
     selectedBusiness,
     selectedOutlet,
     deviceIdentifier,

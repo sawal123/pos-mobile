@@ -17,6 +17,13 @@ import { Capacitor } from '@capacitor/core'
 const TOKEN_KEY = 'cloud_bearer_token'
 
 let _inMemoryToken = null
+let tokenMutationTail = Promise.resolve()
+
+function enqueueTokenOperation(operation) {
+  const result = tokenMutationTail.then(operation, operation)
+  tokenMutationTail = result.catch(() => {})
+  return result
+}
 
 /**
  * In-memory fallback for web/Vitest environments.
@@ -68,7 +75,7 @@ function resolveStore() {
  */
 export async function saveToken(token) {
   if (!token) return
-  await resolveStore().save(token)
+  await enqueueTokenOperation(() => resolveStore().save(token))
 }
 
 /**
@@ -76,17 +83,35 @@ export async function saveToken(token) {
  * @returns {Promise<string|null>}
  */
 export async function getToken() {
-  return resolveStore().get()
+  return enqueueTokenOperation(() => resolveStore().get())
 }
 
 /**
  * Remove stored Bearer token.
  */
 export async function removeToken() {
-  await resolveStore().remove()
+  await enqueueTokenOperation(() => resolveStore().remove())
+}
+
+/**
+ * Remove a token only when it is still the value owned by the caller.
+ * The read/compare/remove sequence is serialized with all token mutations so
+ * a stale operation cannot remove a newer account's token between awaits.
+ */
+export async function removeTokenIfMatches(expectedToken) {
+  if (typeof expectedToken !== 'string' || expectedToken.length === 0) return false
+
+  return enqueueTokenOperation(async () => {
+    const store = resolveStore()
+    const currentToken = await store.get()
+    if (currentToken !== expectedToken) return false
+    await store.remove()
+    return true
+  })
 }
 
 /** Reset for tests */
 export function _resetTokenStore() {
   _inMemoryToken = null
+  tokenMutationTail = Promise.resolve()
 }
