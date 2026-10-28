@@ -422,4 +422,167 @@ describe('AUTH-M05 stale session ownership', () => {
     expect(await getToken()).toBe(TOKEN_B)
     expect(store.user).toMatchObject(USER_B)
   })
+
+  it('does not clear account B when stale account A rollback cannot read secure storage', async () => {
+    let storedToken = null
+    let readCount = 0
+    let loginCount = 0
+    let resolveOldContext
+    const secureStorage = {
+      set: vi.fn(async (_key, token) => {
+        storedToken = token
+      }),
+      get: vi.fn(async () => {
+        readCount += 1
+        if (readCount === 3) throw new Error('stale rollback read failed')
+        return storedToken
+      }),
+      remove: vi.fn(async () => {
+        storedToken = null
+      }),
+    }
+
+    await withNativeSecureStorage(secureStorage, async () => {
+      apiRequest.mockImplementation((path, options = {}) => {
+        if (path === '/api/v2/auth/login') {
+          loginCount += 1
+          const user = loginCount === 1 ? USER_A : USER_B
+          const token = loginCount === 1 ? TOKEN_A : TOKEN_B
+          return Promise.resolve(ok({ token_type: 'Bearer', token, user }))
+        }
+        if (path === '/api/mobile/context' && options.token === TOKEN_A) {
+          return new Promise((resolve) => {
+            resolveOldContext = resolve
+          })
+        }
+        if (path === '/api/mobile/context' && options.token === TOKEN_B) {
+          return Promise.resolve(context(USER_B, []))
+        }
+        if (path === '/api/auth/logout') {
+          return Promise.resolve({ ok: true, status: 204, data: null, error: null })
+        }
+        return Promise.reject(new Error(`unexpected ${path}`))
+      })
+
+      const store = useCloudSessionStore()
+      const oldLogin = store.login('a@example.com', 'password')
+      await vi.waitFor(() => expect(resolveOldContext).toBeTypeOf('function'))
+
+      await expect(store.logout()).resolves.toMatchObject({ ok: true })
+      await expect(store.login('b@example.com', 'password')).resolves.toMatchObject({ ok: true })
+      expect(storedToken).toBe(TOKEN_B)
+
+      resolveOldContext(context(USER_A, []))
+      await expect(oldLogin).resolves.toMatchObject({ state: 'stale_operation' })
+
+      expect(storedToken).toBe(TOKEN_B)
+      expect(store.user).toMatchObject(USER_B)
+      expect(await getToken()).toBe(TOKEN_B)
+    })
+  })
+
+  it('does not clear account B when stale account A rollback cannot remove secure storage', async () => {
+    let storedToken = null
+    let readCount = 0
+    let removeCount = 0
+    let loginCount = 0
+    let resolveOldContext
+    const secureStorage = {
+      set: vi.fn(async (_key, token) => {
+        storedToken = token
+      }),
+      get: vi.fn(async () => {
+        readCount += 1
+        // The stale rollback observes its own token, while the backing value
+        // remains account B and must never be cleared by the rejected remove.
+        if (readCount === 3) return TOKEN_A
+        return storedToken
+      }),
+      remove: vi.fn(async () => {
+        removeCount += 1
+        if (removeCount > 1) throw new Error('stale rollback remove failed')
+        storedToken = null
+      }),
+    }
+
+    await withNativeSecureStorage(secureStorage, async () => {
+      apiRequest.mockImplementation((path, options = {}) => {
+        if (path === '/api/v2/auth/login') {
+          loginCount += 1
+          const user = loginCount === 1 ? USER_A : USER_B
+          const token = loginCount === 1 ? TOKEN_A : TOKEN_B
+          return Promise.resolve(ok({ token_type: 'Bearer', token, user }))
+        }
+        if (path === '/api/mobile/context' && options.token === TOKEN_A) {
+          return new Promise((resolve) => {
+            resolveOldContext = resolve
+          })
+        }
+        if (path === '/api/mobile/context' && options.token === TOKEN_B) {
+          return Promise.resolve(context(USER_B, []))
+        }
+        if (path === '/api/auth/logout') {
+          return Promise.resolve({ ok: true, status: 204, data: null, error: null })
+        }
+        return Promise.reject(new Error(`unexpected ${path}`))
+      })
+
+      const store = useCloudSessionStore()
+      const oldLogin = store.login('a@example.com', 'password')
+      await vi.waitFor(() => expect(resolveOldContext).toBeTypeOf('function'))
+
+      await expect(store.logout()).resolves.toMatchObject({ ok: true })
+      await expect(store.login('b@example.com', 'password')).resolves.toMatchObject({ ok: true })
+      expect(storedToken).toBe(TOKEN_B)
+
+      resolveOldContext(context(USER_A, []))
+      await expect(oldLogin).resolves.toMatchObject({ state: 'stale_operation' })
+
+      expect(storedToken).toBe(TOKEN_B)
+      expect(store.user).toMatchObject(USER_B)
+      expect(await getToken()).toBe(TOKEN_B)
+    })
+  })
+
+  it('fails closed when the current Google rollback cannot remove secure storage', async () => {
+    let storedToken = null
+    let active = true
+    const adapter = await createMemoryAdapter()
+    await adapter.initialize()
+    await adapter.saveBusiness({ name: 'Local POS', type: 'retail', mode: 'cloud' })
+    const secureStorage = {
+      set: vi.fn(async (_key, token) => {
+        storedToken = token
+      }),
+      get: vi.fn(async () => storedToken),
+      remove: vi.fn().mockRejectedValue(new Error('current rollback remove failed')),
+    }
+
+    await withNativeSecureStorage(secureStorage, async () => {
+      apiRequest.mockImplementation((path) => {
+        if (path === '/api/v2/auth/google') {
+          return Promise.resolve(ok({ token_type: 'Bearer', token: TOKEN_A, user: USER_A }))
+        }
+        if (path.startsWith('/api/mobile/context')) {
+          active = false
+          return Promise.resolve(context(USER_A, []))
+        }
+        return Promise.reject(new Error(`unexpected ${path}`))
+      })
+
+      const store = useCloudSessionStore()
+      store.setPersistenceAdapter(adapter)
+      const result = await store.loginWithGoogle('google-id-token', 'android', {
+        isActive: () => active,
+      })
+
+      expect(result.state).toBe('stale_operation')
+      expect(store.isAuthenticated).toBe(false)
+      expect(store.sessionInvalid).toBe(true)
+      expect(store.cloudAccess).toBe(false)
+      expect(store.capabilityState).toBe('unknown')
+      expect(store.canPerformCloudPush).toBe(false)
+      expect(await adapter.loadBusiness()).toMatchObject({ name: 'Local POS' })
+    })
+  })
 })

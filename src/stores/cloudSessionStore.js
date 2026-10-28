@@ -827,23 +827,30 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
    *
    * Returns { ok, businesses, error }.
    */
-  async function rollbackStaleSession(savedToken) {
+  async function rollbackStaleSession(savedToken, operation = null) {
     let removed
     try {
       removed = await removeTokenIfMatches(savedToken)
     } catch {
-      // Storage removal failure is fail-closed: memory is cleared and the
-      // session is marked invalid, while offline data remains untouched.
+      if (operation && !isCurrentSessionOperation(operation)) {
+        return staleSessionResult()
+      }
+
+      // Storage removal failure is fail-closed only for the operation that
+      // still owns the session. A stale operation must not clear a newer one.
       clearSession()
       sessionInvalid.value = true
       error.value = 'Sesi Cloud belum dapat dicabut dengan aman. Silakan coba lagi.'
       return { ok: false, code: 'TOKEN_REMOVAL_FAILED' }
     }
 
+    if (operation && !isCurrentSessionOperation(operation)) {
+      return staleSessionResult()
+    }
+
     // Never clear a newer account's in-memory session when ownership changed.
     if (!removed) return { ok: false, code: 'TOKEN_OWNERSHIP_CHANGED' }
 
-    clearSession()
     if (_adapter) {
       try {
         await _adapter.clearCloudContext()
@@ -851,6 +858,12 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         // Local POS data is intentionally untouched.
       }
     }
+
+    if (operation && !isCurrentSessionOperation(operation)) {
+      return staleSessionResult()
+    }
+
+    clearSession()
     return { ok: true }
   }
 
@@ -889,7 +902,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       await saveToken(loginResult.token)
 
       if (stale()) {
-        await rollbackStaleSession(loginResult.token)
+        await rollbackStaleSession(loginResult.token, operation)
         return staleSessionResult()
       }
 
@@ -902,7 +915,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         : null
 
       if (stale()) {
-        await rollbackStaleSession(loginResult.token)
+        await rollbackStaleSession(loginResult.token, operation)
         return staleSessionResult()
       }
 
@@ -910,7 +923,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       // so the backend can return the owner-pre-registered `device_context`.
       const contextDeviceId = await ensureDeviceIdentifier()
       if (stale()) {
-        await rollbackStaleSession(loginResult.token)
+        await rollbackStaleSession(loginResult.token, operation)
         return staleSessionResult()
       }
       const contextResult = await fetchMobileContext(loginResult.token, {
@@ -918,7 +931,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       })
 
       if (stale()) {
-        await rollbackStaleSession(loginResult.token)
+        await rollbackStaleSession(loginResult.token, operation)
         return staleSessionResult()
       }
 
@@ -947,7 +960,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       const parsed = extractBusinesses(contextResult.data)
 
       if (stale()) {
-        await rollbackStaleSession(loginResult.token)
+        await rollbackStaleSession(loginResult.token, operation)
         return staleSessionResult()
       }
 
@@ -976,7 +989,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       await persistCloudContext(_adapter, { throwOnError: true })
 
       if (stale()) {
-        await rollbackStaleSession(loginResult.token)
+        await rollbackStaleSession(loginResult.token, operation)
         return staleSessionResult()
       }
 
@@ -1001,7 +1014,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         rollbackOnStale: true,
       })
     } catch (exception) {
-      if (loginResult?.ok) await rollbackStaleSession(loginResult.token)
+      if (loginResult?.ok) await rollbackStaleSession(loginResult.token, operation)
       if (!isCurrentSessionOperation(operation)) return staleSessionResult()
       const message = exception?.message ?? 'Login gagal. Coba lagi.'
       error.value = message
@@ -1044,7 +1057,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         rollbackOnStale: true,
       })
     } catch (exception) {
-      if (loginResult?.ok) await rollbackStaleSession(loginResult.token)
+      if (loginResult?.ok) await rollbackStaleSession(loginResult.token, operation)
       if (!isCurrentSessionOperation(operation) || !isActive()) return staleSessionResult()
 
       const message = exception?.message ?? 'Login Google gagal. Coba lagi dengan akun Google.'
