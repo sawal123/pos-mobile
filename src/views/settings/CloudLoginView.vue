@@ -1769,7 +1769,7 @@ onMounted(async () => {
       </div>
 
       <CloudGoogleLinkCard
-        v-if="cloudStore.isAuthenticated && !cloudStore.loading"
+        v-if="cloudStore.isAuthenticated"
         :collision-detected="googleLinkCollision"
       />
 

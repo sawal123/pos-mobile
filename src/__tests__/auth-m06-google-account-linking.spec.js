@@ -43,9 +43,9 @@ const fail = (status, code) => ({
   error: { status, code, message: code, data: null },
 })
 
-function authMethods(methods = ['manual']) {
+function authMethods(methods = ['manual'], user = USER) {
   return ok({
-    user: USER,
+    user,
     email_verified: true,
     two_factor_enabled: false,
     authentication_methods: methods,
@@ -169,6 +169,112 @@ describe('AUTH-M06 service contracts', () => {
 })
 
 describe('AUTH-M06 authenticated linking lifecycle', () => {
+  it('keeps the linking card and reauthentication modal mounted while the parent store is loading', async () => {
+    const store = prepareAuthenticatedStore()
+    await saveToken(TOKEN)
+    let authMethodCall = 0
+    let resolveMethods
+    let resolveReauth
+    let resolveLink
+    apiRequest.mockImplementation((path) => {
+      if (path === '/api/v2/auth/me') {
+        authMethodCall += 1
+        if (authMethodCall === 1) {
+          return new Promise((resolve) => { resolveMethods = resolve })
+        }
+        return Promise.resolve(authMethods(['manual', 'google']))
+      }
+      if (path === '/api/v2/auth/reauthenticate') {
+        return new Promise((resolve) => { resolveReauth = resolve })
+      }
+      if (path === '/api/v2/auth/google/link') {
+        return new Promise((resolve) => { resolveLink = resolve })
+      }
+      throw new Error(`Unexpected request ${path}`)
+    })
+    nativeSignIn.mockResolvedValue({ ok: true, state: 'success', idToken: GOOGLE_ID_TOKEN })
+
+    const wrapper = mount(CloudLoginView)
+    await wrapper.get('[data-testid="google-link-refresh-methods"]').trigger('click')
+    await vi.waitFor(() => expect(resolveMethods).toBeTypeOf('function'))
+    expect(store.loading).toBe(true)
+    expect(wrapper.get('[data-testid="cloud-google-link-card"]').exists()).toBe(true)
+
+    resolveMethods(authMethods(['manual']))
+    await flushPromises()
+    await wrapper.get('[data-testid="google-link-open"]').trigger('click')
+    await wrapper.get('[data-testid="google-link-continue"]').trigger('click')
+    await wrapper.get('[data-testid="google-link-password"]').setValue('password')
+    await wrapper.get('[data-testid="google-link-reauth-form"]').trigger('submit')
+    await vi.waitFor(() => expect(resolveReauth).toBeTypeOf('function'))
+    expect(store.loading).toBe(true)
+    expect(wrapper.get('[data-testid="google-link-reauth-form"]').exists()).toBe(true)
+
+    resolveReauth(ok({ reauthentication_token: GRANT, expires_in: 300, purpose: 'google_link' }))
+    await flushPromises()
+    expect(wrapper.get('[data-testid="google-link-picker-step"]').exists()).toBe(true)
+
+    await wrapper.get('[data-testid="google-link-picker-button"]').trigger('click')
+    await vi.waitFor(() => expect(resolveLink).toBeTypeOf('function'))
+    await wrapper.get('[data-testid="google-link-picker-button"]').trigger('click')
+    expect(apiRequest.mock.calls.filter(([path]) => path === '/api/v2/auth/google/link')).toHaveLength(1)
+    expect(wrapper.get('[data-testid="cloud-google-link-card"]').exists()).toBe(true)
+
+    resolveLink(ok({ provider: 'google', linked: true }))
+    await flushPromises()
+    expect(wrapper.get('[data-testid="google-link-success"]').text()).toContain('berhasil')
+  })
+
+  it('resets account-specific linking UI and re-verifies the new account after an identity switch', async () => {
+    const accountB = { id: 8, name: 'New Owner', email: 'new@example.com' }
+    const store = prepareAuthenticatedStore()
+    await saveToken(TOKEN)
+    let resolveReauth
+    let methodCall = 0
+    apiRequest.mockImplementation((path) => {
+      if (path === '/api/v2/auth/me') {
+        methodCall += 1
+        return Promise.resolve(methodCall === 1
+          ? authMethods(['manual'], USER)
+          : authMethods(['manual'], accountB))
+      }
+      if (path === '/api/v2/auth/reauthenticate') {
+        return new Promise((resolve) => { resolveReauth = resolve })
+      }
+      throw new Error(`Unexpected request ${path}`)
+    })
+
+    const wrapper = mount(CloudGoogleLinkCard)
+    await wrapper.get('[data-testid="google-link-refresh-methods"]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-testid="google-link-open"]').trigger('click')
+    await wrapper.get('[data-testid="google-link-continue"]').trigger('click')
+    await wrapper.get('[data-testid="google-link-password"]').setValue('password')
+    await wrapper.get('[data-testid="google-link-reauth-form"]').trigger('submit')
+    await vi.waitFor(() => expect(resolveReauth).toBeTypeOf('function'))
+
+    store.user = accountB
+    await saveToken('account-b-token')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="cloud-google-link-card"]').text()).toContain('New Owner')
+    expect(wrapper.find('[data-testid="google-link-reauth-form"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="google-link-open"]').exists()).toBe(true)
+    expect(methodCall).toBe(2)
+    expect(await getToken()).toBe('account-b-token')
+
+    resolveReauth(ok({ reauthentication_token: GRANT, expires_in: 300, purpose: 'google_link' }))
+    await flushPromises()
+    expect(wrapper.get('[data-testid="google-link-open"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="google-link-picker-step"]').exists()).toBe(false)
+    expect(store.user).toMatchObject(accountB)
+    expect(store.selectedBusiness).toMatchObject({
+      id: BUSINESS.id,
+      name: BUSINESS.name,
+      cloud_access: BUSINESS.cloud_access,
+    })
+  })
+
   it('shows an explicit manual-account CTA after a Google collision without creating a session', async () => {
     apiRequest.mockResolvedValueOnce(fail(409, 'ACCOUNT_LINK_REQUIRED'))
     nativeSignIn.mockResolvedValue({ ok: true, state: 'success', idToken: GOOGLE_ID_TOKEN })

@@ -26,6 +26,21 @@ registration, workspace, or sync operation.
 9. `GET /api/v2/auth/me` verifies the current user and `google` method after a
    successful link.
 
+## UI lifecycle and identity guards
+
+`CloudGoogleLinkCard` is mounted for the lifetime of the authenticated Cloud
+session. It is not removed merely because the parent store is loading: its own
+method refresh, reauthentication modal, and native picker therefore retain
+their state while their requests are in flight. Local control flags provide
+the disabled/loading presentation; logout and real route/session teardown
+still perform the normal cancellation cleanup.
+
+The component captures the authenticated user ID and a generation number for
+each request. When the ID changes, old methods, grants, modal state, and
+pending assertions are cleared, the linking operation is cancelled, and the
+new account's methods are fetched again. A response from the previous account
+cannot update the new account's UI.
+
 ## Backend contracts
 
 - Reauthentication: `POST /api/v2/auth/reauthenticate` with password and
@@ -64,6 +79,13 @@ shown or logged.
 Google identity ownership is determined by the backend provider subject. The
 client never links by email equality and never calls `loginWithGoogle()` for
 the linking operation.
+
+The current backend `authentication_methods` response does not expose an
+authoritative `password_login_enabled` capability and may include `manual` as
+part of its legacy method list. The mobile UI therefore does not claim that a
+Google-linked account supports password login; it uses neutral copy and does
+not invent a frontend password capability. A backend contract refinement may
+be handled separately without changing this mobile linking flow.
 
 ## Offline and account integrity
 

@@ -26,6 +26,14 @@ const password = ref('')
 const totpCode = ref('')
 const requiresTotp = ref(false)
 const pickerLoading = ref(false)
+const reauthLoading = ref(false)
+
+let componentActive = true
+let accountGeneration = 0
+let activeAccountId = cloudStore.isAuthenticated && cloudStore.user?.id != null
+  ? String(cloudStore.user.id)
+  : null
+let flowSequence = 0
 
 const isAuthenticated = computed(() => cloudStore.isAuthenticated)
 const hasGoogleMethod = computed(() => authMethods.value?.includes('google') === true)
@@ -46,18 +54,36 @@ function describeError(error) {
   return describeGoogleLinkError(error).message
 }
 
+function isCurrentAccount(generation, accountId) {
+  return (
+    componentActive &&
+    accountGeneration === generation &&
+    activeAccountId === accountId &&
+    cloudStore.isAuthenticated &&
+    String(cloudStore.user?.id) === accountId
+  )
+}
+
 async function refreshMethods() {
   if (!isAuthenticated.value || methodsLoading.value) return
+  const requestGeneration = accountGeneration
+  const requestAccountId = activeAccountId
   methodsLoading.value = true
   methodsError.value = ''
-  const result = await cloudStore.refreshAuthenticationMethods()
-  if (result.ok) {
-    authMethods.value = result.authenticationMethods
-  } else if (result.state !== 'stale_operation') {
-    authMethods.value = null
-    methodsError.value = describeError(result.error ?? result)
+  try {
+    const result = await cloudStore.refreshAuthenticationMethods()
+    if (!isCurrentAccount(requestGeneration, requestAccountId)) return
+    if (result.ok) {
+      authMethods.value = result.authenticationMethods
+    } else if (result.state !== 'stale_operation') {
+      authMethods.value = null
+      methodsError.value = describeError(result.error ?? result)
+    }
+  } finally {
+    if (isCurrentAccount(requestGeneration, requestAccountId)) {
+      methodsLoading.value = false
+    }
   }
-  methodsLoading.value = false
 }
 
 function openLinkConfirmation() {
@@ -67,11 +93,13 @@ function openLinkConfirmation() {
 }
 
 function closeFlow() {
+  flowSequence += 1
   clearSensitiveFields()
   flowError.value = ''
   flowMessage.value = ''
   requiresTotp.value = false
   pickerLoading.value = false
+  reauthLoading.value = false
   void cancelGoogleSignIn()
   cloudStore.cancelGoogleAccountLinking()
   flowState.value = 'idle'
@@ -93,33 +121,52 @@ async function submitReauthentication() {
     return
   }
 
-  const result = await cloudStore.reauthenticateForGoogleLink(
-    password.value,
-    totpCode.value || null,
-  )
-  if (!result.ok) {
-    const code = result.error?.code ?? result.code
-    if (code === 'TWO_FACTOR_REQUIRED') {
-      requiresTotp.value = true
-      totpCode.value = ''
+  const requestGeneration = accountGeneration
+  const requestAccountId = activeAccountId
+  const requestFlowSequence = flowSequence
+  reauthLoading.value = true
+  try {
+    const result = await cloudStore.reauthenticateForGoogleLink(
+      password.value,
+      totpCode.value || null,
+    )
+    if (!isCurrentAccount(requestGeneration, requestAccountId) || flowSequence !== requestFlowSequence) {
+      return
     }
-    flowError.value = describeError(result.error ?? result)
-    return
-  }
+    if (!result.ok) {
+      const code = result.error?.code ?? result.code
+      if (code === 'TWO_FACTOR_REQUIRED') {
+        requiresTotp.value = true
+        totpCode.value = ''
+      }
+      flowError.value = describeError(result.error ?? result)
+      return
+    }
 
-  clearSensitiveFields()
-  requiresTotp.value = false
-  flowState.value = 'google_picker'
+    clearSensitiveFields()
+    requiresTotp.value = false
+    flowState.value = 'google_picker'
+  } finally {
+    if (isCurrentAccount(requestGeneration, requestAccountId) && flowSequence === requestFlowSequence) {
+      reauthLoading.value = false
+    }
+  }
 }
 
 async function pickGoogleAccount() {
   if (pickerLoading.value) return
+  const requestGeneration = accountGeneration
+  const requestAccountId = activeAccountId
+  const requestFlowSequence = flowSequence
   pickerLoading.value = true
   flowError.value = ''
   let providerResult = null
 
   try {
     providerResult = await signInWithGoogle()
+    if (!isCurrentAccount(requestGeneration, requestAccountId) || flowSequence !== requestFlowSequence) {
+      return
+    }
     if (!providerResult.ok) {
       if (providerResult.code === 'USER_CANCELLED') {
         closeFlow()
@@ -130,6 +177,9 @@ async function pickGoogleAccount() {
     }
 
     const result = await cloudStore.linkGoogleAccount(providerResult.idToken, 'android')
+    if (!isCurrentAccount(requestGeneration, requestAccountId) || flowSequence !== requestFlowSequence) {
+      return
+    }
     if (result.state === 'stale_operation') {
       closeFlow()
       return
@@ -154,22 +204,39 @@ async function pickGoogleAccount() {
     flowError.value = 'Penghubungan belum dapat dipastikan. Jangan mencoba ulang otomatis.'
   } finally {
     if (providerResult) providerResult.idToken = null
-    pickerLoading.value = false
+    if (isCurrentAccount(requestGeneration, requestAccountId) && flowSequence === requestFlowSequence) {
+      pickerLoading.value = false
+    }
   }
 }
 
 watch(
   () => [cloudStore.isAuthenticated, cloudStore.user?.id],
-  ([authenticated]) => {
+  ([authenticated, rawAccountId]) => {
+    const nextAccountId = authenticated && rawAccountId != null ? String(rawAccountId) : null
+    if (nextAccountId === activeAccountId) return
+
+    activeAccountId = nextAccountId
+    accountGeneration += 1
+    authMethods.value = null
+    methodsError.value = ''
+    methodsLoading.value = false
+    closeFlow()
+
     if (!authenticated) {
       authMethods.value = null
-      closeFlow()
       return
     }
+
+    // A new authenticated identity must never inherit the previous account's
+    // methods. Re-verify it from the server without replacing its session.
+    void refreshMethods()
   },
 )
 
 onUnmounted(() => {
+  componentActive = false
+  accountGeneration += 1
   clearSensitiveFields()
   void cancelGoogleSignIn()
   cloudStore.cancelGoogleAccountLinking()
@@ -205,7 +272,7 @@ onUnmounted(() => {
         data-testid="google-link-refresh-methods"
         variant="secondary"
         :loading="methodsLoading"
-        :disabled="methodsLoading || cloudStore.loading"
+        :disabled="methodsLoading"
         @click="refreshMethods"
       >
         Periksa metode login
@@ -216,7 +283,7 @@ onUnmounted(() => {
       <p class="text-sm font-semibold text-emerald-800" data-testid="google-linked-status">
         Google Terhubung
       </p>
-      <p class="mt-1 text-xs text-emerald-700">Akun Cloud ini dapat masuk dengan password atau Google.</p>
+      <p class="mt-1 text-xs text-emerald-700">Google terhubung ke akun Cloud ini.</p>
     </div>
 
     <div v-else-if="isGoogleOnly" class="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3">
@@ -256,8 +323,8 @@ onUnmounted(() => {
     >
       <div class="space-y-4" data-testid="google-link-confirmation">
         <p class="text-sm leading-relaxed text-ink-secondary">
-          Setelah terhubung, Anda dapat masuk ke akun Cloud yang sama menggunakan email/password
-          atau Google. Data bisnis, transaksi, dan pengaturan POS tidak berubah.
+          Setelah terhubung, akun Google ini menjadi metode login tambahan pada akun Cloud yang
+          sama. Data bisnis, transaksi, dan pengaturan POS tidak berubah.
         </p>
         <div class="flex flex-wrap gap-2">
           <BaseButton data-testid="google-link-continue" @click="continueToReauthentication">
@@ -305,10 +372,10 @@ onUnmounted(() => {
           {{ flowError }}
         </p>
         <div class="flex flex-wrap gap-2">
-          <BaseButton type="submit" :loading="cloudStore.loading" :disabled="cloudStore.loading">
-            {{ cloudStore.loading ? 'Memverifikasi...' : 'Verifikasi dan pilih Google' }}
+          <BaseButton type="submit" :loading="reauthLoading" :disabled="reauthLoading">
+            {{ reauthLoading ? 'Memverifikasi...' : 'Verifikasi dan pilih Google' }}
           </BaseButton>
-          <BaseButton type="button" variant="ghost" :disabled="cloudStore.loading" @click="closeFlow">
+          <BaseButton type="button" variant="ghost" :disabled="reauthLoading" @click="closeFlow">
             Batal
           </BaseButton>
         </div>
@@ -332,7 +399,7 @@ onUnmounted(() => {
           <BaseButton
             data-testid="google-link-picker-button"
             :loading="pickerLoading"
-            :disabled="pickerLoading || cloudStore.loading"
+            :disabled="pickerLoading"
             @click="pickGoogleAccount"
           >
             {{ pickerLoading ? 'Membuka Google...' : 'Pilih akun Google' }}
