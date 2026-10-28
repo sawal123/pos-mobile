@@ -203,7 +203,7 @@ Targeted AUTH-M04 plus AUTH-M02/AUTH-M03/API/Cloud Session tests:
 Full branch run:
 
 ```text
-1,869 passed
+1,871 passed
 11 failed
 4 skipped
 ```
@@ -217,7 +217,7 @@ The 11 failures are the existing unrelated baseline failures. A fresh detached
 4 skipped
 ```
 
-The branch adds 20 AUTH-M04 tests and introduces no additional failure.
+The branch adds 22 AUTH-M04 tests and introduces no additional failure.
 
 Build results:
 
