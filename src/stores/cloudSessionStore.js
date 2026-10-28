@@ -1251,6 +1251,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     }
 
     loading.value = true
+    let linkAttempted = false
     try {
       const currentToken = await getToken()
       if (!isCurrentSessionOperation(operation)) return staleSessionResult()
@@ -1264,6 +1265,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         idToken,
         platform,
       )
+      linkAttempted = true
       if (!isCurrentSessionOperation(operation)) return staleSessionResult()
 
       // A grant is never retained after a link attempt, including uncertain
@@ -1273,7 +1275,13 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
 
       if (!result.ok) {
         const uncertain = Number(result.error?.status) === 0 || result.error?.code === 'NETWORK_ERROR'
-        if (!uncertain) return result
+        if (!uncertain) {
+          return {
+            ...result,
+            linkAttempted: true,
+            linkLifecycle: 'rejected',
+          }
+        }
 
         const verified = await readAuthenticationMethods(currentToken, googleLinkUserId)
         if (!isCurrentSessionOperation(operation)) return staleSessionResult()
@@ -1284,12 +1292,16 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
             methodsVerified: true,
             authenticationMethods: verified.authenticationMethods,
             statusRecovered: true,
+            linkAttempted: true,
+            linkLifecycle: 'linked_verified',
           }
         }
         return {
           ok: false,
           code: 'LINK_STATUS_UNVERIFIED',
           uncertain: true,
+          linkAttempted: true,
+          linkLifecycle: 'uncertain',
           error: verified.error ?? result.error,
         }
       }
@@ -1302,6 +1314,8 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
           linked: result.linked,
           methodsVerified: false,
           code: 'LINK_STATUS_UNVERIFIED',
+          linkAttempted: true,
+          linkLifecycle: 'linked_unverified',
           error: methods.error,
         }
       }
@@ -1311,6 +1325,8 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
           linked: result.linked,
           methodsVerified: false,
           code: 'LINK_STATUS_UNVERIFIED',
+          linkAttempted: true,
+          linkLifecycle: 'linked_unverified',
           error: googleLinkError(
             'LINK_STATUS_UNVERIFIED',
             'Link berhasil, tetapi status metode autentikasi belum dapat dipastikan.',
@@ -1323,12 +1339,16 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         linked: result.linked,
         methodsVerified: true,
         authenticationMethods: methods.authenticationMethods,
+        linkAttempted: true,
+        linkLifecycle: 'linked_verified',
       }
     } catch {
       return {
         ok: false,
         code: 'LINK_STATUS_UNVERIFIED',
         uncertain: true,
+        linkAttempted,
+        linkLifecycle: linkAttempted ? 'uncertain' : 'not_attempted',
         error: { status: 0, code: 'NETWORK_ERROR', message: 'Status link belum dapat dipastikan.', data: null },
       }
     } finally {

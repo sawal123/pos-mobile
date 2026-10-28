@@ -4,7 +4,10 @@ import { computed, onUnmounted, ref, watch } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
-import { describeGoogleLinkError } from '@/services/cloud/cloudLoginErrors'
+import {
+  describeGoogleLinkError,
+  describeGoogleLoginError,
+} from '@/services/cloud/cloudLoginErrors'
 import { cancelGoogleSignIn, signInWithGoogle } from '@/services/cloud/googleNativeAuthService'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 
@@ -149,6 +152,19 @@ function returnToUnverifiedStatus(message) {
   flowState.value = 'idle'
 }
 
+function returnToRejectedLink(result) {
+  flowSequence += 1
+  clearSensitiveFields()
+  flowError.value = describeError(result.error ?? result)
+  flowMessage.value = ''
+  requiresTotp.value = false
+  pickerLoading.value = false
+  reauthLoading.value = false
+  void cancelGoogleSignIn()
+  cloudStore.cancelGoogleAccountLinking()
+  flowState.value = 'idle'
+}
+
 function continueToReauthentication() {
   flowError.value = ''
   flowState.value = 'reauthenticating'
@@ -216,7 +232,7 @@ async function pickGoogleAccount() {
         closeFlow()
         return
       }
-      flowError.value = describeError(providerResult)
+      flowError.value = describeGoogleLoginError(providerResult).message
       return
     }
 
@@ -235,6 +251,10 @@ async function pickGoogleAccount() {
         returnToUnverifiedStatus(
           'Status penghubungan belum dapat dipastikan. Periksa metode login sebelum mencoba lagi.',
         )
+        return
+      }
+      if (result.linkLifecycle === 'rejected' || result.linkAttempted === true) {
+        returnToRejectedLink(result)
         return
       }
       flowError.value = describeError(result.error ?? result)

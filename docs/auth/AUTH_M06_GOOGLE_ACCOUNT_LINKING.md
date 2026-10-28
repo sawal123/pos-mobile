@@ -87,6 +87,15 @@ Google assertion or grant. A later authoritative refresh can show **Google
 Terhubung** or return to the explicit **Hubungkan Google** flow when Google is
 absent.
 
+Every store result after the link endpoint is called carries a non-sensitive
+link lifecycle marker: `rejected`, `uncertain`, `linked_unverified`, or
+`linked_verified`. The UI uses this marker to leave the picker after any
+terminal backend rejection, not only known error codes. The consumed grant is
+therefore never reused; the user must explicitly reauthenticate before a new
+picker/assertion attempt. A native provider failure before the link endpoint
+is called is handled separately, so the still-valid in-memory grant may be
+retried by an explicit picker action, subject to expiry and cancellation.
+
 ## Error handling
 
 Backend error codes are mapped to safe Indonesian messages. Password errors,

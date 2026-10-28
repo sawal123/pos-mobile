@@ -374,6 +374,108 @@ describe('AUTH-M06 authenticated linking lifecycle', () => {
     },
   )
 
+  it.each(['IDENTITY_ALREADY_LINKED', 'GOOGLE_TOKEN_EXPIRED', 'IDENTITY_CONFLICT'])(
+    'treats %s as a terminal rejected link attempt and requires fresh proof before retry',
+    async (rejectedCode) => {
+      const store = prepareAuthenticatedStore()
+      await saveToken(TOKEN)
+      let reauthCalls = 0
+      let linkCalls = 0
+      apiRequest.mockImplementation(async (path) => {
+        if (path === '/api/v2/auth/me') return authMethods(['manual'])
+        if (path === '/api/v2/auth/reauthenticate') {
+          reauthCalls += 1
+          return ok({
+            reauthentication_token: `${GRANT}-${reauthCalls}`,
+            expires_in: 300,
+            purpose: 'google_link',
+          })
+        }
+        if (path === '/api/v2/auth/google/link') {
+          linkCalls += 1
+          return fail(409, rejectedCode)
+        }
+        throw new Error(`Unexpected request ${path}`)
+      })
+      nativeSignIn
+        .mockResolvedValueOnce({ ok: true, state: 'success', idToken: GOOGLE_ID_TOKEN })
+        .mockResolvedValueOnce({ ok: true, state: 'success', idToken: 'fresh-google-id-token-2' })
+
+      const wrapper = mount(CloudGoogleLinkCard)
+      await advanceToGooglePicker(wrapper)
+      await wrapper.get('[data-testid="google-link-picker-button"]').trigger('click')
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="google-link-picker-step"]').exists()).toBe(false)
+      expect(wrapper.get('[data-testid="google-link-open"]').exists()).toBe(true)
+      expect(wrapper.get('[data-testid="google-link-error"]').exists()).toBe(true)
+      expect(reauthCalls).toBe(1)
+      expect(linkCalls).toBe(1)
+      expect(nativeSignIn).toHaveBeenCalledTimes(1)
+      expect(await getToken()).toBe(TOKEN)
+      expect(store.selectedBusiness).toMatchObject({ id: BUSINESS.id, name: BUSINESS.name })
+      expect(store.selectedOutlet).toMatchObject(OUTLET)
+
+      // The rejected operation cannot reopen the picker with its consumed grant.
+      await wrapper.get('[data-testid="google-link-open"]').trigger('click')
+      await wrapper.get('[data-testid="google-link-continue"]').trigger('click')
+      await wrapper.get('[data-testid="google-link-password"]').setValue('password')
+      await wrapper.get('[data-testid="google-link-reauth-form"]').trigger('submit')
+      await flushPromises()
+      expect(reauthCalls).toBe(2)
+      expect(nativeSignIn).toHaveBeenCalledTimes(1)
+      expect(wrapper.get('[data-testid="google-link-picker-step"]').exists()).toBe(true)
+
+      await wrapper.get('[data-testid="google-link-picker-button"]').trigger('click')
+      await flushPromises()
+      expect(nativeSignIn).toHaveBeenCalledTimes(2)
+      expect(linkCalls).toBe(2)
+    },
+  )
+
+  it('keeps a valid grant available after a native provider failure before link submission', async () => {
+    const store = prepareAuthenticatedStore()
+    await saveToken(TOKEN)
+    let methodCalls = 0
+    let reauthCalls = 0
+    let linkCalls = 0
+    apiRequest.mockImplementation(async (path) => {
+      if (path === '/api/v2/auth/me') {
+        methodCalls += 1
+        return methodCalls === 1 ? authMethods(['manual']) : authMethods(['manual', 'google'])
+      }
+      if (path === '/api/v2/auth/reauthenticate') {
+        reauthCalls += 1
+        return ok({ reauthentication_token: GRANT, expires_in: 300, purpose: 'google_link' })
+      }
+      if (path === '/api/v2/auth/google/link') {
+        linkCalls += 1
+        return ok({ provider: 'google', linked: true })
+      }
+      throw new Error(`Unexpected request ${path}`)
+    })
+    nativeSignIn
+      .mockResolvedValueOnce({ ok: false, state: 'failed', code: 'PROVIDER_UNAVAILABLE' })
+      .mockResolvedValueOnce({ ok: true, state: 'success', idToken: GOOGLE_ID_TOKEN })
+
+    const wrapper = mount(CloudGoogleLinkCard)
+    await advanceToGooglePicker(wrapper)
+    await wrapper.get('[data-testid="google-link-picker-button"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="google-link-picker-step"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="google-link-picker-step"]').text()).toContain('tidak tersedia')
+    expect(reauthCalls).toBe(1)
+    expect(linkCalls).toBe(0)
+
+    await wrapper.get('[data-testid="google-link-picker-button"]').trigger('click')
+    await flushPromises()
+    expect(reauthCalls).toBe(1)
+    expect(linkCalls).toBe(1)
+    expect(store.isAuthenticated).toBe(true)
+    expect(await getToken()).toBe(TOKEN)
+  })
+
   it('invalidates cached methods after HTTP 200 when read-only verification fails, then recovers by refresh', async () => {
     const store = prepareAuthenticatedStore()
     await saveToken(TOKEN)
