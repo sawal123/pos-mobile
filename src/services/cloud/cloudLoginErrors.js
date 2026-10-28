@@ -71,6 +71,60 @@ export function describeLoginError(error) {
   return { kind: CLOUD_LOGIN_ERROR_KIND.UNKNOWN, message: MESSAGES.unknown }
 }
 
+/** Curated Indonesian messages for native Google provider and exchange errors. */
+export function describeGoogleLoginError(error) {
+  const status = Number(error?.status) || 0
+  const code = typeof error?.code === 'string' ? error.code.toUpperCase() : ''
+
+  if (code === 'USER_CANCELLED') {
+    return { kind: 'cancelled', message: '' }
+  }
+  if (code === 'UNSUPPORTED_PLATFORM') {
+    return { kind: 'unsupported', message: 'Google Sign-In native hanya tersedia di aplikasi Android.' }
+  }
+  if (code === 'CONFIGURATION_INVALID' || code === 'GOOGLE_AUTH_NOT_CONFIGURED') {
+    return { kind: 'not-configured', message: 'Konfigurasi Google Sign-In belum siap.' }
+  }
+  if (code === 'PROVIDER_UNAVAILABLE') {
+    return { kind: 'provider-unavailable', message: 'Google Sign-In tidak tersedia di perangkat ini.' }
+  }
+  if (code === 'ACCOUNT_LINK_REQUIRED') {
+    return {
+      kind: 'account-link-required',
+      message:
+        'Akun dengan email ini sudah terdaftar. Masuk dengan email dan password terlebih dahulu untuk menghubungkan akun Google.',
+    }
+  }
+  if (code === 'IDENTITY_CONFLICT') {
+    return { kind: 'identity-conflict', message: 'Identitas Google tidak dapat dihubungkan dengan aman ke akun ini.' }
+  }
+  if (status === 202 || code === 'TWO_FACTOR_REQUIRED') {
+    return { kind: 'two-factor', message: 'Akun memerlukan verifikasi dua langkah. Selesaikan verifikasi melalui alur yang tersedia.' }
+  }
+  if (status === 401 || code === 'GOOGLE_TOKEN_INVALID' || code === 'GOOGLE_TOKEN_EXPIRED' || code === 'GOOGLE_AUDIENCE_INVALID') {
+    return { kind: 'invalid-token', message: 'Verifikasi Google gagal. Coba masuk dengan Google kembali.' }
+  }
+  if (code === 'GOOGLE_EMAIL_UNVERIFIED' || code === 'EMAIL_NOT_VERIFIED') {
+    return { kind: 'unverified', message: 'Email Google belum terverifikasi.' }
+  }
+  if (code === 'AUTH_PROVISIONING_PENDING') {
+    return { kind: 'provisioning', message: 'Penyiapan akun Cloud belum selesai. Coba lagi nanti.' }
+  }
+  if (status === 429) {
+    return { kind: 'rate-limited', message: 'Terlalu banyak percobaan. Tunggu sebentar sebelum mencoba lagi.' }
+  }
+  if (code === 'GOOGLE_PROVISIONING_FAILED') {
+    return { kind: 'provisioning-failed', message: 'Penyiapan akun Google gagal. Periksa status akun sebelum mencoba lagi.' }
+  }
+  if (status === 503) {
+    return { kind: 'server', message: 'Login Google belum tersedia. Coba lagi nanti.' }
+  }
+  if (status === 0 || code === 'NETWORK_ERROR') {
+    return { kind: 'network-uncertain', message: 'Permintaan login Google belum dapat dipastikan. Mulai proses baru secara eksplisit dengan akun Google.' }
+  }
+  return { kind: 'unknown', message: 'Login Google gagal. Coba lagi dengan akun Google.' }
+}
+
 /**
  * @param {object|null|undefined} error Raw error from `apiClient`.
  * @returns {{kind: string, message: string}}
