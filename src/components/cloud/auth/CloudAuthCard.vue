@@ -22,6 +22,14 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  initialEmail: {
+    type: String,
+    default: '',
+  },
+  initialName: {
+    type: String,
+    default: '',
+  },
 })
 
 const emit = defineEmits([
@@ -77,6 +85,7 @@ function handleForgotPassword() {
       aria-label="Mode Autentikasi"
     >
       <button
+        id="cloud-tab-login"
         type="button"
         role="tab"
         :aria-selected="currentTab === 'login'"
@@ -92,6 +101,7 @@ function handleForgotPassword() {
         Masuk
       </button>
       <button
+        id="cloud-tab-register"
         type="button"
         role="tab"
         :aria-selected="currentTab === 'register'"
@@ -115,6 +125,7 @@ function handleForgotPassword() {
         :loading="loading"
         :error-message="errorMessage"
         :disabled="disabled"
+        :initial-email="initialEmail"
         @submit="handleLoginSubmit"
         @switch-tab="setTab"
         @google-click="handleGoogleClick"
@@ -126,6 +137,8 @@ function handleForgotPassword() {
         :loading="loading"
         :error-message="errorMessage"
         :disabled="disabled"
+        :initial-email="initialEmail"
+        :initial-name="initialName"
         @submit="handleRegisterSubmit"
         @switch-tab="setTab"
         @google-click="handleGoogleClick"

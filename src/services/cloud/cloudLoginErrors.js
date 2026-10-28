@@ -24,6 +24,19 @@ const MESSAGES = Object.freeze({
   unknown: 'Login Cloud gagal. Periksa data Anda lalu coba lagi.',
 })
 
+const OTP_MESSAGES = Object.freeze({
+  OTP_INVALID: 'Kode OTP salah. Periksa kembali kode yang Anda masukkan.',
+  OTP_EXPIRED: 'Kode OTP sudah kedaluwarsa. Kirim ulang kode terbaru.',
+  OTP_MAX_ATTEMPTS: 'Batas percobaan OTP tercapai. Kirim ulang kode atau mulai alur registrasi baru.',
+  OTP_ALREADY_USED: 'Kode OTP ini sudah digunakan. Gunakan kode terbaru.',
+  OTP_REPLACED: 'Kode OTP ini sudah digantikan. Gunakan kode terbaru.',
+  OTP_RESEND_COOLDOWN: 'Tunggu sampai waktu kirim ulang tercapai.',
+  OTP_RATE_LIMITED: 'Terlalu banyak permintaan. Coba lagi setelah waktu yang ditentukan server.',
+  OTP_DELIVERY_FAILED: 'Kode OTP belum dapat dikirim. Coba lagi nanti.',
+  AUTH_PROVISIONING_PENDING: 'Akun sedang disiapkan. Jangan masuk sebelum proses selesai.',
+  IDEMPOTENCY_KEY_REUSED: 'Permintaan pendaftaran sudah digunakan untuk data berbeda. Mulai registrasi baru.',
+})
+
 /**
  * @param {object|null|undefined} error Raw error from `apiClient`.
  * @returns {{kind: string, message: string}}
@@ -100,10 +113,37 @@ export function describeRegisterError(error) {
     return { kind: CLOUD_LOGIN_ERROR_KIND.SERVER, message: MESSAGES.server }
   }
 
+  if (code === 'IDEMPOTENCY_KEY_REUSED') {
+    return { kind: 'idempotency', message: OTP_MESSAGES.IDEMPOTENCY_KEY_REUSED }
+  }
+
   return {
     kind: CLOUD_LOGIN_ERROR_KIND.UNKNOWN,
-    message: error?.message || 'Pendaftaran Cloud gagal. Silakan periksa data Anda dan coba lagi.',
+    message: 'Pendaftaran Cloud gagal. Silakan periksa data Anda dan coba lagi.',
   }
+}
+
+/** Map OTP/API failures to safe Indonesian UI copy without exposing raw exceptions. */
+export function describeOtpError(error) {
+  const status = Number(error?.status) || 0
+  const code = typeof error?.code === 'string' ? error.code.toUpperCase() : ''
+
+  if (status === 0 || code === 'NETWORK_ERROR') {
+    return { kind: 'offline', message: 'Koneksi internet diperlukan untuk memproses OTP. State Anda tetap tersimpan.' }
+  }
+
+  if (status === 429 || code === 'OTP_RATE_LIMITED' || code === 'RATE_LIMITED') {
+    return {
+      kind: 'rate-limited',
+      message: OTP_MESSAGES.OTP_RATE_LIMITED,
+      retryAfter: error?.retryAfter ?? error?.data?.retry_after ?? null,
+    }
+  }
+
+  if (OTP_MESSAGES[code]) return { kind: code.toLowerCase(), message: OTP_MESSAGES[code] }
+
+  if (status === 422) return { kind: 'validation', message: 'Masukkan kode OTP 6 digit.' }
+  return { kind: 'unknown', message: 'Verifikasi OTP gagal. Coba lagi.' }
 }
 
 /**

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
@@ -36,6 +36,13 @@ const touched = ref({
   email: false,
   password: false,
 })
+
+watch(
+  () => props.initialEmail,
+  (value) => {
+    if (value) email.value = value
+  },
+)
 
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -109,7 +116,7 @@ function handleSwitchToRegister() {
     <!-- Error Alert Banner -->
     <div
       v-if="errorMessage"
-      id="login-error-banner"
+      id="cloud-login-error"
       role="alert"
       data-testid="login-error-banner"
       class="flex items-start gap-3 rounded-2xl border border-danger/20 bg-danger/5 p-3.5 text-xs text-danger shadow-soft"
@@ -129,7 +136,7 @@ function handleSwitchToRegister() {
         <label for="login-email" class="block text-xs font-semibold uppercase tracking-wider text-ink-secondary">
           Alamat Email
         </label>
-        <div class="relative">
+        <div id="cloud-email" class="relative">
           <input
             id="login-email"
             v-model="email"
@@ -169,7 +176,7 @@ function handleSwitchToRegister() {
           </button>
         </div>
 
-        <div class="relative">
+        <div id="cloud-password" class="relative">
           <input
             id="login-password"
             v-model="password"
@@ -231,12 +238,13 @@ function handleSwitchToRegister() {
 
       <!-- Submit Button -->
       <BaseButton
-        id="login-submit-btn"
+        id="cloud-login-btn"
         data-testid="login-submit-button"
         type="submit"
         variant="primary"
         block
         :disabled="!isFormValid || loading || disabled"
+        @click.prevent="handleSubmit"
       >
         <span v-if="loading" class="inline-flex items-center gap-2">
           <svg class="size-4 animate-spin" viewBox="0 0 24 24" fill="none">

@@ -6,6 +6,10 @@ import { useBusinessStore } from '@/stores/businessStore'
 import {
   cloudLogin,
   cloudRegister,
+  cloudVerifyOtp,
+  cloudResendOtp,
+  savePendingRegistrationMetadata,
+  clearPendingRegistrationMetadata,
   fetchMobileContext,
   registerDevice,
   cloudLogout,
@@ -683,11 +687,22 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
    * Returns { ok, businesses, error }.
    */
   async function login(email, password) {
+    if (loading.value) return { ok: false, error: { status: 0, code: 'REQUEST_IN_PROGRESS' } }
     loading.value = true
     error.value = null
 
     try {
       const loginResult = await cloudLogin(email, password)
+
+      if (loginResult.state === 'two_factor_required') {
+        error.value = 'Verifikasi dua faktor tambahan diperlukan. Selesaikan melalui alur AUTH-M08.'
+        return {
+          ok: false,
+          state: 'two_factor_required',
+          challenge: loginResult.challenge,
+          error: loginResult.error,
+        }
+      }
 
       if (!loginResult.ok) {
         error.value = loginResult.error?.message ?? 'Login gagal'
@@ -758,16 +773,11 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   }
 
   /**
-   * Register flow:
-   * 1. Register with /api/auth/register
-   * 2. Save token to secure storage
-   * 3. Fetch /api/mobile/context
-   * 4. Store context in state
-   * 5. Persist initial cloud context
-   *
-   * Returns { ok, businesses, error }.
+   * Register flow intentionally stops at pending email verification. A pending
+   * registration is not a Cloud session and cannot fetch context or save a token.
    */
   async function register(payload) {
+    if (loading.value) return { ok: false, error: { status: 0, code: 'REQUEST_IN_PROGRESS' } }
     loading.value = true
     error.value = null
 
@@ -779,57 +789,36 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         return { ok: false, error: regResult.error }
       }
 
-      await saveToken(regResult.token)
+      savePendingRegistrationMetadata(regResult.registration)
+      return { ok: true, state: 'pending_email', registration: regResult.registration }
+    } finally {
+      loading.value = false
+    }
+  }
 
-      user.value = regResult.user
-        ? {
-            id: regResult.user.id,
-            name: regResult.user.name,
-            email: regResult.user.email,
-          }
-        : null
+  async function verifyRegistrationOtp(registrationId, code) {
+    if (loading.value) return { ok: false, error: { status: 0, code: 'REQUEST_IN_PROGRESS' } }
+    loading.value = true
+    error.value = null
+    try {
+      const result = await cloudVerifyOtp(registrationId, code)
+      if (result.ok) clearPendingRegistrationMetadata()
+      else error.value = result.error?.message ?? 'Verifikasi email gagal.'
+      return result
+    } finally {
+      loading.value = false
+    }
+  }
 
-      const contextDeviceId = await ensureDeviceIdentifier()
-      const contextResult = await fetchMobileContext(regResult.token, {
-        deviceIdentifier: contextDeviceId,
-      })
-
-      if (!contextResult.ok) {
-        if (isUnauthorizedError(contextResult.error)) {
-          await handleInvalidToken()
-          return { ok: false, error: { ...contextResult.error, code: 'TOKEN_INVALID' } }
-        }
-
-        await removeToken()
-        user.value = null
-        error.value = contextResult.error?.message ?? 'Gagal mengambil context'
-        return { ok: false, error: contextResult.error }
-      }
-
-      const parsed = extractBusinesses(contextResult.data)
-
-      if (!parsed.ok) {
-        await removeToken()
-        user.value = null
-        error.value = 'Context cloud dari server tidak valid.'
-        return {
-          ok: false,
-          error: { status: 0, code: 'MALFORMED_CONTEXT', message: error.value, data: null },
-        }
-      }
-
-      businesses.value = parsed.businesses
-      hasResolvedBusinessContext.value = true
-      hasResolvedZeroBusiness.value = businesses.value.length === 0
-      sessionInvalid.value = false
-
-      capabilityState.value = 'verified'
-      capabilitiesVerifiedAt.value = new Date().toISOString()
-      contextCheckedAt.value = capabilitiesVerifiedAt.value
-
-      await persistCloudContext()
-
-      return { ok: true, businesses: businesses.value }
+  async function resendRegistrationOtp(registrationId, email = '') {
+    if (loading.value) return { ok: false, error: { status: 0, code: 'REQUEST_IN_PROGRESS' } }
+    loading.value = true
+    error.value = null
+    try {
+      const result = await cloudResendOtp(registrationId, email)
+      if (result.ok) savePendingRegistrationMetadata(result.registration)
+      else error.value = result.error?.message ?? 'Kode OTP belum dapat dikirim ulang.'
+      return result
     } finally {
       loading.value = false
     }
@@ -1126,7 +1115,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         if (cashierStore?.activeCashier) {
           cashierStore.activeCashier.pinConfigured = true
         }
-      } catch {}
+      } catch {
+        // Best effort UI refresh; the workspace activation remains authoritative.
+      }
       try {
         const { useProductStore } = await import('@/stores/productStore')
         const pStore = useProductStore()
@@ -1138,7 +1129,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
             stockMovements: loaded?.stockMovements ?? [],
           })
         }
-      } catch {}
+      } catch {
+        // Best effort UI refresh; the workspace activation remains authoritative.
+      }
       return {
         ok: true,
         code: 'OPERATIONAL_CONTEXT_ACTIVATED',
@@ -1162,7 +1155,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         if (cashierStore?.activeCashier) {
           cashierStore.activeCashier.pinConfigured = true
         }
-      } catch {}
+      } catch {
+        // Best effort UI refresh; the workspace activation remains authoritative.
+      }
       return {
         ok: true,
         code: 'OPERATIONAL_CONTEXT_ACTIVATED',
@@ -1858,6 +1853,8 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     invalidateCloudSession: handleInvalidToken,
     login,
     register,
+    verifyRegistrationOtp,
+    resendRegistrationOtp,
     selectBusiness,
     selectOutlet,
     activateOperationalContext,
