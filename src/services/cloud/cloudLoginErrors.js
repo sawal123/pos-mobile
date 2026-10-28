@@ -125,6 +125,53 @@ export function describeGoogleLoginError(error) {
   return { kind: 'unknown', message: 'Login Google gagal. Coba lagi dengan akun Google.' }
 }
 
+/** Curated messages for the authenticated Google account-linking flow. */
+export function describeGoogleLinkError(error) {
+  const status = Number(error?.status) || 0
+  const code = typeof error?.code === 'string' ? error.code.toUpperCase() : ''
+
+  if (code === 'INVALID_CREDENTIALS') {
+    return { kind: 'invalid-credentials', message: 'Password saat ini salah.' }
+  }
+  if (code === 'TWO_FACTOR_REQUIRED') {
+    return { kind: 'two-factor', message: 'Masukkan kode autentikator 6 digit untuk melanjutkan.' }
+  }
+  if (code === 'REAUTHENTICATION_EXPIRED' || code === 'REAUTHENTICATION_ALREADY_USED') {
+    return { kind: 'expired', message: 'Verifikasi ulang sudah tidak berlaku. Mulai ulang secara eksplisit.' }
+  }
+  if (code === 'REAUTHENTICATION_RATE_LIMITED' || status === 429) {
+    return { kind: 'rate-limited', message: 'Permintaan terlalu sering. Tunggu sebentar sebelum mencoba lagi.' }
+  }
+  if (code === 'IDENTITY_ALREADY_LINKED') {
+    return { kind: 'identity-conflict', message: 'Identitas Google sudah terhubung ke akun lain.' }
+  }
+  if (code === 'IDENTITY_CONFLICT') {
+    return { kind: 'identity-conflict', message: 'Akun ini sudah memiliki identitas Google berbeda.' }
+  }
+  if (code === 'GOOGLE_EMAIL_UNVERIFIED') {
+    return { kind: 'unverified', message: 'Email Google belum terverifikasi.' }
+  }
+  if (code === 'GOOGLE_TOKEN_INVALID' || code === 'GOOGLE_TOKEN_EXPIRED' || code === 'GOOGLE_AUDIENCE_INVALID') {
+    return { kind: 'invalid-token', message: 'Verifikasi Google gagal. Pilih akun Google kembali.' }
+  }
+  if (code === 'GOOGLE_AUTH_NOT_CONFIGURED' || status === 503) {
+    return { kind: 'server', message: 'Login Google belum tersedia. Coba lagi nanti.' }
+  }
+  if (code === 'LINK_STATUS_UNVERIFIED' || status === 0 || code === 'NETWORK_ERROR') {
+    return { kind: 'uncertain', message: 'Link berhasil diproses, tetapi statusnya belum dapat dipastikan.' }
+  }
+  if (code === 'SESSION_CHANGED' || code === 'STALE_SESSION_OPERATION') {
+    return { kind: 'stale', message: 'Sesi Cloud berubah. Penghubungan dibatalkan.' }
+  }
+  if (code === 'REAUTHENTICATION_REQUIRED') {
+    return { kind: 'reauthentication', message: 'Verifikasi ulang diperlukan sebelum menghubungkan Google.' }
+  }
+  if (status === 401) {
+    return { kind: 'session', message: 'Sesi Cloud tidak dapat diverifikasi. Masuk kembali jika diperlukan.' }
+  }
+  return { kind: 'unknown', message: 'Penghubungan akun Google gagal. Coba lagi secara eksplisit.' }
+}
+
 /**
  * @param {object|null|undefined} error Raw error from `apiClient`.
  * @returns {{kind: string, message: string}}

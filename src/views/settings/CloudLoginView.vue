@@ -39,6 +39,7 @@ import { useProductStore } from '@/stores/productStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import CloudAuthCard from '@/components/cloud/auth/CloudAuthCard.vue'
 import CloudEmailOtpView from '@/components/cloud/auth/CloudEmailOtpView.vue'
+import CloudGoogleLinkCard from '@/components/cloud/auth/CloudGoogleLinkCard.vue'
 import {
   cancelGoogleSignIn,
   signInWithGoogle,
@@ -87,6 +88,7 @@ const showPassword = ref(false)
 const step = ref('login') // 'login' | 'select-business' | 'confirm-link' | 'select-outlet' | 'done'
 const pendingBusiness = ref(null)
 const loginErrorMessage = ref('')
+const googleLinkCollision = ref(false)
 
 // In-app Cloud Registration state
 const registerName = ref('')
@@ -1445,7 +1447,10 @@ async function handleGoogleClick() {
         const description = describeGoogleLoginError(result.error)
         loginErrorMessage.value = description.message
         registerErrorMessage.value = description.message
-        if (description.kind === 'account-link-required') authMode.value = 'login'
+        if (description.kind === 'account-link-required') {
+          authMode.value = 'login'
+          googleLinkCollision.value = true
+        }
         return
       }
 
@@ -1679,6 +1684,7 @@ async function confirmDisconnect() {
   })
 
   await cloudStore.logout()
+  googleLinkCollision.value = false
   email.value = ''
   password.value = ''
   pendingBusiness.value = null
@@ -1761,6 +1767,11 @@ onMounted(async () => {
           Hubungkan bisnis yang sudah terdaftar di Cloud untuk memuat produk dan data toko ke perangkat ini.
         </p>
       </div>
+
+      <CloudGoogleLinkCard
+        v-if="cloudStore.isAuthenticated && !cloudStore.loading"
+        :collision-detected="googleLinkCollision"
+      />
 
       <!-- ZERO BUSINESS STATE (Reachable when authenticated but has 0 businesses) -->
       <BaseCard v-if="isZeroBusiness" id="cloud-no-business" class="space-y-3">
@@ -2914,6 +2925,24 @@ onMounted(async () => {
         >
           {{ otpVerifiedMessage }}
         </p>
+        <div
+          v-if="googleLinkCollision"
+          class="mb-4 space-y-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3"
+          data-testid="google-link-manual-handoff"
+        >
+          <p class="text-sm text-amber-800">
+            Akun Google sudah memiliki akun Cloud. Masuk ke akun lama untuk melanjutkan
+            penghubungan Google secara aman.
+          </p>
+          <BaseButton
+            data-testid="google-link-manual-login"
+            variant="secondary"
+            size="sm"
+            @click="authMode = 'login'"
+          >
+            Masuk ke Akun Lama
+          </BaseButton>
+        </div>
         <CloudAuthCard
           v-model="authMode"
           :loading="cloudStore.loading || googleLoading"

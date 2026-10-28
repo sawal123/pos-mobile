@@ -11,6 +11,9 @@
  * - POST /api/v2/auth/otp/verify
  * - POST /api/v2/auth/otp/resend
  * - POST /api/v2/auth/google
+ * - POST /api/v2/auth/reauthenticate
+ * - POST /api/v2/auth/google/link
+ * - GET  /api/v2/auth/me
  *
  * Does NOT implement:
  * - 2FA completion flow
@@ -494,6 +497,168 @@ export async function fetchMe(token) {
   }
 
   return { ok: true, user: result.data?.data ?? result.data }
+}
+
+/**
+ * Fetch the v2 authentication methods for the current mobile session.
+ * This is intentionally separate from the legacy fetchMe() contract.
+ */
+export async function fetchMobileAuthMethods(token) {
+  const result = await apiRequest('/api/v2/auth/me', { token })
+
+  if (!result.ok) return { ok: false, error: result.error }
+
+  const data = responseData(result)
+  const authenticatedUser = data?.user
+  const methods = data?.authentication_methods
+  const validUser = isValidAuthenticatedUser(authenticatedUser)
+  const validMethods =
+    Array.isArray(methods) &&
+    methods.length > 0 &&
+    methods.every((method) => typeof method === 'string' && method.trim() !== '')
+  const validFlags =
+    typeof data.email_verified === 'boolean' && typeof data.two_factor_enabled === 'boolean'
+
+  if (result.status !== 200 || !validUser || !validMethods || !validFlags) {
+    return {
+      ok: false,
+      error: {
+        status: result.status,
+        code: 'MALFORMED_AUTH_METHODS_RESPONSE',
+        message: 'Respons metode autentikasi tidak valid.',
+        data: null,
+      },
+    }
+  }
+
+  return {
+    ok: true,
+    user: authenticatedUser,
+    emailVerified: data.email_verified === true,
+    twoFactorEnabled: data.two_factor_enabled === true,
+    authenticationMethods: methods.map((method) => method.trim().toLowerCase()),
+  }
+}
+
+/**
+ * Obtain a short-lived, single-use grant for Google account linking.
+ * The raw grant is returned to the caller only so it can be held in memory.
+ */
+export async function cloudReauthenticateForGoogleLink(token, password, totpCode = null) {
+  const body = { password }
+  if (totpCode !== null && totpCode !== undefined && totpCode !== '') {
+    body.totp_code = totpCode
+  }
+
+  const result = await apiRequest('/api/v2/auth/reauthenticate', {
+    method: 'POST',
+    body,
+    token,
+  })
+
+  if (!result.ok) return { ok: false, error: result.error }
+
+  const data = responseData(result)
+  const grant = data?.reauthentication_token
+  const expiresIn = data?.expires_in
+  if (
+    result.status !== 200 ||
+    typeof grant !== 'string' ||
+    grant.trim() === '' ||
+    !Number.isFinite(expiresIn) ||
+    expiresIn <= 0 ||
+    data?.purpose !== 'google_link'
+  ) {
+    return {
+      ok: false,
+      error: {
+        status: result.status,
+        code: 'MALFORMED_REAUTHENTICATION_RESPONSE',
+        message: 'Respons verifikasi ulang tidak valid.',
+        data: null,
+      },
+    }
+  }
+
+  return {
+    ok: true,
+    reauthenticationToken: grant,
+    expiresIn,
+    expiresAt: Date.now() + expiresIn * 1000,
+    purpose: data.purpose,
+  }
+}
+
+/**
+ * Link a fresh Google assertion to the existing mobile Sanctum session.
+ * This endpoint never returns or replaces a Sanctum token.
+ */
+export async function cloudLinkGoogleAccount(
+  token,
+  reauthenticationToken,
+  idToken,
+  platform = 'android',
+) {
+  if (typeof reauthenticationToken !== 'string' || reauthenticationToken.trim() === '') {
+    return {
+      ok: false,
+      error: {
+        status: 0,
+        code: 'REAUTHENTICATION_REQUIRED',
+        message: 'Verifikasi ulang diperlukan.',
+        data: null,
+      },
+    }
+  }
+  if (typeof idToken !== 'string' || idToken.trim() === '') {
+    return {
+      ok: false,
+      error: {
+        status: 0,
+        code: 'GOOGLE_ID_TOKEN_MISSING',
+        message: 'Kredensial Google tidak tersedia.',
+        data: null,
+      },
+    }
+  }
+  if (platform !== 'android') {
+    return {
+      ok: false,
+      error: {
+        status: 0,
+        code: 'UNSUPPORTED_PLATFORM',
+        message: 'Account linking hanya tersedia pada aplikasi Android.',
+        data: null,
+      },
+    }
+  }
+
+  const result = await apiRequest('/api/v2/auth/google/link', {
+    method: 'POST',
+    body: {
+      reauthentication_token: reauthenticationToken,
+      id_token: idToken,
+      client_platform: platform,
+    },
+    token,
+  })
+
+  if (!result.ok) return { ok: false, error: result.error }
+
+  const data = responseData(result)
+  if (result.status !== 200 || data?.provider !== 'google' || typeof data?.linked !== 'boolean') {
+    return {
+      ok: false,
+      error: {
+        status: result.status,
+        code: 'MALFORMED_GOOGLE_LINK_RESPONSE',
+        message: 'Respons penghubungan Google tidak valid.',
+        data: null,
+      },
+    }
+  }
+
+  return { ok: true, provider: data.provider, linked: data.linked }
 }
 
 /**
