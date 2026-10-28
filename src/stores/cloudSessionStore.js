@@ -5,6 +5,7 @@ import { normalizeCloudBusinessType } from '@/data/businessTemplates'
 import { useBusinessStore } from '@/stores/businessStore'
 import {
   cloudLogin,
+  cloudGoogleLogin,
   cloudRegister,
   cloudVerifyOtp,
   cloudResendOtp,
@@ -686,13 +687,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
    *
    * Returns { ok, businesses, error }.
    */
-  async function login(email, password) {
-    if (loading.value) return { ok: false, error: { status: 0, code: 'REQUEST_IN_PROGRESS' } }
-    loading.value = true
-    error.value = null
-
-    try {
-      const loginResult = await cloudLogin(email, password)
+  async function finalizeAuthenticatedLogin(loginResult) {
 
       if (loginResult.state === 'two_factor_required') {
         error.value = 'Verifikasi dua faktor tambahan diperlukan. Selesaikan melalui alur AUTH-M08.'
@@ -767,6 +762,40 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       await persistCloudContext()
 
       return { ok: true, businesses: businesses.value }
+  }
+
+  /** Login with email/password through the shared authenticated session path. */
+  async function login(email, password) {
+    if (loading.value) return { ok: false, error: { status: 0, code: 'REQUEST_IN_PROGRESS' } }
+    loading.value = true
+    error.value = null
+
+    try {
+      return await finalizeAuthenticatedLogin(await cloudLogin(email, password))
+    } finally {
+      loading.value = false
+    }
+  }
+
+  /** Exchange a fresh native Google assertion through the same session path. */
+  async function loginWithGoogle(idToken, platform = 'android') {
+    if (loading.value) return { ok: false, error: { status: 0, code: 'REQUEST_IN_PROGRESS' } }
+    if (isAuthenticated.value) {
+      return {
+        ok: false,
+        error: {
+          status: 409,
+          code: 'SESSION_ALREADY_ACTIVE',
+          message: 'Sesi Cloud yang aktif tidak dapat diganti diam-diam.',
+          data: null,
+        },
+      }
+    }
+
+    loading.value = true
+    error.value = null
+    try {
+      return await finalizeAuthenticatedLogin(await cloudGoogleLogin(idToken, platform))
     } finally {
       loading.value = false
     }
@@ -1852,6 +1881,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     scheduler: computed(() => _scheduler),
     invalidateCloudSession: handleInvalidToken,
     login,
+    loginWithGoogle,
     register,
     verifyRegistrationOtp,
     resendRegistrationOtp,

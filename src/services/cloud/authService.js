@@ -10,6 +10,7 @@
  * - POST /api/v2/auth/register
  * - POST /api/v2/auth/otp/verify
  * - POST /api/v2/auth/otp/resend
+ * - POST /api/v2/auth/google
  *
  * Does NOT implement:
  * - 2FA completion flow
@@ -100,7 +101,13 @@ export function clearRegistrationAttemptCache() {
 }
 
 function responseData(result) {
-  return result?.data?.data ?? result?.data ?? null
+  return (
+    result?.data?.data ??
+    result?.data ??
+    result?.error?.data?.data ??
+    result?.error?.data ??
+    null
+  )
 }
 
 function maskEmail(email) {
@@ -295,6 +302,123 @@ export async function cloudLogin(email, password) {
         status: 0,
         code: 'MISSING_TOKEN',
         message: 'Token not returned by server',
+        data: null,
+      },
+    }
+  }
+
+  return { ok: true, token, user }
+}
+
+function isValidGoogleUser(user) {
+  return (
+    user &&
+    (typeof user.id === 'string' || typeof user.id === 'number') &&
+    String(user.id).trim() !== '' &&
+    typeof user.name === 'string' &&
+    user.name.trim() !== '' &&
+    typeof user.email === 'string' &&
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(user.email)
+  )
+}
+
+function parseTwoFactorChallenge(result) {
+  const data = responseData(result)
+  const challenge = data
+  const validChallenge =
+    typeof challenge?.challenge_id === 'string' &&
+    challenge.challenge_id.trim() !== '' &&
+    typeof challenge?.expires_at === 'string' &&
+    Number.isFinite(Date.parse(challenge.expires_at)) &&
+    Array.isArray(challenge?.methods) &&
+    challenge.methods.length > 0 &&
+    challenge.methods.every((method) => typeof method === 'string' && method.trim() !== '')
+
+  if (!validChallenge) {
+    return {
+      ok: false,
+      error: {
+        status: 202,
+        code: 'MALFORMED_TWO_FACTOR_CHALLENGE',
+        message: 'Respons verifikasi dua langkah tidak valid.',
+        data: null,
+      },
+    }
+  }
+
+  return {
+    ok: false,
+    state: 'two_factor_required',
+    challenge,
+    error: {
+      status: 202,
+      code: 'TWO_FACTOR_REQUIRED',
+      message: 'Verifikasi dua faktor diperlukan.',
+      data: result.data ?? null,
+    },
+  }
+}
+
+/**
+ * Exchange one fresh Android Google ID token for a Cloud Sanctum token.
+ * The assertion is never saved here; the caller owns it only for this request.
+ */
+export async function cloudGoogleLogin(idToken, platform = 'android') {
+  if (typeof idToken !== 'string' || idToken.trim() === '') {
+    return {
+      ok: false,
+      error: {
+        status: 0,
+        code: 'GOOGLE_ID_TOKEN_MISSING',
+        message: 'Kredensial Google tidak tersedia.',
+        data: null,
+      },
+    }
+  }
+
+  const clientPlatform = platform === 'android' ? 'android' : null
+  if (!clientPlatform) {
+    return {
+      ok: false,
+      error: {
+        status: 0,
+        code: 'UNSUPPORTED_PLATFORM',
+        message: 'Login Google hanya tersedia pada aplikasi Android.',
+        data: null,
+      },
+    }
+  }
+
+  const result = await apiRequest('/api/v2/auth/google', {
+    method: 'POST',
+    body: { id_token: idToken, client_platform: clientPlatform },
+  })
+
+  const responseCode = String(result?.data?.code ?? result?.error?.code ?? '').toUpperCase()
+  if (result.status === 202 && responseCode === 'TWO_FACTOR_REQUIRED') {
+    return parseTwoFactorChallenge(result)
+  }
+
+  if (!result.ok) return { ok: false, error: result.error }
+
+  const data = responseData(result)
+  const tokenType = data?.token_type
+  const token = data?.token
+  const user = data?.user
+
+  if (
+    result.status !== 200 ||
+    tokenType !== 'Bearer' ||
+    typeof token !== 'string' ||
+    token.trim() === '' ||
+    !isValidGoogleUser(user)
+  ) {
+    return {
+      ok: false,
+      error: {
+        status: result.status,
+        code: 'MALFORMED_GOOGLE_SUCCESS',
+        message: 'Respons login Google tidak valid.',
         data: null,
       },
     }

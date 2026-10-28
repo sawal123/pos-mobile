@@ -9,6 +9,7 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         // Custom plugins must be registered before the bridge is created in super.onCreate().
         registerPlugin(BluetoothPrinterPlugin.class);
+        registerPlugin(GoogleNativeAuthPlugin.class);
 
         super.onCreate(savedInstanceState);
     }

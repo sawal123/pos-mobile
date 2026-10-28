@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { Capacitor } from '@capacitor/core'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -8,7 +8,11 @@ import BaseInput from '@/components/base/BaseInput.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import AppIcon from '@/components/base/AppIcon.vue'
-import { describeLoginError, describeRegisterError } from '@/services/cloud/cloudLoginErrors'
+import {
+  describeGoogleLoginError,
+  describeLoginError,
+  describeRegisterError,
+} from '@/services/cloud/cloudLoginErrors'
 import { describeOtpError } from '@/services/cloud/cloudLoginErrors'
 import {
   getPendingRegistrationMetadata,
@@ -35,6 +39,10 @@ import { useProductStore } from '@/stores/productStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import CloudAuthCard from '@/components/cloud/auth/CloudAuthCard.vue'
 import CloudEmailOtpView from '@/components/cloud/auth/CloudEmailOtpView.vue'
+import {
+  cancelGoogleSignIn,
+  signInWithGoogle,
+} from '@/services/cloud/googleNativeAuthService'
 
 let route = null
 try {
@@ -91,6 +99,11 @@ const showRegisterPassword = ref(false)
 const otpErrorMessage = ref('')
 const otpVerifiedMessage = ref('')
 const pendingRegistration = ref(null)
+const googleLoading = ref(false)
+
+onUnmounted(() => {
+  cancelGoogleSignIn()
+})
 
 watch(
   () => route?.query?.tab,
@@ -1280,6 +1293,18 @@ async function handleLogin() {
   step.value = businesses.length === 1 ? 'confirm-link' : 'select-business'
 }
 
+function continueAfterCloudLogin(businesses) {
+  if (!Array.isArray(businesses)) return
+  if (businesses.length === 0) {
+    step.value = 'done'
+    return
+  }
+
+  // Never auto-link a Cloud business; the user must confirm it explicitly.
+  pendingBusiness.value = businesses.length === 1 ? businesses[0] : null
+  step.value = businesses.length === 1 ? 'confirm-link' : 'select-business'
+}
+
 // ── In-App Registration flow ─────────────────────────────────────────────────
 async function handleRegister() {
   registerErrorMessage.value = ''
@@ -1379,9 +1404,49 @@ function handleOtpOffline() {
   if (router?.push) void router.push({ name: 'pos' })
 }
 
-function handleGoogleClick() {
-  loginErrorMessage.value = 'Google Sign-In belum tersedia dan dijadwalkan untuk AUTH-M04.'
-  registerErrorMessage.value = loginErrorMessage.value
+async function handleGoogleClick() {
+  if (googleLoading.value || cloudStore.loading) return
+
+  googleLoading.value = true
+  loginErrorMessage.value = ''
+  registerErrorMessage.value = ''
+
+  try {
+    const providerResult = await signInWithGoogle()
+    if (!providerResult.ok) {
+      const description = describeGoogleLoginError(providerResult)
+      if (description.message) {
+        loginErrorMessage.value = description.message
+        registerErrorMessage.value = description.message
+      }
+      return
+    }
+
+    let idToken = providerResult.idToken
+    try {
+      const result = await cloudStore.loginWithGoogle(idToken, 'android')
+      if (!result.ok) {
+        if (result.state === 'two_factor_required') {
+          loginErrorMessage.value = describeGoogleLoginError(result.error).message
+          return
+        }
+
+        const description = describeGoogleLoginError(result.error)
+        loginErrorMessage.value = description.message
+        registerErrorMessage.value = description.message
+        if (description.kind === 'account-link-required') authMode.value = 'login'
+        return
+      }
+
+      continueAfterCloudLogin(result.businesses)
+    } finally {
+      // Release the assertion reference as soon as the exchange is complete.
+      idToken = null
+      providerResult.idToken = null
+    }
+  } finally {
+    googleLoading.value = false
+  }
 }
 
 function handleForgotPassword() {
@@ -2834,11 +2899,11 @@ onMounted(async () => {
         </p>
         <CloudAuthCard
           v-model="authMode"
-          :loading="cloudStore.loading"
+          :loading="cloudStore.loading || googleLoading"
           :error-message="authMode === 'login' ? loginErrorMessage : registerErrorMessage"
           :initial-email="authMode === 'login' ? email : registerEmail"
           :initial-name="registerName"
-          :disabled="cloudStore.loading"
+          :disabled="cloudStore.loading || googleLoading"
           @login-submit="handleAuthLogin"
           @register-submit="handleAuthRegister"
           @google-click="handleGoogleClick"
