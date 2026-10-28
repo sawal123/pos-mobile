@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
-import { mount, flushPromises } from '@vue/test-utils'
+import { mount } from '@vue/test-utils'
 
 import { apiRequest } from '../services/cloud/apiClient'
-import { cloudRegister } from '../services/cloud/authService'
+import { clearPendingRegistrationMetadata, cloudRegister } from '../services/cloud/authService'
 import { describeRegisterError } from '../services/cloud/cloudLoginErrors'
 import { useCloudSessionStore } from '../stores/cloudSessionStore'
 import { _resetTokenStore, getToken } from '../services/cloud/tokenRepository'
@@ -11,32 +11,34 @@ import CloudLoginView from '../views/settings/CloudLoginView.vue'
 
 vi.mock('../services/cloud/apiClient', () => ({
   apiRequest: vi.fn(),
-  resolveBaseUrl: vi.fn(() => 'https://pos.eradig.my.id'),
 }))
 
-const ok = (data) => ({ ok: true, status: 200, data: { data }, error: null })
-const err = (status, code, message = 'error', data = null) => ({
-  ok: false,
-  status,
-  data,
-  error: { status, code, message, data },
+const pending = (registrationId = 'registration-123') => ({
+  ok: true,
+  status: 202,
+  data: {
+    message: 'Jika alamat email dapat digunakan, instruksi verifikasi telah dikirim.',
+    data: {
+      registration_id: registrationId,
+      state: 'pending_email',
+      otp_expires_at: '2099-01-01T00:30:00Z',
+      resend_available_at: '2099-01-01T00:01:00Z',
+    },
+  },
+  error: null,
 })
 
 describe('In-App Cloud Registration', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     _resetTokenStore()
+    clearPendingRegistrationMetadata()
     vi.clearAllMocks()
   })
 
   describe('authService.cloudRegister', () => {
-    it('posts to /api/auth/register with user and business payload', async () => {
-      apiRequest.mockResolvedValueOnce(
-        ok({
-          token: 'token-reg-123',
-          user: { id: 5, name: 'Budi Santoso', email: 'budi@example.com' },
-        }),
-      )
+    it('posts to /api/v2/auth/register with user and business payload', async () => {
+      apiRequest.mockResolvedValueOnce(pending())
 
       const result = await cloudRegister({
         name: 'Budi Santoso',
@@ -46,7 +48,7 @@ describe('In-App Cloud Registration', () => {
         business_name: 'Toko Budi',
       })
 
-      expect(apiRequest).toHaveBeenCalledWith('/api/auth/register', {
+      expect(apiRequest).toHaveBeenCalledWith('/api/v2/auth/register', {
         method: 'POST',
         body: {
           name: 'Budi Santoso',
@@ -55,10 +57,11 @@ describe('In-App Cloud Registration', () => {
           password_confirmation: 'password123',
           business_name: 'Toko Budi',
         },
+        idempotencyKey: expect.any(String),
       })
-      expect(result.ok).toBe(true)
-      expect(result.token).toBe('token-reg-123')
-      expect(result.user.name).toBe('Budi Santoso')
+      expect(apiRequest.mock.calls[0][1].idempotencyKey).toMatch(/^[0-9a-f-]{36}$/i)
+      expect(result).toMatchObject({ ok: true, state: 'pending_email' })
+      expect(result.token).toBeUndefined()
     })
   })
 
@@ -82,29 +85,9 @@ describe('In-App Cloud Registration', () => {
   })
 
   describe('cloudSessionStore.register', () => {
-    it('registers, saves token, and loads context on success', async () => {
+    it('keeps registration pending without token or Cloud context', async () => {
       const store = useCloudSessionStore()
-      apiRequest
-        .mockResolvedValueOnce(
-          ok({
-            token: 'reg-jwt-token',
-            user: { id: 99, name: 'Owner Toko', email: 'owner@toko.com' },
-          }),
-        )
-        .mockResolvedValueOnce(
-          ok({
-            user: { id: 99, name: 'Owner Toko', email: 'owner@toko.com' },
-            businesses: [
-              {
-                id: 10,
-                name: 'Toko Baru',
-                cloud_access: true,
-                subscription: { plan: 'free', status: 'active' },
-                outlets: [{ id: 101, name: 'Outlet Utama', status: 'active' }],
-              },
-            ],
-          }),
-        )
+      apiRequest.mockResolvedValueOnce(pending('registration-456'))
 
       const res = await store.register({
         name: 'Owner Toko',
@@ -114,11 +97,10 @@ describe('In-App Cloud Registration', () => {
         business_name: 'Toko Baru',
       })
 
-      expect(res.ok).toBe(true)
-      expect(res.businesses).toHaveLength(1)
-      expect(store.isAuthenticated).toBe(true)
-      expect(store.user.name).toBe('Owner Toko')
-      expect(await getToken()).toBe('reg-jwt-token')
+      expect(res).toMatchObject({ ok: true, state: 'pending_email' })
+      expect(store.isAuthenticated).toBe(false)
+      expect(await getToken()).toBeNull()
+      expect(apiRequest.mock.calls.map(([path]) => path)).not.toContain('/api/mobile/context')
     })
   })
 

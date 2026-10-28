@@ -53,6 +53,7 @@ async function buildApiError(response) {
     code: body?.code ?? body?.error ?? `HTTP_${response.status}`,
     message: body?.message ?? response.statusText ?? 'Unknown error',
     data: body ?? null,
+    retryAfter: response.headers.get('Retry-After') ?? null,
   }
 }
 
@@ -66,10 +67,21 @@ async function buildApiError(response) {
  * @param {string} [options.token]  Bearer token – never logged
  * @returns {Promise<{ok: boolean, status: number, data: any, error: ApiError|null}>}
  */
-export async function apiRequest(path, { method = 'GET', body, token } = {}) {
+export async function apiRequest(
+  path,
+  { method = 'GET', body, token, headers: customHeaders, idempotencyKey } = {},
+) {
   const headers = {
     Accept: 'application/json',
   }
+
+  if (customHeaders && typeof customHeaders === 'object') {
+    for (const [name, value] of Object.entries(customHeaders)) {
+      if (typeof value === 'string' && value.length > 0) headers[name] = value
+    }
+  }
+
+  if (idempotencyKey) headers['Idempotency-Key'] = String(idempotencyKey)
 
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json'
@@ -108,7 +120,13 @@ export async function apiRequest(path, { method = 'GET', body, token } = {}) {
 
   if (!response.ok) {
     const error = await buildApiError(response)
-    return { ok: false, status: response.status, data: null, error }
+    return {
+      ok: false,
+      status: response.status,
+      data: null,
+      error,
+      headers: readResponseHeaders(response),
+    }
   }
 
   let data = null
@@ -121,7 +139,15 @@ export async function apiRequest(path, { method = 'GET', body, token } = {}) {
     }
   }
 
-  return { ok: true, status: response.status, data, error: null }
+  return { ok: true, status: response.status, data, error: null, headers: readResponseHeaders(response) }
+}
+
+function readResponseHeaders(response) {
+  const result = {}
+  response.headers?.forEach?.((value, key) => {
+    result[key.toLowerCase()] = value
+  })
+  return result
 }
 
 /** Error codes emitted by {@link apiRawRequest}. */

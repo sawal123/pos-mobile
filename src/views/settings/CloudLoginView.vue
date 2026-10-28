@@ -1,7 +1,6 @@
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
 import { Capacitor } from '@capacitor/core'
-import { Browser } from '@capacitor/browser'
 import { useRoute, useRouter } from 'vue-router'
 
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -10,7 +9,11 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import AppIcon from '@/components/base/AppIcon.vue'
 import { describeLoginError, describeRegisterError } from '@/services/cloud/cloudLoginErrors'
-import { resolveBaseUrl } from '@/services/cloud/apiClient'
+import { describeOtpError } from '@/services/cloud/cloudLoginErrors'
+import {
+  getPendingRegistrationMetadata,
+  clearPendingRegistrationMetadata,
+} from '@/services/cloud/authService'
 import { clearLocalCache } from '@/services/localCacheService'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCashierStore } from '@/stores/cashierStore'
@@ -30,6 +33,8 @@ import { useSyncStatusStore } from '@/stores/syncStatusStore'
 import { useSyncReconciliationStore } from '@/stores/syncReconciliationStore'
 import { useProductStore } from '@/stores/productStore'
 import { useTransactionStore } from '@/stores/transactionStore'
+import CloudAuthCard from '@/components/cloud/auth/CloudAuthCard.vue'
+import CloudEmailOtpView from '@/components/cloud/auth/CloudEmailOtpView.vue'
 
 let route = null
 try {
@@ -83,6 +88,9 @@ const registerPasswordConfirmation = ref('')
 const registerBusinessName = ref('')
 const registerErrorMessage = ref('')
 const showRegisterPassword = ref(false)
+const otpErrorMessage = ref('')
+const otpVerifiedMessage = ref('')
+const pendingRegistration = ref(null)
 
 watch(
   () => route?.query?.tab,
@@ -352,6 +360,14 @@ watch(
 )
 
 onMounted(async () => {
+  const pending = getPendingRegistrationMetadata()
+  if (pending?.registrationId) {
+    pendingRegistration.value = pending
+    if (pending.otpExpiresAt && Date.parse(pending.otpExpiresAt) <= Date.now()) {
+      otpErrorMessage.value = describeOtpError({ code: 'OTP_EXPIRED' }).message
+    }
+  }
+
   if (canSync.value) {
     await syncContextGuardStore.check()
   } else {
@@ -1244,6 +1260,10 @@ async function handleLogin() {
   const result = await cloudStore.login(email.value, password.value)
 
   if (!result.ok) {
+    if (result.state === 'two_factor_required') {
+      loginErrorMessage.value = 'Akun memerlukan verifikasi 2FA tambahan. Penyelesaian interaktif akan tersedia pada AUTH-M08.'
+      return
+    }
     loginErrorMessage.value = describeLoginError(result.error).message
     return
   }
@@ -1264,8 +1284,13 @@ async function handleLogin() {
 async function handleRegister() {
   registerErrorMessage.value = ''
 
-  if (!registerName.value.trim() || !registerEmail.value.trim() || !registerPassword.value) {
-    registerErrorMessage.value = 'Mohon isi nama lengkap, email, dan password.'
+  if (
+    !registerName.value.trim() ||
+    !registerEmail.value.trim() ||
+    !registerBusinessName.value.trim() ||
+    !registerPassword.value
+  ) {
+    registerErrorMessage.value = 'Mohon isi nama lengkap, nama bisnis, email, dan password.'
     return
   }
 
@@ -1284,7 +1309,7 @@ async function handleRegister() {
     email: registerEmail.value.trim(),
     password: registerPassword.value,
     password_confirmation: registerPasswordConfirmation.value,
-    business_name: registerBusinessName.value.trim() || undefined,
+    business_name: registerBusinessName.value.trim(),
   })
 
   if (!result.ok) {
@@ -1292,15 +1317,90 @@ async function handleRegister() {
     return
   }
 
-  const { businesses } = result
-
-  if (businesses.length === 0) {
-    step.value = 'done'
+  if (result.state === 'pending_email') {
+    pendingRegistration.value = {
+      ...result.registration,
+      email: registerEmail.value.trim(),
+    }
+    otpErrorMessage.value = ''
+    authMode.value = 'login'
     return
   }
 
-  pendingBusiness.value = businesses.length === 1 ? businesses[0] : null
-  step.value = businesses.length === 1 ? 'confirm-link' : 'select-business'
+  registerErrorMessage.value = 'Registrasi belum dapat dilanjutkan.'
+}
+
+async function handleOtpVerify({ registrationId, code }) {
+  otpErrorMessage.value = ''
+  const result = await cloudStore.verifyRegistrationOtp(registrationId, code)
+  if (!result.ok) {
+    otpErrorMessage.value = describeOtpError(result.error).message
+    return
+  }
+
+  const verifiedEmail = pendingRegistration.value?.email || registerEmail.value.trim()
+  pendingRegistration.value = null
+  clearPendingRegistrationMetadata()
+  password.value = ''
+  registerPassword.value = ''
+  registerPasswordConfirmation.value = ''
+  email.value = verifiedEmail
+  authMode.value = 'login'
+  otpVerifiedMessage.value = 'Email berhasil diverifikasi. Silakan masuk dengan password Anda.'
+}
+
+async function handleOtpResend({ registrationId }) {
+  otpErrorMessage.value = ''
+  const result = await cloudStore.resendRegistrationOtp(
+    registrationId,
+    pendingRegistration.value?.email || '',
+  )
+  if (!result.ok) {
+    otpErrorMessage.value = describeOtpError(result.error).message
+    return
+  }
+  pendingRegistration.value = {
+    ...pendingRegistration.value,
+    ...result.registration,
+  }
+}
+
+function handleOtpBack() {
+  otpErrorMessage.value = ''
+  pendingRegistration.value = null
+  clearPendingRegistrationMetadata()
+  authMode.value = 'register'
+}
+
+function handleOtpOffline() {
+  pendingRegistration.value = null
+  authMode.value = 'login'
+  otpErrorMessage.value = 'Registrasi belum selesai. POS offline tetap dapat digunakan tanpa Cloud Login.'
+  if (router?.push) void router.push({ name: 'pos' })
+}
+
+function handleGoogleClick() {
+  loginErrorMessage.value = 'Google Sign-In belum tersedia dan dijadwalkan untuk AUTH-M04.'
+  registerErrorMessage.value = loginErrorMessage.value
+}
+
+function handleForgotPassword() {
+  loginErrorMessage.value = 'Pemulihan password tersedia melalui Dashboard Web; alur penuh dijadwalkan untuk AUTH-M07.'
+}
+
+function handleAuthLogin(payload) {
+  email.value = payload.email
+  password.value = payload.password
+  void handleLogin()
+}
+
+function handleAuthRegister(payload) {
+  registerName.value = payload.name
+  registerBusinessName.value = payload.businessName
+  registerEmail.value = payload.email
+  registerPassword.value = payload.password
+  registerPasswordConfirmation.value = payload.passwordConfirmation
+  void handleRegister()
 }
 
 function handleSelectBusiness(businessId) {
@@ -1549,20 +1649,6 @@ onMounted(async () => {
   }
 })
 
-async function handleOpenRegister() {
-  const registerUrl = `${resolveBaseUrl()}/register`
-  try {
-    if (Capacitor.isNativePlatform()) {
-      await Browser.open({ url: registerUrl })
-    } else if (typeof window !== 'undefined') {
-      window.open(registerUrl, '_blank')
-    }
-  } catch {
-    if (typeof window !== 'undefined') {
-      window.open(registerUrl, '_blank')
-    }
-  }
-}
 </script>
 
 <template>
@@ -2719,8 +2805,51 @@ async function handleOpenRegister() {
       </div>
     </BaseCard>
 
+    <!-- PENDING EMAIL VERIFICATION: this is not an authenticated session. -->
+    <BaseCard v-else-if="pendingRegistration" id="cloud-otp-form" class="flex justify-center p-6 sm:p-8">
+      <CloudEmailOtpView
+        :registration-id="pendingRegistration.registrationId"
+        :email="pendingRegistration.email || pendingRegistration.maskedEmail"
+        :otp-expires-at="pendingRegistration.otpExpiresAt"
+        :resend-available-at="pendingRegistration.resendAvailableAt"
+        :loading="cloudStore.loading"
+        :error-message="otpErrorMessage"
+        @verify="handleOtpVerify"
+        @resend="handleOtpResend"
+        @back="handleOtpBack"
+        @offline="handleOtpOffline"
+      />
+    </BaseCard>
+
+    <!-- AUTH FORM: reusable AUTH-M02 UI wired to real v2 requests. -->
+    <BaseCard v-else id="cloud-login-form" class="flex justify-center p-0 sm:p-0">
+      <div class="w-full p-0">
+        <p
+          v-if="otpVerifiedMessage"
+          id="cloud-verified-message"
+          class="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
+          role="status"
+        >
+          {{ otpVerifiedMessage }}
+        </p>
+        <CloudAuthCard
+          v-model="authMode"
+          :loading="cloudStore.loading"
+          :error-message="authMode === 'login' ? loginErrorMessage : registerErrorMessage"
+          :initial-email="authMode === 'login' ? email : registerEmail"
+          :initial-name="registerName"
+          :disabled="cloudStore.loading"
+          @login-submit="handleAuthLogin"
+          @register-submit="handleAuthRegister"
+          @google-click="handleGoogleClick"
+          @forgot-password="handleForgotPassword"
+        />
+      </div>
+    </BaseCard>
+
+    <!-- Legacy auth markup retained below only as a compatibility reference. -->
     <!-- AUTH FORM (LOGIN & IN-APP REGISTER) -->
-    <BaseCard v-else class="space-y-4" id="cloud-login-form">
+    <BaseCard v-if="false" class="space-y-4" id="cloud-login-form-legacy">
       <!-- Tab Switcher -->
       <div class="grid grid-cols-2 rounded-2xl bg-surface p-1">
         <button

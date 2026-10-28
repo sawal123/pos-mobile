@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import AppIcon from '@/components/base/AppIcon.vue'
@@ -44,9 +44,24 @@ const showNextStepNotice = ref(false)
 const touched = ref({
   name: false,
   email: false,
+  businessName: false,
   password: false,
   passwordConfirmation: false,
 })
+
+watch(
+  () => props.initialEmail,
+  (value) => {
+    if (value) email.value = value
+  },
+)
+
+watch(
+  () => props.initialName,
+  (value) => {
+    if (value) name.value = value
+  },
+)
 
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -66,6 +81,12 @@ const emailError = computed(() => {
   if (!emailRegex.test(email.value.trim())) {
     return 'Format email tidak valid (contoh: nama@domain.com).'
   }
+  return ''
+})
+
+const businessNameError = computed(() => {
+  if (!touched.value.businessName) return ''
+  if (!businessName.value.trim()) return 'Nama bisnis wajib diisi.'
   return ''
 })
 
@@ -104,6 +125,7 @@ const passwordConfirmationError = computed(() => {
 const isFormValid = computed(() => {
   return (
     name.value.trim().length > 0 &&
+    businessName.value.trim().length > 0 &&
     email.value.trim().length > 0 &&
     emailRegex.test(email.value.trim()) &&
     passwordLengthValid.value &&
@@ -117,6 +139,7 @@ function handleBlur(field) {
 
 function handleSubmit() {
   touched.value.name = true
+  touched.value.businessName = true
   touched.value.email = true
   touched.value.password = true
   touched.value.passwordConfirmation = true
@@ -217,7 +240,7 @@ function handleSwitchToLogin() {
         <label for="register-name" class="block text-xs font-semibold uppercase tracking-wider text-ink-secondary">
           Nama Lengkap <span class="text-danger">*</span>
         </label>
-        <div class="relative">
+        <div id="cloud-register-name" class="relative">
           <input
             id="register-name"
             v-model="name"
@@ -239,15 +262,12 @@ function handleSwitchToLogin() {
         </p>
       </div>
 
-      <!-- Business Name Field (Optional) -->
+      <!-- Business Name Field (required by the v2 contract) -->
       <div class="space-y-1.5">
-        <div class="flex items-center justify-between">
-          <label for="register-business" class="block text-xs font-semibold uppercase tracking-wider text-ink-secondary">
-            Nama Bisnis
-          </label>
-          <span class="text-[11px] text-ink-muted">Opsional</span>
-        </div>
-        <div class="relative">
+        <label for="register-business" class="block text-xs font-semibold uppercase tracking-wider text-ink-secondary">
+          Nama Bisnis <span class="text-danger">*</span>
+        </label>
+        <div id="cloud-register-business" class="relative">
           <input
             id="register-business"
             v-model="businessName"
@@ -255,9 +275,18 @@ function handleSwitchToLogin() {
             autocomplete="organization"
             placeholder="Contoh: Toko Berkah Jaya"
             :disabled="loading || disabled"
-            class="h-12 w-full rounded-2xl border border-zinc-200 bg-white px-4 text-sm text-ink-primary outline-none transition placeholder:text-zinc-400 focus:border-primary focus:ring-4 focus:ring-primary/10 disabled:cursor-not-allowed disabled:bg-zinc-50 disabled:opacity-75"
+            :class="[
+              'h-12 w-full rounded-2xl border bg-white px-4 text-sm text-ink-primary outline-none transition placeholder:text-zinc-400 focus:ring-4 disabled:cursor-not-allowed disabled:bg-zinc-50 disabled:opacity-75',
+              businessNameError
+                ? 'border-danger focus:border-danger focus:ring-danger/10'
+                : 'border-zinc-200 focus:border-primary focus:ring-primary/10',
+            ]"
+            @blur="handleBlur('businessName')"
           />
         </div>
+        <p v-if="businessNameError" data-testid="register-business-error" class="text-xs font-medium text-danger">
+          {{ businessNameError }}
+        </p>
       </div>
 
       <!-- Email Field -->
@@ -265,7 +294,7 @@ function handleSwitchToLogin() {
         <label for="register-email" class="block text-xs font-semibold uppercase tracking-wider text-ink-secondary">
           Alamat Email <span class="text-danger">*</span>
         </label>
-        <div class="relative">
+        <div id="cloud-register-email" class="relative">
           <input
             id="register-email"
             v-model="email"
@@ -293,7 +322,7 @@ function handleSwitchToLogin() {
         <label for="register-password" class="block text-xs font-semibold uppercase tracking-wider text-ink-secondary">
           Password <span class="text-danger">*</span>
         </label>
-        <div class="relative">
+        <div id="cloud-register-password" class="relative">
           <input
             id="register-password"
             v-model="password"
@@ -329,7 +358,7 @@ function handleSwitchToLogin() {
         <label for="register-password-confirmation" class="block text-xs font-semibold uppercase tracking-wider text-ink-secondary">
           Konfirmasi Password <span class="text-danger">*</span>
         </label>
-        <div class="relative">
+        <div id="cloud-register-password-confirmation" class="relative">
           <input
             id="register-password-confirmation"
             v-model="passwordConfirmation"
@@ -392,13 +421,14 @@ function handleSwitchToLogin() {
 
       <!-- Submit Button -->
       <BaseButton
-        id="register-submit-btn"
+        id="cloud-register-submit-btn"
         type="submit"
         variant="primary"
         size="lg"
         block
         :loading="loading"
         :disabled="loading || disabled || !isFormValid"
+        @click.prevent="handleSubmit"
         data-testid="register-submit-button"
         class="h-12 rounded-2xl text-sm font-semibold shadow-soft active:scale-[0.99]"
       >
