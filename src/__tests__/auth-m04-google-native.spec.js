@@ -178,6 +178,28 @@ describe('AUTH-M04 native Google provider adapter', () => {
     await expect(pending).resolves.toMatchObject({ code: 'STALE_OPERATION' })
     expect(nativeGooglePlugin.signIn).toHaveBeenCalledTimes(1)
   })
+
+  it('ignores a late picker result and allows a fresh operation afterward', async () => {
+    let resolveFirstPicker
+    nativeGooglePlugin.signIn.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveFirstPicker = resolve
+      }),
+    )
+
+    const stale = signInWithGoogle({ webClientId: WEB_CLIENT_ID })
+    await vi.waitFor(() => expect(nativeGooglePlugin.signIn).toHaveBeenCalledTimes(1))
+    await cancelGoogleSignIn()
+    resolveFirstPicker({ idToken: 'stale-token' })
+
+    await expect(stale).resolves.toMatchObject({ code: 'STALE_OPERATION' })
+
+    nativeGooglePlugin.signIn.mockResolvedValueOnce({ idToken: GOOGLE_ID_TOKEN })
+    await expect(signInWithGoogle({ webClientId: WEB_CLIENT_ID })).resolves.toMatchObject({
+      ok: true,
+      idToken: GOOGLE_ID_TOKEN,
+    })
+  })
 })
 
 describe('AUTH-M04 Google token exchange', () => {
@@ -357,5 +379,31 @@ describe('AUTH-M04 Cloud session handoff', () => {
     expect(wrapper.text()).toContain('Akun memerlukan verifikasi dua langkah.')
     expect(wrapper.text()).not.toContain('AUTH-M08')
     expect(wrapper.find('[data-testid="register-google-button"]').exists()).toBe(true)
+  })
+
+  it('shows the same safe Google 2FA message on the login tab', async () => {
+    vi.stubEnv('VITE_GOOGLE_WEB_CLIENT_ID', WEB_CLIENT_ID)
+    nativeGooglePlugin.signIn.mockResolvedValueOnce({ idToken: GOOGLE_ID_TOKEN })
+    apiRequest.mockResolvedValueOnce({
+      ok: true,
+      status: 202,
+      data: {
+        code: 'TWO_FACTOR_REQUIRED',
+        data: {
+          challenge_id: 'challenge-login-ui',
+          expires_at: '2099-01-01T00:30:00Z',
+          methods: ['totp'],
+        },
+      },
+      error: null,
+    })
+
+    const wrapper = mount(CloudLoginView)
+    await wrapper.find('[data-testid="cloud-google-button"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Akun memerlukan verifikasi dua langkah.')
+    expect(wrapper.text()).not.toContain('AUTH-M08')
+    expect(useCloudSessionStore().isAuthenticated).toBe(false)
   })
 })

@@ -869,10 +869,23 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
 
     loading.value = true
     error.value = null
+    let loginResult = null
     try {
-      const loginResult = await cloudGoogleLogin(idToken, platform)
+      loginResult = await cloudGoogleLogin(idToken, platform)
       if (!isActive()) return staleGoogleLoginResult()
       return await finalizeAuthenticatedLogin(loginResult, { isActive, rollbackOnStale: true })
+    } catch (exception) {
+      if (loginResult?.ok) {
+        await rollbackStaleGoogleSession(loginResult.token)
+      }
+      if (!isActive()) return staleGoogleLoginResult()
+
+      const message = exception?.message ?? 'Login Google gagal. Coba lagi dengan akun Google.'
+      error.value = message
+      return {
+        ok: false,
+        error: { status: 0, code: 'GOOGLE_LOGIN_FAILED', message, data: null },
+      }
     } finally {
       loading.value = false
     }
