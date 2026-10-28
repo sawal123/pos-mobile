@@ -362,10 +362,9 @@ watch(
 onMounted(async () => {
   const pending = getPendingRegistrationMetadata()
   if (pending?.registrationId) {
+    pendingRegistration.value = pending
     if (pending.otpExpiresAt && Date.parse(pending.otpExpiresAt) <= Date.now()) {
-      clearPendingRegistrationMetadata()
-    } else {
-      pendingRegistration.value = pending
+      otpErrorMessage.value = describeOtpError({ code: 'OTP_EXPIRED' }).message
     }
   }
 

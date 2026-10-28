@@ -3,7 +3,12 @@ import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 
 import { apiRequest } from '@/services/cloud/apiClient'
-import { cloudRegister } from '@/services/cloud/authService'
+import {
+  clearPendingRegistrationMetadata,
+  clearRegistrationAttemptCache,
+  cloudRegister,
+  cloudVerifyOtp,
+} from '@/services/cloud/authService'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import CloudEmailOtpView from '@/components/cloud/auth/CloudEmailOtpView.vue'
 import CloudRegisterForm from '@/components/cloud/auth/CloudRegisterForm.vue'
@@ -30,6 +35,8 @@ describe('AUTH-M03 manual v2 registration and OTP', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     _resetTokenStore()
+    clearPendingRegistrationMetadata()
+    clearRegistrationAttemptCache()
     vi.clearAllMocks()
   })
 
@@ -45,6 +52,7 @@ describe('AUTH-M03 manual v2 registration and OTP', () => {
 
     await cloudRegister(payload)
     await cloudRegister(payload)
+    await cloudRegister({ ...payload, business_name: 'Toko Berbeda' })
 
     expect(apiRequest).toHaveBeenNthCalledWith(
       1,
@@ -56,6 +64,7 @@ describe('AUTH-M03 manual v2 registration and OTP', () => {
       }),
     )
     expect(apiRequest.mock.calls[0][1].idempotencyKey).toBe(apiRequest.mock.calls[1][1].idempotencyKey)
+    expect(apiRequest.mock.calls[0][1].idempotencyKey).not.toBe(apiRequest.mock.calls[2][1].idempotencyKey)
   })
 
   it('keeps pending registration unauthenticated and never fetches context', async () => {
@@ -80,7 +89,15 @@ describe('AUTH-M03 manual v2 registration and OTP', () => {
     apiRequest.mockResolvedValueOnce({
       ok: true,
       status: 202,
-      data: { data: { state: 'two_factor_required', challenge_id: 'challenge-1' } },
+      data: {
+        code: 'TWO_FACTOR_REQUIRED',
+        message: 'Verifikasi dua langkah diperlukan.',
+        data: {
+          challenge_id: 'challenge-1',
+          expires_at: '2099-01-01T00:30:00+07:00',
+          methods: ['totp', 'recovery_code'],
+        },
+      },
       error: null,
     })
     const store = useCloudSessionStore()
@@ -88,9 +105,28 @@ describe('AUTH-M03 manual v2 registration and OTP', () => {
     const result = await store.login('budi@example.com', 'StrongPassword123!')
 
     expect(result.state).toBe('two_factor_required')
+    expect(result.challenge.challenge_id).toBe('challenge-1')
     expect(store.isAuthenticated).toBe(false)
     expect(await getToken()).toBeNull()
     expect(apiRequest).toHaveBeenCalledTimes(1)
+  })
+
+  it('verifies OTP without creating a token or Cloud session', async () => {
+    apiRequest.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      data: { data: { state: 'verified', provisioning: 'complete' } },
+      error: null,
+    })
+
+    const result = await cloudVerifyOtp('registration-1', '123456')
+
+    expect(result).toMatchObject({ ok: true, state: 'verified' })
+    expect(await getToken()).toBeNull()
+    expect(apiRequest).toHaveBeenCalledWith('/api/v2/auth/otp/verify', {
+      method: 'POST',
+      body: { registration_id: 'registration-1', code: '123456' },
+    })
   })
 
   it('accepts only six numeric OTP digits and emits a verify request', async () => {

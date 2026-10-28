@@ -20,8 +20,10 @@
 import { apiRequest } from './apiClient'
 
 const PENDING_REGISTRATION_STORAGE_KEY = 'cloud_pending_registration_v2'
+const REGISTRATION_KEY_TTL_MS = 15 * 60 * 1000
 let inMemoryPendingRegistration = null
 const registrationKeys = new Map()
+let registrationFingerprintSecret = null
 
 function createIdempotencyKey() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
@@ -38,24 +40,63 @@ function createIdempotencyKey() {
   throw new Error('Secure random source unavailable')
 }
 
-function payloadFingerprint(payload) {
-  return JSON.stringify({
+function getRegistrationFingerprintSecret() {
+  if (registrationFingerprintSecret) return registrationFingerprintSecret
+  if (!globalThis.crypto?.getRandomValues) {
+    throw new Error('Secure random source unavailable')
+  }
+  registrationFingerprintSecret = new Uint8Array(32)
+  globalThis.crypto.getRandomValues(registrationFingerprintSecret)
+  return registrationFingerprintSecret
+}
+
+async function keyedPayloadDigest(payload) {
+  if (!globalThis.crypto?.subtle || typeof TextEncoder === 'undefined') {
+    throw new Error('Secure digest unavailable')
+  }
+  const cryptoKey = await globalThis.crypto.subtle.importKey(
+    'raw',
+    getRegistrationFingerprintSecret(),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  )
+  const canonicalPayload = JSON.stringify({
     name: payload.name,
     email: payload.email,
     password: payload.password,
     password_confirmation: payload.password_confirmation,
     business_name: payload.business_name,
   })
+  const digest = await globalThis.crypto.subtle.sign(
+    'HMAC',
+    cryptoKey,
+    new TextEncoder().encode(canonicalPayload),
+  )
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
-function getRegistrationKey(payload, explicitKey) {
+function clearExpiredRegistrationKeys() {
+  const now = Date.now()
+  for (const [digest, entry] of registrationKeys) {
+    if (entry.expiresAt <= now) registrationKeys.delete(digest)
+  }
+}
+
+async function getRegistrationKey(payload, explicitKey) {
   if (explicitKey) return explicitKey
-  const fingerprint = payloadFingerprint(payload)
-  const existing = registrationKeys.get(fingerprint)
-  if (existing) return existing
+  clearExpiredRegistrationKeys()
+  const digest = await keyedPayloadDigest(payload)
+  const existing = registrationKeys.get(digest)
+  if (existing && existing.expiresAt > Date.now()) return existing.key
   const key = createIdempotencyKey()
-  registrationKeys.set(fingerprint, key)
+  registrationKeys.set(digest, { key, expiresAt: Date.now() + REGISTRATION_KEY_TTL_MS })
   return key
+}
+
+export function clearRegistrationAttemptCache() {
+  registrationKeys.clear()
+  registrationFingerprintSecret = null
 }
 
 function responseData(result) {
@@ -98,6 +139,7 @@ export function getPendingRegistrationMetadata() {
 
 export function clearPendingRegistrationMetadata() {
   inMemoryPendingRegistration = null
+  clearRegistrationAttemptCache()
   try {
     globalThis.localStorage?.removeItem(PENDING_REGISTRATION_STORAGE_KEY)
   } catch {
@@ -133,10 +175,25 @@ export async function cloudRegister({
     business_name,
   }
 
+  let registrationKey
+  try {
+    registrationKey = await getRegistrationKey(payload, idempotencyKey)
+  } catch {
+    return {
+      ok: false,
+      error: {
+        status: 0,
+        code: 'SECURE_RANDOM_UNAVAILABLE',
+        message: 'Registrasi tidak dapat diproses dengan aman pada perangkat ini.',
+        data: null,
+      },
+    }
+  }
+
   const result = await apiRequest('/api/v2/auth/register', {
     method: 'POST',
     body: payload,
-    idempotencyKey: getRegistrationKey(payload, idempotencyKey),
+    idempotencyKey: registrationKey,
   })
 
   if (!result.ok) {
@@ -184,11 +241,37 @@ export async function cloudLogin(email, password) {
 
   const data = responseData(result)
 
-  if (result.status === 202 && (data?.state === 'two_factor_required' || result.error?.code === 'TWO_FACTOR_REQUIRED')) {
+  const responseCode = String(result.data?.code ?? result.error?.code ?? '').toUpperCase()
+  if (
+    result.status === 202 &&
+    (responseCode === 'TWO_FACTOR_REQUIRED' || data?.state === 'two_factor_required')
+  ) {
+    const challenge = data
+    const validChallenge =
+      typeof challenge?.challenge_id === 'string' &&
+      challenge.challenge_id.length > 0 &&
+      typeof challenge?.expires_at === 'string' &&
+      Number.isFinite(Date.parse(challenge.expires_at)) &&
+      Array.isArray(challenge?.methods) &&
+      challenge.methods.length > 0 &&
+      challenge.methods.every((method) => typeof method === 'string' && method.length > 0)
+
+    if (!validChallenge) {
+      return {
+        ok: false,
+        error: {
+          status: 202,
+          code: 'MALFORMED_TWO_FACTOR_CHALLENGE',
+          message: 'Respons verifikasi dua langkah tidak valid.',
+          data: null,
+        },
+      }
+    }
+
     return {
       ok: false,
       state: 'two_factor_required',
-      challenge: data,
+      challenge,
       error: {
         status: 202,
         code: 'TWO_FACTOR_REQUIRED',

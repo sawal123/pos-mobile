@@ -122,6 +122,15 @@ onUnmounted(() => {
         </div>
       </div>
 
+      <p
+        v-if="isExpired"
+        id="otp-expired-state"
+        data-testid="otp-expired-state"
+        class="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-center text-xs font-medium text-amber-800"
+      >
+        Kode OTP sudah kedaluwarsa. Kirim ulang kode terbaru.
+      </p>
+
       <BaseButton
         id="otp-verify-btn"
         type="submit"
