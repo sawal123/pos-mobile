@@ -402,7 +402,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     () =>
       cloudAccess.value === true &&
       isWorkspaceAligned.value &&
-      workspaceRecoveryRequired.value !== true,
+      workspaceRecoveryRequired.value !== true &&
+      sessionInvalid.value !== true &&
+      activeSessionOperation.value?.kind !== 'logout',
   )
 
   /**
@@ -423,11 +425,19 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
    * still allowing Free offline mode to run normally.
    */
   const canPerformCloudPush = computed(
-    () => capabilityState.value === 'verified' && isPushEnabled(pushPolicy.value),
+    () =>
+      capabilityState.value === 'verified' &&
+      sessionInvalid.value !== true &&
+      activeSessionOperation.value?.kind !== 'logout' &&
+      isPushEnabled(pushPolicy.value),
   )
 
   const isCashierContext = computed(
-    () => capabilityState.value === 'verified' && pushPolicy.value.role === ROLE_CASHIER,
+    () =>
+      capabilityState.value === 'verified' &&
+      sessionInvalid.value !== true &&
+      activeSessionOperation.value?.kind !== 'logout' &&
+      pushPolicy.value.role === ROLE_CASHIER,
   )
 
   /** Compact capability summary for the Sync Status UI. */
@@ -681,15 +691,19 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       return { ok: false, code: 'STALE_SESSION_OPERATION', stale: true }
     }
 
-    let removed = null
+    let removalState
     try {
-      removed = token ? await removeTokenIfMatches(token) : (await removeToken(), true)
+      const removed = token ? await removeTokenIfMatches(token) : (await removeToken(), true)
+      removalState = removed ? 'removed' : 'ownership_mismatch'
     } catch {
-      // ignore – the local Cloud session is cleared regardless
+      removalState = 'storage_failure'
     }
 
-    if (removed === null) removed = false
-    if (token && !removed) {
+    if (operation && !isCurrentSessionOperation(operation)) {
+      return { ok: false, code: 'STALE_SESSION_OPERATION', stale: true }
+    }
+
+    if (removalState === 'ownership_mismatch') {
       return { ok: false, code: 'TOKEN_OWNERSHIP_CHANGED' }
     }
 
@@ -701,12 +715,20 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       }
     }
 
+    if (operation && !isCurrentSessionOperation(operation)) {
+      return { ok: false, code: 'STALE_SESSION_OPERATION', stale: true }
+    }
+
     clearSession()
     sessionInvalid.value = true
-    error.value = removed
+    error.value = removalState === 'removed'
       ? 'Sesi Cloud tidak valid. Silakan masuk kembali untuk menghubungkan ulang.'
       : 'Sesi Cloud belum dapat dicabut dengan aman. Silakan coba lagi.'
-    return { ok: removed, code: removed ? 'TOKEN_INVALID' : 'TOKEN_REMOVAL_FAILED' }
+    return {
+      ok: false,
+      code: removalState === 'removed' ? 'TOKEN_INVALID' : 'TOKEN_REMOVAL_FAILED',
+      storageFailure: removalState === 'storage_failure',
+    }
   }
 
   function clearSession() {
@@ -902,8 +924,17 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
 
       if (!contextResult.ok) {
         if (isUnauthorizedError(contextResult.error)) {
-          await handleInvalidToken({ token: loginResult.token, operation })
-          return { ok: false, error: { ...contextResult.error, code: 'TOKEN_INVALID' } }
+          const invalidation = await handleInvalidToken({ token: loginResult.token, operation })
+          if (invalidation.stale) return staleSessionResult()
+          return {
+            ok: false,
+            error: {
+              ...contextResult.error,
+              code: invalidation.code === 'TOKEN_REMOVAL_FAILED'
+                ? 'TOKEN_REMOVAL_FAILED'
+                : 'TOKEN_INVALID',
+            },
+          }
         }
 
         // Rollback token – context is required
@@ -1560,21 +1591,48 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     const operation = beginSessionOperation('logout', { replace: true })
     loading.value = true
     error.value = null
-    let token
-    let removed = true
+    let token = null
+    let tokenReadFailed = false
+    let removalState
+    let serverRevocation = 'not_attempted'
 
     try {
-      token = await getToken()
-
-      if (token) {
-        // Best-effort server notification – network failure is acceptable
-        await cloudLogout(token).catch(() => {})
+      try {
+        token = await getToken()
+      } catch {
+        tokenReadFailed = true
       }
 
-      if (token) {
-        removed = await removeTokenIfMatches(token)
+      if (!isCurrentSessionOperation(operation)) return staleSessionResult()
+
+      if (token && !tokenReadFailed) {
+        // Best-effort server notification – network failure is acceptable
+        const revocation = await cloudLogout(token).catch(() => null)
+        serverRevocation = revocation?.ok ? 'succeeded' : 'failed'
+      }
+
+      if (!isCurrentSessionOperation(operation)) return staleSessionResult()
+
+      if (tokenReadFailed) {
+        removalState = 'storage_failure'
       } else {
-        await removeToken()
+        try {
+          if (token) {
+            const removed = await removeTokenIfMatches(token)
+            removalState = removed ? 'removed' : 'ownership_mismatch'
+          } else {
+            await removeToken()
+            removalState = 'removed'
+          }
+        } catch {
+          removalState = 'storage_failure'
+        }
+      }
+
+      if (!isCurrentSessionOperation(operation)) return staleSessionResult()
+
+      if (removalState === 'ownership_mismatch') {
+        return { ok: false, code: 'TOKEN_OWNERSHIP_CHANGED', serverRevocation }
       }
 
       if (_adapter) {
@@ -1585,8 +1643,10 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         }
       }
 
+      if (!isCurrentSessionOperation(operation)) return staleSessionResult()
+
       clearSession()
-      if (!removed) {
+      if (removalState === 'storage_failure') {
         sessionInvalid.value = true
         error.value = 'Sesi Cloud belum dapat dicabut dengan aman. Silakan coba lagi.'
       }
@@ -1596,21 +1656,25 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         if (bStore.mode !== 'free') {
           bStore.mode = 'free'
           if (_adapter && typeof _adapter.saveBusiness === 'function') {
-            void _adapter.saveBusiness({
+            void Promise.resolve(_adapter.saveBusiness({
               name: bStore.name,
               type: bStore.type,
               owner: bStore.owner,
               phone: bStore.phone,
               outlet: bStore.outlet,
               mode: 'free',
-            })
+            })).catch(() => {})
           }
         }
       } catch {
         // non-blocking
       }
 
-      return { ok: removed, code: removed ? 'LOGGED_OUT' : 'TOKEN_REMOVAL_FAILED' }
+      return {
+        ok: removalState === 'removed',
+        code: removalState === 'removed' ? 'LOGGED_OUT' : 'TOKEN_REMOVAL_FAILED',
+        serverRevocation,
+      }
     } finally {
       const ownsLoading = isCurrentSessionOperation(operation)
       finishSessionOperation(operation)
@@ -1899,10 +1963,13 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         // PREM-M03: an invalid/expired token clears the Cloud session (but never
         // local POS data) and asks the user to sign in again.
         if (isUnauthorizedError(result.error)) {
-          await handleInvalidToken({ token, operation })
+          const invalidation = await handleInvalidToken({ token, operation })
+          if (invalidation.stale) return staleSessionResult()
           return {
             ok: false,
-            code: 'TOKEN_INVALID',
+            code: invalidation.code === 'TOKEN_REMOVAL_FAILED'
+              ? 'TOKEN_REMOVAL_FAILED'
+              : 'TOKEN_INVALID',
             message: error.value,
             error: result.error,
           }

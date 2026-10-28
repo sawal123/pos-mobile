@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
+import { Capacitor } from '@capacitor/core'
 
 import { apiRequest } from '../services/cloud/apiClient'
 import {
@@ -40,6 +41,17 @@ beforeEach(() => {
   localStorage.clear()
   sessionStorage.clear()
 })
+
+afterEach(() => {
+  vi.restoreAllMocks()
+  vi.doUnmock('@aparajita/capacitor-secure-storage')
+})
+
+async function withNativeSecureStorage(secureStorage, callback) {
+  vi.spyOn(Capacitor, 'isNativePlatform').mockReturnValue(true)
+  vi.doMock('@aparajita/capacitor-secure-storage', () => ({ SecureStorage: secureStorage }))
+  return callback()
+}
 
 describe('AUTH-M05 session state and safe finalization', () => {
   it('fails closed when manual login has no valid user identity', async () => {
@@ -196,6 +208,177 @@ describe('AUTH-M05 restart and authorization safety', () => {
     expect(store.sessionInvalid).toBe(false)
     expect(store.capabilityState).toBe('unverified')
     expect(await getToken()).toBe(TOKEN_A)
+  })
+})
+
+describe('AUTH-M05 P1 secure storage failure handling', () => {
+  function prepareLinkedStore() {
+    const store = useCloudSessionStore()
+    store.user = USER_A
+    store.cloudAccess = true
+    store.capabilityState = 'verified'
+    return store
+  }
+
+  it('clears local authorization on HTTP 401 when secure token read during removal throws', async () => {
+    const secureStorage = {
+      get: vi.fn()
+        .mockResolvedValueOnce(TOKEN_A)
+        .mockRejectedValueOnce(new Error('secure read failed')),
+      remove: vi.fn().mockResolvedValue(undefined),
+    }
+
+    await withNativeSecureStorage(secureStorage, async () => {
+      const store = prepareLinkedStore()
+      apiRequest.mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        data: null,
+        error: { status: 401, code: 'HTTP_401', message: 'Unauthenticated' },
+      })
+
+      const result = await store.refreshContext()
+
+      expect(result.code).toBe('TOKEN_REMOVAL_FAILED')
+      expect(store.isAuthenticated).toBe(false)
+      expect(store.cloudAccess).toBe(false)
+      expect(store.capabilityState).toBe('unknown')
+      expect(store.sessionInvalid).toBe(true)
+      expect(store.sessionState).toBe('session_invalid')
+      await expect(store.ensureVerifiedContext()).resolves.toMatchObject({
+        ok: false,
+        code: 'NOT_AUTHENTICATED',
+      })
+    })
+  })
+
+  it('clears local authorization on HTTP 401 when secure token removal throws', async () => {
+    const secureStorage = {
+      get: vi.fn().mockResolvedValue(TOKEN_A),
+      remove: vi.fn().mockRejectedValue(new Error('secure remove failed')),
+    }
+
+    await withNativeSecureStorage(secureStorage, async () => {
+      const store = prepareLinkedStore()
+      apiRequest.mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        data: null,
+        error: { status: 401, code: 'HTTP_401', message: 'Unauthenticated' },
+      })
+
+      const result = await store.refreshContext()
+
+      expect(result.code).toBe('TOKEN_REMOVAL_FAILED')
+      expect(store.isAuthenticated).toBe(false)
+      expect(store.cloudAccess).toBe(false)
+      expect(store.sessionInvalid).toBe(true)
+      expect(store.canPerformCloudPush).toBe(false)
+    })
+  })
+
+  it('does not clear a newer session when token ownership changed', async () => {
+    const secureStorage = {
+      get: vi.fn().mockResolvedValueOnce(TOKEN_B).mockResolvedValueOnce(TOKEN_B),
+      remove: vi.fn().mockResolvedValue(undefined),
+    }
+
+    await withNativeSecureStorage(secureStorage, async () => {
+      const store = useCloudSessionStore()
+      store.user = USER_B
+      store.cloudAccess = true
+      store.capabilityState = 'verified'
+
+      const result = await store.invalidateCloudSession({ token: TOKEN_A })
+
+      expect(result.code).toBe('TOKEN_OWNERSHIP_CHANGED')
+      expect(store.user).toMatchObject(USER_B)
+      expect(store.isAuthenticated).toBe(true)
+      expect(store.sessionInvalid).toBe(false)
+      expect(secureStorage.remove).not.toHaveBeenCalled()
+    })
+  })
+
+  it('returns TOKEN_REMOVAL_FAILED and disables Cloud authorization when logout token read throws', async () => {
+    const adapter = await createMemoryAdapter()
+    await adapter.initialize()
+    await adapter.saveDeviceIdentifier('stable-device')
+    await adapter.saveBusiness({ name: 'Local POS', type: 'retail', mode: 'cloud' })
+    const secureStorage = {
+      get: vi.fn().mockRejectedValue(new Error('secure read failed')),
+      remove: vi.fn().mockResolvedValue(undefined),
+    }
+
+    await withNativeSecureStorage(secureStorage, async () => {
+      const store = prepareLinkedStore()
+      store.setPersistenceAdapter(adapter)
+      store.deviceIdentifier = 'stable-device'
+      const result = await store.logout()
+
+      expect(result).toMatchObject({ ok: false, code: 'TOKEN_REMOVAL_FAILED' })
+      expect(store.isAuthenticated).toBe(false)
+      expect(store.cloudAccess).toBe(false)
+      expect(store.sessionInvalid).toBe(true)
+      expect(store.isOperationalCloudAccess).toBe(false)
+      expect(store.deviceIdentifier).toBe('stable-device')
+      expect(await adapter.loadBusiness()).toMatchObject({ name: 'Local POS' })
+    })
+  })
+
+  it('returns TOKEN_REMOVAL_FAILED and disables Cloud authorization when logout removal throws', async () => {
+    const adapter = await createMemoryAdapter()
+    await adapter.initialize()
+    await adapter.saveBusiness({ name: 'Local POS', type: 'retail', mode: 'cloud' })
+    const secureStorage = {
+      get: vi.fn().mockResolvedValue(TOKEN_A),
+      remove: vi.fn().mockRejectedValue(new Error('secure remove failed')),
+    }
+
+    await withNativeSecureStorage(secureStorage, async () => {
+      const store = prepareLinkedStore()
+      store.setPersistenceAdapter(adapter)
+      apiRequest.mockResolvedValueOnce({ ok: true, status: 204, data: null, error: null })
+
+      const result = await store.logout()
+
+      expect(result).toMatchObject({
+        ok: false,
+        code: 'TOKEN_REMOVAL_FAILED',
+        serverRevocation: 'succeeded',
+      })
+      expect(store.isAuthenticated).toBe(false)
+      expect(store.sessionInvalid).toBe(true)
+      expect(store.isOperationalCloudAccess).toBe(false)
+      expect(await adapter.loadBusiness()).toMatchObject({ name: 'Local POS' })
+    })
+  })
+
+  it('reports server revocation failure separately after safe local logout', async () => {
+    const secureStorage = {
+      get: vi.fn().mockResolvedValue(TOKEN_A),
+      remove: vi.fn().mockResolvedValue(undefined),
+    }
+
+    await withNativeSecureStorage(secureStorage, async () => {
+      const store = prepareLinkedStore()
+      apiRequest.mockResolvedValueOnce({
+        ok: false,
+        status: 0,
+        data: null,
+        error: { code: 'NETWORK_ERROR', message: 'offline' },
+      })
+
+      const result = await store.logout()
+
+      expect(result).toMatchObject({
+        ok: true,
+        code: 'LOGGED_OUT',
+        serverRevocation: 'failed',
+      })
+      expect(store.isAuthenticated).toBe(false)
+      expect(store.sessionInvalid).toBe(false)
+      expect(store.isOperationalCloudAccess).toBe(false)
+    })
   })
 })
 
