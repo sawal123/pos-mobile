@@ -66,6 +66,11 @@ Data POS lokal tetap dipertahankan.
 dan `removeToken`. `removeTokenIfMatches(expectedToken)` menghapus token hanya
 jika token yang tersimpan masih sama dengan token pemanggil.
 
+Untuk alur logout/rollback yang harus membedakan keadaan, repository juga
+menyediakan hasil atomic `removed`, `missing`, atau `ownership_mismatch` dari
+`removeTokenIfMatchesDetailed()`. Token yang sudah tidak ada bukan ownership
+account baru; logout tetap boleh menyelesaikan pembersihan session lokal.
+
 Invariant penting:
 
 - callback login lama tidak boleh menghapus token akun baru;
@@ -82,8 +87,9 @@ memeriksa ownership sebelum mutasi state atau persistence.
 
 Logout menggunakan mode replace sehingga membatalkan operasi sesi sebelumnya.
 Hasil operasi lama dikembalikan sebagai `STALE_SESSION_OPERATION`. Rollback
-stale menggunakan compare-and-remove token, sehingga tidak melakukan rollback
-terhadap akun yang sudah lebih baru.
+stale menggunakan compare-and-remove token. Jika logout sedang aktif, rollback
+stale ditunda dan logout menjadi pemilik finalisasi token/session, sehingga tidak
+melakukan rollback terhadap akun yang sudah lebih baru.
 
 ## 6. Restart dan hydration
 

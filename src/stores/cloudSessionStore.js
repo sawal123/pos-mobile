@@ -20,7 +20,7 @@ import {
   saveToken,
   getToken,
   removeToken,
-  removeTokenIfMatches,
+  removeTokenIfMatchesDetailed,
 } from '@/services/cloud/tokenRepository'
 import { resolveDeviceIdentifier } from '@/services/cloud/deviceIdentifier'
 import {
@@ -693,8 +693,13 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
 
     let removalState
     try {
-      const removed = token ? await removeTokenIfMatches(token) : (await removeToken(), true)
-      removalState = removed ? 'removed' : 'ownership_mismatch'
+      if (token) {
+        const removal = await removeTokenIfMatchesDetailed(token)
+        removalState = removal.state
+      } else {
+        await removeToken()
+        removalState = 'removed'
+      }
     } catch {
       removalState = 'storage_failure'
     }
@@ -721,12 +726,14 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
 
     clearSession()
     sessionInvalid.value = true
-    error.value = removalState === 'removed'
+    error.value = removalState === 'removed' || removalState === 'missing'
       ? 'Sesi Cloud tidak valid. Silakan masuk kembali untuk menghubungkan ulang.'
       : 'Sesi Cloud belum dapat dicabut dengan aman. Silakan coba lagi.'
     return {
       ok: false,
-      code: removalState === 'removed' ? 'TOKEN_INVALID' : 'TOKEN_REMOVAL_FAILED',
+      code: removalState === 'removed' || removalState === 'missing'
+        ? 'TOKEN_INVALID'
+        : 'TOKEN_REMOVAL_FAILED',
       storageFailure: removalState === 'storage_failure',
     }
   }
@@ -828,9 +835,16 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
    * Returns { ok, businesses, error }.
    */
   async function rollbackStaleSession(savedToken, operation = null) {
-    let removed
+    // Logout owns final session cleanup while it is waiting for server
+    // revocation. A stale login must not remove its token ahead of logout.
+    if (activeSessionOperation.value?.kind === 'logout') {
+      return staleSessionResult('Logout sedang menyelesaikan pencabutan sesi.')
+    }
+
+    let removalState
     try {
-      removed = await removeTokenIfMatches(savedToken)
+      const removal = await removeTokenIfMatchesDetailed(savedToken)
+      removalState = removal.state
     } catch {
       if (operation && !isCurrentSessionOperation(operation)) {
         return staleSessionResult()
@@ -849,7 +863,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     }
 
     // Never clear a newer account's in-memory session when ownership changed.
-    if (!removed) return { ok: false, code: 'TOKEN_OWNERSHIP_CHANGED' }
+    if (removalState === 'ownership_mismatch') {
+      return { ok: false, code: 'TOKEN_OWNERSHIP_CHANGED' }
+    }
 
     if (_adapter) {
       try {
@@ -864,6 +880,11 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     }
 
     clearSession()
+    if (removalState === 'missing') {
+      sessionInvalid.value = true
+      error.value = 'Sesi Cloud belum dapat diverifikasi. Silakan masuk kembali.'
+      return { ok: false, code: 'TOKEN_INVALID' }
+    }
     return { ok: true }
   }
 
@@ -1628,15 +1649,15 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
 
       if (tokenReadFailed) {
         removalState = 'storage_failure'
+      } else if (!token) {
+        // A successful secure read with no token means the credential was
+        // already removed by a serialized operation. Logout still owns local
+        // cleanup; this is not a newer-session ownership mismatch.
+        removalState = 'missing'
       } else {
         try {
-          if (token) {
-            const removed = await removeTokenIfMatches(token)
-            removalState = removed ? 'removed' : 'ownership_mismatch'
-          } else {
-            await removeToken()
-            removalState = 'removed'
-          }
+          const removal = await removeTokenIfMatchesDetailed(token)
+          removalState = removal.state
         } catch {
           removalState = 'storage_failure'
         }
@@ -1684,8 +1705,10 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       }
 
       return {
-        ok: removalState === 'removed',
-        code: removalState === 'removed' ? 'LOGGED_OUT' : 'TOKEN_REMOVAL_FAILED',
+        ok: removalState === 'removed' || removalState === 'missing',
+        code: removalState === 'removed' || removalState === 'missing'
+          ? 'LOGGED_OUT'
+          : 'TOKEN_REMOVAL_FAILED',
         serverRevocation,
       }
     } finally {

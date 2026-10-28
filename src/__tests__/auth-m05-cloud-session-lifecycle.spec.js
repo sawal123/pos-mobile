@@ -393,7 +393,7 @@ describe('AUTH-M05 stale session ownership', () => {
         const token = loginCount === 1 ? TOKEN_A : TOKEN_B
         return Promise.resolve(ok({ token_type: 'Bearer', token, user }))
       }
-      if (path === '/api/mobile/context' && options.token === TOKEN_A) {
+      if (path.startsWith('/api/mobile/context') && options.token === TOKEN_A) {
         return new Promise((resolve) => {
           resolveOldContext = resolve
         })
@@ -421,6 +421,85 @@ describe('AUTH-M05 stale session ownership', () => {
 
     expect(await getToken()).toBe(TOKEN_B)
     expect(store.user).toMatchObject(USER_B)
+  })
+
+  it('lets in-flight logout finalize cleanup after stale rollback is deferred', async () => {
+    let resolveOldContext
+    let resolveServerRevocation
+    let loginCount = 0
+    const adapter = await createMemoryAdapter()
+    await adapter.initialize()
+    await adapter.saveBusiness({ name: 'Local POS', type: 'retail', mode: 'cloud' })
+    await adapter.upsertSyncQueueItem({
+      id: 'offline-sale-1',
+      entityType: 'transaction',
+      entityId: 'sale-1',
+      operation: 'upsert',
+      payload: { total: 100 },
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    })
+
+    apiRequest.mockImplementation((path, options = {}) => {
+      if (path === '/api/v2/auth/login') {
+        loginCount += 1
+        const user = loginCount === 1 ? USER_A : USER_B
+        const token = loginCount === 1 ? TOKEN_A : TOKEN_B
+        return Promise.resolve(ok({ token_type: 'Bearer', token, user }))
+      }
+      if (path.startsWith('/api/mobile/context') && options.token === TOKEN_A) {
+        return new Promise((resolve) => {
+          resolveOldContext = resolve
+        })
+      }
+      if (path === '/api/auth/logout') {
+        return new Promise((resolve) => {
+          resolveServerRevocation = resolve
+        })
+      }
+      return Promise.reject(new Error(`unexpected ${path}`))
+    })
+
+    const store = useCloudSessionStore()
+    store.setPersistenceAdapter(adapter)
+    const oldLogin = store.login('a@example.com', 'password')
+    await vi.waitFor(() => expect(resolveOldContext).toBeTypeOf('function'))
+
+    const logoutPromise = store.logout()
+    await vi.waitFor(() => expect(resolveServerRevocation).toBeTypeOf('function'))
+
+    resolveOldContext(context(USER_A, []))
+    await expect(oldLogin).resolves.toMatchObject({ state: 'stale_operation' })
+    expect(await getToken()).toBe(TOKEN_A)
+    expect(store.isAuthenticated).toBe(true)
+
+    resolveServerRevocation({ ok: true, status: 204, data: null, error: null })
+    await expect(logoutPromise).resolves.toMatchObject({ ok: true })
+
+    expect(store.isAuthenticated).toBe(false)
+    expect(store.isOperationalCloudAccess).toBe(false)
+    expect(store.canPerformCloudPush).toBe(false)
+    expect(store.selectedBusiness).toBeNull()
+    expect(store.selectedOutlet).toBeNull()
+    expect(await getToken()).toBeNull()
+    expect(await adapter.loadBusiness()).toMatchObject({ name: 'Local POS' })
+    expect(await adapter.countSyncQueueItems()).toBe(1)
+  })
+
+  it('treats an already-removed token as a successful local logout', async () => {
+    const store = useCloudSessionStore()
+    store.user = USER_A
+    store.cloudAccess = true
+    store.capabilityState = 'verified'
+
+    const result = await store.logout()
+
+    expect(result).toMatchObject({ ok: true, code: 'LOGGED_OUT' })
+    expect(store.isAuthenticated).toBe(false)
+    expect(store.isOperationalCloudAccess).toBe(false)
+    expect(store.canPerformCloudPush).toBe(false)
+    expect(store.selectedBusiness).toBeNull()
+    expect(store.selectedOutlet).toBeNull()
   })
 
   it('does not clear account B when stale account A rollback cannot read secure storage', async () => {

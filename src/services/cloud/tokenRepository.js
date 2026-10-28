@@ -99,14 +99,35 @@ export async function removeToken() {
  * a stale operation cannot remove a newer account's token between awaits.
  */
 export async function removeTokenIfMatches(expectedToken) {
-  if (typeof expectedToken !== 'string' || expectedToken.length === 0) return false
+  const result = await removeTokenIfMatchesDetailed(expectedToken)
+  return result.ok
+}
+
+/**
+ * Atomically classify an ownership-aware token removal.
+ *
+ * The read/compare/remove sequence is serialized with every token mutation so
+ * callers can distinguish an already-absent token from a newer owner's token
+ * without introducing a second read/compare/remove race.
+ *
+ * @returns {Promise<{ok: boolean, state: 'removed'|'missing'|'ownership_mismatch'}>}
+ */
+export async function removeTokenIfMatchesDetailed(expectedToken) {
+  if (typeof expectedToken !== 'string' || expectedToken.length === 0) {
+    return { ok: false, state: 'ownership_mismatch' }
+  }
 
   return enqueueTokenOperation(async () => {
     const store = resolveStore()
     const currentToken = await store.get()
-    if (currentToken !== expectedToken) return false
+    if (currentToken === null || currentToken === undefined || currentToken === '') {
+      return { ok: false, state: 'missing' }
+    }
+    if (currentToken !== expectedToken) {
+      return { ok: false, state: 'ownership_mismatch' }
+    }
     await store.remove()
-    return true
+    return { ok: true, state: 'removed' }
   })
 }
 
