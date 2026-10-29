@@ -84,7 +84,7 @@ The localhost value in `.env.example` is a development example only. No environm
 
 ## RC1 final release validation
 
-Validation date: 2026-10-29. The requested post-merge base was not available: PR #70 is still `OPEN`, and `origin/main` remains at `6570e9e`. The candidate branch validated here is `release/rc1-catalog-sync-qa` at `73d8298`.
+Validation date: 2026-10-29. The requested post-merge base was not available: PR #70 is still `OPEN`, and `origin/main` remains at `6570e9e`. The candidate branch validated here is `release/rc1-catalog-sync-qa` at `13bd88e`.
 
 | Required validation | Status | Evidence / blocker |
 |---|---|---|
@@ -130,7 +130,7 @@ P2 / deferred:
 **POS MOBILE RC1 - Readiness Result**
 
 - Branch: `release/rc1-catalog-sync-qa`
-- Commit: `73d8298`
+- Commit: `13bd88e`
 - PR: [#70](https://github.com/sawal123/pos-mobile/pull/70) open toward `main`; no auto-merge or deployment
 - Cloud Menu Root Cause: server sends `is_active: 1`, but product mapping read only `status`; initial Cloud pull was also skipped when the local template catalog already existed
 - Cloud Menu Status: **PASS** automated/code verification; production Cloud smoke **NOT RUN**
