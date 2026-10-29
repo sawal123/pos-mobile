@@ -1,16 +1,34 @@
 <script setup>
-import { computed, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import AppIcon from '@/components/base/AppIcon.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
+import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useProductStore } from '@/stores/productStore'
+import { useSyncPullStore } from '@/stores/syncPullStore'
 import { formatDateTime } from '@/utils/formatters'
 
+const cloudStore = useCloudSessionStore()
 const productStore = useProductStore()
+const syncPullStore = useSyncPullStore()
 const router = useRouter()
+
+onMounted(async () => {
+  if (
+    cloudStore.isLinked &&
+    cloudStore.isOperationalCloudAccess &&
+    productStore.products.length === 0
+  ) {
+    try {
+      await syncPullStore.ensureCatalogLoaded()
+    } catch {
+      // Non-blocking fallback
+    }
+  }
+})
 
 // View Tab: 'products' | 'movements'
 const activeTab = ref('products')

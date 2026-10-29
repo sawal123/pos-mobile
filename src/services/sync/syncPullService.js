@@ -183,6 +183,15 @@ export function createSyncPullService({
 
   let isInitialPulling = false
 
+  function resolveStore(explicitStore, useStoreFn) {
+    if (explicitStore) return explicitStore
+    try {
+      return pinia ? useStoreFn(pinia) : useStoreFn()
+    } catch {
+      return null
+    }
+  }
+
   async function resolveToken(overrideContext = {}) {
     if (overrideContext.token) return overrideContext.token
     if (typeof tokenFetcher === 'function') {
@@ -224,7 +233,7 @@ export function createSyncPullService({
 
     try {
       const overrideContext = options.context ?? {}
-    const activeCloudStore = cloudStore ?? (pinia ? useCloudSessionStore(pinia) : null)
+    const activeCloudStore = resolveStore(cloudStore, useCloudSessionStore)
 
     const token = await resolveToken(overrideContext)
     const user = overrideContext.user ?? activeCloudStore?.user
@@ -709,13 +718,12 @@ export function createSyncPullService({
     const cursorAfter = currentAfter
 
     // ── 6. Resolve domain stores ──────────────────────────────────────────────
-    const productStore = stores?.productStore ?? (pinia ? useProductStore(pinia) : null)
-    const cashStore = stores?.cashStore ?? (pinia ? useCashStore(pinia) : null)
-    const customerStore = stores?.customerStore ?? (pinia ? useCustomerStore(pinia) : null)
-    const expenseStore = stores?.expenseStore ?? (pinia ? useExpenseStore(pinia) : null)
-    const transactionStore =
-      stores?.transactionStore ?? (pinia ? useTransactionStore(pinia) : null)
-    const shiftStore = stores?.shiftStore ?? (pinia ? useShiftStore(pinia) : null)
+    const productStore = resolveStore(stores?.productStore, useProductStore)
+    const cashStore = resolveStore(stores?.cashStore, useCashStore)
+    const customerStore = resolveStore(stores?.customerStore, useCustomerStore)
+    const expenseStore = resolveStore(stores?.expenseStore, useExpenseStore)
+    const transactionStore = resolveStore(stores?.transactionStore, useTransactionStore)
+    const shiftStore = resolveStore(stores?.shiftStore, useShiftStore)
 
     // ── 6.5. Handle empty snapshot ────────────────────────────────────────────
     if (allRecords.length === 0) {
@@ -1463,6 +1471,7 @@ export function createSyncPullService({
           existingProd.name = name
           existingProd.category = resolvedCategoryName
           existingProd.price = Number(price)
+          existingProd.unitPrice = Number(price)
           existingProd.kind = remoteKind
           if (Number.isFinite(remoteCost) && remoteCost >= 0) {
             existingProd.cost = remoteCost
@@ -1491,6 +1500,7 @@ export function createSyncPullService({
             name,
             category: resolvedCategoryName,
             price: Number(price),
+            unitPrice: Number(price),
             kind: remoteKind,
             cost: Number.isFinite(remoteCost) && remoteCost >= 0 ? remoteCost : 0,
             stock: Number.isFinite(remoteStock) && remoteStock >= 0 ? remoteStock : 0,

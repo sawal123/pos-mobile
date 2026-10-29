@@ -353,6 +353,7 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
           sku: row.sku ?? '',
           cost: Number(row.cost ?? 0),
           price: Number(row.price),
+          unitPrice: Number(row.price),
           stock: Number(row.stock),
           unit: row.unit ?? 'pcs',
           minStock: Number(row.min_stock ?? 0),

@@ -124,7 +124,7 @@ export async function clearLocalCache({
       if (typeof resolvedAdapter.clearCloudInitializationJournal === 'function') {
         await resolvedAdapter.clearCloudInitializationJournal()
       }
-      if (typeof resolvedAdapter.saveWorkspaceRegistry === 'function') {
+      if (resetBusiness && typeof resolvedAdapter.saveWorkspaceRegistry === 'function') {
         await resolvedAdapter.saveWorkspaceRegistry({
           version: 1,
           activeWorkspaceId: 'local:default',
