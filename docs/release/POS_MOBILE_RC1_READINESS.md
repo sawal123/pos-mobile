@@ -75,19 +75,40 @@ Use a dedicated QA Cloud account and a test business/outlet. Do not use producti
 | API/backend compatibility | PENDING QA | Validate the deployed backend with the dedicated Cloud QA account, especially catalog `is_active` payloads and push contract. |
 | Android secure storage | PASS | Native token storage uses `@aparajita/capacitor-secure-storage`; no token is stored in localStorage, sessionStorage, SQLite, or Pinia. |
 | Permissions/network | PASS with P2 hardening | INTERNET and Bluetooth printer permissions are declared. `usesCleartextTraffic=true` and `allowBackup=true` remain P2 hardening items. |
-| Capacitor sync/build | PASS | `npx cap sync android` and debug APK build pass; five native plugins synced. |
+| Capacitor sync/build | PASS | `npx cap sync android` and signed release APK build pass; five native plugins synced. |
 | Token/credential logging | PASS | No token or credential logging found in the application path; tokens are sent in Authorization headers. |
 | Developer endpoint | PASS | `/dev/cloud-auth-preview` is DEV-only. |
-| Release signing | PENDING | Debug APK was built. A signed release artifact still requires the project keystore/signing values in the release environment. |
+| Release signing | PASS for local RC validation | `assembleRelease` and `apksigner` verification pass. Keystore/password material remains local and ignored by Git. |
 
 The localhost value in `.env.example` is a development example only. No environment secret or token is included in this report.
+
+## RC1 final release validation
+
+Validation date: 2026-10-29. The requested post-merge base was not available: PR #70 is still `OPEN`, and `origin/main` remains at `6570e9e`. The candidate branch validated here is `release/rc1-catalog-sync-qa` at `73d8298`.
+
+| Required validation | Status | Evidence / blocker |
+|---|---|---|
+| Cloud Login E2E | **NOT RUN** | No separate QA account or credentials are available. |
+| Initial Catalog Pull | **NOT RUN** against deployed backend | Automated catalog pull tests pass; production Cloud E2E needs QA credentials. |
+| Template-to-Cloud Workspace Transition | **NOT RUN** end-to-end | Code path and automated tests cover the local-template-to-initial-pull guard; no database reset was used. |
+| Offline Sale | **PASS** on prior Android smoke | Cash sale completed offline on the debug candidate; release APK install/launch was separately verified. |
+| Sync Push | **NOT RUN** against deployed backend | Automated push contract tests pass; QA account/server verification is pending. |
+| Server Data Verification | **NOT RUN** | No QA business/outlet or server-side verification access was supplied. |
+| Logout & Restart Safety | **PARTIAL PASS** | Restart and SQLite persistence passed on Android; Cloud logout was not run without a QA session. |
+| Signed APK/AAB | **PASS APK / NOT RUN AAB** | `assembleRelease` passed; `apksigner` verified one v2 signer. No AAB was requested or built. |
+| Android Installation | **PASS** | Signed `app-release.apk` installed and launched on fresh `emulator-5556`; onboarding screen rendered. |
+| Active/inactive products and categories | **NOT RUN** against server | Mapping regression tests cover `is_active: 1` and inactive behavior; deployed payload was not available. |
+| Duplicate products/transactions | **NOT RUN** against server | Local automated idempotency tests pass; no production Cloud dataset was touched. |
+| Tenant/outlet isolation | **NOT RUN** against server | Requires two QA contexts or server-side QA verification. |
+
+Release signing details were not printed. The local keystore and properties are ignored by Git and were not added or changed. No signing password or QA credential was stored in the repository or report.
 
 ## Verification
 
 - `npm run build`: **PASS**. Vite build completed; only existing bundle-size/dynamic-import warnings remain.
 - `npx vitest run`: **BASELINE FAILURES, NO RELEVANT NEW REGRESSION**. 92 files: 79 passed, 10 failed, 3 skipped; 1,947 passed, 12 failed, 4 skipped. The 12 named baseline failures are unchanged and are not catalog visibility/data-loss failures.
 - `npx cap sync android`: **PASS**.
-- `android\\gradlew.bat assembleDebug`: **PASS**. `app-debug.apk` produced.
+- `android\\gradlew.bat assembleRelease`: **PASS**. Signed `app-release.apk` produced and verified with `apksigner` v2.
 - Non-mutating lint: `npx oxlint` on changed files **PASS**; targeted ESLint on core changed files **PASS**. Full changed-file ESLint still reports three pre-existing unused imports in Products, Stock, and Laundry views. `npm run lint` was not run because its scripts enable global `--fix`.
 - `git diff --check`: only the pre-existing report EOF whitespace was present before this update; no source whitespace error remains.
 
@@ -100,17 +121,16 @@ P1 blockers: **No confirmed code blocker after targeted verification.** Producti
 P2 / deferred:
 
 1. Complete Cloud QA smoke with deployed backend and dedicated credentials.
-2. Produce and verify a signed release artifact; the current Android artifact is debug.
-3. Consider disabling cleartext traffic and Android backup for hardened Play production configuration.
-4. Resolve the 12 pre-existing baseline test failures and reduce the main JS bundle in a separate change.
-5. Execute the separate category/product creation and stock-adjustment UI scenarios.
+2. Consider disabling cleartext traffic and Android backup for hardened Play production configuration.
+3. Resolve the 12 pre-existing baseline test failures and reduce the main JS bundle in a separate change.
+4. Execute the separate category/product creation and stock-adjustment UI scenarios.
 
 ## Final report
 
 **POS MOBILE RC1 - Readiness Result**
 
 - Branch: `release/rc1-catalog-sync-qa`
-- Commit: `4345680` plus the RC1 catalog-sync changes in this branch
+- Commit: `73d8298`
 - PR: [#70](https://github.com/sawal123/pos-mobile/pull/70) open toward `main`; no auto-merge or deployment
 - Cloud Menu Root Cause: server sends `is_active: 1`, but product mapping read only `status`; initial Cloud pull was also skipped when the local template catalog already existed
 - Cloud Menu Status: **PASS** automated/code verification; production Cloud smoke **NOT RUN**
@@ -118,10 +138,10 @@ P2 / deferred:
 - SQLite Persistence: **PASS** automated and Android restart smoke
 - Sync Push/Pull: **PASS** targeted automated tests; deployed-backend E2E **NOT RUN**
 - Workspace Safety: **PASS**; no reset, transaction deletion, or sync-queue deletion
-- Android APK Build: **PASS** debug APK
+- Android APK Build: **PASS** signed release APK
 - Android Smoke Test: **PARTIAL PASS**; local/offline scenarios pass, Cloud-account scenarios not run
-- Production API Configuration: **PASS** for HTTPS/non-localhost; backend compatibility and signed release artifact remain pending
+- Production API Configuration: **PASS** for HTTPS/non-localhost; backend compatibility and post-merge validation remain pending
 - P0 Blockers: None confirmed in scope
 - P1 Blockers: None confirmed in scope; production Cloud E2E remains a release gate
 - Deferred P2: Manifest hardening, baseline test cleanup, bundle size, remaining UI smoke cases
-- Release Decision: **NO-GO** for production release until Cloud QA E2E, signed release build, and remaining smoke cases are completed
+- Release Decision: **NO-GO** for production release until PR #70 is merged, Cloud QA E2E/server verification is completed, and the remaining smoke cases pass
