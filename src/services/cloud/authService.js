@@ -14,10 +14,13 @@
  * - POST /api/v2/auth/reauthenticate
  * - POST /api/v2/auth/google/link
  * - GET  /api/v2/auth/me
+ * - POST /api/v2/auth/password/forgot
+ * - POST /api/v2/auth/password/reset
+ * - POST /api/v2/auth/email/change/request
+ * - POST /api/v2/auth/email/change/verify
  *
  * Does NOT implement:
  * - 2FA completion flow
- * - Forgot password
  * - Sync push/pull
  */
 
@@ -741,4 +744,317 @@ export async function cloudLogout(token) {
   }
 
   return { ok: result.ok }
+}
+
+/**
+ * Request a password-reset email for the given account.
+ * Returns a generic success message regardless of whether the email exists
+ * (never reveals account existence).
+ *
+ * @param {string} email
+ * @returns {Promise<{ok: boolean, message?: string, error?: object}>}
+ */
+export async function cloudForgotPassword(email) {
+  const normalizedEmail = typeof email === 'string' ? email.trim() : ''
+  if (!normalizedEmail) {
+    return {
+      ok: false,
+      error: {
+        status: 422,
+        code: 'VALIDATION_ERROR',
+        message: 'Alamat email tidak valid.',
+        data: null,
+      },
+    }
+  }
+
+  const result = await apiRequest('/api/v2/auth/password/forgot', {
+    method: 'POST',
+    body: { email: normalizedEmail },
+  })
+
+  if (!result.ok) {
+    return { ok: false, error: result.error }
+  }
+
+  const data = responseData(result)
+  if (result.status !== 202 || data?.token || result.data?.token) {
+    return {
+      ok: false,
+      error: {
+        status: result.status,
+        code: 'INVALID_FORGOT_PASSWORD_RESPONSE',
+        message: 'Respons permintaan pemulihan tidak dapat diproses.',
+        data: null,
+      },
+    }
+  }
+
+  return {
+    ok: true,
+    message:
+      'Jika akun memenuhi syarat, instruksi pemulihan akan dikirim ke alamat email tersebut. Periksa kotak masuk dan folder spam.',
+  }
+}
+
+/**
+ * Reset password using the token from the password-reset email.
+ * Does NOT create a session or save any token.
+ *
+ * @param {object} params
+ * @param {string} params.email
+ * @param {string} params.token
+ * @param {string} params.password
+ * @param {string} params.password_confirmation
+ * @returns {Promise<{ok: boolean, message?: string, error?: object}>}
+ */
+export async function cloudResetPassword({ email, token, password, password_confirmation } = {}) {
+  const normalizedEmail = typeof email === 'string' ? email.trim() : ''
+  const normalizedToken = typeof token === 'string' ? token.trim() : ''
+
+  if (!normalizedEmail || !normalizedToken || typeof password !== 'string' || !password) {
+    return {
+      ok: false,
+      error: {
+        status: 422,
+        code: 'VALIDATION_ERROR',
+        message: 'Data reset password tidak valid.',
+        data: null,
+      },
+    }
+  }
+
+  if (password !== password_confirmation) {
+    return {
+      ok: false,
+      error: {
+        status: 422,
+        code: 'PASSWORD_CONFIRMATION_MISMATCH',
+        message: 'Konfirmasi password tidak cocok.',
+        data: { errors: { password: ['Konfirmasi password tidak cocok.'] } },
+      },
+    }
+  }
+
+  const result = await apiRequest('/api/v2/auth/password/reset', {
+    method: 'POST',
+    body: {
+      email: normalizedEmail,
+      token: normalizedToken,
+      password,
+      password_confirmation,
+    },
+  })
+
+  if (!result.ok) {
+    return { ok: false, error: result.error }
+  }
+
+  const data = responseData(result)
+  if (result.status !== 200 || data?.token || result.data?.token) {
+    return {
+      ok: false,
+      error: {
+        status: result.status,
+        code: 'INVALID_RESET_PASSWORD_RESPONSE',
+        message: 'Respons reset password tidak dapat diproses.',
+        data: null,
+      },
+    }
+  }
+
+  return {
+    ok: true,
+    message: 'Password berhasil diubah. Silakan masuk kembali.',
+  }
+}
+
+/**
+ * Request an email address change for the authenticated user.
+ * Requires identity proof (password, Google ID token, or TOTP code).
+ *
+ * @param {string} token Bearer token
+ * @param {object} params
+ * @param {string} params.newEmail
+ * @param {string} [params.currentPassword]
+ * @param {string} [params.totpCode]
+ * @param {string} [params.idToken]
+ * @param {string} [params.clientPlatform]
+ * @returns {Promise<{ok: boolean, changeId?: string, state?: string, otpExpiresAt?: string, resendAvailableAt?: string, error?: object}>}
+ */
+export async function cloudRequestEmailChange(
+  token,
+  { newEmail, currentPassword = null, totpCode = null, idToken = null, clientPlatform = null } = {},
+) {
+  if (typeof token !== 'string' || token.trim() === '') {
+    return {
+      ok: false,
+      error: {
+        status: 401,
+        code: 'UNAUTHENTICATED',
+        message: 'Sesi Cloud belum aktif.',
+        data: null,
+      },
+    }
+  }
+
+  const normalizedEmail = typeof newEmail === 'string' ? newEmail.trim() : ''
+  if (!normalizedEmail) {
+    return {
+      ok: false,
+      error: {
+        status: 422,
+        code: 'VALIDATION_ERROR',
+        message: 'Alamat email baru wajib diisi.',
+        data: null,
+      },
+    }
+  }
+
+  const body = { new_email: normalizedEmail }
+  if (typeof currentPassword === 'string' && currentPassword.length > 0) {
+    body.current_password = currentPassword
+  }
+  if (typeof idToken === 'string' && idToken.trim().length > 0) {
+    body.id_token = idToken.trim()
+    if (typeof clientPlatform === 'string' && clientPlatform.trim().length > 0) {
+      body.client_platform = clientPlatform.trim()
+    }
+  }
+  if (typeof totpCode === 'string' && totpCode.trim().length > 0) {
+    body.totp_code = totpCode.trim()
+  }
+
+  const result = await apiRequest('/api/v2/auth/email/change/request', {
+    method: 'POST',
+    body,
+    token,
+  })
+
+  if (!result.ok) {
+    return { ok: false, error: result.error }
+  }
+
+  const data = responseData(result)
+  const validChangeId = typeof data?.change_id === 'string' && data.change_id.trim().length > 0
+  const validOtpExpiresAt =
+    typeof data?.otp_expires_at === 'string' && Number.isFinite(Date.parse(data.otp_expires_at))
+  const validResendAvailableAt =
+    typeof data?.resend_available_at === 'string' &&
+    Number.isFinite(Date.parse(data.resend_available_at))
+
+  if (
+    result.status !== 202 ||
+    !validChangeId ||
+    data?.state !== 'pending_verification' ||
+    !validOtpExpiresAt ||
+    !validResendAvailableAt ||
+    data?.token ||
+    result.data?.token
+  ) {
+    return {
+      ok: false,
+      error: {
+        status: result.status,
+        code: data?.state || 'INVALID_EMAIL_CHANGE_RESPONSE',
+        message: 'Respons permintaan perubahan email tidak dapat diproses.',
+        data: null,
+      },
+    }
+  }
+
+  return {
+    ok: true,
+    changeId: data.change_id.trim(),
+    state: 'pending_verification',
+    otpExpiresAt: data.otp_expires_at,
+    resendAvailableAt: data.resend_available_at,
+  }
+}
+
+/**
+ * Verify the email change with the OTP code sent to the new email.
+ *
+ * @param {string} token Bearer token
+ * @param {object} params
+ * @param {string} params.changeId
+ * @param {string} params.code
+ * @returns {Promise<{ok: boolean, state?: string, reauthenticationRequired?: boolean, message?: string, error?: object}>}
+ */
+export async function cloudVerifyEmailChange(token, { changeId, code } = {}) {
+  if (typeof token !== 'string' || token.trim() === '') {
+    return {
+      ok: false,
+      error: {
+        status: 401,
+        code: 'UNAUTHENTICATED',
+        message: 'Sesi Cloud belum aktif.',
+        data: null,
+      },
+    }
+  }
+
+  const normalizedChangeId = typeof changeId === 'string' ? changeId.trim() : ''
+  const normalizedCode = typeof code === 'string' ? code.trim() : ''
+
+  if (!normalizedChangeId) {
+    return {
+      ok: false,
+      error: {
+        status: 409,
+        code: 'EMAIL_CHANGE_CONFLICT',
+        message: 'Permintaan perubahan email tidak valid.',
+        data: null,
+      },
+    }
+  }
+
+  if (!/^\d{6}$/.test(normalizedCode)) {
+    return {
+      ok: false,
+      error: {
+        status: 422,
+        code: 'EMAIL_CHANGE_INVALID_OTP',
+        message: 'Kode verifikasi harus terdiri dari 6 digit angka.',
+        data: null,
+      },
+    }
+  }
+
+  const result = await apiRequest('/api/v2/auth/email/change/verify', {
+    method: 'POST',
+    body: { change_id: normalizedChangeId, code: normalizedCode },
+    token,
+  })
+
+  if (!result.ok) {
+    return { ok: false, error: result.error }
+  }
+
+  const data = responseData(result)
+
+  if (
+    result.status !== 200 ||
+    data?.state !== 'verified' ||
+    data?.reauthentication_required !== true ||
+    data?.token ||
+    result.data?.token
+  ) {
+    return {
+      ok: false,
+      error: {
+        status: result.status,
+        code: data?.state || 'INVALID_EMAIL_VERIFY_RESPONSE',
+        message: 'Respons verifikasi perubahan email tidak dapat diproses.',
+        data: null,
+      },
+    }
+  }
+
+  return {
+    ok: true,
+    state: 'verified',
+    reauthenticationRequired: true,
+    message: 'Email berhasil diperbarui. Silakan masuk kembali.',
+  }
 }

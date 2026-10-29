@@ -16,6 +16,10 @@ import {
   fetchMobileAuthMethods,
   cloudReauthenticateForGoogleLink,
   cloudLinkGoogleAccount,
+  cloudForgotPassword,
+  cloudResetPassword,
+  cloudRequestEmailChange,
+  cloudVerifyEmailChange,
   registerDevice,
   cloudLogout,
 } from '@/services/cloud/authService'
@@ -282,6 +286,11 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   let googleLinkToken = null
   let googleLinkUserId = null
   let googleLinkOperation = null
+  let emailChangePendingId = null
+  let emailChangeToken = null
+  let emailChangeUserId = null
+  let emailChangeOperation = null
+  let emailChangeSequence = 0
 
   function beginSessionOperation(kind, { replace = false } = {}) {
     if (activeSessionOperation.value && !replace) return null
@@ -749,6 +758,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
 
   function clearSession() {
     clearGoogleLinkState()
+    clearEmailChangeState()
     user.value = null
     selectedBusiness.value = null
     selectedOutlet.value = null
@@ -1371,6 +1381,390 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     return { ok: true, state: 'cancelled' }
   }
 
+  function clearEmailChangeState() {
+    emailChangeSequence += 1
+    emailChangePendingId = null
+    emailChangeToken = null
+    emailChangeUserId = null
+    emailChangeOperation = null
+  }
+
+  /**
+   * Request password recovery instructions. Never creates a session, never
+   * saves the email as authenticated identity, and never discloses whether an
+   * account exists.
+   */
+  async function forgotPassword(email) {
+    const result = await cloudForgotPassword(email)
+    return result
+  }
+
+  /**
+   * Complete password reset using a valid server reset token.
+   * Never creates a session or saves a bearer token. If the currently active
+   * local session belongs to the same email, invalidates it in an ownership-aware
+   * manner while preserving any other account's session and all offline POS data.
+   */
+  async function resetPassword({ email, token, password, password_confirmation } = {}) {
+    const result = await cloudResetPassword({
+      email,
+      token,
+      password,
+      password_confirmation,
+    })
+
+    if (!result.ok) {
+      return result
+    }
+
+    const normalizedTargetEmail = String(email ?? '').trim().toLowerCase()
+    const currentSessionEmail = String(user.value?.email ?? '').trim().toLowerCase()
+    let sessionInvalidated = false
+
+    if (
+      isAuthenticated.value &&
+      normalizedTargetEmail &&
+      currentSessionEmail === normalizedTargetEmail
+    ) {
+      let currentToken
+      try {
+        currentToken = await getToken()
+      } catch {
+        currentToken = null
+      }
+
+      if (
+        isAuthenticated.value &&
+        String(user.value?.email ?? '').trim().toLowerCase() === normalizedTargetEmail
+      ) {
+        await handleInvalidToken({ token: currentToken })
+        sessionInvalidated = true
+      }
+    }
+
+    return {
+      ok: true,
+      message: result.message,
+      sessionInvalidated,
+    }
+  }
+
+  /**
+   * Initiate an authenticated email change request.
+   * Never mutates `user.email` on HTTP 202 and distinguishes `INVALID_CREDENTIALS`
+   * (401) from a revoked Sanctum session.
+   */
+  async function requestEmailChange({
+    newEmail,
+    currentPassword = null,
+    totpCode = null,
+    idToken = null,
+    clientPlatform = null,
+  } = {}) {
+    if (!isAuthenticated.value || user.value?.id === null || user.value?.id === undefined) {
+      return googleLinkError('UNAUTHENTICATED', 'Sesi Cloud belum aktif.')
+    }
+
+    const operation = beginSessionOperation('email_change')
+    if (!operation) {
+      return googleLinkError('REQUEST_IN_PROGRESS', 'Operasi Cloud masih berjalan.')
+    }
+
+    emailChangeOperation = operation
+    const requestSequence = ++emailChangeSequence
+    const requestUserId = String(user.value.id)
+    loading.value = true
+    error.value = null
+
+    try {
+      const token = await getToken()
+      if (
+        !isCurrentSessionOperation(operation) ||
+        emailChangeSequence !== requestSequence ||
+        String(user.value?.id) !== requestUserId
+      ) {
+        return staleSessionResult('Sesi Cloud berubah. Perubahan email dibatalkan.')
+      }
+      if (typeof token !== 'string' || token.trim() === '') {
+        return googleLinkError('TOKEN_INVALID', 'Sesi Cloud belum dapat diverifikasi.')
+      }
+
+      const result = await cloudRequestEmailChange(token, {
+        newEmail,
+        currentPassword,
+        totpCode,
+        idToken,
+        clientPlatform,
+      })
+
+      if (
+        !isCurrentSessionOperation(operation) ||
+        emailChangeSequence !== requestSequence ||
+        String(user.value?.id) !== requestUserId
+      ) {
+        return staleSessionResult('Sesi Cloud berubah. Perubahan email dibatalkan.')
+      }
+
+      if (!result.ok) {
+        const errorCode = String(result.error?.code ?? '').toUpperCase()
+        // Distinguish explicit INVALID_CREDENTIALS (which may use HTTP 401)
+        // from an unauthenticated / revoked Sanctum session.
+        if (
+          isUnauthorizedError(result.error) &&
+          errorCode !== 'INVALID_CREDENTIALS'
+        ) {
+          clearEmailChangeState()
+          await handleInvalidToken({ token, operation })
+          return {
+            ok: false,
+            sessionInvalidated: true,
+            error: result.error,
+          }
+        }
+        return result
+      }
+
+      emailChangePendingId = result.changeId
+      emailChangeToken = token
+      emailChangeUserId = requestUserId
+
+      return {
+        ok: true,
+        changeId: result.changeId,
+        state: result.state,
+        otpExpiresAt: result.otpExpiresAt,
+        resendAvailableAt: result.resendAvailableAt,
+      }
+    } catch {
+      return googleLinkError('EMAIL_CHANGE_REQUEST_FAILED', 'Permintaan perubahan email gagal.')
+    } finally {
+      const ownsOperation = isCurrentSessionOperation(operation)
+      if (emailChangeOperation === operation) emailChangeOperation = null
+      finishSessionOperation(operation)
+      if (ownsOperation) loading.value = false
+    }
+  }
+
+  /**
+   * Verify the 6-digit OTP sent to the new email address using the exact
+   * initiating session. On authoritative HTTP 200 verification, revokes the
+   * local Cloud session in an ownership-aware manner without touching POS data.
+   */
+  async function verifyEmailChange({ changeId = null, code } = {}) {
+    const targetChangeId = changeId || emailChangePendingId
+    const expectedUserId = emailChangeUserId || (user.value?.id != null ? String(user.value.id) : null)
+    const expectedToken = emailChangeToken
+    const expectedSequence = emailChangeSequence
+
+    if (!isAuthenticated.value || user.value?.id === null || user.value?.id === undefined) {
+      clearEmailChangeState()
+      return googleLinkError('UNAUTHENTICATED', 'Sesi Cloud belum aktif.')
+    }
+
+    if (expectedUserId && String(user.value.id) !== expectedUserId) {
+      clearEmailChangeState()
+      return staleSessionResult('Sesi Cloud berubah. Perubahan email dibatalkan.')
+    }
+
+    const operation = beginSessionOperation('email_change_verify')
+    if (!operation) {
+      return googleLinkError('REQUEST_IN_PROGRESS', 'Operasi Cloud masih berjalan.')
+    }
+
+    emailChangeOperation = operation
+    loading.value = true
+
+    try {
+      const currentToken = await getToken()
+      if (
+        !isCurrentSessionOperation(operation) ||
+        emailChangeSequence !== expectedSequence ||
+        (expectedUserId && String(user.value?.id) !== expectedUserId)
+      ) {
+        return staleSessionResult('Sesi Cloud berubah. Perubahan email dibatalkan.')
+      }
+
+      if (typeof currentToken !== 'string' || currentToken.trim() === '') {
+        return googleLinkError('UNAUTHENTICATED', 'Sesi Cloud belum aktif.')
+      }
+
+      if (expectedToken && currentToken !== expectedToken) {
+        clearEmailChangeState()
+        return staleSessionResult('Sesi Cloud berubah. Perubahan email dibatalkan.')
+      }
+
+      const result = await cloudVerifyEmailChange(currentToken, {
+        changeId: targetChangeId,
+        code,
+      })
+
+      if (
+        !isCurrentSessionOperation(operation) ||
+        emailChangeSequence !== expectedSequence ||
+        (expectedUserId && String(user.value?.id) !== expectedUserId)
+      ) {
+        return staleSessionResult('Sesi Cloud berubah. Perubahan email dibatalkan.')
+      }
+
+      if (!result.ok) {
+        const uncertain =
+          Number(result.error?.status) === 0 || result.error?.code === 'NETWORK_ERROR'
+        if (uncertain) {
+          // Read-only session check to detect if server already revoked the token
+          const check = await fetchMobileAuthMethods(currentToken).catch(() => ({
+            ok: false,
+            error: { status: 0, code: 'NETWORK_ERROR' },
+          }))
+
+          if (
+            !isCurrentSessionOperation(operation) ||
+            emailChangeSequence !== expectedSequence ||
+            (expectedUserId && String(user.value?.id) !== expectedUserId)
+          ) {
+            return staleSessionResult('Sesi Cloud berubah. Perubahan email dibatalkan.')
+          }
+
+          if (!check.ok && isUnauthorizedError(check.error)) {
+            clearEmailChangeState()
+            await handleInvalidToken({ token: currentToken, operation })
+            error.value =
+              'Status verifikasi perubahan email belum dapat dipastikan dan sesi telah berakhir. Silakan masuk kembali.'
+            return {
+              ok: false,
+              uncertain: true,
+              sessionRevoked: true,
+              code: 'EMAIL_CHANGE_UNCERTAIN',
+              error: {
+                status: 401,
+                code: 'EMAIL_CHANGE_UNCERTAIN',
+                message:
+                  'Status verifikasi perubahan email belum dapat dipastikan dan sesi telah berakhir. Silakan masuk kembali.',
+                data: null,
+              },
+            }
+          }
+
+          return {
+            ok: false,
+            uncertain: true,
+            code: 'EMAIL_CHANGE_UNCERTAIN',
+            error: {
+              status: 0,
+              code: 'EMAIL_CHANGE_UNCERTAIN',
+              message:
+                'Status verifikasi perubahan email belum dapat dipastikan. Jangan mengulang otomatis; silakan periksa sesi atau masuk kembali.',
+              data: null,
+            },
+          }
+        }
+
+        if (isUnauthorizedError(result.error)) {
+          clearEmailChangeState()
+          await handleInvalidToken({ token: currentToken, operation })
+          return {
+            ok: false,
+            sessionInvalidated: true,
+            error: result.error,
+          }
+        }
+
+        return result
+      }
+
+      // Authoritative HTTP 200 verification: backend has revoked all Sanctum tokens.
+      // Perform ownership-aware local session cleanup without calling API logout.
+      clearEmailChangeState()
+
+      let removalState
+      try {
+        const removal = await removeTokenIfMatchesDetailed(currentToken)
+        removalState = removal.state
+      } catch {
+        removalState = 'storage_failure'
+      }
+
+      if (
+        !isCurrentSessionOperation(operation) ||
+        (expectedUserId && String(user.value?.id) !== expectedUserId) ||
+        removalState === 'ownership_mismatch'
+      ) {
+        return staleSessionResult('Sesi Cloud berubah. Perubahan email dibatalkan.')
+      }
+
+      if (_adapter) {
+        try {
+          await _adapter.clearCloudContext()
+        } catch {
+          // Local POS data remains untouched
+        }
+      }
+
+      clearSession()
+      sessionInvalid.value = true
+      if (removalState === 'storage_failure') {
+        error.value = 'Sesi Cloud belum dapat dicabut dengan aman. Silakan coba lagi.'
+      }
+
+      try {
+        const bStore = useBusinessStore()
+        if (bStore.mode !== 'free') {
+          bStore.mode = 'free'
+          if (_adapter && typeof _adapter.saveBusiness === 'function') {
+            void Promise.resolve(
+              _adapter.saveBusiness({
+                name: bStore.name,
+                type: bStore.type,
+                owner: bStore.owner,
+                phone: bStore.phone,
+                outlet: bStore.outlet,
+                mode: 'free',
+              }),
+            ).catch(() => {})
+          }
+        }
+      } catch {
+        // Best effort only
+      }
+
+      return {
+        ok: true,
+        state: 'verified',
+        reauthenticationRequired: true,
+        sessionRevoked: true,
+        storageFailure: removalState === 'storage_failure',
+        message: 'Email berhasil diperbarui. Silakan masuk kembali.',
+      }
+    } catch {
+      return {
+        ok: false,
+        uncertain: true,
+        code: 'EMAIL_CHANGE_UNCERTAIN',
+        error: {
+          status: 0,
+          code: 'EMAIL_CHANGE_UNCERTAIN',
+          message:
+            'Status verifikasi perubahan email belum dapat dipastikan. Jangan mengulang otomatis; silakan periksa sesi atau masuk kembali.',
+          data: null,
+        },
+      }
+    } finally {
+      const ownsOperation = isCurrentSessionOperation(operation)
+      if (emailChangeOperation === operation) emailChangeOperation = null
+      finishSessionOperation(operation)
+      if (ownsOperation) loading.value = false
+    }
+  }
+
+  function cancelEmailChange() {
+    const operation = emailChangeOperation
+    clearEmailChangeState()
+    if (operation && isCurrentSessionOperation(operation)) {
+      finishSessionOperation(operation)
+      loading.value = false
+    }
+    return { ok: true, state: 'cancelled' }
+  }
+
   /**
    * Register flow intentionally stops at pending email verification. A pending
    * registration is not a Cloud session and cannot fetch context or save a token.
@@ -1900,6 +2294,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
    */
   async function logout() {
     clearGoogleLinkState()
+    clearEmailChangeState()
     const operation = beginSessionOperation('logout', { replace: true })
     loading.value = true
     error.value = null
@@ -2557,6 +2952,11 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     reauthenticateForGoogleLink,
     linkGoogleAccount,
     cancelGoogleAccountLinking,
+    forgotPassword,
+    resetPassword,
+    requestEmailChange,
+    verifyEmailChange,
+    cancelEmailChange,
     register,
     verifyRegistrationOtp,
     resendRegistrationOtp,

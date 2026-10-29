@@ -90,7 +90,7 @@ function handleGoogleClick() {
 
 function handleForgotPasswordClick() {
   showForgotPasswordModal.value = true
-  emit('forgot-password')
+  emit('forgot-password', { email: email.value.trim() })
 }
 
 function handleSwitchToRegister() {

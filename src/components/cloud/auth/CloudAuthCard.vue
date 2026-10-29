@@ -3,18 +3,24 @@ import { ref, watch } from 'vue'
 
 import CloudLoginForm from './CloudLoginForm.vue'
 import CloudRegisterForm from './CloudRegisterForm.vue'
+import CloudForgotPasswordForm from './CloudForgotPasswordForm.vue'
+import CloudResetPasswordForm from './CloudResetPasswordForm.vue'
 
 const props = defineProps({
   modelValue: {
     type: String,
     default: 'login',
-    validator: (val) => ['login', 'register'].includes(val),
+    validator: (val) => ['login', 'register', 'forgot', 'reset'].includes(val),
   },
   loading: {
     type: Boolean,
     default: false,
   },
   errorMessage: {
+    type: String,
+    default: '',
+  },
+  successMessage: {
     type: String,
     default: '',
   },
@@ -37,8 +43,14 @@ const emit = defineEmits([
   'tab-change',
   'login-submit',
   'register-submit',
+  'forgot-submit',
+  'reset-submit',
   'google-click',
   'forgot-password',
+  'go-to-reset',
+  'back-to-login',
+  'back-to-forgot',
+  'offline',
 ])
 
 const currentTab = ref(props.modelValue)
@@ -64,12 +76,40 @@ function handleRegisterSubmit(payload) {
   emit('register-submit', payload)
 }
 
+function handleForgotSubmit(payload) {
+  emit('forgot-submit', payload)
+}
+
+function handleResetSubmit(payload) {
+  emit('reset-submit', payload)
+}
+
 function handleGoogleClick() {
   emit('google-click')
 }
 
-function handleForgotPassword() {
-  emit('forgot-password')
+function handleForgotPassword(payload) {
+  setTab('forgot')
+  emit('forgot-password', payload)
+}
+
+function handleGoToReset() {
+  setTab('reset')
+  emit('go-to-reset')
+}
+
+function handleBackToLogin() {
+  setTab('login')
+  emit('back-to-login')
+}
+
+function handleBackToForgot() {
+  setTab('forgot')
+  emit('back-to-forgot')
+}
+
+function handleOffline() {
+  emit('offline')
 }
 </script>
 
@@ -80,6 +120,7 @@ function handleForgotPassword() {
   >
     <!-- Segmented Tab Switcher -->
     <div
+      v-if="currentTab === 'login' || currentTab === 'register'"
       class="mb-6 grid grid-cols-2 rounded-2xl bg-zinc-100/80 p-1.5"
       role="tablist"
       aria-label="Mode Autentikasi"
@@ -142,6 +183,31 @@ function handleForgotPassword() {
         @submit="handleRegisterSubmit"
         @switch-tab="setTab"
         @google-click="handleGoogleClick"
+      />
+
+      <CloudForgotPasswordForm
+        v-else-if="currentTab === 'forgot'"
+        :loading="loading"
+        :error-message="errorMessage"
+        :success-message="successMessage"
+        :disabled="disabled"
+        :initial-email="initialEmail"
+        @submit="handleForgotSubmit"
+        @go-to-reset="handleGoToReset"
+        @back-to-login="handleBackToLogin"
+        @offline="handleOffline"
+      />
+
+      <CloudResetPasswordForm
+        v-else-if="currentTab === 'reset'"
+        :loading="loading"
+        :error-message="errorMessage"
+        :success-message="successMessage"
+        :disabled="disabled"
+        :initial-email="initialEmail"
+        @submit="handleResetSubmit"
+        @back-to-forgot="handleBackToForgot"
+        @back-to-login="handleBackToLogin"
       />
     </div>
   </div>

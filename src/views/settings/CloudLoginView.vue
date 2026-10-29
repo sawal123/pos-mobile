@@ -9,9 +9,11 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import AppIcon from '@/components/base/AppIcon.vue'
 import {
+  describeForgotPasswordError,
   describeGoogleLoginError,
   describeLoginError,
   describeRegisterError,
+  describeResetPasswordError,
 } from '@/services/cloud/cloudLoginErrors'
 import { describeOtpError } from '@/services/cloud/cloudLoginErrors'
 import {
@@ -38,6 +40,7 @@ import { useSyncReconciliationStore } from '@/stores/syncReconciliationStore'
 import { useProductStore } from '@/stores/productStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import CloudAuthCard from '@/components/cloud/auth/CloudAuthCard.vue'
+import CloudEmailChangeCard from '@/components/cloud/auth/CloudEmailChangeCard.vue'
 import CloudEmailOtpView from '@/components/cloud/auth/CloudEmailOtpView.vue'
 import CloudGoogleLinkCard from '@/components/cloud/auth/CloudGoogleLinkCard.vue'
 import {
@@ -104,8 +107,19 @@ const pendingRegistration = ref(null)
 const googleLoading = ref(false)
 let googleOperationSequence = 0
 
+// Password Recovery & Verified Email Change state (AUTH-M07)
+const recoveryEmail = ref('')
+const recoveryLoading = ref(false)
+const forgotErrorMessage = ref('')
+const forgotSuccessMessage = ref('')
+const resetErrorMessage = ref('')
+const resetSuccessMessage = ref('')
+const emailChangeCompleted = ref(false)
+let recoveryOperationSequence = 0
+
 onUnmounted(() => {
   googleOperationSequence += 1
+  recoveryOperationSequence += 1
   void cancelGoogleSignIn()
 })
 
@@ -1471,11 +1485,125 @@ async function handleGoogleClick() {
   }
 }
 
-function handleForgotPassword() {
-  loginErrorMessage.value = 'Pemulihan password tersedia melalui Dashboard Web; alur penuh dijadwalkan untuk AUTH-M07.'
+function handleForgotPassword(payload) {
+  if (payload?.email) {
+    recoveryEmail.value = payload.email
+  } else if (email.value) {
+    recoveryEmail.value = email.value
+  }
+  forgotErrorMessage.value = ''
+  forgotSuccessMessage.value = ''
+  resetErrorMessage.value = ''
+  resetSuccessMessage.value = ''
+  loginErrorMessage.value = ''
+  authMode.value = 'forgot'
+}
+
+async function handleForgotSubmit(payload) {
+  if (recoveryLoading.value) return
+  const targetEmail = String(payload?.email ?? '').trim()
+  recoveryEmail.value = targetEmail
+  forgotErrorMessage.value = ''
+  forgotSuccessMessage.value = ''
+  const opId = ++recoveryOperationSequence
+  recoveryLoading.value = true
+  try {
+    const result = await cloudStore.forgotPassword(targetEmail)
+    if (opId !== recoveryOperationSequence) return
+    if (!result.ok) {
+      forgotErrorMessage.value = describeForgotPasswordError(result.error).message
+      return
+    }
+    forgotSuccessMessage.value =
+      'Jika akun memenuhi syarat, instruksi pemulihan akan dikirim ke alamat email tersebut. Periksa kotak masuk dan folder spam.'
+  } finally {
+    if (opId === recoveryOperationSequence) {
+      recoveryLoading.value = false
+    }
+  }
+}
+
+function handleGoToReset() {
+  resetErrorMessage.value = ''
+  resetSuccessMessage.value = ''
+  authMode.value = 'reset'
+}
+
+function handleBackToForgot() {
+  forgotErrorMessage.value = ''
+  resetErrorMessage.value = ''
+  resetSuccessMessage.value = ''
+  authMode.value = 'forgot'
+}
+
+function handleBackToLogin() {
+  recoveryOperationSequence += 1
+  recoveryLoading.value = false
+  forgotErrorMessage.value = ''
+  forgotSuccessMessage.value = ''
+  resetErrorMessage.value = ''
+  if (resetSuccessMessage.value) {
+    otpVerifiedMessage.value = resetSuccessMessage.value
+    resetSuccessMessage.value = ''
+  }
+  if (recoveryEmail.value) {
+    email.value = recoveryEmail.value
+  }
+  authMode.value = 'login'
+}
+
+async function handleResetSubmit(payload) {
+  if (recoveryLoading.value) return
+  const targetEmail = String(payload?.email ?? '').trim()
+  recoveryEmail.value = targetEmail
+  resetErrorMessage.value = ''
+  resetSuccessMessage.value = ''
+  const opId = ++recoveryOperationSequence
+  recoveryLoading.value = true
+  try {
+    const result = await cloudStore.resetPassword({
+      email: targetEmail,
+      token: payload?.token,
+      password: payload?.password,
+      password_confirmation: payload?.password_confirmation,
+    })
+    if (opId !== recoveryOperationSequence) return
+    if (!result.ok) {
+      resetErrorMessage.value = describeResetPasswordError(result.error).message
+      return
+    }
+    email.value = targetEmail
+    password.value = ''
+    resetSuccessMessage.value = 'Password berhasil diubah. Silakan masuk kembali.'
+  } finally {
+    if (opId === recoveryOperationSequence) {
+      recoveryLoading.value = false
+    }
+  }
+}
+
+function handleRecoveryOffline() {
+  recoveryOperationSequence += 1
+  recoveryLoading.value = false
+  forgotErrorMessage.value = ''
+  forgotSuccessMessage.value = ''
+  resetErrorMessage.value = ''
+  resetSuccessMessage.value = ''
+  authMode.value = 'login'
+  if (router?.push) void router.push({ name: 'pos' })
+}
+
+function handleEmailChangeSessionRevoked() {
+  emailChangeCompleted.value = true
+  step.value = 'login'
+  authMode.value = 'login'
+  email.value = ''
+  password.value = ''
+  otpVerifiedMessage.value = 'Email berhasil diperbarui. Silakan masuk kembali.'
 }
 
 function handleAuthLogin(payload) {
+  emailChangeCompleted.value = false
   email.value = payload.email
   password.value = payload.password
   void handleLogin()
@@ -1771,6 +1899,11 @@ onMounted(async () => {
       <CloudGoogleLinkCard
         v-if="cloudStore.isAuthenticated"
         :collision-detected="googleLinkCollision"
+      />
+
+      <CloudEmailChangeCard
+        @session-revoked="handleEmailChangeSessionRevoked"
+        @login-again="emailChangeCompleted = false"
       />
 
       <!-- ZERO BUSINESS STATE (Reachable when authenticated but has 0 businesses) -->
@@ -2945,15 +3078,42 @@ onMounted(async () => {
         </div>
         <CloudAuthCard
           v-model="authMode"
-          :loading="cloudStore.loading || googleLoading"
-          :error-message="authMode === 'login' ? loginErrorMessage : registerErrorMessage"
-          :initial-email="authMode === 'login' ? email : registerEmail"
+          :loading="cloudStore.loading || googleLoading || recoveryLoading"
+          :error-message="
+            authMode === 'login'
+              ? loginErrorMessage
+              : authMode === 'register'
+                ? registerErrorMessage
+                : authMode === 'forgot'
+                  ? forgotErrorMessage
+                  : resetErrorMessage
+          "
+          :success-message="
+            authMode === 'forgot'
+              ? forgotSuccessMessage
+              : authMode === 'reset'
+                ? resetSuccessMessage
+                : ''
+          "
+          :initial-email="
+            authMode === 'login'
+              ? email
+              : authMode === 'register'
+                ? registerEmail
+                : recoveryEmail || email
+          "
           :initial-name="registerName"
-          :disabled="cloudStore.loading || googleLoading"
+          :disabled="cloudStore.loading || googleLoading || recoveryLoading"
           @login-submit="handleAuthLogin"
           @register-submit="handleAuthRegister"
+          @forgot-submit="handleForgotSubmit"
+          @reset-submit="handleResetSubmit"
           @google-click="handleGoogleClick"
           @forgot-password="handleForgotPassword"
+          @go-to-reset="handleGoToReset"
+          @back-to-forgot="handleBackToForgot"
+          @back-to-login="handleBackToLogin"
+          @offline="handleRecoveryOffline"
         />
       </div>
     </BaseCard>
