@@ -13,6 +13,9 @@ import {
   getPendingRegistrationMetadata,
   clearPendingRegistrationMetadata,
   fetchMobileContext,
+  fetchMobileAuthMethods,
+  cloudReauthenticateForGoogleLink,
+  cloudLinkGoogleAccount,
   registerDevice,
   cloudLogout,
 } from '@/services/cloud/authService'
@@ -274,6 +277,11 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   /** One ownership record for restore/auth/context operations. */
   const activeSessionOperation = ref(null)
   let sessionOperationSequence = 0
+  let googleLinkGrant = null
+  let googleLinkGrantExpiresAt = 0
+  let googleLinkToken = null
+  let googleLinkUserId = null
+  let googleLinkOperation = null
 
   function beginSessionOperation(kind, { replace = false } = {}) {
     if (activeSessionOperation.value && !replace) return null
@@ -324,7 +332,8 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     if (
       activeSessionOperation.value?.kind === 'restore' ||
       activeSessionOperation.value?.kind === 'manual_login' ||
-      activeSessionOperation.value?.kind === 'google_login'
+      activeSessionOperation.value?.kind === 'google_login' ||
+      activeSessionOperation.value?.kind === 'google_link'
     ) {
       return 'authenticating'
     }
@@ -739,6 +748,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   }
 
   function clearSession() {
+    clearGoogleLinkState()
     user.value = null
     selectedBusiness.value = null
     selectedOutlet.value = null
@@ -1092,6 +1102,273 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       finishSessionOperation(operation)
       if (ownsLoading) loading.value = false
     }
+  }
+
+  function clearGoogleLinkGrant() {
+    googleLinkGrant = null
+    googleLinkGrantExpiresAt = 0
+    googleLinkToken = null
+    googleLinkUserId = null
+  }
+
+  function clearGoogleLinkState(operation = null) {
+    if (operation && googleLinkOperation !== operation) return
+    clearGoogleLinkGrant()
+    googleLinkOperation = null
+  }
+
+  function googleLinkError(code, message) {
+    return {
+      ok: false,
+      error: { status: 0, code, message, data: null },
+    }
+  }
+
+  async function readAuthenticationMethods(token, expectedUserId) {
+    const result = await fetchMobileAuthMethods(token)
+    if (!result.ok) return result
+
+    if (String(result.user.id) !== String(expectedUserId)) {
+      return googleLinkError(
+        'SESSION_CHANGED',
+        'Sesi Cloud berubah. Status metode autentikasi belum dapat dipastikan.',
+      )
+    }
+
+    return result
+  }
+
+  /** Refresh v2 authentication methods without changing Cloud/business state. */
+  async function refreshAuthenticationMethods() {
+    if (!isAuthenticated.value || user.value?.id === null || user.value?.id === undefined) {
+      return googleLinkError('UNAUTHENTICATED', 'Sesi Cloud belum aktif.')
+    }
+
+    const operation = beginSessionOperation('auth_methods_refresh')
+    if (!operation) return googleLinkError('REQUEST_IN_PROGRESS', 'Operasi Cloud masih berjalan.')
+
+    loading.value = true
+    try {
+      const token = await getToken()
+      if (!isCurrentSessionOperation(operation)) return staleSessionResult()
+      if (typeof token !== 'string' || token.trim() === '') {
+        return googleLinkError('TOKEN_INVALID', 'Sesi Cloud belum dapat diverifikasi.')
+      }
+
+      const result = await readAuthenticationMethods(token, user.value.id)
+      if (!isCurrentSessionOperation(operation)) return staleSessionResult()
+      return result
+    } catch {
+      if (!isCurrentSessionOperation(operation)) return staleSessionResult()
+      return googleLinkError('AUTH_METHODS_UNVERIFIED', 'Metode autentikasi belum dapat diverifikasi.')
+    } finally {
+      const ownsLoading = isCurrentSessionOperation(operation)
+      finishSessionOperation(operation)
+      if (ownsLoading) loading.value = false
+    }
+  }
+
+  /**
+   * Start or continue the explicit password/TOTP proof for Google linking.
+   * The raw grant stays in this closure and is never exposed as store state.
+   */
+  async function reauthenticateForGoogleLink(password, totpCode = null) {
+    if (!isAuthenticated.value || user.value?.id === null || user.value?.id === undefined) {
+      return googleLinkError('UNAUTHENTICATED', 'Sesi Cloud belum aktif.')
+    }
+    if (typeof password !== 'string' || password.trim() === '') {
+      return googleLinkError('INVALID_CREDENTIALS', 'Password saat ini wajib diisi.')
+    }
+
+    const operation = googleLinkOperation && isCurrentSessionOperation(googleLinkOperation)
+      ? googleLinkOperation
+      : beginSessionOperation('google_link')
+    if (!operation) return googleLinkError('REQUEST_IN_PROGRESS', 'Operasi Cloud masih berjalan.')
+
+    googleLinkOperation = operation
+    clearGoogleLinkGrant()
+    googleLinkToken = null
+    googleLinkUserId = String(user.value.id)
+    loading.value = true
+    error.value = null
+    let retainOperation = true
+
+    try {
+      const token = await getToken()
+      if (!isCurrentSessionOperation(operation)) return staleSessionResult()
+      if (typeof token !== 'string' || token.trim() === '') {
+        retainOperation = false
+        return googleLinkError('TOKEN_INVALID', 'Sesi Cloud belum dapat diverifikasi.')
+      }
+
+      googleLinkToken = token
+      const result = await cloudReauthenticateForGoogleLink(token, password, totpCode)
+      if (!isCurrentSessionOperation(operation)) return staleSessionResult()
+      if (!result.ok) {
+        // The user may explicitly correct the password or add the requested TOTP.
+        return result
+      }
+
+      googleLinkGrant = result.reauthenticationToken
+      googleLinkGrantExpiresAt = result.expiresAt
+      return { ok: true, expiresAt: result.expiresAt }
+    } catch {
+      retainOperation = false
+      return googleLinkError('REAUTHENTICATION_FAILED', 'Verifikasi ulang belum dapat diproses.')
+    } finally {
+      const ownsOperation = isCurrentSessionOperation(operation)
+      if (!retainOperation && ownsOperation) {
+        clearGoogleLinkState(operation)
+        finishSessionOperation(operation)
+      }
+      if (ownsOperation) loading.value = false
+    }
+  }
+
+  /**
+   * Submit one fresh Google assertion using the currently owned reauth grant.
+   * A link result is followed by one authentication-method refresh only; no
+   * grant or assertion is replayed automatically.
+   */
+  async function linkGoogleAccount(idToken, platform = 'android') {
+    const operation = googleLinkOperation
+    if (!operation || !isCurrentSessionOperation(operation)) {
+      clearGoogleLinkGrant()
+      return googleLinkError('REAUTHENTICATION_REQUIRED', 'Mulai verifikasi ulang terlebih dahulu.')
+    }
+    if (
+      typeof googleLinkGrant !== 'string' ||
+      googleLinkGrant.trim() === '' ||
+      !Number.isFinite(googleLinkGrantExpiresAt) ||
+      Date.now() >= googleLinkGrantExpiresAt
+    ) {
+      clearGoogleLinkState(operation)
+      finishSessionOperation(operation)
+      return googleLinkError('REAUTHENTICATION_EXPIRED', 'Sesi verifikasi ulang sudah kedaluwarsa.')
+    }
+    if (typeof idToken !== 'string' || idToken.trim() === '') {
+      return googleLinkError('GOOGLE_ID_TOKEN_MISSING', 'Kredensial Google tidak tersedia.')
+    }
+
+    loading.value = true
+    let linkAttempted = false
+    try {
+      const currentToken = await getToken()
+      if (!isCurrentSessionOperation(operation)) return staleSessionResult()
+      if (currentToken !== googleLinkToken || String(user.value?.id) !== googleLinkUserId) {
+        return staleSessionResult('Sesi Cloud berubah. Penghubungan dibatalkan.')
+      }
+
+      const result = await cloudLinkGoogleAccount(
+        currentToken,
+        googleLinkGrant,
+        idToken,
+        platform,
+      )
+      linkAttempted = true
+      if (!isCurrentSessionOperation(operation)) return staleSessionResult()
+
+      // A grant is never retained after a link attempt, including uncertain
+      // network outcomes. The server status check below is not a replay.
+      googleLinkGrant = null
+      googleLinkGrantExpiresAt = 0
+
+      if (!result.ok) {
+        const uncertain = Number(result.error?.status) === 0 || result.error?.code === 'NETWORK_ERROR'
+        if (!uncertain) {
+          return {
+            ...result,
+            linkAttempted: true,
+            linkLifecycle: 'rejected',
+          }
+        }
+
+        const verified = await readAuthenticationMethods(currentToken, googleLinkUserId)
+        if (!isCurrentSessionOperation(operation)) return staleSessionResult()
+        if (verified.ok && verified.authenticationMethods.includes('google')) {
+          return {
+            ok: true,
+            linked: false,
+            methodsVerified: true,
+            authenticationMethods: verified.authenticationMethods,
+            statusRecovered: true,
+            linkAttempted: true,
+            linkLifecycle: 'linked_verified',
+          }
+        }
+        return {
+          ok: false,
+          code: 'LINK_STATUS_UNVERIFIED',
+          uncertain: true,
+          linkAttempted: true,
+          linkLifecycle: 'uncertain',
+          error: verified.error ?? result.error,
+        }
+      }
+
+      const methods = await readAuthenticationMethods(currentToken, googleLinkUserId)
+      if (!isCurrentSessionOperation(operation)) return staleSessionResult()
+      if (!methods.ok) {
+        return {
+          ok: true,
+          linked: result.linked,
+          methodsVerified: false,
+          code: 'LINK_STATUS_UNVERIFIED',
+          linkAttempted: true,
+          linkLifecycle: 'linked_unverified',
+          error: methods.error,
+        }
+      }
+      if (!methods.authenticationMethods.includes('google')) {
+        return {
+          ok: true,
+          linked: result.linked,
+          methodsVerified: false,
+          code: 'LINK_STATUS_UNVERIFIED',
+          linkAttempted: true,
+          linkLifecycle: 'linked_unverified',
+          error: googleLinkError(
+            'LINK_STATUS_UNVERIFIED',
+            'Link berhasil, tetapi status metode autentikasi belum dapat dipastikan.',
+          ).error,
+        }
+      }
+
+      return {
+        ok: true,
+        linked: result.linked,
+        methodsVerified: true,
+        authenticationMethods: methods.authenticationMethods,
+        linkAttempted: true,
+        linkLifecycle: 'linked_verified',
+      }
+    } catch {
+      return {
+        ok: false,
+        code: 'LINK_STATUS_UNVERIFIED',
+        uncertain: true,
+        linkAttempted,
+        linkLifecycle: linkAttempted ? 'uncertain' : 'not_attempted',
+        error: { status: 0, code: 'NETWORK_ERROR', message: 'Status link belum dapat dipastikan.', data: null },
+      }
+    } finally {
+      const ownsOperation = isCurrentSessionOperation(operation)
+      if (ownsOperation) {
+        clearGoogleLinkState(operation)
+        finishSessionOperation(operation)
+        loading.value = false
+      }
+    }
+  }
+
+  function cancelGoogleAccountLinking() {
+    const operation = googleLinkOperation
+    clearGoogleLinkState()
+    if (operation && isCurrentSessionOperation(operation)) {
+      finishSessionOperation(operation)
+      loading.value = false
+    }
+    return { ok: true, state: 'cancelled' }
   }
 
   /**
@@ -1622,6 +1899,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
    * NEVER deletes POS data, sync_queue, backup, or device_identifier.
    */
   async function logout() {
+    clearGoogleLinkState()
     const operation = beginSessionOperation('logout', { replace: true })
     loading.value = true
     error.value = null
@@ -2275,6 +2553,10 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     invalidateCloudSession: handleInvalidToken,
     login,
     loginWithGoogle,
+    refreshAuthenticationMethods,
+    reauthenticateForGoogleLink,
+    linkGoogleAccount,
+    cancelGoogleAccountLinking,
     register,
     verifyRegistrationOtp,
     resendRegistrationOtp,
