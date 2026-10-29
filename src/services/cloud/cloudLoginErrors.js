@@ -254,3 +254,158 @@ export function describeOtpError(error) {
 export function isOfflineError(error) {
   return describeLoginError(error).kind === CLOUD_LOGIN_ERROR_KIND.OFFLINE
 }
+
+/** Curated messages for the forgot-password flow. */
+export function describeForgotPasswordError(error) {
+  const status = Number(error?.status) || 0
+  const code = typeof error?.code === 'string' ? error.code.toUpperCase() : ''
+
+  if (status === 0 || code === 'NETWORK_ERROR') {
+    return { kind: 'offline', message: 'Koneksi internet diperlukan untuk memproses permintaan.' }
+  }
+  if (status === 429 || code === 'PASSWORD_RESET_RATE_LIMITED') {
+    return {
+      kind: 'rate-limited',
+      message: 'Permintaan terlalu sering. Tunggu sebentar sebelum mencoba lagi.',
+      retryAfter: error?.retryAfter ?? error?.data?.retry_after ?? null,
+    }
+  }
+  if (status === 422 || code === 'VALIDATION_ERROR') {
+    return { kind: 'validation', message: 'Alamat email tidak valid.' }
+  }
+  if (status >= 500) {
+    return { kind: 'server', message: 'Server Cloud sedang bermasalah. Coba lagi nanti.' }
+  }
+  return { kind: 'unknown', message: 'Permintaan pemulihan tidak dapat diproses. Coba lagi.' }
+}
+
+/** Curated messages for the reset-password flow. */
+export function describeResetPasswordError(error) {
+  const status = Number(error?.status) || 0
+  const code = typeof error?.code === 'string' ? error.code.toUpperCase() : ''
+
+  if (status === 0 || code === 'NETWORK_ERROR') {
+    return { kind: 'offline', message: 'Koneksi internet diperlukan. Jangan menganggap reset berhasil.' }
+  }
+  if (code === 'PASSWORD_RESET_INVALID') {
+    return { kind: 'invalid-token', message: 'Token pemulihan tidak valid atau tidak dapat digunakan.' }
+  }
+  if (code === 'PASSWORD_RESET_EXPIRED' || status === 410) {
+    return { kind: 'expired-token', message: 'Token kedaluwarsa; mulai permintaan pemulihan baru.' }
+  }
+  if (code === 'PASSWORD_CONFIRMATION_MISMATCH') {
+    return { kind: 'validation', message: 'Konfirmasi password tidak cocok.' }
+  }
+  if (status === 422 || code === 'VALIDATION_ERROR') {
+    const errors = error?.data?.errors
+    if (errors && typeof errors === 'object') {
+      if (errors.email && errors.email.length > 0) {
+        return { kind: 'validation', message: 'Alamat email tidak valid.' }
+      }
+      if (errors.token && errors.token.length > 0) {
+        return { kind: 'invalid-token', message: 'Token pemulihan tidak valid atau tidak dapat digunakan.' }
+      }
+      if (errors.password && errors.password.length > 0) {
+        return {
+          kind: 'validation',
+          message: 'Password minimal 8 karakter dan konfirmasi harus cocok.',
+        }
+      }
+    }
+    return {
+      kind: 'validation',
+      message: 'Data reset password tidak valid. Periksa kembali input Anda.',
+    }
+  }
+  if (status === 429 || code === 'PASSWORD_RESET_RATE_LIMITED') {
+    return {
+      kind: 'rate-limited',
+      message: 'Permintaan terlalu sering. Tunggu sebentar sebelum mencoba lagi.',
+      retryAfter: error?.retryAfter ?? error?.data?.retry_after ?? null,
+    }
+  }
+  if (status >= 500) {
+    return { kind: 'server', message: 'Server Cloud sedang bermasalah. Coba lagi nanti.' }
+  }
+  return { kind: 'unknown', message: 'Reset password gagal. Coba lagi.' }
+}
+
+/** Curated messages for the email-change request and verification flows. */
+export function describeEmailChangeError(error) {
+  const status = Number(error?.status) || 0
+  const code = typeof error?.code === 'string' ? error.code.toUpperCase() : ''
+
+  if (code === 'EMAIL_CHANGE_UNCERTAIN') {
+    if (status === 401) {
+      return {
+        kind: 'uncertain',
+        message:
+          'Sesi Cloud telah berakhir, tetapi perubahan email belum dapat dipastikan. Periksa email akun atau masuk kembali.',
+      }
+    }
+    return {
+      kind: 'uncertain',
+      message:
+        'Status verifikasi perubahan email belum dapat dipastikan. Jangan mengulang otomatis; silakan periksa sesi atau masuk kembali.',
+    }
+  }
+  if (status === 0 || code === 'NETWORK_ERROR') {
+    return { kind: 'offline', message: 'Koneksi internet diperlukan. Status belum dapat dipastikan.' }
+  }
+  if (code === 'SESSION_CHANGED' || code === 'STALE_SESSION_OPERATION') {
+    return { kind: 'stale', message: 'Sesi Cloud berubah. Perubahan email dibatalkan.' }
+  }
+  if (code === 'INVALID_CREDENTIALS') {
+    return { kind: 'invalid-credentials', message: 'Password saat ini salah.' }
+  }
+  if (code === 'REAUTHENTICATION_REQUIRED') {
+    return { kind: 'reauthentication', message: 'Bukti kepemilikan akun belum sah.' }
+  }
+  if (code === 'TWO_FACTOR_REQUIRED') {
+    return { kind: 'two-factor', message: 'Masukkan kode autentikator 6 digit untuk melanjutkan.' }
+  }
+  if (code === 'MOBILE_ABILITY_REQUIRED') {
+    return { kind: 'forbidden', message: 'Token tidak memiliki izin yang diperlukan.' }
+  }
+  if (code === 'EMAIL_ALREADY_USED') {
+    return { kind: 'email-taken', message: 'Email baru sudah digunakan oleh akun lain.' }
+  }
+  if (code === 'EMAIL_CHANGE_PENDING') {
+    return { kind: 'pending', message: 'Ada permintaan perubahan email aktif yang masih menunggu verifikasi.' }
+  }
+  if (code === 'EMAIL_CHANGE_CONFLICT') {
+    return { kind: 'conflict', message: 'Perubahan email tidak dapat dilanjutkan.' }
+  }
+  if (code === 'EMAIL_CHANGE_EXPIRED' || status === 410) {
+    return { kind: 'expired', message: 'Kode verifikasi sudah kedaluwarsa. Mulai permintaan baru.' }
+  }
+  if (code === 'EMAIL_CHANGE_INVALID_OTP') {
+    return { kind: 'invalid-otp', message: 'Kode OTP salah, sudah digunakan, atau terkunci.' }
+  }
+  if (code === 'OTP_RATE_LIMITED' || status === 429) {
+    return {
+      kind: 'rate-limited',
+      message: 'Permintaan terlalu sering. Tunggu sebentar sebelum mencoba lagi.',
+      retryAfter: error?.retryAfter ?? error?.data?.retry_after ?? null,
+    }
+  }
+  if (status === 401) {
+    return { kind: 'session', message: 'Sesi Cloud tidak dapat diverifikasi. Masuk kembali jika diperlukan.' }
+  }
+  if (status >= 500) {
+    return { kind: 'server', message: 'Server Cloud sedang bermasalah. Coba lagi nanti.' }
+  }
+  if (status === 422 || code === 'VALIDATION_ERROR') {
+    const errors = error?.data?.errors
+    if (errors && typeof errors === 'object') {
+      if (errors.new_email && errors.new_email.length > 0) {
+        return { kind: 'validation', message: 'Format alamat email baru tidak valid.' }
+      }
+      if (errors.code && errors.code.length > 0) {
+        return { kind: 'invalid-otp', message: 'Masukkan kode OTP 6 digit.' }
+      }
+    }
+    return { kind: 'validation', message: 'Data perubahan email tidak valid.' }
+  }
+  return { kind: 'unknown', message: 'Perubahan email gagal. Coba lagi.' }
+}

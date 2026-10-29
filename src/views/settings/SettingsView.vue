@@ -677,6 +677,14 @@ async function handleRestoreFileChange(event) {
           <BaseButton
             size="sm"
             variant="secondary"
+            data-testid="settings-cloud-account-entry"
+            @click="goToCloud"
+          >
+            Kelola Akun / Ganti Email
+          </BaseButton>
+          <BaseButton
+            size="sm"
+            variant="secondary"
             data-testid="settings-my-subscription-entry"
             @click="goToSubscription"
           >
