@@ -111,7 +111,7 @@ P2 / deferred:
 
 - Branch: `release/rc1-catalog-sync-qa`
 - Commit: `4345680` plus the RC1 catalog-sync changes in this branch
-- PR: To be created toward `main`; no auto-merge or deployment
+- PR: [#70](https://github.com/sawal123/pos-mobile/pull/70) open toward `main`; no auto-merge or deployment
 - Cloud Menu Root Cause: server sends `is_active: 1`, but product mapping read only `status`; initial Cloud pull was also skipped when the local template catalog already existed
 - Cloud Menu Status: **PASS** automated/code verification; production Cloud smoke **NOT RUN**
 - Offline Transactions: **PASS** on Android emulator
