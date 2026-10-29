@@ -7,7 +7,7 @@ Version: `1.0.0` (`versionCode: 10000`)
 
 ## Executive result
 
-Cloud catalog visibility is fixed in code and covered by automated tests. No database reset, transaction deletion, or sync-queue deletion was used. The debug APK builds successfully and the local/offline Android smoke path passed. Production Cloud login, pull, push, and logout require a real QA account and were not run; therefore this is **NO-GO for production release** until that final Cloud smoke pass is completed.
+Cloud catalog visibility is fixed in code and covered by automated tests. No database reset, transaction deletion, or sync-queue deletion was used. The signed release APK builds successfully and the local/offline Android smoke path passed. Production Cloud login, pull, push, and logout require a real QA account and were not run; therefore this is **NO-GO for production release** until that final Cloud smoke pass is completed.
 
 ## Cloud menu investigation
 
@@ -61,8 +61,8 @@ adb devices
 npm run build
 npx cap sync android
 Set-Location android
-.\gradlew.bat assembleDebug
-adb install -r app\build\outputs\apk\debug\app-debug.apk
+.\gradlew.bat assembleRelease
+adb install -r app\build\outputs\apk\release\app-release.apk
 ```
 
 Use a dedicated QA Cloud account and a test business/outlet. Do not use production customer data.
