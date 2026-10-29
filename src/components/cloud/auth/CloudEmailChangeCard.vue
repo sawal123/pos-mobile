@@ -398,10 +398,12 @@ async function submitOtpVerification() {
     if (result.uncertain) {
       clearAllSecrets()
       flowMessage.value = ''
-      flowError.value = describeEmailChangeError(result.error ?? result).message
+      flowError.value = result.sessionRevoked
+        ? 'Sesi Cloud telah berakhir, tetapi perubahan email belum dapat dipastikan. Periksa email akun atau masuk kembali.'
+        : describeEmailChangeError(result.error ?? result).message
       flowState.value = 'uncertain'
       if (result.sessionRevoked) {
-        emit('session-revoked')
+        emit('session-revoked', { outcome: 'uncertain' })
       }
       return
     }
@@ -426,7 +428,7 @@ async function submitOtpVerification() {
     flowError.value = ''
     flowMessage.value = 'Email berhasil diperbarui. Silakan masuk kembali.'
     flowState.value = 'success'
-    emit('session-revoked')
+    emit('session-revoked', { outcome: 'verified', state: result.state })
   } finally {
     isVerifyingOtp = false
     if (flowSequence === requestSeq) {

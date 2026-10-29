@@ -291,6 +291,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   let emailChangeUserId = null
   let emailChangeOperation = null
   let emailChangeSequence = 0
+  let isClearingEmailChangeContext = false
 
   function beginSessionOperation(kind, { replace = false } = {}) {
     if (activeSessionOperation.value && !replace) return null
@@ -739,6 +740,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     }
 
     if (operation && !isCurrentSessionOperation(operation)) {
+      if (isAuthenticated.value && user.value?.id !== null && user.value?.id !== undefined) {
+        await persistCloudContext(_adapter)
+      }
       return { ok: false, code: 'STALE_SESSION_OPERATION', stale: true }
     }
 
@@ -896,6 +900,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     }
 
     if (operation && !isCurrentSessionOperation(operation)) {
+      if (isAuthenticated.value && user.value?.id !== null && user.value?.id !== undefined) {
+        await persistCloudContext(_adapter)
+      }
       return staleSessionResult()
     }
 
@@ -1039,8 +1046,12 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
 
   /** Login with email/password through the shared authenticated session path. */
   async function login(email, password) {
-    if (loading.value) return { ok: false, error: { status: 0, code: 'REQUEST_IN_PROGRESS' } }
-    const operation = beginSessionOperation('manual_login')
+    const canReplaceVerifyCleanup =
+      isClearingEmailChangeContext && activeSessionOperation.value?.kind === 'email_change_verify'
+    if (loading.value && !canReplaceVerifyCleanup) {
+      return { ok: false, error: { status: 0, code: 'REQUEST_IN_PROGRESS' } }
+    }
+    const operation = beginSessionOperation('manual_login', { replace: canReplaceVerifyCleanup })
     if (!operation) return { ok: false, error: { status: 0, code: 'REQUEST_IN_PROGRESS' } }
     loading.value = true
     error.value = null
@@ -1069,9 +1080,13 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
 
   /** Exchange a fresh native Google assertion through the same session path. */
   async function loginWithGoogle(idToken, platform = 'android', { isActive = () => true } = {}) {
-    if (loading.value) return { ok: false, error: { status: 0, code: 'REQUEST_IN_PROGRESS' } }
+    const canReplaceVerifyCleanup =
+      isClearingEmailChangeContext && activeSessionOperation.value?.kind === 'email_change_verify'
+    if (loading.value && !canReplaceVerifyCleanup) {
+      return { ok: false, error: { status: 0, code: 'REQUEST_IN_PROGRESS' } }
+    }
     if (!isActive()) return staleSessionResult('Login Google dibatalkan karena halaman sudah tidak aktif.')
-    if (isAuthenticated.value) {
+    if (isAuthenticated.value && !canReplaceVerifyCleanup) {
       return {
         ok: false,
         error: {
@@ -1083,7 +1098,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       }
     }
 
-    const operation = beginSessionOperation('google_login')
+    const operation = beginSessionOperation('google_login', { replace: canReplaceVerifyCleanup })
     if (!operation) return { ok: false, error: { status: 0, code: 'REQUEST_IN_PROGRESS' } }
     loading.value = true
     error.value = null
@@ -1401,11 +1416,47 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
 
   /**
    * Complete password reset using a valid server reset token.
-   * Never creates a session or saves a bearer token. If the currently active
-   * local session belongs to the same email, invalidates it in an ownership-aware
-   * manner while preserving any other account's session and all offline POS data.
+   * Never creates a session or saves a bearer token. Captures session ownership
+   * context before sending the unauthenticated request and invalidates only the
+   * exact owned session if it is still active when the response arrives.
    */
   async function resetPassword({ email, token, password, password_confirmation } = {}) {
+    const normalizedTargetEmail = String(email ?? '').trim().toLowerCase()
+    const initialSessionEmail = String(user.value?.email ?? '').trim().toLowerCase()
+    const initialUserId =
+      isAuthenticated.value && user.value?.id !== null && user.value?.id !== undefined
+        ? String(user.value.id)
+        : null
+    const initialOperationSeq = sessionOperationSequence
+    const hadMatchingSessionAtStart = Boolean(
+      isAuthenticated.value &&
+        initialUserId &&
+        normalizedTargetEmail &&
+        initialSessionEmail === normalizedTargetEmail &&
+        !activeSessionOperation.value,
+    )
+
+    let initialToken = null
+    let initialTokenReadFailed = false
+
+    if (hadMatchingSessionAtStart) {
+      try {
+        const storedToken = await getToken()
+        initialToken =
+          typeof storedToken === 'string' && storedToken.length > 0 ? storedToken : null
+      } catch {
+        initialTokenReadFailed = true
+      }
+    }
+
+    const ownsSessionBeforeRequest =
+      hadMatchingSessionAtStart &&
+      isAuthenticated.value &&
+      String(user.value?.id) === initialUserId &&
+      String(user.value?.email ?? '').trim().toLowerCase() === normalizedTargetEmail &&
+      sessionOperationSequence === initialOperationSeq &&
+      !activeSessionOperation.value
+
     const result = await cloudResetPassword({
       email,
       token,
@@ -1417,35 +1468,131 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       return result
     }
 
-    const normalizedTargetEmail = String(email ?? '').trim().toLowerCase()
-    const currentSessionEmail = String(user.value?.email ?? '').trim().toLowerCase()
-    let sessionInvalidated = false
-
-    if (
-      isAuthenticated.value &&
-      normalizedTargetEmail &&
-      currentSessionEmail === normalizedTargetEmail
-    ) {
-      let currentToken
-      try {
-        currentToken = await getToken()
-      } catch {
-        currentToken = null
-      }
-
-      if (
-        isAuthenticated.value &&
-        String(user.value?.email ?? '').trim().toLowerCase() === normalizedTargetEmail
-      ) {
-        await handleInvalidToken({ token: currentToken })
-        sessionInvalidated = true
+    // A reset started without an authenticated session for this account must
+    // never acquire authority to invalidate a session created afterward.
+    if (!ownsSessionBeforeRequest) {
+      return {
+        ok: true,
+        message: result.message,
+        sessionInvalidated: false,
+        sessionCleanupState: 'not_applicable',
+        storageFailure: false,
       }
     }
+
+    const isSameOwnedSession = () =>
+      isAuthenticated.value &&
+      String(user.value?.id) === initialUserId &&
+      String(user.value?.email ?? '').trim().toLowerCase() === normalizedTargetEmail &&
+      sessionOperationSequence === initialOperationSeq &&
+      !activeSessionOperation.value
+
+    if (!isSameOwnedSession()) {
+      return {
+        ok: true,
+        message: result.message,
+        sessionInvalidated: false,
+        sessionCleanupState: isAuthenticated.value ? 'newer_session_preserved' : 'not_applicable',
+        storageFailure: false,
+      }
+    }
+
+    // Secure storage read failed before the request: never fall back to
+    // unconditional token deletion (`handleInvalidToken({ token: null })`).
+    if (initialTokenReadFailed) {
+      clearSession()
+      sessionInvalid.value = true
+      error.value = 'Sesi Cloud belum dapat dicabut dengan aman. Silakan coba lagi.'
+      return {
+        ok: true,
+        message: result.message,
+        sessionInvalidated: false,
+        sessionCleanupState: 'storage_failure',
+        storageFailure: true,
+      }
+    }
+
+    let removalState
+
+    if (initialToken === null) {
+      // Token was already absent when reset started; verify no newer token
+      // was stored while the reset request was in flight.
+      try {
+        const currentToken = await getToken()
+        if (typeof currentToken === 'string' && currentToken.length > 0) {
+          removalState = 'ownership_mismatch'
+        } else {
+          removalState = 'missing'
+        }
+      } catch {
+        removalState = 'storage_failure'
+      }
+    } else {
+      try {
+        const removal = await removeTokenIfMatchesDetailed(initialToken)
+        removalState = removal.state
+      } catch {
+        removalState = 'storage_failure'
+      }
+    }
+
+    if (!isSameOwnedSession() || removalState === 'ownership_mismatch') {
+      return {
+        ok: true,
+        message: result.message,
+        sessionInvalidated: false,
+        sessionCleanupState:
+          isAuthenticated.value || removalState === 'ownership_mismatch'
+            ? 'newer_session_preserved'
+            : 'not_applicable',
+        storageFailure: false,
+      }
+    }
+
+    if (removalState === 'storage_failure') {
+      clearSession()
+      sessionInvalid.value = true
+      error.value = 'Sesi Cloud belum dapat dicabut dengan aman. Silakan coba lagi.'
+      return {
+        ok: true,
+        message: result.message,
+        sessionInvalidated: false,
+        sessionCleanupState: 'storage_failure',
+        storageFailure: true,
+      }
+    }
+
+    if (_adapter) {
+      try {
+        await _adapter.clearCloudContext()
+      } catch {
+        // Local POS data remains untouched
+      }
+    }
+
+    if (!isSameOwnedSession()) {
+      if (isAuthenticated.value && user.value?.id !== null && user.value?.id !== undefined) {
+        await persistCloudContext(_adapter)
+      }
+      return {
+        ok: true,
+        message: result.message,
+        sessionInvalidated: false,
+        sessionCleanupState: isAuthenticated.value ? 'newer_session_preserved' : 'not_applicable',
+        storageFailure: false,
+      }
+    }
+
+    clearSession()
+    sessionInvalid.value = true
+    error.value = 'Sesi Cloud tidak valid. Silakan masuk kembali untuk menghubungkan ulang.'
 
     return {
       ok: true,
       message: result.message,
-      sessionInvalidated,
+      sessionInvalidated: true,
+      sessionCleanupState: 'invalidated',
+      storageFailure: false,
     }
   }
 
@@ -1627,8 +1774,10 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
           if (!check.ok && isUnauthorizedError(check.error)) {
             clearEmailChangeState()
             await handleInvalidToken({ token: currentToken, operation })
-            error.value =
-              'Status verifikasi perubahan email belum dapat dipastikan dan sesi telah berakhir. Silakan masuk kembali.'
+            if (isCurrentSessionOperation(operation)) {
+              error.value =
+                'Sesi Cloud telah berakhir, tetapi perubahan email belum dapat dipastikan. Periksa email akun atau masuk kembali.'
+            }
             return {
               ok: false,
               uncertain: true,
@@ -1638,7 +1787,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
                 status: 401,
                 code: 'EMAIL_CHANGE_UNCERTAIN',
                 message:
-                  'Status verifikasi perubahan email belum dapat dipastikan dan sesi telah berakhir. Silakan masuk kembali.',
+                  'Sesi Cloud telah berakhir, tetapi perubahan email belum dapat dipastikan. Periksa email akun atau masuk kembali.',
                 data: null,
               },
             }
@@ -1692,11 +1841,24 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       }
 
       if (_adapter) {
+        isClearingEmailChangeContext = true
         try {
           await _adapter.clearCloudContext()
         } catch {
           // Local POS data remains untouched
+        } finally {
+          isClearingEmailChangeContext = false
         }
+      }
+
+      if (
+        !isCurrentSessionOperation(operation) ||
+        (expectedUserId && String(user.value?.id) !== expectedUserId)
+      ) {
+        if (isAuthenticated.value && user.value?.id !== null && user.value?.id !== undefined) {
+          await persistCloudContext(_adapter)
+        }
+        return staleSessionResult('Sesi Cloud berubah. Perubahan email dibatalkan.')
       }
 
       clearSession()
@@ -1748,6 +1910,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         },
       }
     } finally {
+      isClearingEmailChangeContext = false
       const ownsOperation = isCurrentSessionOperation(operation)
       if (emailChangeOperation === operation) emailChangeOperation = null
       finishSessionOperation(operation)

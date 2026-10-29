@@ -1040,3 +1040,406 @@ describe('AUTH-M07 UI & Full CloudLoginView Integration Flows', () => {
     expect(resetWrapper.emitted('submit')).toBeUndefined()
   })
 })
+
+describe('AUTH-M07 P2 Session Safety & Recovery Revisions', () => {
+  it('FIX 1: preserves uncertain email-change outcome in CloudLoginView without claiming success or auto-filling the new email', async () => {
+    const pos = seedOfflinePosData()
+    const beforePos = pos.snapshot()
+    const { store } = await prepareAuthenticatedSession(USER_A, TOKEN_A)
+
+    apiRequest.mockImplementation(async (path) => {
+      if (path === '/api/v2/auth/me') {
+        // First call loads methods when opening card; second call is the read-only check after verify timeout
+        const meCalls = apiRequest.mock.calls.filter(([p]) => p === '/api/v2/auth/me').length
+        if (meCalls === 1) {
+          return ok({
+            user: USER_A,
+            email_verified: true,
+            two_factor_enabled: false,
+            authentication_methods: ['manual'],
+          })
+        }
+        return fail(401, 'UNAUTHENTICATED')
+      }
+      if (path === '/api/v2/auth/email/change/request') {
+        return ok(
+          {
+            change_id: CHANGE_ID,
+            state: 'pending_verification',
+            otp_expires_at: futureIso(300),
+            resend_available_at: futureIso(60),
+          },
+          202,
+        )
+      }
+      if (path === '/api/v2/auth/email/change/verify') {
+        return fail(0, 'NETWORK_ERROR')
+      }
+      throw new Error(`Unexpected request ${path}`)
+    })
+
+    const wrapper = mount(CloudLoginView)
+
+    await wrapper.get('[data-testid="email-change-open"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.get('[data-testid="email-change-email-input"]').setValue('uncertain-new@example.com')
+    await wrapper.get('[data-testid="email-change-password-input"]').setValue('CorrectPass123!')
+    await wrapper.get('[data-testid="email-change-submit"]').trigger('click')
+    await flushPromises()
+
+    await wrapper.get('[data-testid="email-change-otp-input"]').setValue('123456')
+    await wrapper.get('[data-testid="email-change-verify"]').trigger('click')
+    await flushPromises()
+
+    // Local session has ended
+    expect(store.isAuthenticated).toBe(false)
+    expect(await getToken()).toBeNull()
+
+    // Uncertain banner is shown, and authoritative success is NEVER claimed
+    const expectedUncertainMessage =
+      'Sesi Cloud telah berakhir, tetapi perubahan email belum dapat dipastikan. Periksa email akun atau masuk kembali.'
+    expect(wrapper.get('[data-testid="email-change-uncertain"]').text()).toContain(
+      expectedUncertainMessage,
+    )
+    expect(wrapper.find('[data-testid="email-change-success"]').exists()).toBe(false)
+    expect(wrapper.find('#cloud-verified-message').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="login-error-banner"]').text()).toContain(
+      expectedUncertainMessage,
+    )
+
+    // New email is NOT assumed or auto-filled in the login form
+    expect(wrapper.get('#login-email').element.value).toBe('')
+    // No automatic OTP replay occurred
+    const verifyCalls = apiRequest.mock.calls.filter(
+      ([p]) => p === '/api/v2/auth/email/change/verify',
+    )
+    expect(verifyCalls).toHaveLength(1)
+    expect(pos.snapshot()).toEqual(beforePos)
+  })
+
+  it('FIX 2: rechecks operation and account ownership after delayed _adapter.clearCloudContext() and preserves Session B context', async () => {
+    const pos = seedOfflinePosData()
+    const beforePos = pos.snapshot()
+    const { store, adapter } = await prepareAuthenticatedSession(USER_A, TOKEN_A)
+    const deferredClear = createDeferred()
+
+    const originalClear = adapter.clearCloudContext.bind(adapter)
+    let clearIntercepted = false
+    vi.spyOn(adapter, 'clearCloudContext').mockImplementation(async () => {
+      if (!clearIntercepted) {
+        clearIntercepted = true
+        await deferredClear.promise
+      }
+      return originalClear()
+    })
+
+    const businessB = {
+      id: 22,
+      name: 'Warung Kopi B',
+      business_type: 'fnb',
+      business_type_status: 'canonical',
+      cloud_access: true,
+      role: 'owner',
+      subscription: { status: 'active', plan_code: 'pro_monthly', plan_label: 'Pro Bulanan' },
+    }
+    const outletB = { id: 202, name: 'Cabang Pusat B', code: 'CPB', status: 'active' }
+
+    apiRequest.mockImplementation(async (path, options = {}) => {
+      if (path === '/api/v2/auth/email/change/request') {
+        return ok(
+          {
+            change_id: CHANGE_ID,
+            state: 'pending_verification',
+            otp_expires_at: futureIso(300),
+            resend_available_at: futureIso(60),
+          },
+          202,
+        )
+      }
+      if (path === '/api/v2/auth/email/change/verify') {
+        return ok({ state: 'verified', reauthentication_required: true }, 200)
+      }
+      if (path === '/api/v2/auth/login' && options.body?.email === USER_B.email) {
+        return ok({
+          token_type: 'Bearer',
+          token: TOKEN_B,
+          user: USER_B,
+        })
+      }
+      if (path.startsWith('/api/mobile/context') && options.token === TOKEN_B) {
+        return ok({
+          user: USER_B,
+          businesses: [{ ...businessB, outlets: [outletB] }],
+        })
+      }
+      throw new Error(`Unexpected request ${path}`)
+    })
+
+    await store.requestEmailChange({
+      newEmail: 'new-a@example.com',
+      currentPassword: 'PasswordA123!',
+    })
+
+    // Start verification for Account A; it will pause inside adapter.clearCloudContext()
+    const verifyPromise = store.verifyEmailChange({ code: '123456' })
+    await vi.waitFor(() => expect(clearIntercepted).toBe(true))
+
+    // While Account A's context cleanup is paused, replace Operation A with authenticated Session B
+    const loginB = await store.login(USER_B.email, 'PasswordB123!')
+    expect(loginB.ok).toBe(true)
+    await store.selectBusiness(businessB.id)
+    await store.selectOutlet(outletB.id)
+    const businessStore = useBusinessStore()
+    businessStore.mode = 'cloud'
+
+    // Complete the delayed cleanup from Account A
+    deferredClear.resolve()
+    const verifyResult = await verifyPromise
+
+    expect(verifyResult).toMatchObject({
+      ok: false,
+      state: 'stale_operation',
+    })
+
+    // Account B's token, user, business, outlet, capabilities, business mode, and persisted context remain intact
+    expect(await getToken()).toBe(TOKEN_B)
+    expect(store.isAuthenticated).toBe(true)
+    expect(store.sessionInvalid).toBe(false)
+    expect(store.user).toEqual(USER_B)
+    expect(store.selectedBusiness?.id).toBe(businessB.id)
+    expect(store.selectedOutlet?.id).toBe(outletB.id)
+    expect(store.cloudAccess).toBe(true)
+    expect(businessStore.mode).toBe('cloud')
+
+    const persistedContextB = await adapter.loadCloudContext()
+    expect(persistedContextB).toMatchObject({
+      user: USER_B,
+      selectedBusiness: expect.objectContaining({ id: businessB.id, name: businessB.name }),
+      selectedOutlet: expect.objectContaining({ id: outletB.id, name: outletB.name }),
+      cloudAccess: true,
+    })
+    expect(pos.snapshot()).toEqual(beforePos)
+  })
+
+  it('FIX 3a: protects newer session B and same-account newer token when resetPassword completes after session replacement', async () => {
+    const pos = seedOfflinePosData()
+    const beforePos = pos.snapshot()
+    const { store } = await prepareAuthenticatedSession(USER_A, TOKEN_A)
+
+    // Case 1: Reset begins while Session A is active, then switches to Session B before response arrives
+    const deferredReset1 = createDeferred()
+    apiRequest.mockImplementationOnce(() => deferredReset1.promise)
+
+    const resetPromise1 = store.resetPassword({
+      email: USER_A.email,
+      token: 'reset-token-1',
+      password: 'NewPassword123!',
+      password_confirmation: 'NewPassword123!',
+    })
+    await flushPromises()
+
+    apiRequest.mockImplementation(async (path, options = {}) => {
+      if (path === '/api/auth/logout') {
+        return ok({ message: 'Logged out' })
+      }
+      if (path === '/api/v2/auth/login' && options.body?.email === USER_B.email) {
+        return ok({ token_type: 'Bearer', token: TOKEN_B, user: USER_B })
+      }
+      if (path.startsWith('/api/mobile/context') && options.token === TOKEN_B) {
+        return ok({ user: USER_B, businesses: [{ ...BUSINESS_A, outlets: [OUTLET_A] }] })
+      }
+      throw new Error(`Unexpected ${path}`)
+    })
+
+    await store.logout()
+    await store.login(USER_B.email, 'PasswordB123!')
+    expect(store.user?.email).toBe(USER_B.email)
+    expect(await getToken()).toBe(TOKEN_B)
+
+    deferredReset1.resolve(
+      okTopLevel({ message: 'Password berhasil diubah. Silakan masuk kembali.' }, 200),
+    )
+    const resetResult1 = await resetPromise1
+
+    expect(resetResult1).toEqual({
+      ok: true,
+      message: 'Password berhasil diubah. Silakan masuk kembali.',
+      sessionInvalidated: false,
+      sessionCleanupState: 'newer_session_preserved',
+      storageFailure: false,
+    })
+    expect(store.isAuthenticated).toBe(true)
+    expect(store.user?.email).toBe(USER_B.email)
+    expect(await getToken()).toBe(TOKEN_B)
+
+    // Case 2: Reset begins while Session A (TOKEN_A) is active, then same Account A obtains a new token before reset finishes
+    await prepareAuthenticatedSession(USER_A, TOKEN_A)
+    const deferredReset2 = createDeferred()
+    apiRequest.mockImplementationOnce(() => deferredReset2.promise)
+
+    const resetPromise2 = store.resetPassword({
+      email: USER_A.email,
+      token: 'reset-token-2',
+      password: 'NewPassword123!',
+      password_confirmation: 'NewPassword123!',
+    })
+    await flushPromises()
+
+    const TOKEN_A_NEW = 'sanctum-token-account-a-fresh'
+    await saveToken(TOKEN_A_NEW)
+
+    deferredReset2.resolve(
+      okTopLevel({ message: 'Password berhasil diubah. Silakan masuk kembali.' }, 200),
+    )
+    const resetResult2 = await resetPromise2
+
+    expect(resetResult2).toEqual({
+      ok: true,
+      message: 'Password berhasil diubah. Silakan masuk kembali.',
+      sessionInvalidated: false,
+      sessionCleanupState: 'newer_session_preserved',
+      storageFailure: false,
+    })
+    expect(store.isAuthenticated).toBe(true)
+    expect(store.user?.email).toBe(USER_A.email)
+    expect(await getToken()).toBe(TOKEN_A_NEW)
+    expect(pos.snapshot()).toEqual(beforePos)
+  })
+
+  it('FIX 3b: prevents unauthenticated resetPassword from invalidating a session created while reset is in flight', async () => {
+    const pos = seedOfflinePosData()
+    const beforePos = pos.snapshot()
+    const store = useCloudSessionStore()
+    expect(store.isAuthenticated).toBe(false)
+
+    const deferredReset = createDeferred()
+    apiRequest.mockImplementation(async (path, options = {}) => {
+      if (path === '/api/v2/auth/password/reset') {
+        return deferredReset.promise
+      }
+      if (path === '/api/v2/auth/login') {
+        return ok({ token_type: 'Bearer', token: TOKEN_A, user: USER_A })
+      }
+      if (path.startsWith('/api/mobile/context') && options.token === TOKEN_A) {
+        return ok({ user: USER_A, businesses: [{ ...BUSINESS_A, outlets: [OUTLET_A] }] })
+      }
+      throw new Error(`Unexpected ${path}`)
+    })
+
+    // Start password reset while unauthenticated
+    const resetPromise = store.resetPassword({
+      email: USER_A.email,
+      token: 'unauth-reset-token',
+      password: 'NewPassword123!',
+      password_confirmation: 'NewPassword123!',
+    })
+    await flushPromises()
+
+    // User logs in with USER_A while the reset response is still in flight
+    const loginRes = await store.login(USER_A.email, 'NewPassword123!')
+    expect(loginRes.ok).toBe(true)
+    expect(store.isAuthenticated).toBe(true)
+    expect(await getToken()).toBe(TOKEN_A)
+
+    deferredReset.resolve(
+      okTopLevel({ message: 'Password berhasil diubah. Silakan masuk kembali.' }, 200),
+    )
+    const resetResult = await resetPromise
+
+    expect(resetResult).toEqual({
+      ok: true,
+      message: 'Password berhasil diubah. Silakan masuk kembali.',
+      sessionInvalidated: false,
+      sessionCleanupState: 'not_applicable',
+      storageFailure: false,
+    })
+    expect(store.isAuthenticated).toBe(true)
+    expect(store.user?.email).toBe(USER_A.email)
+    expect(await getToken()).toBe(TOKEN_A)
+    expect(pos.snapshot()).toEqual(beforePos)
+  })
+
+  it('FIX 3c: handles secure storage read/remove exceptions and already-missing tokens during resetPassword without unconditional token deletion', async () => {
+    const pos = seedOfflinePosData()
+    const beforePos = pos.snapshot()
+
+    // 1. Pre-request getToken() throws -> never calls unconditional removeToken(), reports storage_failure
+    const { store } = await prepareAuthenticatedSession(USER_A, TOKEN_A)
+    const removeTokenSpy = vi.spyOn(tokenRepository, 'removeToken')
+    vi.spyOn(tokenRepository, 'getToken').mockRejectedValueOnce(new Error('Keystore read error'))
+    apiRequest.mockResolvedValueOnce(
+      okTopLevel({ message: 'Password berhasil diubah. Silakan masuk kembali.' }, 200),
+    )
+
+    const readFailResult = await store.resetPassword({
+      email: USER_A.email,
+      token: 'reset-token-read-fail',
+      password: 'NewPassword123!',
+      password_confirmation: 'NewPassword123!',
+    })
+
+    expect(readFailResult).toEqual({
+      ok: true,
+      message: 'Password berhasil diubah. Silakan masuk kembali.',
+      sessionInvalidated: false,
+      sessionCleanupState: 'storage_failure',
+      storageFailure: true,
+    })
+    expect(removeTokenSpy).not.toHaveBeenCalled()
+    expect(store.isAuthenticated).toBe(false)
+    expect(store.sessionInvalid).toBe(true)
+
+    // 2. removeTokenIfMatchesDetailed() throws -> reports storage_failure without declaring sessionInvalidated: true
+    await prepareAuthenticatedSession(USER_A, TOKEN_A)
+    vi.spyOn(tokenRepository, 'removeTokenIfMatchesDetailed').mockRejectedValueOnce(
+      new Error('Keystore remove error'),
+    )
+    apiRequest.mockResolvedValueOnce(
+      okTopLevel({ message: 'Password berhasil diubah. Silakan masuk kembali.' }, 200),
+    )
+
+    const removeFailResult = await store.resetPassword({
+      email: USER_A.email,
+      token: 'reset-token-remove-fail',
+      password: 'NewPassword123!',
+      password_confirmation: 'NewPassword123!',
+    })
+
+    expect(removeFailResult).toEqual({
+      ok: true,
+      message: 'Password berhasil diubah. Silakan masuk kembali.',
+      sessionInvalidated: false,
+      sessionCleanupState: 'storage_failure',
+      storageFailure: true,
+    })
+    expect(removeTokenSpy).not.toHaveBeenCalled()
+    expect(store.isAuthenticated).toBe(false)
+    expect(store.sessionInvalid).toBe(true)
+
+    // 3. Token already missing when reset starts and remains missing -> invalidates owned in-memory session cleanly
+    await prepareAuthenticatedSession(USER_A, TOKEN_A)
+    await tokenRepository.removeTokenIfMatchesDetailed(TOKEN_A)
+    apiRequest.mockResolvedValueOnce(
+      okTopLevel({ message: 'Password berhasil diubah. Silakan masuk kembali.' }, 200),
+    )
+
+    const missingTokenResult = await store.resetPassword({
+      email: USER_A.email,
+      token: 'reset-token-missing',
+      password: 'NewPassword123!',
+      password_confirmation: 'NewPassword123!',
+    })
+
+    expect(missingTokenResult).toEqual({
+      ok: true,
+      message: 'Password berhasil diubah. Silakan masuk kembali.',
+      sessionInvalidated: true,
+      sessionCleanupState: 'invalidated',
+      storageFailure: false,
+    })
+    expect(store.isAuthenticated).toBe(false)
+    expect(store.sessionInvalid).toBe(true)
+    expect(pos.snapshot()).toEqual(beforePos)
+  })
+})

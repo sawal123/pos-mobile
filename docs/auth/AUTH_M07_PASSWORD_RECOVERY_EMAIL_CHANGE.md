@@ -94,17 +94,21 @@ When `POST /api/v2/auth/email/change/verify` returns HTTP `200` with `state === 
 1. The backend revokes all Sanctum tokens for the user.
 2. Mobile clears in-memory email-change metadata and secrets.
 3. Mobile removes the current bearer token from `tokenRepository` via `removeTokenIfMatchesDetailed(currentToken)` without calling `DELETE /api/auth/logout`.
-4. Mobile clears persisted `cloud_context` from the adapter, resets `cloudSessionStore` state, marks `sessionInvalid = true`, switches `businessStore.mode` back to `'free'`, and prompts the user with `"Email berhasil diperbarui. Silakan masuk kembali."`.
+4. Mobile clears persisted `cloud_context` from the adapter, immediately rechecks `isCurrentSessionOperation(operation)` and expected user identity after `await _adapter.clearCloudContext()` (re-persisting any newer session's context if replaced mid-cleanup), and only then resets `cloudSessionStore` state, marks `sessionInvalid = true`, switches `businessStore.mode` back to `'free'`, and prompts the user with `"Email berhasil diperbarui. Silakan masuk kembali."`.
 
 ## 10. Ownership and Race Handling
 
 - Every `requestEmailChange()` and `verifyEmailChange()` call is guarded by `emailChangeSequence`, `emailChangeUserId`, `emailChangeToken`, and `activeSessionOperation`.
-- If the user logs out or switches from Account A to Account B while a request or OTP verification is pending:
+- `resetPassword()` captures session ownership context (`initialUserId`, `initialSessionEmail`, `initialOperationSeq`, and `initialToken`) before sending the unauthenticated reset request:
+  - A reset started while unauthenticated (or under another account) never acquires authority to invalidate a session created while the request is in flight.
+  - A newer login (including for the same email with a fresh token) is never invalidated by an earlier reset operation.
+  - Secure storage read/removal failures fail closed for the owned in-memory session without calling unconditional `removeToken()` and report `sessionInvalidated: false`, `sessionCleanupState: 'storage_failure'`, `storageFailure: true` distinct from the HTTP `200` password-reset success.
+- If the user logs out or switches from Account A to Account B while an email-change request, OTP verification, or async adapter context cleanup (`_adapter.clearCloudContext()`) is pending:
   - Pending state for Account A is immediately cleared.
   - Account A's `change_id` / OTP cannot be verified with Account B's token.
-  - Account A's session revocation cannot remove Account B's token from `tokenRepository`.
+  - Account A's session revocation or delayed context cleanup cannot remove Account B's token, clear Account B's in-memory session/business/outlet, reset `businessStore.mode`, or destroy Account B's persisted `cloud_context`.
 - If `POST /api/v2/auth/email/change/verify` fails with a network timeout (`status === 0` / `NETWORK_ERROR`), mobile performs a read-only `/api/v2/auth/me` check:
-  - If `/api/v2/auth/me` returns `401`, mobile revokes the local session safely and surfaces an `EMAIL_CHANGE_UNCERTAIN` warning without claiming the email change definitely succeeded.
+  - If `/api/v2/auth/me` returns `401`, mobile revokes the local session safely, emits `session-revoked` with `{ outcome: 'uncertain' }`, and displays `"Sesi Cloud telah berakhir, tetapi perubahan email belum dapat dipastikan. Periksa email akun atau masuk kembali."` without claiming authoritative success or auto-filling the new email.
 
 ## 11. Offline-First Guarantees
 
@@ -116,7 +120,7 @@ Throughout all Password Recovery and Verified Email Change flows (including erro
 
 ## 12. Tests and Baseline Comparison
 
-- Added `src/__tests__/auth-m07-password-recovery-email-change.spec.js` (22 tests covering service contracts, error classifiers, store ownership/revocation, timeout recovery, keystore failure handling, isolated form validation, and full `CloudLoginView` integration flows).
+- Added `src/__tests__/auth-m07-password-recovery-email-change.spec.js` (27 tests covering service contracts, error classifiers, store ownership/revocation, async context cleanup ownership, password-reset session races, uncertain verification outcome UI, keystore failure handling, isolated form validation, and full `CloudLoginView` integration flows).
 - All existing AUTH-M04, AUTH-M05, and AUTH-M06 regression suites pass without modification.
 
 ## 13. Android / Live-Mail QA Checklist

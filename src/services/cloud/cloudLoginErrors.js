@@ -336,6 +336,13 @@ export function describeEmailChangeError(error) {
   const code = typeof error?.code === 'string' ? error.code.toUpperCase() : ''
 
   if (code === 'EMAIL_CHANGE_UNCERTAIN') {
+    if (status === 401) {
+      return {
+        kind: 'uncertain',
+        message:
+          'Sesi Cloud telah berakhir, tetapi perubahan email belum dapat dipastikan. Periksa email akun atau masuk kembali.',
+      }
+    }
     return {
       kind: 'uncertain',
       message:

@@ -1593,13 +1593,22 @@ function handleRecoveryOffline() {
   if (router?.push) void router.push({ name: 'pos' })
 }
 
-function handleEmailChangeSessionRevoked() {
-  emailChangeCompleted.value = true
+function handleEmailChangeSessionRevoked(payload = {}) {
+  const isAuthoritativeSuccess =
+    payload?.outcome === 'verified' && payload?.state === 'verified'
+  emailChangeCompleted.value = isAuthoritativeSuccess
   step.value = 'login'
   authMode.value = 'login'
   email.value = ''
   password.value = ''
-  otpVerifiedMessage.value = 'Email berhasil diperbarui. Silakan masuk kembali.'
+  if (isAuthoritativeSuccess) {
+    otpVerifiedMessage.value = 'Email berhasil diperbarui. Silakan masuk kembali.'
+    loginErrorMessage.value = ''
+  } else {
+    otpVerifiedMessage.value = ''
+    loginErrorMessage.value =
+      'Sesi Cloud telah berakhir, tetapi perubahan email belum dapat dipastikan. Periksa email akun atau masuk kembali.'
+  }
 }
 
 function handleAuthLogin(payload) {
