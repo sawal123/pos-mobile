@@ -141,6 +141,29 @@ async function verifyProvenance({
 
 const MAX_PULL_PAGES = 1000
 
+function normalizeRemoteIsActive(record) {
+  const status = typeof record?.status === 'string' ? record.status.trim().toLowerCase() : null
+
+  if (status) {
+    return status === 'active'
+  }
+
+  const rawActive = record?.is_active ?? record?.isActive ?? record?.active
+  if (rawActive === undefined || rawActive === null) {
+    // Some deployed API serializers omit the status field for active rows.
+    return true
+  }
+
+  if (typeof rawActive === 'boolean') return rawActive
+  if (typeof rawActive === 'number') return rawActive !== 0
+
+  const normalized = String(rawActive).trim().toLowerCase()
+  if (['1', 'true', 'active', 'enabled', 'yes'].includes(normalized)) return true
+  if (['0', 'false', 'inactive', 'disabled', 'no'].includes(normalized)) return false
+
+  return false
+}
+
 /**
  * Creates the durable manual pull & apply service for Laravel /api/sync/pull.
  *
@@ -1374,10 +1397,13 @@ export function createSyncPullService({
         const {
           category_sync_id,
           name,
+          sku,
+          barcode,
           price,
           status,
           kind,
           cost,
+          cost_price,
           stock,
           unit,
           min_stock,
@@ -1459,10 +1485,12 @@ export function createSyncPullService({
         }
 
         const remoteKind = kind === 'service' ? 'service' : 'product'
-        const remoteCost = Number(cost)
+        const remoteCost = Number(cost ?? cost_price)
         const remoteStock = Number(stock)
         const remoteMinStock = Number(min_stock)
         const remoteMinQuantity = Number(min_quantity)
+        const remoteSku = typeof sku === 'string' ? sku : (typeof barcode === 'string' ? barcode : '')
+        const remoteIsActive = normalizeRemoteIsActive(data)
 
         // Accepted remote records converge normal mutable fields to the server
         // value (this branch only runs when no pending local mutation
@@ -1470,6 +1498,7 @@ export function createSyncPullService({
         if (existingProd) {
           existingProd.name = name
           existingProd.category = resolvedCategoryName
+          if (remoteSku) existingProd.sku = remoteSku
           existingProd.price = Number(price)
           existingProd.unitPrice = Number(price)
           existingProd.kind = remoteKind
@@ -1493,12 +1522,13 @@ export function createSyncPullService({
           existingProd.estimatedDuration = typeof estimated_duration === 'string'
             ? estimated_duration
             : ''
-          existingProd.isActive = status === 'active'
+          existingProd.isActive = remoteIsActive
         } else if (status !== 'deleted') {
           nextProducts.push({
             id: syncId,
             name,
             category: resolvedCategoryName,
+            sku: remoteSku,
             price: Number(price),
             unitPrice: Number(price),
             kind: remoteKind,
@@ -1509,7 +1539,7 @@ export function createSyncPullService({
             pricingUnit: typeof pricing_unit === 'string' && pricing_unit.trim() ? pricing_unit.trim() : remoteKind === 'service' ? 'kg' : 'pcs',
             minQuantity: Number.isFinite(remoteMinQuantity) && remoteMinQuantity >= 0 ? remoteMinQuantity : 0,
             estimatedDuration: typeof estimated_duration === 'string' ? estimated_duration : '',
-            isActive: status === 'active',
+            isActive: remoteIsActive,
           })
           plannedRegistryBinds.push({
             type: 'bind',

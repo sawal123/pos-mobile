@@ -31,7 +31,7 @@ const selectedStatus = ref('all') // 'all' | 'active' | 'inactive'
 const productToDelete = ref(null)
 
 onMounted(async () => {
-  if (cloudStore.isLinked && cloudStore.isOperationalCloudAccess && productStore.products.length === 0) {
+  if (cloudStore.isLinked && cloudStore.isOperationalCloudAccess) {
     await syncPullStore.ensureCatalogLoaded()
   }
 })

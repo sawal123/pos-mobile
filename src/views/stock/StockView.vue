@@ -19,8 +19,7 @@ const router = useRouter()
 onMounted(async () => {
   if (
     cloudStore.isLinked &&
-    cloudStore.isOperationalCloudAccess &&
-    productStore.products.length === 0
+    cloudStore.isOperationalCloudAccess
   ) {
     try {
       await syncPullStore.ensureCatalogLoaded()

@@ -357,6 +357,33 @@ describe('Auto Pull on Fresh Workspace & POS Catalog Preload', () => {
     expect(spyEnsure).toHaveBeenCalled()
   })
 
+  it('automatically checks the Cloud binding when the local template is still present', async () => {
+    const cloudStore = useCloudSessionStore(pinia)
+    cloudStore.token = 'test-token'
+    cloudStore.user = { id: 1, email: 'admin@gmail.com' }
+    cloudStore.selectedBusiness = { id: 10, name: 'Admin Business' }
+    cloudStore.selectedOutlet = { id: 101, name: 'Outlet Utama' }
+    cloudStore.cloudAccess = true
+
+    const productStore = useProductStore(pinia)
+    expect(productStore.products.length).toBeGreaterThan(0)
+
+    const pullStore = useSyncPullStore(pinia)
+    const spyEnsure = vi.spyOn(pullStore, 'ensureCatalogLoaded').mockResolvedValue({ ok: true })
+
+    const router = createRouter({
+      history: createWebHistory(),
+      routes: [{ path: '/', component: PosView }],
+    })
+
+    mount(PosView, {
+      global: { plugins: [pinia, router] },
+    })
+    await flushPromises()
+
+    expect(spyEnsure).toHaveBeenCalled()
+  })
+
   it('resolves productStore and normalizes unitPrice when createSyncPullService is initialized without explicit pinia, and avoids duplicate products on repeated pulls', async () => {
     const cloudStore = useCloudSessionStore(pinia)
     cloudStore.user = { id: 1, email: 'admin@gmail.com', name: 'Admin' }
@@ -393,7 +420,7 @@ describe('Auto Pull on Fresh Workspace & POS Catalog Preload', () => {
                 name: 'Es Kopi Susu',
                 price: 18000,
                 stock: 15,
-                status: 'active',
+                is_active: 1,
               },
             },
           ],

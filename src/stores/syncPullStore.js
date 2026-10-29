@@ -144,9 +144,6 @@ export const useSyncPullStore = defineStore('syncPull', () => {
       // unavailable outside a Pinia component context
     }
 
-    if (!force && productStore && productStore.products.length > 0) {
-      return { ok: true, alreadyLoaded: true }
-    }
     if (!cloudStore.isLinked || !cloudStore.isOperationalCloudAccess) {
       return { ok: false, reason: 'not_linked' }
     }
@@ -154,10 +151,11 @@ export const useSyncPullStore = defineStore('syncPull', () => {
       return { ok: true, inProgress: true }
     }
 
-    let isInitial = false
+    let pullBinding = null
+    let isInitial = true
     if (_adapter) {
       try {
-        const [pushBinding, pullBinding] = await Promise.all([
+        const bindings = await Promise.all([
           typeof _adapter.loadSyncPushBinding === 'function'
             ? _adapter.loadSyncPushBinding()
             : Promise.resolve(null),
@@ -165,12 +163,26 @@ export const useSyncPullStore = defineStore('syncPull', () => {
             ? _adapter.loadSyncPullBinding()
             : Promise.resolve(null),
         ])
+        const pushBinding = bindings[0]
+        pullBinding = bindings[1]
         isInitial = Boolean(
           !pushBinding && (!pullBinding || pullBinding.status === 'initializing'),
         )
       } catch {
         isInitial = false
       }
+    }
+
+    // The default local template is not a Cloud catalog. Only a completed
+    // pull binding proves that the current business/outlet has been loaded.
+    // A push-only workspace must still perform a normal incremental pull.
+    if (
+      !force &&
+      pullBinding?.status === 'completed' &&
+      productStore &&
+      productStore.products.length > 0
+    ) {
+      return { ok: true, alreadyLoaded: true }
     }
 
     return pullNow({ initialCloudRead: isInitial })
