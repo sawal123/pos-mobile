@@ -169,6 +169,9 @@ describe('AUTH-M06 service contracts', () => {
   })
 
   it('maps sensitive linking failures to safe Indonesian messages', () => {
+    expect(describeGoogleLoginError({ code: 'USER_CANCELLED' }).message).toContain(
+      'tidak dapat menyelesaikan verifikasi',
+    )
     expect(describeGoogleLoginError({ status: 409, code: 'ACCOUNT_LINK_REQUIRED' }).kind).toBe(
       'account-link-required',
     )
