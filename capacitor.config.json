@@ -6,6 +6,9 @@
     "backgroundColor": "#4945D6"
   },
   "plugins": {
+    "CapacitorSQLite": {
+      "androidIsEncryption": false
+    },
     "SystemBars": {
       "insetsHandling": "css",
       "style": "LIGHT",
