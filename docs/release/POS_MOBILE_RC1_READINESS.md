@@ -5,6 +5,23 @@ Base: `origin/main` (`6570e9e`)
 Branch: `release/rc1-catalog-sync-qa`
 Version: `1.0.0` (`versionCode: 10000`)
 
+## Validation update - 2026-10-30
+
+The remaining Google login failure was traced to the Android live-reload path, not to the Android SHA-1 or the rotated backend secret. `android:live` was loading the local `.env`, whose Google Web Client ID differed from the Web Client ID configured on the backend. The resulting Google ID token therefore had the wrong `aud` value and was rejected by `/api/v2/auth/google`.
+
+The local `.env` and committed production configuration are now aligned to the backend Web Client ID. The Android client ID remains native Credential Manager configuration and is not used as `VITE_GOOGLE_WEB_CLIENT_ID`. A production asset build was verified to load from `https://localhost` (Capacitor local asset scheme) with no live-reload URL. No app data, SQLite database, workspace registry, transactions, or sync queue was reset or deleted.
+
+Current verification:
+
+- `npm run build`: **PASS**.
+- `npx cap sync android`: **PASS**.
+- `android\\gradlew.bat assembleDebug`: **PASS**; APK installed with `adb install -r` without uninstalling the existing app.
+- Google native/account-linking tests: **48/48 PASS**.
+- Full Vitest: **BASELINE FAILURES**; 1,947 passed, 12 failed, 4 skipped across the existing suite. No Google test failed.
+- Android Google E2E: **NOT RUN** after the production install because the connected device was locked behind the system notification shade and no QA account confirmation was available. Do not mark Cloud login production PASS until the user selects the QA account and verifies the post-login business/outlet flow.
+
+Security note: the earlier live-reload debug session exposed an ID token in the device log stream. The application source/native plugin does not intentionally log the token, but release validation must use a production asset build and `adb logcat -c` before testing. Never paste or retain that token; rotate it if it was exported outside the device log.
+
 ## Executive result
 
 Cloud catalog visibility is fixed in code and covered by automated tests. No database reset, transaction deletion, or sync-queue deletion was used. The signed release APK builds successfully and the local/offline Android smoke path passed. Production Cloud login, pull, push, and logout require a real QA account and were not run; therefore this is **NO-GO for production release** until that final Cloud smoke pass is completed.
