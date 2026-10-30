@@ -1,16 +1,33 @@
 <script setup>
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
+import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useProductStore } from '@/stores/productStore'
+import { useSyncPullStore } from '@/stores/syncPullStore'
 
+const cloudStore = useCloudSessionStore()
 const productStore = useProductStore()
+const syncPullStore = useSyncPullStore()
 
 const { categories } = storeToRefs(productStore)
+
+onMounted(async () => {
+  if (
+    cloudStore.isLinked &&
+    cloudStore.isOperationalCloudAccess
+  ) {
+    try {
+      await syncPullStore.ensureCatalogLoaded()
+    } catch {
+      // Non-blocking fallback
+    }
+  }
+})
 
 const newCategoryName = ref('')
 const editingCategory = ref('')

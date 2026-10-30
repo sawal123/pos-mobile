@@ -144,9 +144,6 @@ export const useSyncPullStore = defineStore('syncPull', () => {
       // unavailable outside a Pinia component context
     }
 
-    if (!force && productStore && productStore.products.length > 0) {
-      return { ok: true, alreadyLoaded: true }
-    }
     if (!cloudStore.isLinked || !cloudStore.isOperationalCloudAccess) {
       return { ok: false, reason: 'not_linked' }
     }
@@ -154,46 +151,41 @@ export const useSyncPullStore = defineStore('syncPull', () => {
       return { ok: true, inProgress: true }
     }
 
-    let isInitial = false
-    if (_adapter && typeof _adapter.loadSyncPullBinding === 'function') {
+    let pullBinding = null
+    let isInitial = true
+    if (_adapter) {
       try {
-        const binding = await _adapter.loadSyncPullBinding()
-        if (!binding || binding.status !== 'completed') {
-          isInitial = true
-        }
+        const bindings = await Promise.all([
+          typeof _adapter.loadSyncPushBinding === 'function'
+            ? _adapter.loadSyncPushBinding()
+            : Promise.resolve(null),
+          typeof _adapter.loadSyncPullBinding === 'function'
+            ? _adapter.loadSyncPullBinding()
+            : Promise.resolve(null),
+        ])
+        const pushBinding = bindings[0]
+        pullBinding = bindings[1]
+        isInitial = Boolean(
+          !pushBinding && (!pullBinding || pullBinding.status === 'initializing'),
+        )
       } catch {
-        isInitial = true
-      }
-    } else {
-      isInitial = true
-    }
-
-    const res = await pullNow({ initialCloudRead: isInitial })
-    if (!res.ok && res.code === 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY') {
-      let transactionStore = null
-      try {
-        const { useTransactionStore } = await import('./transactionStore')
-        transactionStore = useTransactionStore()
-      } catch {
-        // unavailable outside a Pinia component context
-      }
-      if (!transactionStore?.items || transactionStore.items.length === 0) {
-        try {
-          const { clearLocalCache } = await import('@/services/localCacheService')
-          await clearLocalCache({
-            pinia: null,
-            adapter: _adapter,
-            scheduler: _scheduler,
-            resetBusiness: false,
-          })
-          return pullNow({ initialCloudRead: true })
-        } catch {
-          // If clearing fails, return original result
-        }
+        isInitial = false
       }
     }
 
-    return res
+    // The default local template is not a Cloud catalog. Only a completed
+    // pull binding proves that the current business/outlet has been loaded.
+    // A push-only workspace must still perform a normal incremental pull.
+    if (
+      !force &&
+      pullBinding?.status === 'completed' &&
+      productStore &&
+      productStore.products.length > 0
+    ) {
+      return { ok: true, alreadyLoaded: true }
+    }
+
+    return pullNow({ initialCloudRead: isInitial })
   }
 
   return {

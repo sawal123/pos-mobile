@@ -38,7 +38,6 @@ import { useSyncContextGuardStore } from '@/stores/syncContextGuardStore'
 import { useSyncStatusStore } from '@/stores/syncStatusStore'
 import { useSyncReconciliationStore } from '@/stores/syncReconciliationStore'
 import { useProductStore } from '@/stores/productStore'
-import { useTransactionStore } from '@/stores/transactionStore'
 import CloudAuthCard from '@/components/cloud/auth/CloudAuthCard.vue'
 import CloudEmailChangeCard from '@/components/cloud/auth/CloudEmailChangeCard.vue'
 import CloudEmailOtpView from '@/components/cloud/auth/CloudEmailOtpView.vue'
@@ -66,7 +65,6 @@ const cashierStore = useCashierStore()
 const cloudStore = useCloudSessionStore()
 const subscriptionStore = useSubscriptionStore()
 const productStore = useProductStore()
-const transactionStore = useTransactionStore()
 const isOnboarding = computed(
   () => route?.name === 'cloud-onboarding' || route?.path === '/setup/cloud',
 )
@@ -371,6 +369,7 @@ watch(
     cloudStore.selectedBusiness?.id,
     cloudStore.selectedOutlet?.id,
     cloudStore.cloudAccess,
+    cloudStore.isOperationalCloudAccess,
     cloudStore.deviceIdentifier,
     cloudStore.registeredDeviceId,
   ],
@@ -959,14 +958,12 @@ async function handleSyncNow() {
 async function autoPullAfterActivation() {
   if (isInitialPullRunning.value || syncPullStore.loading) return
   try {
-    await syncContextGuardStore.check()
-    await handlePullNow({ initialCloudRead: true })
-    if (!pullSuccess.value && pullMessage.value && pullMessage.value.includes('Bersihkan cache')) {
-      const hasTransactions = transactionStore.items && transactionStore.items.length > 0
-      if (!hasTransactions) {
-        await handleClearAndPull()
-      }
+    await syncStatusStore.refresh()
+    if (canSync.value) {
+      await syncContextGuardStore.check()
     }
+    if (!canSync.value || isContextGuardMutationBlocked.value) return
+    await handlePullNow({ initialCloudRead: isFreshWorkspace.value })
   } catch (err) {
     console.warn('Auto-pull after activation error:', err)
   }
@@ -991,7 +988,11 @@ async function handleClearAndPull() {
 }
 
 async function handlePullNow({ initialCloudRead = false } = {}) {
-  if (isAnySyncOperationBusy.value || isContextGuardMutationBlocked.value) return
+  if (isAnySyncOperationBusy.value) return
+  if (canSync.value && (syncContextGuardStore.loading || syncContextGuardStore.status === 'idle')) {
+    await syncContextGuardStore.check()
+  }
+  if (isContextGuardMutationBlocked.value) return
   const isInitial = Boolean(initialCloudRead || isFreshWorkspace.value)
   if (isInitial && isInitialPullRunning.value) return
   if (isInitial) {

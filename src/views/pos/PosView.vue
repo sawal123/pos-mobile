@@ -30,7 +30,7 @@ const { items, subtotal, tax, total } = storeToRefs(cartStore)
 const showCartSheet = ref(false)
 
 onMounted(async () => {
-  if (cloudStore.isLinked && cloudStore.isOperationalCloudAccess && productStore.products.length === 0) {
+  if (cloudStore.isLinked && cloudStore.isOperationalCloudAccess) {
     await syncPullStore.ensureCatalogLoaded()
   }
 })

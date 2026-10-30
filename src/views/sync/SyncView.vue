@@ -116,18 +116,6 @@ async function handleSyncNow() {
     await syncStatusStore.refresh()
 
     if (result && result.ok === false) {
-      if (
-        result.code === 'CLOUD_FIRST_INITIALIZATION_INCOMPLETE' ||
-        result.code === 'SYNC_CLOUD_FIRST_NOT_READY' ||
-        result.code === 'SYNC_BUSINESS_NOT_BOUND'
-      ) {
-        const hasTransactions = transactionStore.items && transactionStore.items.length > 0
-        if (!hasTransactions) {
-          await handleClearAndPull()
-          return
-        }
-      }
-
       syncFeedback.value = {
         type: 'error',
         code: result.code,
@@ -156,10 +144,13 @@ async function handlePullNow(opts = {}) {
 
   try {
     await syncContextGuardStore.check()
+    const sources = Array.isArray(syncContextGuardStore.sources)
+      ? syncContextGuardStore.sources
+      : []
+    const hasCatalogBinding = sources.includes('push_binding') || sources.includes('pull_binding')
     const isInitial = Boolean(
       (typeof opts === 'object' && opts && opts.initialCloudRead === true) ||
-      !cloudStore.pushBinding ||
-      (cloudStore.pullBinding?.status === 'initializing')
+      !hasCatalogBinding,
     )
     const result = await syncPullStore.pullNow({ initialCloudRead: isInitial })
     await syncPushStore.refreshPendingCount()
@@ -167,11 +158,6 @@ async function handlePullNow(opts = {}) {
 
     if (result && !result.ok) {
       if (result.code === 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY') {
-        const hasTransactions = transactionStore.items && transactionStore.items.length > 0
-        if (!hasTransactions) {
-          await handleClearAndPull()
-          return
-        }
         syncFeedback.value = {
           type: 'error',
           code: result.code,

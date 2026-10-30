@@ -28,7 +28,7 @@ const syncPullStore = useSyncPullStore()
 const refreshRoot = ref(null)
 
 onMounted(async () => {
-  if (cloudStore.isLinked && cloudStore.isOperationalCloudAccess && productStore.products.length === 0) {
+  if (cloudStore.isLinked && cloudStore.isOperationalCloudAccess) {
     void syncPullStore.ensureCatalogLoaded()
   }
 })

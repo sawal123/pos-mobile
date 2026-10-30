@@ -1,5 +1,5 @@
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
 import AppIcon from '@/components/base/AppIcon.vue'
@@ -9,18 +9,35 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import CustomerAutocomplete from '@/components/customer/CustomerAutocomplete.vue'
 import { useBusinessStore } from '@/stores/businessStore'
+import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useCustomerStore } from '@/stores/customerStore'
 import { useProductStore } from '@/stores/productStore'
+import { useSyncPullStore } from '@/stores/syncPullStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import { resolveLocalOperationService } from '@/services/database/localOperationService'
 import { formatCurrency, toLocalDateString } from '@/utils/formatters'
 
 const router = useRouter()
 const businessStore = useBusinessStore()
+const cloudStore = useCloudSessionStore()
 const customerStore = useCustomerStore()
 const productStore = useProductStore()
+const syncPullStore = useSyncPullStore()
 const transactionStore = useTransactionStore()
 const localOperations = resolveLocalOperationService()
+
+onMounted(async () => {
+  if (
+    cloudStore.isLinked &&
+    cloudStore.isOperationalCloudAccess
+  ) {
+    try {
+      await syncPullStore.ensureCatalogLoaded()
+    } catch {
+      // Non-blocking fallback
+    }
+  }
+})
 
 // Customer state
 const customerName = ref('')

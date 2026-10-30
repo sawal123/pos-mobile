@@ -141,6 +141,29 @@ async function verifyProvenance({
 
 const MAX_PULL_PAGES = 1000
 
+function normalizeRemoteIsActive(record) {
+  const status = typeof record?.status === 'string' ? record.status.trim().toLowerCase() : null
+
+  if (status) {
+    return status === 'active'
+  }
+
+  const rawActive = record?.is_active ?? record?.isActive ?? record?.active
+  if (rawActive === undefined || rawActive === null) {
+    // Some deployed API serializers omit the status field for active rows.
+    return true
+  }
+
+  if (typeof rawActive === 'boolean') return rawActive
+  if (typeof rawActive === 'number') return rawActive !== 0
+
+  const normalized = String(rawActive).trim().toLowerCase()
+  if (['1', 'true', 'active', 'enabled', 'yes'].includes(normalized)) return true
+  if (['0', 'false', 'inactive', 'disabled', 'no'].includes(normalized)) return false
+
+  return false
+}
+
 /**
  * Creates the durable manual pull & apply service for Laravel /api/sync/pull.
  *
@@ -183,6 +206,15 @@ export function createSyncPullService({
 
   let isInitialPulling = false
 
+  function resolveStore(explicitStore, useStoreFn) {
+    if (explicitStore) return explicitStore
+    try {
+      return pinia ? useStoreFn(pinia) : useStoreFn()
+    } catch {
+      return null
+    }
+  }
+
   async function resolveToken(overrideContext = {}) {
     if (overrideContext.token) return overrideContext.token
     if (typeof tokenFetcher === 'function') {
@@ -224,7 +256,7 @@ export function createSyncPullService({
 
     try {
       const overrideContext = options.context ?? {}
-    const activeCloudStore = cloudStore ?? (pinia ? useCloudSessionStore(pinia) : null)
+    const activeCloudStore = resolveStore(cloudStore, useCloudSessionStore)
 
     const token = await resolveToken(overrideContext)
     const user = overrideContext.user ?? activeCloudStore?.user
@@ -709,13 +741,12 @@ export function createSyncPullService({
     const cursorAfter = currentAfter
 
     // ── 6. Resolve domain stores ──────────────────────────────────────────────
-    const productStore = stores?.productStore ?? (pinia ? useProductStore(pinia) : null)
-    const cashStore = stores?.cashStore ?? (pinia ? useCashStore(pinia) : null)
-    const customerStore = stores?.customerStore ?? (pinia ? useCustomerStore(pinia) : null)
-    const expenseStore = stores?.expenseStore ?? (pinia ? useExpenseStore(pinia) : null)
-    const transactionStore =
-      stores?.transactionStore ?? (pinia ? useTransactionStore(pinia) : null)
-    const shiftStore = stores?.shiftStore ?? (pinia ? useShiftStore(pinia) : null)
+    const productStore = resolveStore(stores?.productStore, useProductStore)
+    const cashStore = resolveStore(stores?.cashStore, useCashStore)
+    const customerStore = resolveStore(stores?.customerStore, useCustomerStore)
+    const expenseStore = resolveStore(stores?.expenseStore, useExpenseStore)
+    const transactionStore = resolveStore(stores?.transactionStore, useTransactionStore)
+    const shiftStore = resolveStore(stores?.shiftStore, useShiftStore)
 
     // ── 6.5. Handle empty snapshot ────────────────────────────────────────────
     if (allRecords.length === 0) {
@@ -1366,10 +1397,13 @@ export function createSyncPullService({
         const {
           category_sync_id,
           name,
+          sku,
+          barcode,
           price,
           status,
           kind,
           cost,
+          cost_price,
           stock,
           unit,
           min_stock,
@@ -1451,10 +1485,12 @@ export function createSyncPullService({
         }
 
         const remoteKind = kind === 'service' ? 'service' : 'product'
-        const remoteCost = Number(cost)
+        const remoteCost = Number(cost ?? cost_price)
         const remoteStock = Number(stock)
         const remoteMinStock = Number(min_stock)
         const remoteMinQuantity = Number(min_quantity)
+        const remoteSku = typeof sku === 'string' ? sku : (typeof barcode === 'string' ? barcode : '')
+        const remoteIsActive = normalizeRemoteIsActive(data)
 
         // Accepted remote records converge normal mutable fields to the server
         // value (this branch only runs when no pending local mutation
@@ -1462,7 +1498,9 @@ export function createSyncPullService({
         if (existingProd) {
           existingProd.name = name
           existingProd.category = resolvedCategoryName
+          if (remoteSku) existingProd.sku = remoteSku
           existingProd.price = Number(price)
+          existingProd.unitPrice = Number(price)
           existingProd.kind = remoteKind
           if (Number.isFinite(remoteCost) && remoteCost >= 0) {
             existingProd.cost = remoteCost
@@ -1484,13 +1522,15 @@ export function createSyncPullService({
           existingProd.estimatedDuration = typeof estimated_duration === 'string'
             ? estimated_duration
             : ''
-          existingProd.isActive = status === 'active'
+          existingProd.isActive = remoteIsActive
         } else if (status !== 'deleted') {
           nextProducts.push({
             id: syncId,
             name,
             category: resolvedCategoryName,
+            sku: remoteSku,
             price: Number(price),
+            unitPrice: Number(price),
             kind: remoteKind,
             cost: Number.isFinite(remoteCost) && remoteCost >= 0 ? remoteCost : 0,
             stock: Number.isFinite(remoteStock) && remoteStock >= 0 ? remoteStock : 0,
@@ -1499,7 +1539,7 @@ export function createSyncPullService({
             pricingUnit: typeof pricing_unit === 'string' && pricing_unit.trim() ? pricing_unit.trim() : remoteKind === 'service' ? 'kg' : 'pcs',
             minQuantity: Number.isFinite(remoteMinQuantity) && remoteMinQuantity >= 0 ? remoteMinQuantity : 0,
             estimatedDuration: typeof estimated_duration === 'string' ? estimated_duration : '',
-            isActive: status === 'active',
+            isActive: remoteIsActive,
           })
           plannedRegistryBinds.push({
             type: 'bind',

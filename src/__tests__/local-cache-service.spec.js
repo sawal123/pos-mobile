@@ -20,6 +20,9 @@ import { useSyncContextGuardStore } from '@/stores/syncContextGuardStore'
 import SettingsView from '@/views/settings/SettingsView.vue'
 import CloudLoginView from '@/views/settings/CloudLoginView.vue'
 import PosView from '@/views/pos/PosView.vue'
+import SyncView from '@/views/sync/SyncView.vue'
+import LaundryOrderCreateView from '@/views/laundry/LaundryOrderCreateView.vue'
+import { createSyncPullService } from '@/services/sync/syncPullService'
 
 vi.mock('@/services/cloud/apiClient', async (importOriginal) => {
   const actual = await importOriginal()
@@ -347,6 +350,246 @@ describe('Auto Pull on Fresh Workspace & POS Catalog Preload', () => {
     })
 
     mount(PosView, {
+      global: { plugins: [pinia, router] },
+    })
+    await flushPromises()
+
+    expect(spyEnsure).toHaveBeenCalled()
+  })
+
+  it('automatically checks the Cloud binding when the local template is still present', async () => {
+    const cloudStore = useCloudSessionStore(pinia)
+    cloudStore.token = 'test-token'
+    cloudStore.user = { id: 1, email: 'admin@gmail.com' }
+    cloudStore.selectedBusiness = { id: 10, name: 'Admin Business' }
+    cloudStore.selectedOutlet = { id: 101, name: 'Outlet Utama' }
+    cloudStore.cloudAccess = true
+
+    const productStore = useProductStore(pinia)
+    expect(productStore.products.length).toBeGreaterThan(0)
+
+    const pullStore = useSyncPullStore(pinia)
+    const spyEnsure = vi.spyOn(pullStore, 'ensureCatalogLoaded').mockResolvedValue({ ok: true })
+
+    const router = createRouter({
+      history: createWebHistory(),
+      routes: [{ path: '/', component: PosView }],
+    })
+
+    mount(PosView, {
+      global: { plugins: [pinia, router] },
+    })
+    await flushPromises()
+
+    expect(spyEnsure).toHaveBeenCalled()
+  })
+
+  it('resolves productStore and normalizes unitPrice when createSyncPullService is initialized without explicit pinia, and avoids duplicate products on repeated pulls', async () => {
+    const cloudStore = useCloudSessionStore(pinia)
+    cloudStore.user = { id: 1, email: 'admin@gmail.com', name: 'Admin' }
+    cloudStore.selectedBusiness = { id: 10, name: 'Admin Business', business_type: 'Cafe / UMKM' }
+    cloudStore.selectedOutlet = { id: 101, name: 'Outlet Utama' }
+    cloudStore.cloudAccess = true
+    cloudStore.capabilityState = 'verified'
+    cloudStore.role = 'owner'
+    cloudStore.syncCapabilities = { push_mode: 'full' }
+    cloudStore.deviceIdentifier = '33333333-3333-4333-8333-333333333333'
+    cloudStore.registeredDeviceId = 77
+
+    const catUuid = '11111111-1111-4111-8111-111111111111'
+    const prodUuid = '22222222-2222-4222-8222-222222222222'
+
+    const transport = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: {
+        data: {
+          records: [
+            {
+              entity: 'categories',
+              sync_sequence: 1,
+              data: { sync_id: catUuid, sync_version: 1, name: 'Minuman' },
+            },
+            {
+              entity: 'products',
+              sync_sequence: 2,
+              data: {
+                sync_id: prodUuid,
+                sync_version: 1,
+                category_sync_id: catUuid,
+                name: 'Es Kopi Susu',
+                price: 18000,
+                stock: 15,
+                is_active: 1,
+              },
+            },
+          ],
+          next_cursor: 2,
+          server_sequence: 2,
+          has_more: false,
+        },
+      },
+    })
+
+    // Initialize pullService WITHOUT passing `pinia`
+    const pullService = createSyncPullService({
+      adapter,
+      cloudStore,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const productStore = useProductStore(pinia)
+    productStore.products = []
+    productStore.categories = []
+
+    const pullStore = useSyncPullStore(pinia)
+    pullStore.init({ pullService, adapter })
+
+    // 1st pull (initialCloudRead via ensureCatalogLoaded on fresh workspace)
+    const firstPull = await pullStore.ensureCatalogLoaded()
+    expect(firstPull.ok).toBe(true)
+
+    expect(productStore.categories).toContain('Minuman')
+    expect(productStore.products).toHaveLength(1)
+    expect(productStore.products[0]).toMatchObject({
+      id: prodUuid,
+      name: 'Es Kopi Susu',
+      category: 'Minuman',
+      price: 18000,
+      unitPrice: 18000,
+      stock: 15,
+      isActive: true,
+    })
+
+    const persisted = await adapter.loadProducts()
+    expect(persisted.products).toHaveLength(1)
+    expect(persisted.categories).toContain('Minuman')
+
+    // 2nd pull (repeated pull via force=true uses initialCloudRead: false and does not duplicate)
+    const secondPull = await pullStore.ensureCatalogLoaded({ force: true })
+    expect(secondPull.ok).toBe(true)
+    expect(productStore.products).toHaveLength(1)
+  })
+
+  it('ensureCatalogLoaded on a push-only workspace pulls normally with initialCloudRead: false without deleting local transactions or sync queue', async () => {
+    const cloudStore = useCloudSessionStore(pinia)
+    cloudStore.user = { id: 1, email: 'admin@gmail.com' }
+    cloudStore.selectedBusiness = { id: 10, name: 'Admin Business' }
+    cloudStore.selectedOutlet = { id: 101, name: 'Outlet Utama' }
+    cloudStore.cloudAccess = true
+
+    await adapter.saveSyncPushBinding({
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: '33333333-3333-4333-8333-333333333333',
+      registeredDeviceId: 77,
+      boundAt: new Date().toISOString(),
+    })
+    await adapter.saveTransactions([{ id: 'trx-1', total: 20000, createdAt: new Date().toISOString() }])
+    await adapter.upsertSyncQueueItem({
+      id: 'q-1',
+      entityType: 'transaction',
+      entityId: 'trx-1',
+      operation: 'upsert',
+      payload: { id: 'trx-1', total: 20000 },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+
+    const productStore = useProductStore(pinia)
+    productStore.products = []
+    productStore.categories = []
+
+    const pullService = {
+      pullNow: vi.fn().mockResolvedValue({ ok: true, applied: 2 }),
+    }
+    const pullStore = useSyncPullStore(pinia)
+    pullStore.init({ pullService, adapter })
+
+    await pullStore.ensureCatalogLoaded()
+
+    expect(pullService.pullNow).toHaveBeenCalledWith(
+      expect.objectContaining({ initialCloudRead: false }),
+    )
+    expect(await adapter.loadTransactions()).toHaveLength(1)
+    expect(await adapter.countSyncQueueItems()).toBe(1)
+  })
+
+  it('SyncView handlePullNow uses initialCloudRead: false when workspace is already bound and preserves workspaceRegistry on clearLocalCache(resetBusiness: false)', async () => {
+    const cloudStore = useCloudSessionStore(pinia)
+    cloudStore.user = { id: 1, email: 'admin@gmail.com' }
+    cloudStore.selectedBusiness = { id: 10, name: 'Admin Business' }
+    cloudStore.selectedOutlet = { id: 101, name: 'Outlet Utama' }
+    cloudStore.cloudAccess = true
+    cloudStore.deviceIdentifier = 'dev-1234'
+    cloudStore.registeredDeviceId = 77
+
+    await adapter.saveWorkspaceRegistry({
+      version: 1,
+      activeWorkspaceId: 'cloud:10:101',
+      workspaces: {
+        'local:default': { business: { name: 'Toko Lokal', mode: 'free' } },
+      },
+    })
+
+    await clearLocalCache({ pinia, adapter, resetBusiness: false })
+    const regAfterClear = await adapter.loadWorkspaceRegistry()
+    expect(regAfterClear.activeWorkspaceId).toBe('cloud:10:101')
+    expect(regAfterClear.workspaces['local:default']).toBeDefined()
+
+    const guardStore = useSyncContextGuardStore(pinia)
+    guardStore.init({
+      contextGuardService: {
+        inspect: vi.fn().mockResolvedValue({
+          ok: true,
+          status: 'safe',
+          code: 'SYNC_CONTEXT_SAFE',
+          sources: ['pull_binding'],
+        }),
+      },
+    })
+
+    const pullStore = useSyncPullStore(pinia)
+    const spyPullNow = vi.spyOn(pullStore, 'pullNow').mockResolvedValue({ ok: true, applied: 1 })
+
+    const router = createRouter({
+      history: createWebHistory(),
+      routes: [{ path: '/', component: SyncView }],
+    })
+
+    const wrapper = mount(SyncView, {
+      global: { plugins: [pinia, router] },
+    })
+    await flushPromises()
+
+    const pullBtn = wrapper.find('[data-testid="btn-pull-cloud"]')
+    expect(pullBtn.exists()).toBe(true)
+    await pullBtn.trigger('click')
+    await flushPromises()
+
+    expect(spyPullNow).toHaveBeenCalledWith({ initialCloudRead: false })
+  })
+
+  it('automatically triggers ensureCatalogLoaded when LaundryOrderCreateView mounts with empty products', async () => {
+    const cloudStore = useCloudSessionStore(pinia)
+    cloudStore.user = { id: 1, email: 'admin@gmail.com' }
+    cloudStore.selectedBusiness = { id: 10, name: 'Laundry Cloud', business_type: 'Laundry' }
+    cloudStore.selectedOutlet = { id: 101, name: 'Outlet Utama' }
+    cloudStore.cloudAccess = true
+
+    const productStore = useProductStore(pinia)
+    productStore.products = []
+
+    const pullStore = useSyncPullStore(pinia)
+    const spyEnsure = vi.spyOn(pullStore, 'ensureCatalogLoaded').mockResolvedValue({ ok: true })
+
+    const router = createRouter({
+      history: createWebHistory(),
+      routes: [{ path: '/', component: LaundryOrderCreateView }],
+    })
+
+    mount(LaundryOrderCreateView, {
       global: { plugins: [pinia, router] },
     })
     await flushPromises()

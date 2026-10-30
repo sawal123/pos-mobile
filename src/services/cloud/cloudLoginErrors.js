@@ -77,7 +77,11 @@ export function describeGoogleLoginError(error) {
   const code = typeof error?.code === 'string' ? error.code.toUpperCase() : ''
 
   if (code === 'USER_CANCELLED') {
-    return { kind: 'cancelled', message: '' }
+    return {
+      kind: 'cancelled',
+      message:
+        'Google Sign-In tidak dapat menyelesaikan verifikasi. Coba lagi atau periksa pendaftaran aplikasi Android.',
+    }
   }
   if (code === 'UNSUPPORTED_PLATFORM') {
     return { kind: 'unsupported', message: 'Google Sign-In native hanya tersedia di aplikasi Android.' }
