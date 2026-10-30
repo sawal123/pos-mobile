@@ -5,6 +5,17 @@ Base: `origin/main` (`6570e9e`)
 Branch: `release/rc1-catalog-sync-qa`
 Version: `1.0.0` (`versionCode: 10000`)
 
+## Xiaomi Google login investigation - 2026-10-30
+
+- **Cloud Login E2E: PASS for Google authentication, user-confirmed on Xiaomi.** The user confirmed that mobile login succeeded after adding the Android client ID to `GOOGLE_ANDROID_CLIENT_IDS` on the backend. Business/outlet selection and subsequent Cloud operations were not confirmed in this investigation.
+- The installed APK was pulled read-only from Xiaomi `475d91cd`. Its SHA-256 is `67F506D1A987E1DBA16A740730DA0F1467FFA8076AB77BAC890BF767EAD6BC0A`; APK v2 signature verification passes. Its signing certificate SHA-1 matches the registered release certificate. The embedded Web Client ID matches the new production ID; the old ID and a live-reload URL are absent.
+- **Native Google credential acquisition: PASS** for the observed 16:31 device-time attempt. Google Play services reports `Activity finished successfully`; the framework reports `GetCredentialResponse returned from framework`. This does not prove API login success.
+- **Confirmed configuration blocker:** the backend Android presenter allowlist was missing the Android client ID. `GoogleOidcVerifier.php` checks the token's `azp` against its configured audience/presenter allowlist; Android IDs are loaded from `GOOGLE_ANDROID_CLIENT_IDS` in `config/services.php`. A Google-issued Android token with a Web audience can still be rejected when its Android presenter is missing. The user confirmed successful login after configuring that value. The exact deployed audit rejection reason was not collected.
+- Backend verifier regression checks: **5 tests / 15 assertions PASS** (`php artisan test --compact --filter=test_real_verifier_`), using the test SQLite in-memory configuration and mocked Google keys.
+- Required release configuration: keep `GOOGLE_CLIENT_ID` set to the Web client ID and `GOOGLE_ANDROID_CLIENT_IDS` set to the full registered Android client ID; rebuild Laravel's configuration cache after changing them. This server action is now **completed by the user**. The mobile `VITE_GOOGLE_WEB_CLIENT_ID` remains the Web client ID. No new APK was needed for this server configuration fix.
+- Adding a test user did not establish the root cause. No production backend configuration was changed by the agent; no APK reinstallation or database reset was performed during this investigation.
+- **Release Decision: NO-GO** until a fresh mobile login completes business/outlet selection and the remaining Cloud smoke tests pass.
+
 ## Validation update - 2026-10-30
 
 The remaining Google login failure was traced to the Android live-reload path, not to the Android SHA-1 or the rotated backend secret. `android:live` was loading the local `.env`, whose Google Web Client ID differed from the Web Client ID configured on the backend. The resulting Google ID token therefore had the wrong `aud` value and was rejected by `/api/v2/auth/google`.
@@ -24,7 +35,7 @@ Security note: the earlier live-reload debug session exposed an ID token in the 
 
 ## Executive result
 
-Cloud catalog visibility is fixed in code and covered by automated tests. No database reset, transaction deletion, or sync-queue deletion was used. The signed release APK builds successfully and the local/offline Android smoke path passed. Production Cloud login, pull, push, and logout require a real QA account and were not run; therefore this is **NO-GO for production release** until that final Cloud smoke pass is completed.
+Cloud catalog visibility is fixed in code and covered by automated tests. No database reset, transaction deletion, or sync-queue deletion was used. The signed release APK builds successfully and the local/offline Android smoke path passed. Google mobile authentication is now user-confirmed on Xiaomi after correcting the backend Android presenter allowlist. Business/outlet selection, production pull/push, and Cloud logout still need their dedicated QA smoke; therefore this is **NO-GO for production release** until that final Cloud smoke pass is completed. Earlier dated validation sections below describe the evidence available at those times.
 
 ## Cloud menu investigation
 
