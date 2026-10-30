@@ -333,7 +333,7 @@ onUnmounted(() => {
 
     <div v-if="authMethods === null" class="space-y-3">
       <p class="rounded-2xl bg-surface px-4 py-3 text-sm text-ink-secondary">
-        Metode login belum diverifikasi. Jangan menganggap Google sudah atau belum terhubung.
+        Status metode login belum diperiksa.
       </p>
       <p v-if="methodsError" class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger" role="status">
         {{ methodsError }}
@@ -353,7 +353,6 @@ onUnmounted(() => {
       <p class="text-sm font-semibold text-emerald-800" data-testid="google-linked-status">
         Google Terhubung
       </p>
-      <p class="mt-1 text-xs text-emerald-700">Google terhubung ke akun Cloud ini.</p>
     </div>
 
     <div v-else-if="isGoogleOnly" class="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3">

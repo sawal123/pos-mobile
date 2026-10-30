@@ -429,8 +429,8 @@ describe('TEST D — Zero business UI handling', () => {
     expect(loggedInCard.text()).toContain(MOCK_USER.email)
     expect(loggedInCard.text()).toContain('Toko A')
     expect(loggedInCard.text()).toContain('Outlet Utama')
-    expect(loggedInCard.text()).toContain('Aktif')
-    expect(loggedInCard.text()).toContain('Terdaftar')
+    expect(loggedInCard.get('#cloud-link-summary').text()).toContain('Terhubung')
+    expect(wrapper.get('[data-testid="cloud-page-header"]').text()).toContain('Cloud Anda')
 
     // Assert: tidak ada network request (offline-only hydration)
     const calledPaths = apiRequest.mock.calls.map((c) => c[0])

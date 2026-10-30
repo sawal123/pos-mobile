@@ -2361,7 +2361,7 @@ describe('INT-02 — cashier device onboarding', () => {
 
     const loggedIn = wrapper.find('#cloud-logged-in')
     expect(loggedIn.exists()).toBe(true)
-    expect(loggedIn.text()).toContain('Terdaftar')
+    expect(loggedIn.get('#cloud-link-summary').text()).toContain('Terhubung')
 
     const contextCalls = apiRequest.mock.calls.filter((call) =>
       String(call[0]).startsWith('/api/mobile/context'),

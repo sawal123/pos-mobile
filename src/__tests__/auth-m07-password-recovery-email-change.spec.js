@@ -803,7 +803,10 @@ describe('AUTH-M07 UI & Full CloudLoginView Integration Flows', () => {
 
     const wrapper = mount(CloudLoginView)
 
-    // 1. Open Email Change form in authenticated CloudLoginView
+    // 1. Open account settings, then Email Change in authenticated CloudLoginView
+    const settings = wrapper.get('[data-testid="cloud-account-settings"]')
+    settings.element.open = true
+    await settings.trigger('toggle')
     const card = wrapper.get('[data-testid="email-change-card"]')
     expect(card.get('[data-testid="email-change-current-email"]').text()).toContain(USER_A.email)
 
@@ -1080,6 +1083,9 @@ describe('AUTH-M07 P2 Session Safety & Recovery Revisions', () => {
 
     const wrapper = mount(CloudLoginView)
 
+    const settings = wrapper.get('[data-testid="cloud-account-settings"]')
+    settings.element.open = true
+    await settings.trigger('toggle')
     await wrapper.get('[data-testid="email-change-open"]').trigger('click')
     await flushPromises()
 
