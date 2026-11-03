@@ -99,8 +99,27 @@ export const useCartStore = defineStore('cart', {
     clearDiscount() {
       this.removePromo()
     },
-    addItem(product) {
-      const existingItem = this.items.find((item) => item.id === product.id)
+    addItem(product, selectedOptions = []) {
+      const optionsArray = Array.isArray(selectedOptions) ? selectedOptions : []
+      const variantPriceAdj = optionsArray.reduce(
+        (sum, opt) => sum + (Number(opt.priceAdjustment ?? opt.price_adjustment) || 0),
+        0,
+      )
+      const variantCostAdj = optionsArray.reduce(
+        (sum, opt) => sum + (Number(opt.costAdjustment ?? opt.cost_adjustment) || 0),
+        0,
+      )
+
+      const variantKey = optionsArray
+        .map((opt) => String(opt.id ?? opt.syncId ?? opt.name))
+        .sort()
+        .join('-')
+
+      const lineId = variantKey ? `${product.id}::${variantKey}` : product.id
+
+      const existingItem = this.items.find(
+        (item) => item.id === lineId || String(item.id) === String(lineId),
+      )
       const nextQty = (existingItem?.qty ?? 0) + 1
 
       if (existingItem) {
@@ -108,26 +127,60 @@ export const useCartStore = defineStore('cart', {
         return true
       }
 
+      const summaryParts = optionsArray.map((opt) => {
+        const adj = Number(opt.priceAdjustment ?? opt.price_adjustment) || 0
+        if (adj > 0) {
+          return `${opt.name} (+Rp ${adj.toLocaleString('id-ID')})`
+        } else if (adj < 0) {
+          return `${opt.name} (-Rp ${Math.abs(adj).toLocaleString('id-ID')})`
+        }
+        return opt.name
+      })
+      const variantSummary = summaryParts.join(', ')
+
+      const variantsSnapshot = optionsArray.map((opt) => ({
+        id: opt.id ?? opt.syncId,
+        sync_id: opt.syncId ?? opt.sync_id ?? opt.id,
+        name: opt.name,
+        price_adjustment: Number(opt.priceAdjustment ?? opt.price_adjustment ?? 0),
+        cost_adjustment: Number(opt.costAdjustment ?? opt.cost_adjustment ?? 0),
+        ingredient_product_id: opt.ingredientProductId ?? opt.ingredient_product_id ?? null,
+        ingredient_product_sync_id: opt.ingredientProductSyncId ?? opt.ingredient_product_sync_id ?? null,
+        ingredient_quantity: Number(opt.ingredientQuantity ?? opt.ingredient_quantity ?? 0),
+      }))
+
+      const basePrice = Number(product.price ?? product.unitPrice) || 0
+      const baseCost = Number(product.cost) || 0
+      const finalPrice = Math.max(0, basePrice + variantPriceAdj)
+      const finalCost = Math.max(0, baseCost + variantCostAdj)
+
       this.items.push({
         ...product,
-        price: Number(product.price ?? product.unitPrice) || 0,
-        unitPrice: Number(product.price ?? product.unitPrice) || 0,
-        costSnapshot: Number(product.cost ?? 0) || 0,
-        hppSnapshot: Number(product.cost ?? 0) || 0,
+        id: lineId,
+        productId: product.id,
+        price: finalPrice,
+        unitPrice: finalPrice,
+        costSnapshot: finalCost,
+        hppSnapshot: finalCost,
+        selectedOptions: optionsArray,
+        variant_summary: variantSummary,
+        variantSummary,
+        variants_snapshot: variantsSnapshot,
+        variantsSnapshot,
         qty: Number(product.minQuantity) > 0 ? Number(product.minQuantity) : 1,
       })
 
       return true
     },
     increaseQty(id) {
-      const item = this.items.find((entry) => entry.id === id)
+      const item = this.items.find((entry) => entry.id === id || String(entry.id) === String(id))
 
       if (item) {
         item.qty += 1
       }
     },
     decreaseQty(id) {
-      const item = this.items.find((entry) => entry.id === id)
+      const item = this.items.find((entry) => entry.id === id || String(entry.id) === String(id))
 
       if (!item) {
         return
@@ -141,7 +194,7 @@ export const useCartStore = defineStore('cart', {
       item.qty -= 1
     },
     updateQty(id, quantity) {
-      const item = this.items.find((entry) => entry.id === id)
+      const item = this.items.find((entry) => entry.id === id || String(entry.id) === String(id))
 
       if (!item) {
         return
@@ -157,7 +210,7 @@ export const useCartStore = defineStore('cart', {
       item.qty = nextQuantity
     },
     removeItem(id) {
-      this.items = this.items.filter((item) => item.id !== id)
+      this.items = this.items.filter((item) => item.id !== id && String(item.id) !== String(id))
     },
     clearCart() {
       this.items = []

@@ -12,17 +12,20 @@ import CategoryPill from '@/components/pos/CategoryPill.vue'
 import DiscountPromoModal from '@/components/pos/DiscountPromoModal.vue'
 import MobileCartSheet from '@/components/pos/MobileCartSheet.vue'
 import ProductCard from '@/components/pos/ProductCard.vue'
+import ProductVariantSheet from '@/components/pos/ProductVariantSheet.vue'
 import { useCartStore } from '@/stores/cartStore'
 import { useProductStore } from '@/stores/productStore'
 import { useTaxStore } from '@/stores/taxStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useSyncPullStore } from '@/stores/syncPullStore'
+import { useVariantStore } from '@/stores/variantStore'
 
 const productStore = useProductStore()
 const cartStore = useCartStore()
 const taxStore = useTaxStore()
 const cloudStore = useCloudSessionStore()
 const syncPullStore = useSyncPullStore()
+const variantStore = useVariantStore()
 const router = useRouter()
 
 const { filterCategories, filteredProducts, searchQuery, selectedCategory } = storeToRefs(productStore)
@@ -35,6 +38,29 @@ const totalQty = computed(() => {
 
 const showCartSheet = ref(false)
 const showPromoModal = ref(false)
+const showVariantSheet = ref(false)
+const selectedVariantProduct = ref(null)
+
+const activeVariantGroupsForProduct = computed(() => {
+  if (!selectedVariantProduct.value) return []
+  return variantStore.getProductVariantGroups(selectedVariantProduct.value)
+})
+
+function handleProductAdd(product) {
+  const groups = variantStore.getProductVariantGroups(product)
+  if (groups.length > 0) {
+    selectedVariantProduct.value = product
+    showVariantSheet.value = true
+    return
+  }
+  cartStore.addItem(product)
+}
+
+function handleVariantConfirm({ product, selectedOptions }) {
+  cartStore.addItem(product, selectedOptions)
+  showVariantSheet.value = false
+  selectedVariantProduct.value = null
+}
 
 onMounted(async () => {
   if (cloudStore.isLinked && cloudStore.isOperationalCloudAccess) {
@@ -104,7 +130,7 @@ function handleCheckout() {
             v-for="product in filteredProducts"
             :key="product.id"
             :product="product"
-            @add="cartStore.addItem"
+            @add="handleProductAdd"
           />
         </div>
         <BaseCard v-else-if="syncPullStore.loading" class="py-12 text-center space-y-3">
@@ -207,6 +233,15 @@ function handleCheckout() {
     <DiscountPromoModal
       :open="showPromoModal"
       @close="closePromoModal"
+    />
+
+    <!-- Variant Selection Bottom Sheet -->
+    <ProductVariantSheet
+      :open="showVariantSheet"
+      :product="selectedVariantProduct"
+      :variant-groups="activeVariantGroupsForProduct"
+      @close="showVariantSheet = false"
+      @confirm="handleVariantConfirm"
     />
   </div>
 </template>

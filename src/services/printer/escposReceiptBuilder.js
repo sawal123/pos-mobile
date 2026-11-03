@@ -265,6 +265,10 @@ function buildItemLines(items, width) {
     const unitSuffix = normalized.unit ? ` ${normalized.unit}` : ''
 
     lines.push(...wrapText(normalized.name, width))
+    const variantSummary = item.variant_summary || item.variantSummary
+    if (variantSummary) {
+      lines.push(...wrapText(`  ${variantSummary}`, width))
+    }
     lines.push(...wrapText(`${formatQty(normalized.qty)}${unitSuffix} x ${formatIdr(normalized.price)}`, width))
     lines.push(...alignRow('', formatIdr(normalized.lineTotal), width))
   }

@@ -1,5 +1,5 @@
 export const DB_NAME = 'pos_mobile'
-export const DB_VERSION = 5
+export const DB_VERSION = 6
 
 export const APP_META_KEYS = {
   initialized: 'data_initialized',
@@ -13,6 +13,7 @@ export const APP_STATE_KEYS = {
   printer: 'printer_state',
   tax: 'tax_settings',
   promos: 'promos_state',
+  variantGroups: 'variant_groups_state',
 }
 
 export const RESERVED_CATEGORY = 'Semua'
@@ -142,5 +143,23 @@ export const MIGRATIONS = {
     updated_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_promos_status ON promos(status);
+  `,
+  6: `
+  ALTER TABLE products ADD COLUMN variant_group_ids TEXT NOT NULL DEFAULT '[]';
+  CREATE TABLE IF NOT EXISTS variant_groups (
+    id TEXT PRIMARY KEY NOT NULL,
+    sync_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    selection_type TEXT NOT NULL DEFAULT 'single',
+    is_required INTEGER NOT NULL DEFAULT 1,
+    min_selection INTEGER NOT NULL DEFAULT 1,
+    max_selection INTEGER NULL,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'active',
+    sync_version INTEGER NOT NULL DEFAULT 1,
+    options TEXT NOT NULL DEFAULT '[]',
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_variant_groups_status ON variant_groups(status);
   `,
 }

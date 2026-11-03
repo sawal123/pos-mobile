@@ -11,6 +11,7 @@ import { usePromoStore } from '@/stores/promoStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import { useTaxStore } from '@/stores/taxStore'
+import { useVariantStore } from '@/stores/variantStore'
 
 import { DB_VERSION } from './schema'
 
@@ -34,6 +35,7 @@ function createPersistenceContexts(pinia) {
   const printerStore = usePrinterStore(pinia)
   const taxStore = useTaxStore(pinia)
   const promoStore = usePromoStore(pinia)
+  const variantStore = useVariantStore(pinia)
 
   return [
     {
@@ -238,6 +240,28 @@ function createPersistenceContexts(pinia) {
       async save(adapter, snapshot) {
         if (typeof adapter.savePromos === 'function') {
           await adapter.savePromos(snapshot.promos)
+        }
+      },
+    },
+    {
+      key: 'variantGroups',
+      store: variantStore,
+      initialState: cloneValue(variantStore.$state),
+      read() {
+        return {
+          groups: cloneValue(variantStore.groups),
+        }
+      },
+      async load(adapter) {
+        if (typeof adapter.loadVariantGroups === 'function') {
+          const groups = await adapter.loadVariantGroups()
+          return { groups }
+        }
+        return { groups: [] }
+      },
+      async save(adapter, snapshot) {
+        if (typeof adapter.saveVariantGroups === 'function') {
+          await adapter.saveVariantGroups(snapshot.groups)
         }
       },
     },

@@ -158,6 +158,9 @@ const showCashSummary = computed(() => (
           class="space-y-0.5"
         >
           <p class="text-[13px] font-semibold text-ink-primary leading-snug">{{ item.name }}</p>
+          <p v-if="item.variant_summary || item.variantSummary" class="text-[11px] text-ink-secondary italic leading-tight">
+            {{ item.variant_summary || item.variantSummary }}
+          </p>
           <div class="flex items-baseline justify-between gap-4 tabular-nums text-ink-secondary">
             <span>{{ item.qty }}{{ item.unitSuffix }} x {{ formatCurrency(item.price) }}</span>
             <span class="text-right font-semibold text-ink-primary">{{ formatCurrency(item.lineTotal) }}</span>

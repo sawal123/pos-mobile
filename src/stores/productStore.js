@@ -488,20 +488,47 @@ export const useProductStore = defineStore('product', {
     },
     recordSaleStock(items, referenceId, transactionId = null) {
       for (const item of items) {
-        const product = this.getProductById(item.id)
+        const prodId = item.productId ?? item.id
+        const product = this.getProductById(prodId)
 
-        if (!product || (product.kind ?? 'product') === 'service') {
-          continue
+        if (product && (product.kind ?? 'product') !== 'service') {
+          this.adjustStock(product.id, {
+            quantityChange: -normalizeNumber(item.qty),
+            type: 'sale',
+            referenceId,
+            transactionId: transactionId ?? item.transactionId ?? null,
+            category: 'Penjualan',
+            note: `Penjualan ${item.name}`,
+          })
         }
 
-        this.adjustStock(product.id, {
-          quantityChange: -normalizeNumber(item.qty),
-          type: 'sale',
-          referenceId,
-          transactionId: transactionId ?? item.transactionId ?? null,
-          category: 'Penjualan',
-          note: `Penjualan ${item.name}`,
-        })
+        const variants = item.variants_snapshot ?? item.variantsSnapshot ?? item.selectedOptions ?? []
+        if (Array.isArray(variants)) {
+          for (const variant of variants) {
+            const ingId =
+              variant.ingredient_product_id ??
+              variant.ingredientProductId ??
+              variant.ingredient_product_sync_id ??
+              variant.ingredientProductSyncId
+            const ingQty = Number(variant.ingredient_quantity ?? variant.ingredientQuantity ?? 0)
+
+            if (ingId && ingQty > 0) {
+              const ingProd =
+                this.getProductById(ingId) || this.products.find((p) => p.syncId === ingId || p.id === ingId)
+              if (ingProd) {
+                const totalDeduct = ingQty * normalizeNumber(item.qty)
+                this.adjustStock(ingProd.id, {
+                  quantityChange: -totalDeduct,
+                  type: 'sale',
+                  referenceId,
+                  transactionId: transactionId ?? item.transactionId ?? null,
+                  category: 'Penjualan (Varian)',
+                  note: `Varian ${variant.name} (${item.name})`,
+                })
+              }
+            }
+          }
+        }
       }
     },
     createCategory(name) {

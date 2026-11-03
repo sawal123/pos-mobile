@@ -87,8 +87,9 @@ export function evaluatePromoDiscount(promo, cartItems = []) {
 
     const matchingItems = cartItems.filter((item) => {
       const id = String(item.id ?? '').toLowerCase()
+      const prodId = String(item.productId ?? item.product_id ?? '').toLowerCase()
       const syncId = String(item.syncId ?? item.sync_id ?? '').toLowerCase()
-      return targetSyncIds.has(id) || targetSyncIds.has(syncId)
+      return targetSyncIds.has(id) || (prodId && targetSyncIds.has(prodId)) || (syncId && targetSyncIds.has(syncId))
     })
 
     eligibleAmount = matchingItems.reduce((sum, item) => {

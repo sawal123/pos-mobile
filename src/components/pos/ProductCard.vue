@@ -19,6 +19,10 @@ function isOutOfStock(product) {
 }
 
 const hasImage = computed(() => Boolean(props.product.imageData))
+const hasVariants = computed(
+  () =>
+    Boolean(props.product.variantGroupIds?.length || props.product.variant_group_ids?.length || props.product.hasVariants),
+)
 </script>
 
 <template>
@@ -51,6 +55,12 @@ const hasImage = computed(() => Boolean(props.product.imageData))
           class="absolute left-2.5 top-2.5 max-w-[calc(100%-1.25rem)] truncate rounded-full border border-zinc-200/70 bg-white/90 px-2.5 py-0.5 text-[10px] font-semibold text-zinc-700 shadow-xs backdrop-blur-xs dark:border-slate-600/60 dark:bg-[#101523]/85 dark:text-slate-200"
         >
           {{ product.category }}
+        </span>
+        <span
+          v-if="hasVariants"
+          class="absolute right-2.5 top-2.5 rounded-full border border-primary/25 bg-primary px-2 py-0.5 text-[10px] font-bold text-white shadow-xs backdrop-blur-xs"
+        >
+          Varian
         </span>
       </div>
 

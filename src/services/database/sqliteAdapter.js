@@ -339,7 +339,7 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
         db.query('SELECT name FROM categories ORDER BY name ASC'),
         db.query(
           `SELECT id, name, category, sku, cost, price, stock, unit, min_stock,
-             kind, pricing_unit, min_quantity, estimated_duration, image_data, is_sellable, is_active
+             kind, pricing_unit, min_quantity, estimated_duration, image_data, is_sellable, is_active, variant_group_ids
            FROM products ORDER BY rowid ASC`,
         ),
       ])
@@ -364,6 +364,7 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
           imageData: row.image_data ?? '',
           isSellable: row.is_sellable === undefined ? true : Boolean(row.is_sellable),
           isActive: Boolean(row.is_active),
+          variantGroupIds: parseJsonValue(row.variant_group_ids, []),
         })),
         stockMovements: await readAppState(APP_STATE_KEYS.stockMovements, []),
       }
@@ -385,8 +386,8 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
           await db.run(
             `INSERT INTO products
               (id, name, category, sku, cost, price, stock, unit, min_stock,
-               kind, pricing_unit, min_quantity, estimated_duration, image_data, is_sellable, is_active)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               kind, pricing_unit, min_quantity, estimated_duration, image_data, is_sellable, is_active, variant_group_ids)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               String(product.id),
               product.name,
@@ -404,6 +405,9 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
               product.imageData ?? '',
               product.isSellable === undefined ? 1 : (product.isSellable ? 1 : 0),
               product.isActive ? 1 : 0,
+              Array.isArray(product.variantGroupIds)
+                ? JSON.stringify(product.variantGroupIds)
+                : (typeof product.variantGroupIds === 'string' ? product.variantGroupIds : '[]'),
             ],
             false,
           )
@@ -510,6 +514,58 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
               Number(promo.syncVersion ?? promo.sync_version ?? 1),
               Array.isArray(promo.targets) ? JSON.stringify(promo.targets) : (typeof promo.targets === 'string' ? promo.targets : '[]'),
               promo.updatedAt ?? promo.updated_at ?? new Date().toISOString(),
+            ],
+            false,
+          )
+        }
+      })
+    },
+    async loadVariantGroups() {
+      const db = await ensureConnection()
+      const { values: rows = [] } = await db.query(
+        `SELECT id, sync_id, name, selection_type, is_required, min_selection,
+                max_selection, sort_order, status, sync_version, options, updated_at
+         FROM variant_groups ORDER BY sort_order ASC, rowid ASC`,
+      )
+
+      return rows.map((row) => ({
+        id: row.id,
+        syncId: row.sync_id ?? row.id,
+        name: row.name,
+        selectionType: row.selection_type ?? 'single',
+        isRequired: Boolean(row.is_required),
+        minSelection: Number(row.min_selection ?? 1),
+        maxSelection: row.max_selection !== null && row.max_selection !== undefined ? Number(row.max_selection) : null,
+        sortOrder: Number(row.sort_order ?? 0),
+        status: row.status ?? 'active',
+        syncVersion: Number(row.sync_version ?? 1),
+        options: parseJsonValue(row.options, []),
+        updatedAt: row.updated_at ?? new Date().toISOString(),
+      }))
+    },
+    async saveVariantGroups(groups = []) {
+      await withTransaction(async (db) => {
+        await db.run('DELETE FROM variant_groups', [], false)
+
+        for (const group of groups) {
+          await db.run(
+            `INSERT INTO variant_groups
+              (id, sync_id, name, selection_type, is_required, min_selection,
+               max_selection, sort_order, status, sync_version, options, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              String(group.id ?? group.syncId),
+              String(group.syncId ?? group.sync_id ?? group.id),
+              group.name,
+              group.selectionType ?? group.selection_type ?? 'single',
+              group.isRequired !== undefined ? (group.isRequired ? 1 : 0) : (group.is_required ? 1 : 0),
+              Number(group.minSelection ?? group.min_selection ?? 1),
+              group.maxSelection !== undefined && group.maxSelection !== null ? Number(group.maxSelection) : (group.max_selection !== undefined && group.max_selection !== null ? Number(group.max_selection) : null),
+              Number(group.sortOrder ?? group.sort_order ?? 0),
+              group.status ?? 'active',
+              Number(group.syncVersion ?? group.sync_version ?? 1),
+              Array.isArray(group.options) ? JSON.stringify(group.options) : (typeof group.options === 'string' ? group.options : '[]'),
+              group.updatedAt ?? group.updated_at ?? new Date().toISOString(),
             ],
             false,
           )

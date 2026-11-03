@@ -11,6 +11,7 @@ import { useExpenseStore } from '@/stores/expenseStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import { usePromoStore } from '@/stores/promoStore'
+import { useVariantStore } from '@/stores/variantStore'
 import {
   inspectCloudFirstWorkspace,
   isTransactionMapped,
@@ -30,6 +31,7 @@ const KNOWN_ENTITIES = new Set([
   'stock_movements',
   'promos',
   'promo_targets',
+  'variant_groups',
 ])
 
 const BASE_URL = (import.meta.env?.VITE_API_BASE_URL ?? '').replace(/\/+$/, '')
@@ -751,6 +753,7 @@ export function createSyncPullService({
     const transactionStore = resolveStore(stores?.transactionStore, useTransactionStore)
     const shiftStore = resolveStore(stores?.shiftStore, useShiftStore)
     const promoStore = resolveStore(stores?.promoStore, usePromoStore)
+    const variantStore = resolveStore(stores?.variantStore, useVariantStore)
 
     // ── 6.5. Handle empty snapshot ────────────────────────────────────────────
     if (allRecords.length === 0) {
@@ -1200,6 +1203,7 @@ export function createSyncPullService({
       ? productStore.stockMovements.map((m) => ({ ...m }))
       : []
     const nextPromos = promoStore ? promoStore.promos.map((p) => ({ ...p })) : []
+    const nextVariantGroups = variantStore ? variantStore.groups.map((g) => ({ ...g })) : []
     const nextShift = shiftStore
       ? {
           id: shiftStore.id,
@@ -1529,6 +1533,9 @@ export function createSyncPullService({
             : ''
           existingProd.isSellable = data.is_sellable !== undefined ? Boolean(data.is_sellable) : true
           existingProd.isActive = remoteIsActive
+          if (Array.isArray(data.variant_group_sync_ids)) {
+            existingProd.variantGroupIds = data.variant_group_sync_ids
+          }
         } else if (status !== 'deleted') {
           nextProducts.push({
             id: syncId,
@@ -1547,6 +1554,7 @@ export function createSyncPullService({
             estimatedDuration: typeof estimated_duration === 'string' ? estimated_duration : '',
             isSellable: data.is_sellable !== undefined ? Boolean(data.is_sellable) : true,
             isActive: remoteIsActive,
+            variantGroupIds: Array.isArray(data.variant_group_sync_ids) ? data.variant_group_sync_ids : [],
           })
           plannedRegistryBinds.push({
             type: 'bind',
@@ -1604,6 +1612,57 @@ export function createSyncPullService({
 
         appliedCount++
         serverVersionsToSave[`promos:${syncId}`] = {
+          syncVersion,
+          syncSequence: sync_sequence,
+        }
+      } else if (entity === 'variant_groups') {
+        const groupRecord = {
+          id: syncId,
+          syncId,
+          syncVersion,
+          name: data.name,
+          selectionType: data.selection_type ?? 'single',
+          isRequired: Boolean(data.is_required),
+          minSelection: Number(data.min_selection ?? 1),
+          maxSelection: data.max_selection !== null && data.max_selection !== undefined ? Number(data.max_selection) : null,
+          sortOrder: Number(data.sort_order ?? 0),
+          status: data.status ?? 'active',
+          options: Array.isArray(data.options)
+            ? data.options.map((opt) => ({
+                id: opt.sync_id ?? opt.id,
+                syncId: opt.sync_id ?? opt.id,
+                syncVersion: Number(opt.sync_version ?? 1),
+                name: opt.name,
+                priceAdjustment: Number(opt.price_adjustment ?? 0),
+                costAdjustment: Number(opt.cost_adjustment ?? 0),
+                ingredientProductSyncId: opt.ingredient_product_sync_id ?? null,
+                ingredientQuantity: Number(opt.ingredient_quantity ?? 0),
+                isDefault: Boolean(opt.is_default),
+                sortOrder: Number(opt.sort_order ?? 0),
+                status: opt.status ?? 'active',
+              }))
+            : [],
+          updatedAt: new Date().toISOString(),
+        }
+
+        const existingGroupIndex = nextVariantGroups.findIndex(
+          (g) => String(g.id).toLowerCase() === syncId || String(g.syncId).toLowerCase() === syncId,
+        )
+
+        if (data.status === 'deleted') {
+          if (existingGroupIndex !== -1) {
+            nextVariantGroups.splice(existingGroupIndex, 1)
+          }
+        } else {
+          if (existingGroupIndex !== -1) {
+            nextVariantGroups[existingGroupIndex] = groupRecord
+          } else {
+            nextVariantGroups.push(groupRecord)
+          }
+        }
+
+        appliedCount++
+        serverVersionsToSave[`variant_groups:${syncId}`] = {
           syncVersion,
           syncSequence: sync_sequence,
         }
@@ -2460,6 +2519,11 @@ export function createSyncPullService({
         promos: nextPromos,
       })
     }
+    if (variantStore) {
+      variantStore.$patch({
+        groups: nextVariantGroups,
+      })
+    }
 
     // ── 11. Flush persistence scheduler (persists Pinia state to SQLite) ───────
     if (scheduler && typeof scheduler.flush === 'function') {
@@ -2478,6 +2542,9 @@ export function createSyncPullService({
       }
       if (typeof adapter.savePromos === 'function') {
         await adapter.savePromos(nextPromos)
+      }
+      if (typeof adapter.saveVariantGroups === 'function') {
+        await adapter.saveVariantGroups(nextVariantGroups)
       }
     }
 

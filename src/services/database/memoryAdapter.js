@@ -26,6 +26,8 @@ export function createMemoryAdapter() {
     customers: [],
     expenses: [],
     transactions: [],
+    promos: [],
+    variantGroups: [],
     cashierState: null,
     shiftState: null,
     cashState: null,
@@ -120,6 +122,18 @@ export function createMemoryAdapter() {
     },
     async saveTransactions(transactions) {
       state.transactions = cloneValue(transactions)
+    },
+    async loadPromos() {
+      return cloneValue(state.promos)
+    },
+    async savePromos(promos) {
+      state.promos = cloneValue(promos)
+    },
+    async loadVariantGroups() {
+      return cloneValue(state.variantGroups)
+    },
+    async saveVariantGroups(groups) {
+      state.variantGroups = cloneValue(groups)
     },
     async loadCashierState() {
       return cloneValue(state.cashierState)

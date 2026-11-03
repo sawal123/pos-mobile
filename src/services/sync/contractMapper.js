@@ -662,6 +662,16 @@ export async function mapOutboxEntries(
           saleItemChange.pricing_unit = item.pricingUnit.trim()
         }
 
+        const variantSummary = item.variant_summary || item.variantSummary
+        if (isNonEmptyString(variantSummary)) {
+          saleItemChange.variant_summary = variantSummary.trim()
+        }
+
+        const variantsSnapshot = item.variants_snapshot || item.variantsSnapshot || item.selectedOptions
+        if (Array.isArray(variantsSnapshot) && variantsSnapshot.length > 0) {
+          saleItemChange.variants_snapshot = variantsSnapshot
+        }
+
         if (Number.isFinite(itemLineCost) && itemLineCost >= 0) {
           saleItemChange.line_cost = itemLineCost
         }

@@ -114,6 +114,9 @@ function handleQtyInput(event) {
   <div class="flex items-center justify-between gap-2.5 rounded-2xl border border-zinc-100 bg-surface/80 p-2.5 transition hover:border-zinc-200">
     <div class="min-w-0 flex-1">
       <h4 class="truncate text-xs font-semibold text-ink-primary">{{ item.name }}</h4>
+      <p v-if="item.variant_summary || item.variantSummary" class="text-[10px] text-primary dark:text-indigo-400 font-medium leading-tight">
+        {{ item.variant_summary || item.variantSummary }}
+      </p>
       <p class="text-[11px] text-ink-secondary">
         {{ formatCurrency(item.price) }} / {{ unitLabel }}
       </p>
