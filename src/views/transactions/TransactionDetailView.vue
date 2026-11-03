@@ -259,6 +259,14 @@ async function copyInvoiceNumber() {
           </div>
 
           <div
+            v-if="Number(transaction.discount) > 0"
+            class="flex items-center justify-between text-emerald-600"
+          >
+            <span>{{ transaction.appliedPromo?.name || transaction.discountLabel || 'Diskon' }}</span>
+            <span class="font-semibold">-{{ formatCurrency(transaction.discount) }}</span>
+          </div>
+
+          <div
             v-if="Number(transaction.tax) > 0"
             class="flex items-center justify-between text-ink-secondary"
           >

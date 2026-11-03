@@ -66,6 +66,8 @@ public class BluetoothPrinterPlugin extends Plugin {
     private static final UUID SPP_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
     private static final long DEFAULT_TIMEOUT_MS = 10000L;
     private static final long MAX_TIMEOUT_MS = 60000L;
+    private static final int WRITE_CHUNK_BYTES = 512;
+    private static final long POST_WRITE_DRAIN_MS = 250L;
     private static final Pattern MAC_ADDRESS = Pattern.compile("^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$");
 
     private final ExecutorService printExecutor = Executors.newSingleThreadExecutor();
@@ -279,8 +281,7 @@ public class BluetoothPrinterPlugin extends Plugin {
                 connected = true;
 
                 OutputStream output = socket.getOutputStream();
-                output.write(payload);
-                output.flush();
+                writePayload(output, payload);
 
                 settleResolve(call, settled);
             } catch (Exception error) {
@@ -453,6 +454,28 @@ public class BluetoothPrinterPlugin extends Plugin {
     private void reject(PluginCall call, String code) {
         // The code doubles as the message so JS never shows a raw Java exception.
         call.reject(code, code);
+    }
+
+    /**
+     * Writes ESC/POS bytes in small chunks and pauses briefly before the RFCOMM
+     * socket closes so slow 58mm/80mm Bluetooth thermal printers finish draining
+     * the controller TX buffer without truncating long receipts.
+     */
+    private void writePayload(OutputStream output, byte[] payload) throws IOException {
+        int offset = 0;
+
+        while (offset < payload.length) {
+            int length = Math.min(WRITE_CHUNK_BYTES, payload.length - offset);
+            output.write(payload, offset, length);
+            output.flush();
+            offset += length;
+        }
+
+        try {
+            Thread.sleep(POST_WRITE_DRAIN_MS);
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private void closeQuietly(BluetoothSocket socket) {

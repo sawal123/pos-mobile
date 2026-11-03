@@ -77,16 +77,17 @@ function checkout() {
 
         <div
           v-if="cartStore.appliedPromo || cartStore.discount > 0"
-          class="flex items-center justify-between rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+          class="flex cursor-pointer items-center justify-between rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100/70 transition-colors dark:bg-emerald-950/40 dark:text-emerald-300"
+          @click="$emit('select-promo')"
         >
           <div class="flex items-center gap-1.5 min-w-0">
             <span>🏷️</span>
-            <span class="truncate font-medium">{{ cartStore.appliedPromo?.name || 'Diskon Promo' }}</span>
+            <span class="truncate font-medium">{{ cartStore.discountLabel || cartStore.appliedPromo?.name || 'Diskon' }}</span>
             <button
               type="button"
-              class="ml-1 text-xs text-zinc-400 hover:text-red-500 transition-colors"
-              title="Hapus promo"
-              aria-label="Hapus promo"
+              class="ml-1 text-xs text-zinc-400 hover:text-red-500 transition-colors cursor-pointer"
+              title="Hapus diskon"
+              aria-label="Hapus diskon"
               @click.stop="cartStore.removePromo()"
             >
               ✕
@@ -98,11 +99,11 @@ function checkout() {
         <button
           v-else
           type="button"
-          class="flex w-full items-center justify-between rounded-lg border border-dashed border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-primary hover:border-primary/50 transition-colors text-left"
+          class="flex w-full items-center justify-between rounded-lg border border-dashed border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-primary hover:border-primary/50 transition-colors text-left cursor-pointer"
           @click="$emit('select-promo')"
         >
           <span class="flex items-center gap-1.5">
-            <span>🏷️</span> Gunakan Promo / Voucher
+            <span>🏷️</span> Tambah Diskon / Promo
           </span>
           <span class="text-zinc-400">›</span>
         </button>

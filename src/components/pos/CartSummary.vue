@@ -12,6 +12,10 @@ defineProps({
     type: Number,
     default: 0,
   },
+  discountLabel: {
+    type: String,
+    default: '',
+  },
   appliedPromo: {
     type: Object,
     default: null,
@@ -63,16 +67,18 @@ defineEmits(['checkout', 'select-promo', 'remove-promo'])
     <div
       v-if="appliedPromo || discount > 0"
       class="flex items-center justify-between rounded-lg bg-emerald-50 px-2.5 py-1.5 text-sm font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+      :class="allowPromoSelect ? 'cursor-pointer hover:bg-emerald-100/70 transition-colors' : ''"
+      @click="allowPromoSelect && $emit('select-promo')"
     >
       <div class="flex items-center gap-1.5 min-w-0">
         <span class="text-xs">🏷️</span>
-        <span class="truncate font-medium">{{ appliedPromo?.name || 'Diskon Promo' }}</span>
+        <span class="truncate font-medium">{{ discountLabel || appliedPromo?.name || 'Diskon' }}</span>
         <button
           v-if="allowPromoSelect"
           type="button"
-          class="ml-1 text-xs text-zinc-400 hover:text-red-500 transition-colors"
-          title="Hapus promo"
-          aria-label="Hapus promo"
+          class="ml-1 text-xs text-zinc-400 hover:text-red-500 transition-colors cursor-pointer"
+          title="Hapus diskon"
+          aria-label="Hapus diskon"
           @click.stop="$emit('remove-promo')"
         >
           ✕
@@ -86,10 +92,11 @@ defineEmits(['checkout', 'select-promo', 'remove-promo'])
       class="flex cursor-pointer items-center justify-between rounded-lg border border-dashed border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-primary hover:border-primary/50 transition-colors"
       role="button"
       tabindex="0"
+      data-testid="cart-summary-select-discount"
       @click="$emit('select-promo')"
     >
       <span class="flex items-center gap-1.5">
-        <span>🏷️</span> Gunakan Promo / Voucher
+        <span>🏷️</span> Tambah Diskon / Promo
       </span>
       <span class="text-zinc-400">›</span>
     </div>

@@ -308,7 +308,7 @@ export function createReceiptCommands({ transaction, business, paperWidth } = {}
   if (Number(transaction?.discount) > 0) {
     const promoLabel = transaction?.appliedPromo?.name
       ? `Diskon (${transaction.appliedPromo.name})`
-      : 'Diskon'
+      : (transaction?.discountLabel || 'Diskon')
     for (const line of alignRow(promoLabel, `-${formatIdr(transaction.discount)}`, width)) {
       commands.push({ type: 'text', value: line })
     }

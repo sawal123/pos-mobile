@@ -28,13 +28,40 @@ export const useCartStore = defineStore('cart', {
   state: () => ({
     items: [],
     appliedPromo: null,
+    manualDiscountType: 'fixed', // 'fixed' | 'percent'
+    manualDiscountValue: 0,
   }),
   getters: {
     subtotal: (state) => state.items.reduce((sum, item) => sum + itemPrice(item) * itemQuantity(item), 0),
     discount(state) {
-      if (!state.appliedPromo) return 0
-      const promoStore = usePromoStore()
-      return promoStore.calculateDiscount(state.appliedPromo, state.items)
+      if (state.appliedPromo) {
+        const promoStore = usePromoStore()
+        return promoStore.calculateDiscount(state.appliedPromo, state.items)
+      }
+
+      const rawValue = Number(state.manualDiscountValue) || 0
+      if (rawValue <= 0 || this.subtotal <= 0) {
+        return 0
+      }
+
+      if (state.manualDiscountType === 'percent') {
+        const clampedPercent = Math.min(100, Math.max(0, rawValue))
+        return Math.min(this.subtotal, Math.round((this.subtotal * clampedPercent) / 100))
+      }
+
+      return Math.min(this.subtotal, Math.round(Math.max(0, rawValue)))
+    },
+    discountLabel(state) {
+      if (state.appliedPromo?.name) {
+        return state.appliedPromo.name
+      }
+      const rawValue = Number(state.manualDiscountValue) || 0
+      if (rawValue > 0) {
+        return state.manualDiscountType === 'percent'
+          ? `Diskon ${Math.min(100, rawValue)}%`
+          : 'Diskon Manual'
+      }
+      return ''
     },
     taxableSubtotal() {
       return Math.max(0, this.subtotal - this.discount)
@@ -50,9 +77,27 @@ export const useCartStore = defineStore('cart', {
   actions: {
     applyPromo(promo) {
       this.appliedPromo = promo ?? null
+      if (promo) {
+        this.manualDiscountValue = 0
+      }
+    },
+    setManualDiscount({ type = 'fixed', value = 0 } = {}) {
+      const normalizedType = type === 'percent' ? 'percent' : 'fixed'
+      const numeric = Number(value)
+      const cleanValue = Number.isFinite(numeric) && numeric > 0
+        ? (normalizedType === 'percent' ? Math.min(100, numeric) : Math.round(numeric))
+        : 0
+
+      this.appliedPromo = null
+      this.manualDiscountType = normalizedType
+      this.manualDiscountValue = cleanValue
     },
     removePromo() {
       this.appliedPromo = null
+      this.manualDiscountValue = 0
+    },
+    clearDiscount() {
+      this.removePromo()
     },
     addItem(product) {
       const existingItem = this.items.find((item) => item.id === product.id)
@@ -117,6 +162,8 @@ export const useCartStore = defineStore('cart', {
     clearCart() {
       this.items = []
       this.appliedPromo = null
+      this.manualDiscountType = 'fixed'
+      this.manualDiscountValue = 0
     },
   },
 })

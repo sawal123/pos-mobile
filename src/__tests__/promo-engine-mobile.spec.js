@@ -1,13 +1,21 @@
 import { describe, it, expect, beforeEach } from 'vitest'
+import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import {
   isPromoActive,
   evaluatePromoDiscount,
   usePromoStore,
 } from '@/stores/promoStore'
+import { useBusinessStore } from '@/stores/businessStore'
 import { useCartStore } from '@/stores/cartStore'
+import { useCashierStore } from '@/stores/cashierStore'
 import { useProductStore } from '@/stores/productStore'
+import { useShiftStore } from '@/stores/shiftStore'
 import { useTaxStore } from '@/stores/taxStore'
+import { useTransactionStore } from '@/stores/transactionStore'
+import { createAppRouter } from '@/router'
+import PaymentView from '@/views/payment/PaymentView.vue'
+import BaseInput from '@/components/base/BaseInput.vue'
 import { createMemoryAdapter } from '@/services/database/memoryAdapter'
 import { createSyncIdentityRegistry } from '@/services/sync/syncIdentityRegistry'
 import { mapOutboxEntries } from '@/services/sync/contractMapper'
@@ -317,6 +325,197 @@ describe('Mobile Promo Engine & Feature Parity', () => {
       const discountLine = textLines.find((line) => line.includes('Kupon Hemat') || line.includes('Diskon'))
       expect(discountLine).toBeDefined()
       expect(discountLine).toContain('-Rp 5.000')
+    })
+  })
+
+  describe('manual discount & PaymentView pre-payment discount flow', () => {
+    it('supports manual fixed (Rp) and percent (%) discounts with subtotal cap and promo exclusivity', () => {
+      const cartStore = useCartStore()
+      const taxStore = useTaxStore()
+      taxStore.setSettings({ enabled: false, rate: 0 })
+
+      cartStore.addItem({ id: 'p1', name: 'Nasi Goreng', price: 40000 })
+
+      cartStore.setManualDiscount({ type: 'fixed', value: 5000 })
+      expect(cartStore.discount).toBe(5000)
+      expect(cartStore.discountLabel).toBe('Diskon Manual')
+      expect(cartStore.total).toBe(35000)
+
+      cartStore.setManualDiscount({ type: 'percent', value: 25 })
+      expect(cartStore.discount).toBe(10000)
+      expect(cartStore.discountLabel).toBe('Diskon 25%')
+      expect(cartStore.total).toBe(30000)
+
+      // Caps fixed discount at subtotal
+      cartStore.setManualDiscount({ type: 'fixed', value: 99000 })
+      expect(cartStore.discount).toBe(40000)
+      expect(cartStore.total).toBe(0)
+
+      // Applying promo clears manual discount
+      cartStore.applyPromo({
+        id: 'promo-1',
+        name: 'Promo 8rb',
+        type: 'fixed',
+        scope: 'all',
+        discount_value: 8000,
+        status: 'active',
+      })
+      expect(cartStore.manualDiscountValue).toBe(0)
+      expect(cartStore.discount).toBe(8000)
+      expect(cartStore.discountLabel).toBe('Promo 8rb')
+
+      // Setting manual discount clears appliedPromo
+      cartStore.setManualDiscount({ type: 'fixed', value: 3000 })
+      expect(cartStore.appliedPromo).toBeNull()
+      expect(cartStore.discount).toBe(3000)
+
+      cartStore.clearCart()
+      expect(cartStore.manualDiscountValue).toBe(0)
+      expect(cartStore.discount).toBe(0)
+    })
+
+    it('allows cashier to input manual discount directly on /payment before clicking Bayar', async () => {
+      const pinia = createPinia()
+      setActivePinia(pinia)
+      const router = createAppRouter()
+
+      const businessStore = useBusinessStore()
+      const cashierStore = useCashierStore()
+      const shiftStore = useShiftStore()
+      const taxStore = useTaxStore()
+      const productStore = useProductStore()
+      const cartStore = useCartStore()
+      const transactionStore = useTransactionStore()
+
+      businessStore.setBusiness({
+        name: 'Kedai Nusantara',
+        type: 'Cafe',
+        owner: 'Admin',
+        phone: '08123456789',
+        outlet: 'Utama',
+        mode: 'free',
+      })
+      cashierStore.setPinConfigured(true)
+      shiftStore.openShift(100000)
+      taxStore.setSettings({ enabled: false, rate: 0 })
+
+      const product = { id: 'k1', name: 'Kopi Susu', category: 'Minuman', price: 30000, stock: 20, isSellable: true, isActive: true }
+      productStore.$patch({ products: [product] })
+      cartStore.addItem(product)
+
+      await router.push('/payment')
+      await flushPromises()
+
+      const wrapper = mount(PaymentView, {
+        global: { plugins: [pinia, router] },
+      })
+
+      expect(wrapper.find('[data-testid="payment-discount-card"]').exists()).toBe(true)
+      expect(cartStore.total).toBe(30000)
+
+      // Input manual Rp 5.000 discount on PaymentView
+      const discountInput = wrapper.find('[data-testid="payment-discount-input"]')
+      await discountInput.setValue('5000')
+      await wrapper.find('[data-testid="btn-apply-payment-discount"]').trigger('click')
+      await flushPromises()
+
+      expect(cartStore.discount).toBe(5000)
+      expect(cartStore.total).toBe(25000)
+      expect(wrapper.find('[data-testid="payment-active-discount"]').text()).toContain('Diskon Manual')
+
+      // Switch to % discount (10% of 30.000 = 3.000 -> total 27.000)
+      await wrapper.find('[data-testid="payment-discount-type-percent"]').trigger('click')
+      await discountInput.setValue('10')
+      await wrapper.find('[data-testid="btn-apply-payment-discount"]').trigger('click')
+      await flushPromises()
+
+      expect(cartStore.discount).toBe(3000)
+      expect(cartStore.total).toBe(27000)
+
+      const initialCount = transactionStore.items.length
+
+      // Pay cash 30.000 -> change should be 3.000
+      wrapper.findComponent(BaseInput).vm.$emit('update:modelValue', '30000')
+      await flushPromises()
+
+      await wrapper.find('[data-testid="desktop-submit-payment"]').trigger('click')
+      await flushPromises()
+
+      expect(transactionStore.items).toHaveLength(initialCount + 1)
+      const committed = transactionStore.items[0]
+      expect(committed.subtotal).toBe(30000)
+      expect(committed.discount).toBe(3000)
+      expect(committed.discountLabel).toBe('Diskon 10%')
+      expect(committed.total).toBe(27000)
+      expect(committed.changeAmount).toBe(3000)
+    })
+
+    it('allows selecting Promo / Voucher from modal on /payment and removing discount', async () => {
+      const pinia = createPinia()
+      setActivePinia(pinia)
+      const router = createAppRouter()
+
+      const businessStore = useBusinessStore()
+      const cashierStore = useCashierStore()
+      const shiftStore = useShiftStore()
+      const taxStore = useTaxStore()
+      const promoStore = usePromoStore()
+      const cartStore = useCartStore()
+
+      businessStore.setBusiness({
+        name: 'Kedai Nusantara',
+        type: 'Cafe',
+        owner: 'Admin',
+        phone: '08123456789',
+        outlet: 'Utama',
+        mode: 'free',
+      })
+      cashierStore.setPinConfigured(true)
+      shiftStore.openShift(100000)
+      taxStore.setSettings({ enabled: false, rate: 0 })
+
+      promoStore.setPromos([
+        {
+          id: 'pr-1',
+          sync_id: 'sync-pr-1',
+          name: 'Hemat 5rb',
+          code: 'HEMAT5',
+          type: 'fixed',
+          scope: 'all',
+          discount_value: 5000,
+          status: 'active',
+        },
+      ])
+
+      cartStore.addItem({ id: 'k1', name: 'Kopi Susu', category: 'Minuman', price: 25000, stock: 10 })
+
+      await router.push('/payment')
+      await flushPromises()
+
+      const wrapper = mount(PaymentView, {
+        global: { plugins: [pinia, router] },
+      })
+
+      // Open Promo Modal on PaymentView
+      await wrapper.find('[data-testid="btn-open-promo-modal"]').trigger('click')
+      await flushPromises()
+
+      const pakaiBtn = wrapper.findAll('button').find((b) => b.text().trim() === 'Pakai')
+      expect(pakaiBtn).toBeDefined()
+      await pakaiBtn.trigger('click')
+      await flushPromises()
+
+      expect(cartStore.appliedPromo?.id).toBe('pr-1')
+      expect(cartStore.discount).toBe(5000)
+      expect(cartStore.total).toBe(20000)
+
+      // Remove discount from PaymentView
+      await wrapper.find('[data-testid="btn-remove-payment-discount"]').trigger('click')
+      await flushPromises()
+
+      expect(cartStore.appliedPromo).toBeNull()
+      expect(cartStore.discount).toBe(0)
+      expect(cartStore.total).toBe(25000)
     })
   })
 })

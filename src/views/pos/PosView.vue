@@ -3,17 +3,15 @@ import { onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 
-import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
-import BaseModal from '@/components/base/BaseModal.vue'
 import CartItem from '@/components/pos/CartItem.vue'
 import CartSummary from '@/components/pos/CartSummary.vue'
 import CategoryPill from '@/components/pos/CategoryPill.vue'
+import DiscountPromoModal from '@/components/pos/DiscountPromoModal.vue'
 import MobileCartSheet from '@/components/pos/MobileCartSheet.vue'
 import ProductCard from '@/components/pos/ProductCard.vue'
 import { useCartStore } from '@/stores/cartStore'
-import { usePromoStore } from '@/stores/promoStore'
 import { useProductStore } from '@/stores/productStore'
 import { useTaxStore } from '@/stores/taxStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
@@ -22,7 +20,6 @@ import { formatCurrency } from '@/utils/formatters'
 
 const productStore = useProductStore()
 const cartStore = useCartStore()
-const promoStore = usePromoStore()
 const taxStore = useTaxStore()
 const cloudStore = useCloudSessionStore()
 const syncPullStore = useSyncPullStore()
@@ -33,8 +30,6 @@ const { items, subtotal, tax, total } = storeToRefs(cartStore)
 
 const showCartSheet = ref(false)
 const showPromoModal = ref(false)
-const promoCodeInput = ref('')
-const promoErrorMessage = ref('')
 
 onMounted(async () => {
   if (cloudStore.isLinked && cloudStore.isOperationalCloudAccess) {
@@ -55,36 +50,11 @@ function closeCartSheet() {
 }
 
 function openPromoModal() {
-  promoCodeInput.value = ''
-  promoErrorMessage.value = ''
   showPromoModal.value = true
 }
 
 function closePromoModal() {
   showPromoModal.value = false
-  promoErrorMessage.value = ''
-}
-
-function applyVoucherCode() {
-  const code = promoCodeInput.value.trim()
-  if (!code) {
-    promoErrorMessage.value = 'Masukkan kode voucher terlebih dahulu'
-    return
-  }
-
-  const promo = promoStore.findPromoByCode(code)
-  if (!promo) {
-    promoErrorMessage.value = 'Kode promo tidak valid atau telah berakhir'
-    return
-  }
-
-  cartStore.applyPromo(promo)
-  closePromoModal()
-}
-
-function selectPromo(promo) {
-  cartStore.applyPromo(promo)
-  closePromoModal()
 }
 
 function handleCheckout() {
@@ -180,6 +150,7 @@ function handleCheckout() {
         <CartSummary
           :subtotal="subtotal"
           :discount="cartStore.discount"
+          :discount-label="cartStore.discountLabel"
           :applied-promo="cartStore.appliedPromo"
           :tax="tax"
           :tax-enabled="taxStore.enabled"
@@ -233,92 +204,10 @@ function handleCheckout() {
       @select-promo="openPromoModal"
     />
 
-    <!-- Promo / Voucher Selection Modal -->
-    <BaseModal
+    <!-- Discount & Promo Selection Modal -->
+    <DiscountPromoModal
       :open="showPromoModal"
-      title="Pilih Promo & Voucher"
       @close="closePromoModal"
-    >
-      <div class="space-y-4">
-        <!-- Input Kode Voucher -->
-        <div class="space-y-2">
-          <label class="text-xs font-semibold text-ink-secondary">Punya kode voucher?</label>
-          <div class="flex gap-2">
-            <BaseInput
-              :model-value="promoCodeInput"
-              placeholder="Contoh: DISKON10"
-              class="flex-1 uppercase"
-              @update:model-value="(val) => (promoCodeInput = val)"
-              @keydown.enter="applyVoucherCode"
-            />
-            <BaseButton
-              variant="outline"
-              size="sm"
-              class="shrink-0 px-4"
-              @click="applyVoucherCode"
-            >
-              Terapkan
-            </BaseButton>
-          </div>
-          <p v-if="promoErrorMessage" class="text-xs font-medium text-red-500">
-            {{ promoErrorMessage }}
-          </p>
-        </div>
-
-        <div class="border-t border-zinc-100 pt-3">
-          <p class="mb-2 text-xs font-semibold text-ink-secondary">Promo Tersedia</p>
-
-          <div v-if="promoStore.activePromos.length" class="max-h-60 space-y-2 overflow-y-auto no-scrollbar pr-0.5">
-            <div
-              v-for="promo in promoStore.activePromos"
-              :key="promo.id"
-              class="flex items-center justify-between rounded-xl border p-3 transition"
-              :class="cartStore.appliedPromo?.id === promo.id
-                ? 'border-emerald-500 bg-emerald-50/50 dark:border-emerald-500/80 dark:bg-emerald-950/20'
-                : 'border-zinc-200 bg-white hover:border-primary/40'"
-            >
-              <div class="min-w-0 space-y-1 pr-2">
-                <div class="flex items-center gap-2">
-                  <span class="text-sm font-bold text-ink-primary">{{ promo.name }}</span>
-                  <span
-                    v-if="promo.code"
-                    class="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[10px] font-bold text-zinc-600"
-                  >
-                    {{ promo.code }}
-                  </span>
-                </div>
-                <p class="text-xs text-ink-secondary">
-                  <span v-if="promo.type === 'percent'">Diskon {{ promo.discount_value / 100 }}%</span>
-                  <span v-else-if="promo.type === 'fixed'">Potongan {{ formatCurrency(promo.discount_value) }}</span>
-                  <span v-else-if="promo.type === 'price_override'">Harga Khusus {{ formatCurrency(promo.discount_value) }}</span>
-                  <span v-if="promo.min_purchase > 0"> &bull; Min. {{ formatCurrency(promo.min_purchase) }}</span>
-                </p>
-              </div>
-
-              <div class="shrink-0">
-                <span
-                  v-if="cartStore.appliedPromo?.id === promo.id"
-                  class="rounded-lg bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-800"
-                >
-                  Digunakan ✓
-                </span>
-                <BaseButton
-                  v-else
-                  size="sm"
-                  variant="outline"
-                  @click="selectPromo(promo)"
-                >
-                  Pakai
-                </BaseButton>
-              </div>
-            </div>
-          </div>
-
-          <p v-else class="py-4 text-center text-xs text-ink-secondary">
-            Belum ada promo aktif saat ini.
-          </p>
-        </div>
-      </div>
-    </BaseModal>
+    />
   </div>
 </template>

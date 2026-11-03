@@ -3,6 +3,8 @@ import { createPinia, setActivePinia } from 'pinia'
 import { describe, expect, it } from 'vitest'
 
 import { createAppRouter } from '@/router'
+import { useBusinessStore } from '@/stores/businessStore'
+import { useCashierStore } from '@/stores/cashierStore'
 import { useExpenseStore } from '@/stores/expenseStore'
 import { formatCurrency } from '@/utils/formatters'
 import ExpensesView from '@/views/expenses/ExpensesView.vue'
@@ -13,7 +15,19 @@ function createContext() {
   setActivePinia(pinia)
 
   const router = createAppRouter()
+  const businessStore = useBusinessStore()
+  const cashierStore = useCashierStore()
   const expenseStore = useExpenseStore()
+
+  businessStore.setBusiness({
+    name: 'Toko Nusantara',
+    type: 'Cafe',
+    owner: 'Admin',
+    phone: '08123456789',
+    outlet: 'Utama',
+    mode: 'free',
+  })
+  cashierStore.setPinConfigured(true)
 
   return { pinia, router, expenseStore }
 }
@@ -163,5 +177,91 @@ describe('ExpensesView UI/UX Enhancement', () => {
 
     const amountInput = wrapper.find('input[type="number"]')
     expect(amountInput.element.value).toBe('50000')
+    expect(wrapper.find('[data-testid="expense-amount-preview"]').text()).toContain(formatCurrency(50000))
+  })
+
+  it('ExpenseFormView dapat membuat pengeluaran baru dengan saran judul dan menyimpan ke store', async () => {
+    const context = createContext()
+    await context.router.push('/expenses/create')
+    await flushPromises()
+
+    const wrapper = mount(ExpenseFormView, {
+      global: { plugins: [context.pinia, context.router] },
+    })
+
+    // Pilih kategori Belanja Stok
+    await wrapper.find('[data-testid="expense-category-Belanja Stok"]').trigger('click')
+    await flushPromises()
+
+    // Klik salah satu chip contoh judul "Bahan Baku"
+    const suggestionChip = wrapper.findAll('button').find((b) => b.text().trim() === 'Bahan Baku')
+    expect(suggestionChip).toBeDefined()
+    await suggestionChip.trigger('click')
+    await flushPromises()
+
+    // Isi nominal dan catatan
+    await wrapper.find('[data-testid="expense-amount-input"]').setValue('75000')
+    await wrapper.find('[data-testid="expense-note-input"]').setValue('Beli susu UHT 3 karton')
+    await flushPromises()
+
+    await wrapper.find('form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(context.expenseStore.expenses).toHaveLength(1)
+    expect(context.expenseStore.expenses[0]).toMatchObject({
+      title: 'Bahan Baku',
+      category: 'Belanja Stok',
+      amount: 75000,
+      note: 'Beli susu UHT 3 karton',
+    })
+  })
+
+  it('ExpenseFormView mode Edit memuat data lama, memperbarui pengeluaran, dan mendukung hapus langsung', async () => {
+    const context = createContext()
+    const created = context.expenseStore.createExpense({
+      title: 'Bayar Internet',
+      category: 'Operasional',
+      amount: 300000,
+      note: 'Tagihan bulan ini',
+    })
+
+    await context.router.push(`/expenses/${created.expense.id}/edit`)
+    await flushPromises()
+
+    const wrapper = mount(ExpenseFormView, {
+      global: { plugins: [context.pinia, context.router] },
+    })
+
+    expect(wrapper.text()).toContain('Edit Pengeluaran')
+    expect(wrapper.text()).toContain('Mode Edit')
+    expect(wrapper.find('[data-testid="expense-amount-input"]').element.value).toBe('300000')
+
+    // Update nominal & catatan
+    await wrapper.find('[data-testid="expense-amount-input"]').setValue('350000')
+    await wrapper.find('[data-testid="expense-note-input"]').setValue('Tagihan + upgrade paket')
+    await wrapper.find('form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(context.expenseStore.getExpenseById(created.expense.id)).toMatchObject({
+      title: 'Bayar Internet',
+      category: 'Operasional',
+      amount: 350000,
+      note: 'Tagihan + upgrade paket',
+    })
+
+    // Buka ulang mode edit lalu hapus dari tombol Hapus di header
+    await context.router.push(`/expenses/${created.expense.id}/edit`)
+    await flushPromises()
+
+    const editWrapper = mount(ExpenseFormView, {
+      global: { plugins: [context.pinia, context.router] },
+    })
+    await editWrapper.find('[data-testid="btn-delete-in-edit"]').trigger('click')
+    await flushPromises()
+
+    await editWrapper.find('[data-testid="confirm-delete-in-edit-btn"]').trigger('click')
+    await flushPromises()
+
+    expect(context.expenseStore.getExpenseById(created.expense.id)).toBeNull()
   })
 })

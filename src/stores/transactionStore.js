@@ -135,6 +135,7 @@ export const useTransactionStore = defineStore('transaction', {
         itemCount: items.reduce((count, item) => count + item.qty, 0),
         subtotal: payload.subtotal,
         discount: Number(payload.discount ?? 0),
+        discountLabel: payload.discountLabel ?? payload.appliedPromo?.name ?? null,
         promoSyncId: payload.promoSyncId ?? payload.appliedPromo?.sync_id ?? null,
         appliedPromo: payload.appliedPromo ? { ...payload.appliedPromo } : null,
         tax: payload.tax,
