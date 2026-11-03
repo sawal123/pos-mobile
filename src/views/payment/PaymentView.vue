@@ -269,6 +269,9 @@ async function completePayment() {
       checkout: {
         items: cartStore.items,
         subtotal: cartStore.subtotal,
+        discount: cartStore.discount,
+        promoSyncId: cartStore.appliedPromo?.sync_id ?? null,
+        appliedPromo: cartStore.appliedPromo,
         tax: cartStore.tax,
         taxEnabled: taxStore.enabled,
         taxRate: taxStore.enabled ? taxStore.rate : 0,
@@ -294,6 +297,7 @@ async function completePayment() {
       id: transaction.id,
       invoiceNumber: transaction.invoiceNumber,
       total: transaction.total,
+      discount: transaction.discount ?? 0,
       paymentMethod: transaction.paymentMethod,
       cashReceived: transaction.cashReceived ?? null,
       changeAmount: transaction.changeAmount ?? null,
@@ -490,11 +494,14 @@ function goToTransactions() {
         <h3 class="text-base font-bold text-ink-primary">Ringkasan Pembayaran</h3>
         <CartSummary
           :subtotal="cartStore.subtotal"
+          :discount="cartStore.discount"
+          :applied-promo="cartStore.appliedPromo"
           :tax="cartStore.tax"
           :tax-enabled="taxStore.enabled"
           :tax-rate="taxStore.rate"
           :total="cartStore.total"
           :show-action="false"
+          :allow-promo-select="false"
         />
       </BaseCard>
 

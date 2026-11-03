@@ -15,7 +15,7 @@ const props = defineProps({
   },
 })
 
-const emit = defineEmits(['close', 'checkout'])
+const emit = defineEmits(['close', 'checkout', 'select-promo'])
 
 const cartStore = useCartStore()
 const taxStore = useTaxStore()
@@ -74,6 +74,39 @@ function checkout() {
           <span>Subtotal</span>
           <span>{{ formatCurrency(cartStore.subtotal) }}</span>
         </div>
+
+        <div
+          v-if="cartStore.appliedPromo || cartStore.discount > 0"
+          class="flex items-center justify-between rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+        >
+          <div class="flex items-center gap-1.5 min-w-0">
+            <span>🏷️</span>
+            <span class="truncate font-medium">{{ cartStore.appliedPromo?.name || 'Diskon Promo' }}</span>
+            <button
+              type="button"
+              class="ml-1 text-xs text-zinc-400 hover:text-red-500 transition-colors"
+              title="Hapus promo"
+              aria-label="Hapus promo"
+              @click.stop="cartStore.removePromo()"
+            >
+              ✕
+            </button>
+          </div>
+          <span class="shrink-0 font-semibold">-{{ formatCurrency(cartStore.discount) }}</span>
+        </div>
+
+        <button
+          v-else
+          type="button"
+          class="flex w-full items-center justify-between rounded-lg border border-dashed border-zinc-200 px-2.5 py-1.5 text-xs font-medium text-primary hover:border-primary/50 transition-colors text-left"
+          @click="$emit('select-promo')"
+        >
+          <span class="flex items-center gap-1.5">
+            <span>🏷️</span> Gunakan Promo / Voucher
+          </span>
+          <span class="text-zinc-400">›</span>
+        </button>
+
         <div
           v-if="taxStore.enabled && taxStore.rate > 0"
           class="flex items-center justify-between text-xs text-ink-secondary"

@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { useTaxStore } from '@/stores/taxStore'
+import { usePromoStore } from '@/stores/promoStore'
 
 function itemPrice(item) {
   return Number(item.price ?? item.unitPrice) || 0
@@ -26,18 +27,33 @@ function normalizeQuantity(value, item) {
 export const useCartStore = defineStore('cart', {
   state: () => ({
     items: [],
+    appliedPromo: null,
   }),
   getters: {
     subtotal: (state) => state.items.reduce((sum, item) => sum + itemPrice(item) * itemQuantity(item), 0),
+    discount(state) {
+      if (!state.appliedPromo) return 0
+      const promoStore = usePromoStore()
+      return promoStore.calculateDiscount(state.appliedPromo, state.items)
+    },
+    taxableSubtotal() {
+      return Math.max(0, this.subtotal - this.discount)
+    },
     tax() {
       const taxStore = useTaxStore()
-      return Math.round(this.subtotal * taxStore.effectiveRate / 100)
+      return Math.round(this.taxableSubtotal * taxStore.effectiveRate / 100)
     },
     total() {
-      return this.subtotal + this.tax
+      return this.taxableSubtotal + this.tax
     },
   },
   actions: {
+    applyPromo(promo) {
+      this.appliedPromo = promo ?? null
+    },
+    removePromo() {
+      this.appliedPromo = null
+    },
     addItem(product) {
       const existingItem = this.items.find((item) => item.id === product.id)
       const nextQty = (existingItem?.qty ?? 0) + 1
@@ -100,6 +116,7 @@ export const useCartStore = defineStore('cart', {
     },
     clearCart() {
       this.items = []
+      this.appliedPromo = null
     },
   },
 })

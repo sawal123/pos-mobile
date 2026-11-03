@@ -94,6 +94,10 @@ const showCashSummary = computed(() => (
         <span class="text-ink-secondary">Subtotal</span>
         <span class="font-medium">{{ formatCurrency(transaction.subtotal) }}</span>
       </div>
+      <div v-if="Number(transaction.discount) > 0" class="flex items-start justify-between gap-4 text-emerald-600 dark:text-emerald-400">
+        <span class="text-ink-secondary">Diskon Promo</span>
+        <span class="font-medium">-{{ formatCurrency(transaction.discount) }}</span>
+      </div>
       <div v-if="Number(transaction.tax) > 0" class="flex items-start justify-between gap-4">
         <span class="text-ink-secondary">{{ taxLabel }}</span>
         <span class="font-medium">{{ formatCurrency(transaction.tax) }}</span>

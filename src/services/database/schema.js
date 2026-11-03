@@ -1,5 +1,5 @@
 export const DB_NAME = 'pos_mobile'
-export const DB_VERSION = 4
+export const DB_VERSION = 5
 
 export const APP_META_KEYS = {
   initialized: 'data_initialized',
@@ -12,6 +12,7 @@ export const APP_STATE_KEYS = {
   stockMovements: 'stock_movements_state',
   printer: 'printer_state',
   tax: 'tax_settings',
+  promos: 'promos_state',
 }
 
 export const RESERVED_CATEGORY = 'Semua'
@@ -114,5 +115,32 @@ export const MIGRATIONS = {
   `,
   4: `
   ALTER TABLE products ADD COLUMN image_data TEXT NOT NULL DEFAULT '';
+  `,
+  5: `
+  ALTER TABLE products ADD COLUMN is_sellable INTEGER NOT NULL DEFAULT 1;
+  CREATE TABLE IF NOT EXISTS promos (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    code TEXT NULL,
+    discount_type TEXT NOT NULL,
+    discount_value INTEGER NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'all',
+    min_purchase REAL NOT NULL DEFAULT 0,
+    max_discount REAL NULL,
+    weekdays TEXT NULL,
+    starts_at TEXT NULL,
+    ends_at TEXT NULL,
+    start_time TEXT NULL,
+    end_time TEXT NULL,
+    usage_limit_total INTEGER NULL,
+    usage_limit_per_customer INTEGER NULL,
+    is_stackable INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'active',
+    sync_id TEXT NOT NULL,
+    sync_version INTEGER NOT NULL DEFAULT 1,
+    targets TEXT NULL,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_promos_status ON promos(status);
   `,
 }

@@ -331,6 +331,9 @@ export async function mapOutboxEntries(
       if (isNonEmptyString(payload.estimatedDuration)) {
         productChange.estimated_duration = payload.estimatedDuration.trim()
       }
+      if (payload.isSellable !== undefined || payload.is_sellable !== undefined) {
+        productChange.is_sellable = payload.isSellable !== undefined ? Boolean(payload.isSellable) : Boolean(payload.is_sellable)
+      }
       const prodBaseVer = extractServerSyncVersion(serverVersions, 'products', syncId)
       if (prodBaseVer !== undefined) {
         productChange.base_sync_version = prodBaseVer
@@ -715,10 +718,15 @@ export async function mapOutboxEntries(
         transaction_number: transactionNumber,
         status,
         subtotal: payload.subtotal,
-        discount_amount: 0,
+        discount_amount: Math.round(Number(payload.discountAmount ?? payload.discount ?? 0)),
         tax_amount: taxAmount,
         total_amount: payload.total,
         sold_at: new Date(soldAt).toISOString(),
+      }
+
+      const promoSyncId = payload.promoSyncId ?? payload.promo_sync_id ?? payload.appliedPromo?.sync_id ?? payload.appliedPromo?.syncId ?? null
+      if (promoSyncId) {
+        saleChange.promo_sync_id = promoSyncId
       }
 
       if (salePaymentMethod) {

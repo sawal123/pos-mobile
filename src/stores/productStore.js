@@ -13,6 +13,9 @@ function normalizeNumber(value, fallback = 0) {
 function normalizeProduct(product) {
   const kind = product.kind ?? (product.pricingUnit ? 'service' : 'product')
   const price = normalizeNumber(product.price ?? product.unitPrice)
+  const isSellable = product.isSellable !== undefined
+    ? Boolean(product.isSellable)
+    : (product.is_sellable !== undefined ? Boolean(product.is_sellable) : true)
 
   return {
     ...product,
@@ -28,6 +31,7 @@ function normalizeProduct(product) {
     minQuantity: normalizeNumber(product.minQuantity),
     estimatedDuration: product.estimatedDuration ?? '',
     imageData: typeof product.imageData === 'string' ? product.imageData : '',
+    isSellable,
     isActive: product.isActive ?? true,
   }
 }
@@ -110,6 +114,9 @@ function validateProductInput(payload, categories) {
   const minQuantity = isBlankValue(payload.minQuantity) ? 0 : Number(payload.minQuantity)
   const unit = normalizeName(payload.unit ?? 'pcs')
   const pricingUnit = normalizeName(payload.pricingUnit ?? 'kg')
+  const isSellable = payload.isSellable !== undefined
+    ? Boolean(payload.isSellable)
+    : (payload.is_sellable !== undefined ? Boolean(payload.is_sellable) : true)
 
   if (!name) {
     errors.name = 'Nama produk wajib diisi.'
@@ -173,6 +180,7 @@ function validateProductInput(payload, categories) {
       minQuantity: Number.isNaN(minQuantity) ? 0 : minQuantity,
       estimatedDuration: normalizeName(payload.estimatedDuration ?? ''),
       imageData: typeof payload.imageData === 'string' ? payload.imageData : '',
+      isSellable,
       isActive: payload.isActive ?? true,
     },
   }
@@ -240,7 +248,11 @@ export const useProductStore = defineStore('product', {
       return [DEFAULT_FILTER_CATEGORY, ...state.categories]
     },
     filteredProducts() {
-      let list = this.products.filter((product) => product.isActive)
+      let list = this.products.filter((product) => {
+        if (!product.isActive) return false
+        const sellable = product.isSellable !== undefined ? product.isSellable : product.is_sellable
+        return sellable === undefined || sellable === true || sellable === 1 || sellable === '1'
+      })
 
       if (this.selectedCategory !== DEFAULT_FILTER_CATEGORY) {
         list = list.filter((product) => product.category === this.selectedCategory)
