@@ -129,7 +129,7 @@ describe('Onboarding Account Choice Flow', () => {
 
       expect(wrapper.find('[data-testid="cloud-onboarding-back"]').exists()).toBe(true)
       expect(wrapper.text()).toContain('Masuk ke Akun Cloud')
-      expect(wrapper.text()).toContain('Onboarding Cloud')
+      expect(wrapper.get('[data-testid="cloud-page-header"] h1').text()).toBe('Masuk ke Akun Cloud')
     })
 
     it('navigates back to welcome when clicking back button', async () => {
@@ -171,7 +171,10 @@ describe('Onboarding Account Choice Flow', () => {
       await flushPromises()
 
       expect(wrapper.find('[data-testid="cloud-onboarding-next"]').exists()).toBe(true)
-      expect(wrapper.text()).toContain('Bisnis Cloud Terhubung!')
+      expect(wrapper.text()).toContain('Siap mulai berjualan')
+      expect(wrapper.get('[data-testid="cloud-page-header"] h1').text()).toBe('Cloud Anda')
+      expect(wrapper.find('[data-testid="cloud-google-link-card"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="email-change-card"]').exists()).toBe(false)
       expect(wrapper.text()).toContain('Kopi Nusantara')
 
       const continueBtn = wrapper.find('#cloud-onboarding-continue-pin-btn')

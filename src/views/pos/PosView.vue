@@ -8,6 +8,7 @@ import BaseInput from '@/components/base/BaseInput.vue'
 import CartItem from '@/components/pos/CartItem.vue'
 import CartSummary from '@/components/pos/CartSummary.vue'
 import CategoryPill from '@/components/pos/CategoryPill.vue'
+import DiscountPromoModal from '@/components/pos/DiscountPromoModal.vue'
 import MobileCartSheet from '@/components/pos/MobileCartSheet.vue'
 import ProductCard from '@/components/pos/ProductCard.vue'
 import { useCartStore } from '@/stores/cartStore'
@@ -28,6 +29,7 @@ const { filterCategories, filteredProducts, searchQuery, selectedCategory } = st
 const { items, subtotal, tax, total } = storeToRefs(cartStore)
 
 const showCartSheet = ref(false)
+const showPromoModal = ref(false)
 
 onMounted(async () => {
   if (cloudStore.isLinked && cloudStore.isOperationalCloudAccess) {
@@ -45,6 +47,14 @@ function openCartSheet() {
 
 function closeCartSheet() {
   showCartSheet.value = false
+}
+
+function openPromoModal() {
+  showPromoModal.value = true
+}
+
+function closePromoModal() {
+  showPromoModal.value = false
 }
 
 function handleCheckout() {
@@ -139,12 +149,17 @@ function handleCheckout() {
 
         <CartSummary
           :subtotal="subtotal"
+          :discount="cartStore.discount"
+          :discount-label="cartStore.discountLabel"
+          :applied-promo="cartStore.appliedPromo"
           :tax="tax"
           :tax-enabled="taxStore.enabled"
           :tax-rate="taxStore.rate"
           :total="total"
           :disabled="!items.length"
           @checkout="handleCheckout"
+          @select-promo="openPromoModal"
+          @remove-promo="cartStore.removePromo"
         />
       </section>
     </div>
@@ -186,6 +201,13 @@ function handleCheckout() {
       :open="showCartSheet"
       @close="closeCartSheet"
       @checkout="handleCheckout"
+      @select-promo="openPromoModal"
+    />
+
+    <!-- Discount & Promo Selection Modal -->
+    <DiscountPromoModal
+      :open="showPromoModal"
+      @close="closePromoModal"
     />
   </div>
 </template>

@@ -7,6 +7,7 @@ import { useCustomerStore } from '@/stores/customerStore'
 import { useExpenseStore } from '@/stores/expenseStore'
 import { usePrinterStore } from '@/stores/printerStore'
 import { useProductStore } from '@/stores/productStore'
+import { usePromoStore } from '@/stores/promoStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import { useTaxStore } from '@/stores/taxStore'
@@ -32,6 +33,7 @@ function createPersistenceContexts(pinia) {
   const shiftStore = useShiftStore(pinia)
   const printerStore = usePrinterStore(pinia)
   const taxStore = useTaxStore(pinia)
+  const promoStore = usePromoStore(pinia)
 
   return [
     {
@@ -215,6 +217,28 @@ function createPersistenceContexts(pinia) {
       },
       async save(adapter, snapshot) {
         await adapter.savePrinterState(snapshot)
+      },
+    },
+    {
+      key: 'promos',
+      store: promoStore,
+      initialState: cloneValue(promoStore.$state),
+      read() {
+        return {
+          promos: cloneValue(promoStore.promos),
+        }
+      },
+      async load(adapter) {
+        if (typeof adapter.loadPromos === 'function') {
+          const promos = await adapter.loadPromos()
+          return { promos }
+        }
+        return { promos: [] }
+      },
+      async save(adapter, snapshot) {
+        if (typeof adapter.savePromos === 'function') {
+          await adapter.savePromos(snapshot.promos)
+        }
       },
     },
   ]

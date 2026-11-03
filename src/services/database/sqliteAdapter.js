@@ -339,7 +339,7 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
         db.query('SELECT name FROM categories ORDER BY name ASC'),
         db.query(
           `SELECT id, name, category, sku, cost, price, stock, unit, min_stock,
-             kind, pricing_unit, min_quantity, estimated_duration, image_data, is_active
+             kind, pricing_unit, min_quantity, estimated_duration, image_data, is_sellable, is_active
            FROM products ORDER BY rowid ASC`,
         ),
       ])
@@ -362,6 +362,7 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
           minQuantity: Number(row.min_quantity ?? 0),
           estimatedDuration: row.estimated_duration ?? '',
           imageData: row.image_data ?? '',
+          isSellable: row.is_sellable === undefined ? true : Boolean(row.is_sellable),
           isActive: Boolean(row.is_active),
         })),
         stockMovements: await readAppState(APP_STATE_KEYS.stockMovements, []),
@@ -384,8 +385,8 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
           await db.run(
             `INSERT INTO products
               (id, name, category, sku, cost, price, stock, unit, min_stock,
-               kind, pricing_unit, min_quantity, estimated_duration, image_data, is_active)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               kind, pricing_unit, min_quantity, estimated_duration, image_data, is_sellable, is_active)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               String(product.id),
               product.name,
@@ -401,6 +402,7 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
               Number(product.minQuantity ?? 0),
               product.estimatedDuration ?? '',
               product.imageData ?? '',
+              product.isSellable === undefined ? 1 : (product.isSellable ? 1 : 0),
               product.isActive ? 1 : 0,
             ],
             false,
@@ -437,6 +439,78 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
           await db.run(
             'INSERT INTO customers (id, name, phone, email) VALUES (?, ?, ?, ?)',
             [String(customer.id), customer.name, customer.phone, customer.email],
+            false,
+          )
+        }
+      })
+    },
+    async loadPromos() {
+      const db = await ensureConnection()
+      const { values: rows = [] } = await db.query(
+        `SELECT id, name, code, discount_type, discount_value, scope, min_purchase, max_discount,
+                weekdays, starts_at, ends_at, start_time, end_time, usage_limit_total,
+                usage_limit_per_customer, is_stackable, status, sync_id, sync_version, targets, updated_at
+         FROM promos ORDER BY rowid ASC`,
+      )
+
+      return rows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        code: row.code ?? null,
+        discountType: row.discount_type,
+        discountValue: Number(row.discount_value ?? 0),
+        scope: row.scope ?? 'all',
+        minPurchase: Number(row.min_purchase ?? 0),
+        maxDiscount: row.max_discount !== null && row.max_discount !== undefined ? Number(row.max_discount) : null,
+        weekdays: parseJsonValue(row.weekdays, null),
+        startsAt: row.starts_at ?? null,
+        endsAt: row.ends_at ?? null,
+        startTime: row.start_time ?? null,
+        endTime: row.end_time ?? null,
+        usageLimitTotal: row.usage_limit_total !== null && row.usage_limit_total !== undefined ? Number(row.usage_limit_total) : null,
+        usageLimitPerCustomer: row.usage_limit_per_customer !== null && row.usage_limit_per_customer !== undefined ? Number(row.usage_limit_per_customer) : null,
+        isStackable: Boolean(row.is_stackable),
+        status: row.status ?? 'active',
+        syncId: row.sync_id ?? row.id,
+        syncVersion: Number(row.sync_version ?? 1),
+        targets: parseJsonValue(row.targets, []),
+        updatedAt: row.updated_at ?? new Date().toISOString(),
+      }))
+    },
+    async savePromos(promos = []) {
+      await withTransaction(async (db) => {
+        await db.run('DELETE FROM promos', [], false)
+
+        for (const promo of promos) {
+          await db.run(
+            `INSERT INTO promos
+              (id, name, code, discount_type, discount_value, scope, min_purchase, max_discount,
+               weekdays, starts_at, ends_at, start_time, end_time, usage_limit_total,
+               usage_limit_per_customer, is_stackable, status, sync_id, sync_version, targets, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              String(promo.id ?? promo.syncId),
+              promo.name,
+              promo.code ?? null,
+              promo.discountType ?? promo.discount_type,
+              Number(promo.discountValue ?? promo.discount_value ?? 0),
+              promo.scope ?? 'all',
+              Number(promo.minPurchase ?? promo.min_purchase ?? 0),
+              promo.maxDiscount !== undefined && promo.maxDiscount !== null ? Number(promo.maxDiscount) : (promo.max_discount !== undefined && promo.max_discount !== null ? Number(promo.max_discount) : null),
+              Array.isArray(promo.weekdays) ? JSON.stringify(promo.weekdays) : (typeof promo.weekdays === 'string' ? promo.weekdays : null),
+              promo.startsAt ?? promo.starts_at ?? null,
+              promo.endsAt ?? promo.ends_at ?? null,
+              promo.startTime ?? promo.start_time ?? null,
+              promo.endTime ?? promo.end_time ?? null,
+              promo.usageLimitTotal !== undefined && promo.usageLimitTotal !== null ? Number(promo.usageLimitTotal) : (promo.usage_limit_total !== undefined && promo.usage_limit_total !== null ? Number(promo.usage_limit_total) : null),
+              promo.usageLimitPerCustomer !== undefined && promo.usageLimitPerCustomer !== null ? Number(promo.usageLimitPerCustomer) : (promo.usage_limit_per_customer !== undefined && promo.usage_limit_per_customer !== null ? Number(promo.usage_limit_per_customer) : null),
+              promo.isStackable || promo.is_stackable ? 1 : 0,
+              promo.status ?? 'active',
+              String(promo.syncId ?? promo.sync_id ?? promo.id),
+              Number(promo.syncVersion ?? promo.sync_version ?? 1),
+              Array.isArray(promo.targets) ? JSON.stringify(promo.targets) : (typeof promo.targets === 'string' ? promo.targets : '[]'),
+              promo.updatedAt ?? promo.updated_at ?? new Date().toISOString(),
+            ],
             false,
           )
         }

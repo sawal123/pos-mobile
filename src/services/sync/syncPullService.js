@@ -10,6 +10,7 @@ import { useCustomerStore } from '@/stores/customerStore'
 import { useExpenseStore } from '@/stores/expenseStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import { useTransactionStore } from '@/stores/transactionStore'
+import { usePromoStore } from '@/stores/promoStore'
 import {
   inspectCloudFirstWorkspace,
   isTransactionMapped,
@@ -27,6 +28,8 @@ const KNOWN_ENTITIES = new Set([
   'expenses',
   'cash_ledger',
   'stock_movements',
+  'promos',
+  'promo_targets',
 ])
 
 const BASE_URL = (import.meta.env?.VITE_API_BASE_URL ?? '').replace(/\/+$/, '')
@@ -747,6 +750,7 @@ export function createSyncPullService({
     const expenseStore = resolveStore(stores?.expenseStore, useExpenseStore)
     const transactionStore = resolveStore(stores?.transactionStore, useTransactionStore)
     const shiftStore = resolveStore(stores?.shiftStore, useShiftStore)
+    const promoStore = resolveStore(stores?.promoStore, usePromoStore)
 
     // ── 6.5. Handle empty snapshot ────────────────────────────────────────────
     if (allRecords.length === 0) {
@@ -1195,6 +1199,7 @@ export function createSyncPullService({
     const nextStockMovements = productStore
       ? productStore.stockMovements.map((m) => ({ ...m }))
       : []
+    const nextPromos = promoStore ? promoStore.promos.map((p) => ({ ...p })) : []
     const nextShift = shiftStore
       ? {
           id: shiftStore.id,
@@ -1522,6 +1527,7 @@ export function createSyncPullService({
           existingProd.estimatedDuration = typeof estimated_duration === 'string'
             ? estimated_duration
             : ''
+          existingProd.isSellable = data.is_sellable !== undefined ? Boolean(data.is_sellable) : true
           existingProd.isActive = remoteIsActive
         } else if (status !== 'deleted') {
           nextProducts.push({
@@ -1539,6 +1545,7 @@ export function createSyncPullService({
             pricingUnit: typeof pricing_unit === 'string' && pricing_unit.trim() ? pricing_unit.trim() : remoteKind === 'service' ? 'kg' : 'pcs',
             minQuantity: Number.isFinite(remoteMinQuantity) && remoteMinQuantity >= 0 ? remoteMinQuantity : 0,
             estimatedDuration: typeof estimated_duration === 'string' ? estimated_duration : '',
+            isSellable: data.is_sellable !== undefined ? Boolean(data.is_sellable) : true,
             isActive: remoteIsActive,
           })
           plannedRegistryBinds.push({
@@ -1551,6 +1558,52 @@ export function createSyncPullService({
 
         appliedCount++
         serverVersionsToSave[`products:${syncId}`] = {
+          syncVersion,
+          syncSequence: sync_sequence,
+        }
+      } else if (entity === 'promos') {
+        const promoRecord = {
+          id: syncId,
+          syncId,
+          syncVersion,
+          name: data.name,
+          code: data.code ?? null,
+          discountType: data.discount_type,
+          discountValue: Number(data.discount_value ?? 0),
+          scope: data.scope ?? 'all',
+          minPurchase: Number(data.min_purchase ?? 0),
+          maxDiscount: data.max_discount !== null && data.max_discount !== undefined ? Number(data.max_discount) : null,
+          weekdays: data.weekdays ?? null,
+          startsAt: data.starts_at ?? null,
+          endsAt: data.ends_at ?? null,
+          startTime: data.start_time ?? null,
+          endTime: data.end_time ?? null,
+          usageLimitTotal: data.usage_limit_total !== null && data.usage_limit_total !== undefined ? Number(data.usage_limit_total) : null,
+          usageLimitPerCustomer: data.usage_limit_per_customer !== null && data.usage_limit_per_customer !== undefined ? Number(data.usage_limit_per_customer) : null,
+          isStackable: Boolean(data.is_stackable),
+          status: data.status ?? 'active',
+          targets: Array.isArray(data.targets) ? data.targets : [],
+          updatedAt: new Date().toISOString(),
+        }
+
+        const existingPromoIndex = nextPromos.findIndex(
+          (p) => String(p.id).toLowerCase() === syncId || String(p.syncId).toLowerCase() === syncId,
+        )
+
+        if (data.status === 'deleted' || data.status === 'inactive') {
+          if (existingPromoIndex !== -1) {
+            nextPromos.splice(existingPromoIndex, 1)
+          }
+        } else {
+          if (existingPromoIndex !== -1) {
+            nextPromos[existingPromoIndex] = promoRecord
+          } else {
+            nextPromos.push(promoRecord)
+          }
+        }
+
+        appliedCount++
+        serverVersionsToSave[`promos:${syncId}`] = {
           syncVersion,
           syncSequence: sync_sequence,
         }
@@ -1883,10 +1936,6 @@ export function createSyncPullService({
           business_snapshot,
         } = data
 
-        if (discount_amount && Number(discount_amount) > 0) {
-          warnings.push('UNSUPPORTED_LOCAL_SALE_DISCOUNT_FIELD')
-        }
-
         const saleItemRecords = pulledSaleItemsBySaleId[syncId] ?? []
 
         let existingTrx = nextTransactions.find((t) => String(t.id).toLowerCase() === syncId)
@@ -2040,6 +2089,8 @@ export function createSyncPullService({
           existingTrx.invoiceNumber = transaction_number
           existingTrx.status = status
           existingTrx.subtotal = Number(subtotal)
+          existingTrx.discount = Number(discount_amount || 0)
+          existingTrx.promoSyncId = data.promo_sync_id || null
           existingTrx.tax = Number(tax_amount)
           existingTrx.total = Number(total_amount)
           existingTrx.createdAt = sold_at
@@ -2084,6 +2135,8 @@ export function createSyncPullService({
             items: mappedItems,
             itemCount,
             subtotal: Number(subtotal),
+            discount: Number(discount_amount || 0),
+            promoSyncId: data.promo_sync_id || null,
             tax: Number(tax_amount),
             total: Number(total_amount),
             grossProfit: Number.isFinite(remoteGrossProfit) ? remoteGrossProfit : 0,
@@ -2402,6 +2455,11 @@ export function createSyncPullService({
         items: nextTransactions,
       })
     }
+    if (promoStore) {
+      promoStore.$patch({
+        promos: nextPromos,
+      })
+    }
 
     // ── 11. Flush persistence scheduler (persists Pinia state to SQLite) ───────
     if (scheduler && typeof scheduler.flush === 'function') {
@@ -2417,6 +2475,9 @@ export function createSyncPullService({
       }
       if (typeof adapter.saveTransactions === 'function') {
         await adapter.saveTransactions(nextTransactions)
+      }
+      if (typeof adapter.savePromos === 'function') {
+        await adapter.savePromos(nextPromos)
       }
     }
 

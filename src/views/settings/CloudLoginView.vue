@@ -90,6 +90,34 @@ const step = ref('login') // 'login' | 'select-business' | 'confirm-link' | 'sel
 const pendingBusiness = ref(null)
 const loginErrorMessage = ref('')
 const googleLinkCollision = ref(false)
+const accountSettingsOpen = ref(false)
+const accountSettingsMounted = ref(false)
+
+watch([() => cloudStore.isAuthenticated, googleLinkCollision], ([authenticated, collision]) => {
+  if (authenticated && collision) {
+    accountSettingsOpen.value = true
+    accountSettingsMounted.value = true
+  }
+})
+
+function toggleAccountSettings(event) {
+  accountSettingsOpen.value = event.target.open
+  if (event.target.open) accountSettingsMounted.value = true
+}
+
+const cloudPageTitle = computed(() => {
+  if (!cloudStore.isAuthenticated) return isOnboarding.value ? 'Masuk ke Akun Cloud' : 'Cloud Login'
+  if (isLinked.value && step.value === 'done') return 'Cloud Anda'
+  if (step.value === 'select-outlet') return 'Pilih outlet'
+  return 'Hubungkan bisnis'
+})
+
+const cloudPageDescription = computed(() => {
+  if (!cloudStore.isAuthenticated) return 'Hubungkan akun untuk menggunakan bisnis Cloud Anda.'
+  if (isLinked.value && step.value === 'done') return 'Kelola data toko dari perangkat ini.'
+  if (step.value === 'select-outlet') return 'Pilih lokasi yang akan digunakan di perangkat ini.'
+  return 'Pilih bisnis untuk mulai berjualan.'
+})
 
 // In-app Cloud Registration state
 const registerName = ref('')
@@ -1878,10 +1906,10 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div :class="isOnboarding ? 'min-h-dvh bg-[#F7F8FC] px-4 py-8 sm:px-6' : ''">
-    <div class="mx-auto max-w-3xl space-y-5">
+  <div :class="isOnboarding ? 'min-h-dvh bg-[#F7F8FC] px-4 py-6 sm:px-6' : ''">
+    <div class="mx-auto max-w-2xl space-y-5 pb-6">
       <!-- Back button during onboarding login step -->
-      <div v-if="isOnboarding && step === 'login'" class="mb-2">
+      <div v-if="isOnboarding && !cloudStore.isAuthenticated && step === 'login'" class="mb-2">
         <button
           id="cloud-onboarding-back-btn"
           type="button"
@@ -1894,27 +1922,33 @@ onMounted(async () => {
         </button>
       </div>
 
-      <div>
-        <p class="text-sm font-medium uppercase tracking-[0.18em] text-primary">
-          {{ isOnboarding ? 'Onboarding Cloud' : 'Cloud' }}
-        </p>
-        <h2 class="mt-2 text-2xl font-semibold text-ink-primary">
-          {{ isOnboarding ? 'Masuk ke Akun Cloud' : 'Cloud Login' }}
-        </h2>
-        <p v-if="isOnboarding" class="mt-1 text-sm text-ink-secondary">
-          Hubungkan bisnis yang sudah terdaftar di Cloud untuk memuat produk dan data toko ke perangkat ini.
-        </p>
-      </div>
-
-      <CloudGoogleLinkCard
-        v-if="cloudStore.isAuthenticated"
-        :collision-detected="googleLinkCollision"
-      />
-
-      <CloudEmailChangeCard
-        @session-revoked="handleEmailChangeSessionRevoked"
-        @login-again="emailChangeCompleted = false"
-      />
+      <header class="space-y-4" data-testid="cloud-page-header">
+        <div class="flex items-center gap-3">
+          <span class="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+            <AppIcon name="cloud" class="size-6" />
+          </span>
+          <div class="min-w-0">
+            <h1 class="text-2xl font-semibold tracking-tight text-ink-primary">{{ cloudPageTitle }}</h1>
+            <p class="mt-1 text-sm leading-relaxed text-ink-secondary">{{ cloudPageDescription }}</p>
+          </div>
+        </div>
+        <div
+          v-if="cloudStore.isAuthenticated && !(isLinked && step === 'done')"
+          class="flex items-center gap-3 rounded-2xl border border-zinc-200/70 bg-white px-4 py-3"
+          data-testid="cloud-signed-in-account"
+        >
+          <span class="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-semibold text-primary" aria-hidden="true">
+            {{ (cloudStore.user?.name || cloudStore.user?.email || 'A').slice(0, 1).toUpperCase() }}
+          </span>
+          <div class="min-w-0 flex-1">
+            <p class="truncate text-sm font-medium text-ink-primary">{{ cloudStore.user?.name || 'Akun Cloud' }}</p>
+            <p class="truncate text-xs text-ink-secondary" data-testid="link-cloud-account">{{ cloudAccountEmail }}</p>
+          </div>
+          <span class="flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700">
+            <span class="size-1.5 rounded-full bg-emerald-500" aria-hidden="true"></span> Masuk
+          </span>
+        </div>
+      </header>
 
       <!-- ZERO BUSINESS STATE (Reachable when authenticated but has 0 businesses) -->
       <BaseCard v-if="isZeroBusiness" id="cloud-no-business" class="space-y-3">
@@ -1947,14 +1981,10 @@ onMounted(async () => {
             </span>
             <div class="min-w-0 flex-1">
               <h3 class="text-base font-bold text-ink-primary">
-                Bisnis Cloud Terhubung!
+                Siap mulai berjualan
               </h3>
               <p class="mt-1 text-sm leading-relaxed text-ink-secondary">
-                Bisnis <strong class="text-ink-primary">{{ cloudStore.selectedBusiness?.name }}</strong>
-                ({{ cloudStore.selectedOutlet?.name }}) telah aktif di perangkat ini.
-              </p>
-              <p class="mt-2 text-xs leading-relaxed text-ink-secondary">
-                Anda dapat menekan <strong>Muat Data Cloud</strong> di bawah untuk menarik katalog produk &amp; kategori, lalu lanjutkan ke pembuatan PIN kasir untuk mulai transaksi.
+                Siapkan PIN kasir untuk melanjutkan ke POS.
               </p>
               <div class="mt-4 flex flex-wrap gap-2.5">
                 <BaseButton
@@ -1963,7 +1993,7 @@ onMounted(async () => {
                   variant="primary"
                   @click="router.push({ name: 'pin-setup' })"
                 >
-                  Lanjut
+                  Lanjut ke PIN kasir
                 </BaseButton>
               </div>
             </div>
@@ -1972,39 +2002,39 @@ onMounted(async () => {
       <!-- PREM-M03: link status summary -->
       <div
         id="cloud-link-summary"
-        class="rounded-2xl border border-emerald-200 bg-emerald-50/60 px-4 py-3"
+        class="rounded-2xl border border-zinc-200/80 bg-white px-4 py-4"
       >
         <div class="flex items-center justify-between">
-          <span class="text-sm font-semibold text-ink-primary">Cloud</span>
+          <span class="text-sm font-semibold text-ink-primary">Bisnis aktif</span>
           <span
             class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-emerald-700"
           >
             Terhubung
           </span>
         </div>
-        <dl class="mt-2 space-y-1 text-xs text-ink-secondary">
+        <dl class="mt-4 space-y-3 text-sm text-ink-secondary">
           <div class="flex items-center justify-between">
             <dt>Akun</dt>
-            <dd class="font-medium text-ink-primary" data-testid="cloud-link-email">
+            <dd class="min-w-0 break-all pl-4 text-right font-medium text-ink-primary" data-testid="cloud-link-email">
               {{ cloudAccountEmail }}
             </dd>
           </div>
           <div class="flex items-center justify-between">
-            <dt>Bisnis Cloud</dt>
-            <dd class="font-medium text-ink-primary" data-testid="cloud-link-business">
+            <dt>Bisnis</dt>
+            <dd class="min-w-0 break-words pl-4 text-right font-medium text-ink-primary" data-testid="cloud-link-business">
               {{ cloudStore.selectedBusiness?.name ?? '-' }}
             </dd>
           </div>
           <div class="flex items-center justify-between">
-            <dt>Subscription</dt>
-            <dd class="font-medium text-ink-primary" data-testid="cloud-link-subscription">
-              {{ cloudSubscriptionLabel }}
+            <dt>Outlet</dt>
+            <dd class="min-w-0 break-words pl-4 text-right font-medium text-ink-primary" data-testid="cloud-link-outlet">
+              {{ cloudStore.selectedOutlet?.name ?? '-' }}
             </dd>
           </div>
           <div class="flex items-center justify-between">
-            <dt>Status diperiksa</dt>
-            <dd class="font-medium text-ink-primary" data-testid="cloud-link-checked">
-              {{ contextCheckedLabel }}
+            <dt>Paket</dt>
+            <dd class="font-medium text-ink-primary" data-testid="cloud-link-subscription">
+              {{ cloudSubscriptionLabel }}
             </dd>
           </div>
         </dl>
@@ -2026,41 +2056,6 @@ onMounted(async () => {
           >
             Putuskan
           </BaseButton>
-        </div>
-      </div>
-
-      <div class="space-y-2">
-        <div class="flex items-center justify-between rounded-2xl bg-surface px-4 py-3">
-          <span class="text-sm text-ink-secondary">Email</span>
-          <span class="font-medium text-ink-primary">{{ cloudStore.user?.email ?? '-' }}</span>
-        </div>
-        <div class="flex items-center justify-between rounded-2xl bg-surface px-4 py-3">
-          <span class="text-sm text-ink-secondary">Business</span>
-          <span class="font-medium text-ink-primary">{{
-            cloudStore.selectedBusiness?.name ?? '-'
-          }}</span>
-        </div>
-        <div class="flex items-center justify-between rounded-2xl bg-surface px-4 py-3">
-          <span class="text-sm text-ink-secondary">Outlet</span>
-          <span class="font-medium text-ink-primary">{{
-            cloudStore.selectedOutlet?.name ?? '-'
-          }}</span>
-        </div>
-        <div class="flex items-center justify-between rounded-2xl bg-surface px-4 py-3">
-          <span class="text-sm text-ink-secondary">Cloud Access</span>
-          <span
-            class="font-medium"
-            :class="cloudStore.cloudAccess ? 'text-emerald-600' : 'text-danger'"
-          >
-            {{ cloudStore.cloudAccess ? 'Aktif' : 'Tidak aktif' }}
-          </span>
-        </div>
-        <div
-          v-if="cloudStore.isDeviceRegistered"
-          class="flex items-center justify-between rounded-2xl bg-surface px-4 py-3"
-        >
-          <span class="text-sm text-ink-secondary">Device</span>
-          <span class="font-medium text-emerald-600">Terdaftar</span>
         </div>
       </div>
 
@@ -2103,6 +2098,118 @@ onMounted(async () => {
           akses data tenant diblokir sampai data ruang kerja dipastikan konsisten.
         </p>
       </div>
+
+      <!-- P13: Manual Pull Section -->
+      <div
+        v-if="canSync"
+        id="cloud-pull-section"
+        class="space-y-3 rounded-2xl border border-zinc-200/80 bg-white p-4"
+      >
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div class="min-w-0">
+            <p class="text-sm font-semibold text-ink-primary">Katalog Cloud</p>
+            <p class="text-xs text-ink-secondary">
+              Produk dan kategori dari bisnis Anda.
+            </p>
+          </div>
+          <BaseButton
+            id="pull-now-btn"
+            v-show="!canInitializeCloudData"
+            variant="secondary"
+            size="md"
+            :disabled="
+              isAnySyncOperationBusy ||
+              isContextGuardMutationBlocked ||
+              isFreshWorkspace
+            "
+            :loading="syncPullStore.loading"
+            aria-label="Tarik Data Cloud"
+            title="Tarik Data Cloud"
+            class="w-full shrink-0 sm:w-auto"
+            @click="handlePullNow"
+          >
+            <AppIcon name="download" class="h-4 w-4" />
+            <span class="ml-1.5">Muat ulang</span>
+          </BaseButton>
+        </div>
+
+        <p
+          v-if="isPushOnlyWorkspace"
+          id="cloud-push-only-notice"
+          class="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800"
+        >
+          Perangkat ini sudah terhubung untuk mengirim data. Gunakan Tarik untuk mengambil data
+          Cloud pertama kali tanpa menghapus data lokal.
+        </p>
+
+        <div
+          v-if="canInitializeCloudData"
+          id="cloud-initialization-notice"
+          class="space-y-3"
+        >
+          <p class="text-xs text-ink-secondary">
+            Katalog belum dimuat di perangkat ini.
+          </p>
+          <BaseButton
+            id="cloud-initialize-btn"
+            variant="primary"
+            size="md"
+            :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked || isInitialPullRunning"
+            :loading="syncPullStore.loading || isInitialPullRunning"
+            aria-label="Muat Data Cloud"
+            title="Muat Data Cloud"
+            class="mt-3 w-full sm:w-auto"
+            @click="handlePullNow({ initialCloudRead: true })"
+          >
+            <AppIcon name="download" class="h-4 w-4" />
+            <span class="ml-1.5">Muat Data Cloud</span>
+          </BaseButton>
+        </div>
+
+        <p
+          v-if="pullMessage"
+          id="pull-result-message"
+          class="rounded-xl px-3 py-2 text-xs font-medium"
+          :class="pullSuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'"
+        >
+          {{ pullMessage }}
+        </p>
+
+        <div
+          v-if="syncPullStore.lastResult?.code === 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY'"
+          id="clear-and-pull-section"
+          class="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3.5 space-y-2"
+        >
+          <p class="text-xs text-amber-800">
+            Ada data lokal yang belum tersinkron (seperti kas/shift). Jika Anda ingin menggunakan data Cloud sepenuhnya di perangkat ini, bersihkan cache lokal lalu muat ulang dari Cloud.
+          </p>
+          <BaseButton
+            id="clear-and-pull-btn"
+            variant="secondary"
+            size="sm"
+            class="w-full sm:w-auto text-amber-800 border-amber-300 hover:bg-amber-100"
+            :disabled="isAnySyncOperationBusy || isInitialPullRunning"
+            :loading="isInitialPullRunning"
+            @click="handleClearAndPull"
+          >
+            <AppIcon name="trash" class="h-4 w-4 text-amber-700" />
+            <span class="ml-1.5 font-medium">Bersihkan</span>
+          </BaseButton>
+        </div>
+      </div>
+
+      <details
+        v-if="canSync"
+        id="cloud-sync-details"
+        class="group rounded-2xl border border-zinc-200/80"
+        :open="syncConflictStore.openConflictCount > 0 || syncStatusStore.reconciliationRequired || syncBootstrapStore.hasContextMismatch"
+      >
+        <summary class="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium text-ink-primary [&::-webkit-details-marker]:hidden">
+          <span>Sinkronisasi &amp; riwayat</span>
+          <AppIcon name="chevron-right" class="size-4 text-ink-secondary transition-transform group-open:rotate-90" />
+        </summary>
+        <div class="space-y-4 border-t border-zinc-100 p-4">
+          <p class="text-xs text-ink-secondary" data-testid="cloud-link-checked">Diperiksa: {{ contextCheckedLabel }}</p>
 
       <!-- P14: Initial Bootstrap Section (Free to Cloud) -->
       <div
@@ -2504,103 +2611,6 @@ onMounted(async () => {
         </p>
       </div>
 
-      <!-- P13: Manual Pull Section -->
-      <div
-        v-if="canSync"
-        id="cloud-pull-section"
-        class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
-      >
-        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div class="min-w-0">
-            <p class="text-sm font-semibold text-ink-primary">Tarik Data Cloud</p>
-            <p class="text-xs text-ink-secondary">
-              Ambil perubahan data dari server cloud ke POS lokal
-            </p>
-          </div>
-          <BaseButton
-            id="pull-now-btn"
-            variant="secondary"
-            size="md"
-            :disabled="
-              isAnySyncOperationBusy ||
-              isContextGuardMutationBlocked ||
-              isFreshWorkspace
-            "
-            :loading="syncPullStore.loading"
-            aria-label="Tarik Data Cloud"
-            title="Tarik Data Cloud"
-            class="w-full shrink-0 sm:w-auto"
-            @click="handlePullNow"
-          >
-            <AppIcon name="download" class="h-4 w-4" />
-            <span class="ml-1.5">Tarik</span>
-          </BaseButton>
-        </div>
-
-        <p
-          v-if="isPushOnlyWorkspace"
-          id="cloud-push-only-notice"
-          class="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800"
-        >
-          Perangkat ini sudah terhubung untuk mengirim data. Gunakan Tarik untuk mengambil data
-          Cloud pertama kali tanpa menghapus data lokal.
-        </p>
-
-        <div
-          v-if="canInitializeCloudData"
-          id="cloud-initialization-notice"
-          class="rounded-xl border border-amber-200 bg-amber-50 p-3"
-        >
-          <p class="text-xs text-amber-800">
-            Perangkat ini belum menginisialisasi data Cloud. Muat katalog Cloud ke ruang kerja baru ini.
-          </p>
-          <BaseButton
-            id="cloud-initialize-btn"
-            variant="primary"
-            size="md"
-            :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked || isInitialPullRunning"
-            :loading="syncPullStore.loading || isInitialPullRunning"
-            aria-label="Muat Data Cloud"
-            title="Muat Data Cloud"
-            class="mt-3 w-full sm:w-auto"
-            @click="handlePullNow({ initialCloudRead: true })"
-          >
-            <AppIcon name="download" class="h-4 w-4" />
-            <span class="ml-1.5">Muat</span>
-          </BaseButton>
-        </div>
-
-        <p
-          v-if="pullMessage"
-          id="pull-result-message"
-          class="rounded-xl px-3 py-2 text-xs font-medium"
-          :class="pullSuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'"
-        >
-          {{ pullMessage }}
-        </p>
-
-        <div
-          v-if="syncPullStore.lastResult?.code === 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY'"
-          id="clear-and-pull-section"
-          class="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3.5 space-y-2"
-        >
-          <p class="text-xs text-amber-800">
-            Ada data lokal yang belum tersinkron (seperti kas/shift). Jika Anda ingin menggunakan data Cloud sepenuhnya di perangkat ini, bersihkan cache lokal lalu muat ulang dari Cloud.
-          </p>
-          <BaseButton
-            id="clear-and-pull-btn"
-            variant="secondary"
-            size="sm"
-            class="w-full sm:w-auto text-amber-800 border-amber-300 hover:bg-amber-100"
-            :disabled="isAnySyncOperationBusy || isInitialPullRunning"
-            :loading="isInitialPullRunning"
-            @click="handleClearAndPull"
-          >
-            <AppIcon name="trash" class="h-4 w-4 text-amber-700" />
-            <span class="ml-1.5 font-medium">Bersihkan</span>
-          </BaseButton>
-        </div>
-      </div>
 
       <!-- P15: Manual Conflict Resolution Section -->
       <div
@@ -2853,6 +2863,9 @@ onMounted(async () => {
         </div>
       </div>
 
+        </div>
+      </details>
+
       <!-- Cloud access warning -->
       <p
         v-if="!cloudStore.cloudAccess"
@@ -2883,18 +2896,27 @@ onMounted(async () => {
     </BaseCard>
 
     <!-- SELECT BUSINESS -->
-    <BaseCard v-else-if="step === 'select-business'" id="cloud-select-business" class="space-y-3">
-      <p class="text-sm font-medium text-ink-primary">Pilih Bisnis Cloud</p>
-      <div
+    <BaseCard v-else-if="step === 'select-business'" id="cloud-select-business" class="space-y-4">
+      <div class="flex items-center justify-between gap-3">
+        <h2 class="text-base font-semibold text-ink-primary">Bisnis Anda</h2>
+        <span class="text-xs text-ink-secondary">{{ cloudStore.businesses.length }} bisnis</span>
+      </div>
+      <button
         v-for="biz in cloudStore.businesses"
         :key="biz.id"
-        class="flex cursor-pointer items-center justify-between rounded-2xl bg-surface px-4 py-3 hover:bg-surface/80"
+        type="button"
+        class="flex min-h-20 w-full items-center gap-3 rounded-2xl border border-zinc-200/80 bg-white p-4 text-left transition hover:border-primary/40 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-50"
         :id="`cloud-business-${biz.id}`"
+        :disabled="cloudStore.loading"
         @click="handleSelectBusiness(biz.id)"
       >
-        <span class="font-medium text-ink-primary">{{ biz.name }}</span>
-        <span class="text-sm text-ink-secondary">Pilih →</span>
-      </div>
+        <span class="flex size-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary"><AppIcon name="store" /></span>
+        <span class="min-w-0 flex-1">
+          <span class="block break-words text-sm font-semibold text-ink-primary">{{ biz.name }}</span>
+          <span class="mt-1 block text-xs text-ink-secondary">{{ (biz.outlets ?? []).filter((outlet) => outlet.status === 'active').length }} outlet aktif</span>
+        </span>
+        <AppIcon name="chevron-right" class="size-4 text-ink-secondary" />
+      </button>
 
       <p v-if="cloudStore.error" class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger">
         {{ cloudStore.error }}
@@ -2914,7 +2936,7 @@ onMounted(async () => {
 
     <!-- SELECT OUTLET -->
     <BaseCard v-else-if="step === 'select-outlet'" id="cloud-select-outlet" class="space-y-3">
-      <p class="text-sm font-medium text-ink-primary">Pilih Outlet</p>
+      <h2 class="text-base font-semibold text-ink-primary">{{ cloudStore.selectedBusiness?.name || 'Outlet Anda' }}</h2>
 
       <p
         v-if="zeroActiveOutlets"
@@ -2925,16 +2947,19 @@ onMounted(async () => {
       </p>
 
       <template v-else>
-        <div
+        <button
           v-for="outlet in activeBusinessOutlets"
           :key="outlet.id"
-          class="flex cursor-pointer items-center justify-between rounded-2xl bg-surface px-4 py-3 hover:bg-surface/80"
+          type="button"
+          class="flex min-h-16 w-full items-center gap-3 rounded-2xl border border-zinc-200/80 bg-white p-4 text-left transition hover:border-primary/40 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-50"
           :id="`cloud-outlet-${outlet.id}`"
+          :disabled="cloudStore.loading"
           @click="handleSelectOutlet(outlet.id)"
         >
-          <span class="font-medium text-ink-primary">{{ outlet.name }}</span>
-          <span class="text-sm text-ink-secondary">Pilih →</span>
-        </div>
+          <AppIcon name="store" class="text-primary" />
+          <span class="min-w-0 flex-1 break-words text-sm font-medium text-ink-primary">{{ outlet.name }}</span>
+          <AppIcon name="chevron-right" class="size-4 text-ink-secondary" />
+        </button>
       </template>
 
       <p v-if="cloudStore.error" class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger">
@@ -2956,45 +2981,34 @@ onMounted(async () => {
     <!-- CONFIRM LINK (PREM-M03) -->
     <BaseCard v-else-if="step === 'confirm-link'" id="cloud-confirm-link" class="space-y-4">
       <div>
-        <p class="text-sm font-medium text-ink-primary">Hubungkan Bisnis</p>
+        <h2 class="text-base font-semibold text-ink-primary">Gunakan bisnis ini?</h2>
         <p class="mt-1 text-xs text-ink-secondary">
-          Tautkan POS lokal ini dengan bisnis Cloud berikut. Data lokal tidak akan diubah.
+          Bisnis berikut akan digunakan di perangkat ini.
         </p>
       </div>
 
-      <dl class="space-y-2">
-        <div class="flex items-center justify-between rounded-2xl bg-surface px-4 py-3">
-          <dt class="text-sm text-ink-secondary">Bisnis lokal</dt>
-          <dd class="font-medium text-ink-primary" data-testid="link-local-business">
-            {{ localBusinessName }}
-          </dd>
+      <div class="flex items-center gap-3 rounded-2xl border border-primary/15 bg-primary/5 p-4">
+        <span class="flex size-12 shrink-0 items-center justify-center rounded-xl bg-white text-primary"><AppIcon name="store" class="size-6" /></span>
+        <div class="min-w-0">
+          <p class="break-words text-base font-semibold text-ink-primary" data-testid="link-cloud-business">{{ pendingBusiness?.name ?? '-' }}</p>
+          <p class="mt-1 text-xs text-ink-secondary">{{ (pendingBusiness?.outlets ?? []).filter((outlet) => outlet.status === 'active').length }} outlet aktif</p>
         </div>
-        <div class="flex items-center justify-between rounded-2xl bg-surface px-4 py-3">
-          <dt class="text-sm text-ink-secondary">Akun Cloud</dt>
-          <dd class="font-medium text-ink-primary" data-testid="link-cloud-account">
-            {{ cloudAccountEmail }}
-          </dd>
-        </div>
-        <div class="flex items-center justify-between rounded-2xl bg-surface px-4 py-3">
-          <dt class="text-sm text-ink-secondary">Bisnis Cloud</dt>
-          <dd class="font-medium text-ink-primary" data-testid="link-cloud-business">
-            {{ pendingBusiness?.name ?? '-' }}
-          </dd>
-        </div>
-      </dl>
+      </div>
+      <p class="text-xs leading-relaxed text-ink-secondary">Ruang kerja lokal: <span data-testid="link-local-business">{{ localBusinessName }}</span></p>
 
       <p v-if="cloudStore.error" class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger">
         {{ cloudStore.error }}
       </p>
 
-      <div class="flex flex-wrap gap-2">
+      <div class="flex flex-col gap-2 sm:flex-row">
         <BaseButton
           id="cloud-confirm-link-btn"
+          class="w-full sm:flex-1"
           :loading="cloudStore.loading"
           :disabled="cloudStore.loading"
           @click="handleConfirmLink"
         >
-          Hubungkan
+          Hubungkan bisnis
         </BaseButton>
         <BaseButton
           id="cloud-cancel-link-btn"
@@ -3009,10 +3023,10 @@ onMounted(async () => {
 
     <!-- UNLINKED (authenticated but no Cloud business linked yet) -->
     <BaseCard v-else-if="isUnlinkedBusiness" id="cloud-unlinked" class="space-y-3">
-      <p class="text-sm font-medium text-ink-primary">Cloud terhubung</p>
-      <p class="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-700">
-        Belum ada bisnis Cloud yang ditautkan ke POS ini. Pilih bisnis untuk menautkan (perlu
-        koneksi internet).
+      <div class="flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary"><AppIcon name="store" class="size-6" /></div>
+      <h2 class="text-lg font-semibold text-ink-primary">Pilih bisnis Anda</h2>
+      <p class="text-sm leading-relaxed text-ink-secondary">
+        Hubungkan bisnis Cloud untuk memuat katalog toko Anda.
       </p>
       <p
         v-if="loginErrorMessage"
@@ -3028,7 +3042,7 @@ onMounted(async () => {
           :disabled="cloudStore.loading"
           @click="handleRelink"
         >
-          Pilih
+          Pilih bisnis
         </BaseButton>
         <BaseButton
           id="cloud-unlinked-disconnect"
@@ -3127,6 +3141,31 @@ onMounted(async () => {
         />
       </div>
     </BaseCard>
+
+    <details
+      v-if="cloudStore.isAuthenticated || accountSettingsMounted"
+      id="cloud-account-settings"
+      data-testid="cloud-account-settings"
+      class="group rounded-2xl border border-zinc-200/80 bg-white"
+      :open="accountSettingsOpen"
+      @toggle="toggleAccountSettings"
+    >
+      <summary class="flex min-h-16 cursor-pointer list-none items-center gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
+        <span class="flex size-9 shrink-0 items-center justify-center rounded-xl bg-zinc-100 text-ink-secondary"><AppIcon name="settings" class="size-4" /></span>
+        <span class="min-w-0 flex-1 text-sm font-medium text-ink-primary">Pengaturan akun</span>
+        <AppIcon name="chevron-right" class="size-4 text-ink-secondary transition-transform group-open:rotate-90" />
+      </summary>
+      <div v-if="accountSettingsMounted" class="space-y-3 border-t border-zinc-100 p-3">
+        <CloudGoogleLinkCard
+          v-if="cloudStore.isAuthenticated"
+          :collision-detected="googleLinkCollision"
+        />
+        <CloudEmailChangeCard
+          @session-revoked="handleEmailChangeSessionRevoked"
+          @login-again="emailChangeCompleted = false"
+        />
+      </div>
+    </details>
 
     <!-- Legacy auth markup retained below only as a compatibility reference. -->
     <!-- AUTH FORM (LOGIN & IN-APP REGISTER) -->

@@ -9,10 +9,12 @@ import CustomerAutocomplete from '@/components/customer/CustomerAutocomplete.vue
 import PaymentMethodCard from '@/components/payment/PaymentMethodCard.vue'
 import PaymentSuccessModal from '@/components/payment/PaymentSuccessModal.vue'
 import CartSummary from '@/components/pos/CartSummary.vue'
+import DiscountPromoModal from '@/components/pos/DiscountPromoModal.vue'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCartStore } from '@/stores/cartStore'
 import { useCustomerStore } from '@/stores/customerStore'
 import { useProductStore } from '@/stores/productStore'
+import { usePromoStore } from '@/stores/promoStore'
 import { useTaxStore } from '@/stores/taxStore'
 import { useSyncPushStore } from '@/stores/syncPushStore'
 import { useSyncStatusStore } from '@/stores/syncStatusStore'
@@ -27,6 +29,7 @@ const cloudStore = useCloudSessionStore()
 const syncPushStore = useSyncPushStore()
 const syncStatusStore = useSyncStatusStore()
 const cartStore = useCartStore()
+const promoStore = usePromoStore()
 const taxStore = useTaxStore()
 const customerStore = useCustomerStore()
 const productStore = useProductStore()
@@ -41,6 +44,66 @@ const isProcessing = ref(false)
 const hasAttemptedSubmit = ref(false)
 const paymentError = ref('')
 const isCashModalOpen = ref(false)
+const showPromoModal = ref(false)
+const inlineDiscountType = ref(cartStore.manualDiscountType || 'fixed')
+const inlineDiscountInput = ref(
+  cartStore.manualDiscountValue > 0 ? String(cartStore.manualDiscountValue) : '',
+)
+const discountErrorMessage = ref('')
+
+watch(
+  () => [cartStore.manualDiscountType, cartStore.manualDiscountValue, cartStore.appliedPromo],
+  ([type, val, promo]) => {
+    discountErrorMessage.value = ''
+    if (promo) {
+      inlineDiscountInput.value = ''
+      return
+    }
+    inlineDiscountType.value = type || 'fixed'
+    inlineDiscountInput.value = Number(val) > 0 ? String(val) : ''
+  },
+)
+
+function switchInlineDiscountType(type) {
+  inlineDiscountType.value = type
+  discountErrorMessage.value = ''
+  const raw = String(inlineDiscountInput.value ?? '').trim()
+  if (!raw) {
+    return
+  }
+  applyInlineDiscount()
+}
+
+function applyInlineDiscount() {
+  discountErrorMessage.value = ''
+  const raw = String(inlineDiscountInput.value ?? '').trim()
+  if (!raw || Number(raw) === 0) {
+    cartStore.clearDiscount()
+    return
+  }
+
+  const numeric = Number(raw)
+  if (!Number.isFinite(numeric) || numeric < 0) {
+    discountErrorMessage.value = 'Masukkan nominal diskon yang valid'
+    return
+  }
+
+  if (inlineDiscountType.value === 'percent' && numeric > 100) {
+    discountErrorMessage.value = 'Persentase diskon maksimal 100%'
+    return
+  }
+
+  cartStore.setManualDiscount({
+    type: inlineDiscountType.value,
+    value: numeric,
+  })
+}
+
+function handleRemovePaymentDiscount() {
+  discountErrorMessage.value = ''
+  inlineDiscountInput.value = ''
+  cartStore.removePromo()
+}
 
 /**
  * Summary of the transaction that was actually committed. Set only after
@@ -269,6 +332,10 @@ async function completePayment() {
       checkout: {
         items: cartStore.items,
         subtotal: cartStore.subtotal,
+        discount: cartStore.discount,
+        discountLabel: cartStore.discountLabel || null,
+        promoSyncId: cartStore.appliedPromo?.sync_id ?? null,
+        appliedPromo: cartStore.appliedPromo,
         tax: cartStore.tax,
         taxEnabled: taxStore.enabled,
         taxRate: taxStore.enabled ? taxStore.rate : 0,
@@ -294,6 +361,7 @@ async function completePayment() {
       id: transaction.id,
       invoiceNumber: transaction.invoiceNumber,
       total: transaction.total,
+      discount: transaction.discount ?? 0,
       paymentMethod: transaction.paymentMethod,
       cashReceived: transaction.cashReceived ?? null,
       changeAmount: transaction.changeAmount ?? null,
@@ -407,6 +475,111 @@ function goToTransactions() {
         </div>
       </BaseCard>
 
+      <!-- Compact Discount & Promo Section (before payment completion) -->
+      <BaseCard
+        class="space-y-3 border border-zinc-200/70 p-4"
+        data-testid="payment-discount-card"
+      >
+        <div class="flex items-center justify-between gap-2">
+          <div>
+            <p class="text-xs font-semibold text-ink-primary">Diskon &amp; Promo</p>
+            <p class="text-[11px] text-ink-secondary">Potongan harga sebelum bayar</p>
+          </div>
+          <button
+            type="button"
+            data-testid="btn-open-promo-modal"
+            class="inline-flex items-center gap-1.5 rounded-xl border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-xs font-semibold text-primary hover:bg-primary/20 active:scale-95 transition cursor-pointer"
+            @click="showPromoModal = true"
+          >
+            <span>🏷️ Promo / Voucher</span>
+            <span
+              v-if="promoStore.activePromos.length"
+              class="rounded-full bg-primary px-1.5 py-0.2 text-[10px] font-bold text-white"
+            >
+              {{ promoStore.activePromos.length }}
+            </span>
+          </button>
+        </div>
+
+        <!-- Active Discount / Promo Indicator -->
+        <div
+          v-if="cartStore.appliedPromo || cartStore.discount > 0"
+          data-testid="payment-active-discount"
+          class="flex items-center justify-between rounded-xl bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+        >
+          <div class="flex items-center gap-1.5 min-w-0">
+            <span>🏷️</span>
+            <span class="truncate font-semibold">
+              {{ cartStore.discountLabel || cartStore.appliedPromo?.name || 'Diskon' }}
+            </span>
+          </div>
+          <div class="flex items-center gap-2 shrink-0">
+            <span class="font-bold">-{{ formatCurrency(cartStore.discount) }}</span>
+            <button
+              type="button"
+              data-testid="btn-remove-payment-discount"
+              aria-label="Hapus diskon"
+              title="Hapus diskon"
+              class="rounded-md px-1.5 py-0.5 text-xs text-zinc-500 hover:bg-red-100 hover:text-red-600 transition cursor-pointer"
+              @click="handleRemovePaymentDiscount"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+
+        <!-- Inline Manual Discount Input (Rp / %) -->
+        <div class="flex items-center gap-2">
+          <div class="inline-flex shrink-0 rounded-xl border border-zinc-200 bg-zinc-50 p-0.5">
+            <button
+              type="button"
+              data-testid="payment-discount-type-fixed"
+              class="rounded-lg px-2.5 py-1.5 text-xs font-bold transition cursor-pointer"
+              :class="inlineDiscountType === 'fixed'
+                ? 'bg-primary text-white shadow-xs'
+                : 'text-ink-secondary hover:text-ink-primary'"
+              @click="switchInlineDiscountType('fixed')"
+            >
+              Rp
+            </button>
+            <button
+              type="button"
+              data-testid="payment-discount-type-percent"
+              class="rounded-lg px-2.5 py-1.5 text-xs font-bold transition cursor-pointer"
+              :class="inlineDiscountType === 'percent'
+                ? 'bg-primary text-white shadow-xs'
+                : 'text-ink-secondary hover:text-ink-primary'"
+              @click="switchInlineDiscountType('percent')"
+            >
+              %
+            </button>
+          </div>
+
+          <input
+            v-model="inlineDiscountInput"
+            type="text"
+            inputmode="decimal"
+            data-testid="payment-discount-input"
+            :placeholder="inlineDiscountType === 'percent' ? 'Diskon % (cth: 10)' : 'Nominal diskon Rp'"
+            class="min-w-0 flex-1 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs font-semibold text-ink-primary outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
+            @keydown.enter="applyInlineDiscount"
+          />
+
+          <button
+            type="button"
+            data-testid="btn-apply-payment-discount"
+            class="shrink-0 rounded-xl border border-zinc-200 bg-zinc-100 px-3 py-2 text-xs font-bold text-ink-primary hover:bg-zinc-200 active:scale-95 transition cursor-pointer"
+            @click="applyInlineDiscount"
+          >
+            Terapkan
+          </button>
+        </div>
+
+        <p v-if="discountErrorMessage" class="text-xs font-medium text-danger">
+          {{ discountErrorMessage }}
+        </p>
+      </BaseCard>
+
       <!-- Cash Section: Minimalist Summary + Keypad Trigger -->
       <BaseCard v-if="isCashMethod" class="space-y-3.5 border border-zinc-200/70 p-4">
         <div class="flex items-center justify-between">
@@ -490,11 +663,17 @@ function goToTransactions() {
         <h3 class="text-base font-bold text-ink-primary">Ringkasan Pembayaran</h3>
         <CartSummary
           :subtotal="cartStore.subtotal"
+          :discount="cartStore.discount"
+          :discount-label="cartStore.discountLabel"
+          :applied-promo="cartStore.appliedPromo"
           :tax="cartStore.tax"
           :tax-enabled="taxStore.enabled"
           :tax-rate="taxStore.rate"
           :total="cartStore.total"
           :show-action="false"
+          :allow-promo-select="!isPaymentCompleted"
+          @select-promo="showPromoModal = true"
+          @remove-promo="handleRemovePaymentDiscount"
         />
       </BaseCard>
 
@@ -542,6 +721,12 @@ function goToTransactions() {
         </BaseButton>
       </div>
     </div>
+
+    <!-- Discount & Promo Modal -->
+    <DiscountPromoModal
+      :open="showPromoModal"
+      @close="showPromoModal = false"
+    />
 
     <!-- Payment success modal (shown only after a committed transaction) -->
     <PaymentSuccessModal

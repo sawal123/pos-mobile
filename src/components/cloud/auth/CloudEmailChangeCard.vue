@@ -578,7 +578,7 @@ onUnmounted(() => {
     <!-- Idle State -->
     <div v-if="isAuthenticated && flowState === 'idle'" class="space-y-2">
       <p class="text-xs leading-relaxed text-ink-secondary">
-        Perubahan email memerlukan bukti kepemilikan akun dan verifikasi kode OTP 6 digit ke alamat email baru. Seluruh sesi Cloud akan dicabut setelah verifikasi berhasil.
+        Verifikasi email baru dengan kode OTP. Setelah berhasil, Anda perlu masuk kembali di semua perangkat.
       </p>
       <BaseButton
         data-testid="email-change-open"

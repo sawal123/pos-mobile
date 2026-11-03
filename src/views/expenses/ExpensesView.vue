@@ -73,11 +73,11 @@ function getCategoryBadgeClass(category) {
 <template>
   <div class="mx-auto max-w-xl space-y-4 pb-36">
     <!-- Header Minimalis & Simple -->
-    <header class="flex items-center justify-between gap-1.5">
-      <div class="flex items-center gap-2 min-w-0">
+    <header class="flex items-center justify-between gap-3">
+      <div class="flex items-center gap-3 min-w-0">
         <button
           type="button"
-          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-zinc-200 bg-white text-ink-primary shadow-xs transition hover:bg-zinc-50 active:scale-95"
+          class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-zinc-200 bg-white text-ink-primary shadow-2xs transition hover:bg-zinc-50 active:scale-95 cursor-pointer"
           aria-label="Kembali ke Home"
           @click="router.push('/home')"
         >
@@ -87,17 +87,17 @@ function getCategoryBadgeClass(category) {
         </button>
 
         <div class="min-w-0">
-          <p class="text-[9px] font-bold uppercase tracking-wider text-primary">Biaya Usaha</p>
-          <h1 class="text-xs sm:text-sm font-bold tracking-tight text-ink-primary whitespace-nowrap">Riwayat Pengeluaran</h1>
+          <p class="text-[11px] font-bold uppercase tracking-wider text-primary">Biaya Usaha</p>
+          <h1 class="truncate text-lg sm:text-xl font-bold tracking-tight text-ink-primary">Riwayat Pengeluaran</h1>
         </div>
       </div>
 
       <button
         type="button"
-        class="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-primary px-3 py-1.5 text-xs font-semibold text-white shadow-soft transition hover:bg-primary-light active:scale-95"
+        class="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-xl bg-primary px-3.5 text-xs font-semibold text-white shadow-soft transition hover:bg-primary-light active:scale-95 cursor-pointer"
         @click="goToCreate"
       >
-        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
         </svg>
         <span class="whitespace-nowrap">Catat</span>

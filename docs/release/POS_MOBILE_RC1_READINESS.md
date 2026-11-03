@@ -5,6 +5,29 @@ Base: `origin/main` (`6570e9e`)
 Branch: `release/rc1-catalog-sync-qa`
 Version: `1.0.0` (`versionCode: 10000`)
 
+## User-requested post-login UI cleanup - 2026-10-30
+
+The user explicitly requested a cleaner post-login screen after successful Google authentication. The Cloud screen now leads with the current business/outlet step and one account summary. Business/outlet choices are keyboard-accessible buttons; the connected screen no longer repeats the same account and business fields. Catalog loading appears before the collapsible sync details. Context-guard and workspace-recovery warnings remain visible, and sync details expand for conflicts, reconciliation, or bootstrap mismatch.
+
+Google linking and email change are under a collapsed **Pengaturan akun** section. They mount only when opened (or when account-link collision requires the flow), preventing the unrelated email-change cancellation message from appearing on first login. Once opened, collapsing the section preserves active account/OTP state. Existing authentication, workspace activation, persistence, and sync handlers are retained.
+
+- Targeted Cloud/auth/onboarding/device coverage: **212/212 PASS** across 9 suites, including account-settings lazy mounting and state preservation.
+- Full suite (`npx vitest run --silent --maxWorkers=4`): **1,948 PASS / 12 baseline failures / 4 skipped**; 79 suites passed, 10 failed, 3 skipped. The remaining failures match the earlier baseline by name:
+  - `cloud-sync-foundation.spec.js`: `business payload tidak memiliki mode`.
+  - `pos-flow.spec.js`: `prevents checkout when cart is empty`; `allows checkout to payment when cart has items`.
+  - `premium-plan-selection.spec.js`: `keeps the CTA inert while checkout_available is false`; `activates the continue action only when both gates and the price agree`.
+  - `reports-view-enhancement.spec.js`: `modal ringkasan struk dapat dibuka dan menampilkan format cetak`.
+  - `sqlite-transaction-concurrency.spec.js`: `survives a restart with every queued item intact`.
+  - `stock-view-enhancement.spec.js`: `dapat membuka modal adjustment dan menambah stok produk`.
+  - `sync-bootstrap.spec.js`: `includes UNSUPPORTED_BUSINESS_OUTBOX_PRESENT warning when business outbox exists without corrupting bootstrap`.
+  - `sync-orchestrator.spec.js`: `renders "Sinkronkan Semua" button and maintains existing "Sync Sekarang" and "Tarik Data Cloud" buttons`.
+  - `sync-parity-p37.spec.js`: `rejects localhost and empty base URLs as production API config`.
+  - `sync-push-outbox.spec.js`: `builds valid Laravel v1 push request body with Bearer token and UUID request_id`.
+- Non-mutating ESLint and Oxlint on changed source files: **PASS**. Production web build, Capacitor Android sync, signed release APK build, and APK v2 signature verification: **PASS**.
+- UI APK: `android/app/build/outputs/apk/release/app-release.apk`, SHA-256 `35E0C1C2522BFBD747044F7F40BE58FD4F3E9A4D0338DBE8407ACB18CC94DB3F`. Its release signing certificate is unchanged.
+- Visual browser QA: **NOT RUN**; Windows computer-use stopped because it could not establish the active browser URL for its policy checks. Installation and on-device visual smoke for this UI build: **NOT RUN**. Temporary visual fixtures were removed.
+- This UI update does not change the remaining Cloud data smoke release gates or authorize deployment/publication.
+
 ## Xiaomi Google login investigation - 2026-10-30
 
 - **Cloud Login E2E: PASS for Google authentication, user-confirmed on Xiaomi.** The user confirmed that mobile login succeeded after adding the Android client ID to `GOOGLE_ANDROID_CLIENT_IDS` on the backend. Business/outlet selection and subsequent Cloud operations were not confirmed in this investigation.

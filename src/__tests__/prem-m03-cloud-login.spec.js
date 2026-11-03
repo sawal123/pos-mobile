@@ -294,7 +294,7 @@ describe('explicit linking', () => {
 
     const text = wrapper.find('#cloud-confirm-link').text()
     expect(text).toContain('Temuan Space')
-    expect(text).toContain(USER.email)
+    expect(wrapper.get('[data-testid="link-cloud-account"]').text()).toContain(USER.email)
     expect(text).toContain(BIZ_LOCAL_ONLY.name)
   })
 

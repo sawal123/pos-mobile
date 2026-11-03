@@ -80,6 +80,11 @@ function prepareAuthenticatedStore() {
 }
 
 async function advanceToGooglePicker(wrapper) {
+  const settings = wrapper.find('[data-testid="cloud-account-settings"]')
+  if (settings.exists()) {
+    settings.element.open = true
+    await settings.trigger('toggle')
+  }
   await wrapper.get('[data-testid="google-link-refresh-methods"]').trigger('click')
   await flushPromises()
   await wrapper.get('[data-testid="google-link-open"]').trigger('click')
@@ -183,6 +188,31 @@ describe('AUTH-M06 service contracts', () => {
 })
 
 describe('AUTH-M06 authenticated linking lifecycle', () => {
+  it('loads account settings only when opened and keeps their state when collapsed', async () => {
+    prepareAuthenticatedStore()
+    await saveToken(TOKEN)
+    apiRequest.mockResolvedValue(authMethods(['manual']))
+    const wrapper = mount(CloudLoginView)
+    await flushPromises()
+
+    const settings = wrapper.get('[data-testid="cloud-account-settings"]')
+    expect(settings.element.open).toBe(false)
+    expect(wrapper.find('[data-testid="cloud-google-link-card"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="email-change-card"]').exists()).toBe(false)
+    expect(apiRequest.mock.calls.some(([path]) => path === '/api/v2/auth/me')).toBe(false)
+
+    settings.element.open = true
+    await settings.trigger('toggle')
+    const emailCard = wrapper.get('[data-testid="email-change-card"]').element
+    expect(wrapper.get('[data-testid="cloud-google-link-card"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('Sesi Cloud berubah. Perubahan email dibatalkan.')
+
+    settings.element.open = false
+    await settings.trigger('toggle')
+    expect(wrapper.get('[data-testid="email-change-card"]').element).toBe(emailCard)
+    wrapper.unmount()
+  })
+
   it('keeps the linking card and reauthentication modal mounted while the parent store is loading', async () => {
     const store = prepareAuthenticatedStore()
     await saveToken(TOKEN)
@@ -209,6 +239,9 @@ describe('AUTH-M06 authenticated linking lifecycle', () => {
     nativeSignIn.mockResolvedValue({ ok: true, state: 'success', idToken: GOOGLE_ID_TOKEN })
 
     const wrapper = mount(CloudLoginView)
+    const settings = wrapper.get('[data-testid="cloud-account-settings"]')
+    settings.element.open = true
+    await settings.trigger('toggle')
     await wrapper.get('[data-testid="google-link-refresh-methods"]').trigger('click')
     await vi.waitFor(() => expect(resolveMethods).toBeTypeOf('function'))
     expect(store.loading).toBe(true)
@@ -593,6 +626,7 @@ describe('AUTH-M06 authenticated linking lifecycle', () => {
       'Masuk ke Akun Lama',
     )
     expect(wrapper.get('[data-testid="google-link-manual-login"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="cloud-account-settings"]').exists()).toBe(false)
     expect(useCloudSessionStore().isAuthenticated).toBe(false)
     expect(await getToken()).toBeNull()
   })

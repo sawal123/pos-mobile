@@ -9,8 +9,9 @@ import { usePrinterStore } from '@/stores/printerStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import ReceiptView from '@/views/transactions/ReceiptView.vue'
 
-const { printReceiptMock, printerState } = vi.hoisted(() => ({
+const { printReceiptMock, listPairedPrintersMock, printerState } = vi.hoisted(() => ({
   printReceiptMock: vi.fn(),
+  listPairedPrintersMock: vi.fn(),
   printerState: { native: false },
 }))
 
@@ -20,6 +21,7 @@ vi.mock('@/services/printer/bluetoothPrinterService', async (importOriginal) => 
   return {
     ...actual,
     isNativePrinterPlatform: () => printerState.native,
+    listPairedPrinters: (...args) => listPairedPrintersMock(...args),
     printReceipt: (...args) => printReceiptMock(...args),
   }
 })
@@ -82,6 +84,12 @@ beforeEach(() => {
   printerState.native = false
   printReceiptMock.mockReset()
   printReceiptMock.mockImplementation(async () => ({ success: true, mode: 'browser' }))
+  listPairedPrintersMock.mockReset()
+  listPairedPrintersMock.mockImplementation(async () => ({
+    success: true,
+    native: true,
+    devices: [PRINTER],
+  }))
 })
 
 describe('P33 receipt view printing', () => {
@@ -186,5 +194,33 @@ describe('P33 receipt view printing', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-testid="btn-print-receipt"]').text()).toBe('Print')
+  })
+
+  it('kasir dapat memilih printer Bluetooth langsung dari halaman struk lalu print', async () => {
+    printerState.native = true
+    printReceiptMock.mockImplementation(async () => ({ success: true, mode: 'native' }))
+
+    const { wrapper, printerStore } = await mountReceiptView()
+    expect(printerStore.hasSelectedPrinter).toBe(false)
+
+    await wrapper.find('[data-testid="btn-quick-select-printer"]').trigger('click')
+    await flushPromises()
+
+    expect(listPairedPrintersMock).toHaveBeenCalledTimes(1)
+    const deviceBtn = wrapper.findAll('button').find((b) => b.text().includes('POS-58'))
+    expect(deviceBtn).toBeDefined()
+
+    await deviceBtn.trigger('click')
+    await flushPromises()
+
+    expect(printerStore.selectedPrinter).toEqual(PRINTER)
+
+    await wrapper.find('[data-testid="btn-print-receipt"]').trigger('click')
+    await flushPromises()
+
+    expect(printReceiptMock).toHaveBeenCalledTimes(1)
+    expect(wrapper.find('[data-testid="print-feedback"]').text()).toBe(
+      'Struk berhasil dikirim ke printer.',
+    )
   })
 })
