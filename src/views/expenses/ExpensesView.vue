@@ -58,14 +58,14 @@ function executeDelete() {
 function getCategoryBadgeClass(category) {
   switch (category) {
     case 'Operasional':
-      return 'bg-blue-50 text-blue-700 border-blue-200/60'
+      return 'bg-blue-50 text-blue-700 border-blue-200/60 dark:bg-sky-500/15 dark:text-sky-300 dark:border-sky-400/30'
     case 'Belanja Stok':
-      return 'bg-amber-50 text-amber-700 border-amber-200/60'
+      return 'bg-amber-50 text-amber-700 border-amber-200/60 dark:bg-amber-500/15 dark:text-amber-300 dark:border-amber-400/30'
     case 'Transportasi':
-      return 'bg-indigo-50 text-indigo-700 border-indigo-200/60'
+      return 'bg-indigo-50 text-indigo-700 border-indigo-200/60 dark:bg-indigo-500/15 dark:text-indigo-300 dark:border-indigo-400/30'
     case 'Lainnya':
     default:
-      return 'bg-zinc-100 text-zinc-700 border-zinc-200'
+      return 'bg-zinc-100 text-zinc-700 border-zinc-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700'
   }
 }
 </script>
@@ -105,13 +105,13 @@ function getCategoryBadgeClass(category) {
     </header>
 
     <!-- Summary Hero Card Minimalis -->
-    <section class="rounded-3xl border border-zinc-200/80 bg-white p-4 sm:p-5 shadow-soft space-y-3">
+    <section class="rounded-3xl border border-zinc-200/80 bg-card p-4 sm:p-5 shadow-soft space-y-3 dark:border-slate-700/60">
       <div class="flex items-start justify-between gap-2">
         <div class="min-w-0">
           <p class="text-[11px] font-medium text-ink-secondary">
             Total Pengeluaran Tercatat
           </p>
-          <h2 class="mt-1 font-mono text-2xl sm:text-3xl font-bold tracking-tight text-rose-600 truncate">
+          <h2 class="mt-1 font-mono text-2xl sm:text-3xl font-bold tracking-tight text-rose-600 dark:text-rose-400 truncate">
             {{ formatCurrency(expenseStore.totalExpenses) }}
           </h2>
           <p class="mt-0.5 text-[11px] text-ink-secondary">
@@ -119,7 +119,7 @@ function getCategoryBadgeClass(category) {
           </p>
         </div>
 
-        <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-rose-50 text-rose-600 border border-rose-100">
+        <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl border border-rose-100 bg-rose-50 text-rose-600 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-300">
           <AppIcon name="expenses" class="h-5 w-5" />
         </span>
       </div>
@@ -129,19 +129,19 @@ function getCategoryBadgeClass(category) {
     <section class="space-y-2">
       <!-- Search Input -->
       <div class="relative">
-        <svg class="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
         </svg>
         <input
           v-model="searchQuery"
           type="text"
           placeholder="Cari pengeluaran atau catatan..."
-          class="h-10 w-full rounded-2xl border border-zinc-200 bg-white pl-10 pr-4 text-xs text-ink-primary shadow-xs outline-none transition placeholder:text-zinc-400 focus:border-primary focus:ring-2 focus:ring-primary/10"
+          class="h-10 w-full rounded-2xl border border-zinc-200 bg-card pl-10 pr-4 text-xs text-ink-primary shadow-xs outline-none transition placeholder:text-zinc-400 focus:border-primary focus:ring-2 focus:ring-primary/10 dark:border-slate-700/70 dark:placeholder:text-slate-500"
         />
         <button
           v-if="searchQuery"
           type="button"
-          class="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-zinc-400 hover:text-zinc-600"
+          class="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-zinc-400 hover:text-zinc-600 dark:text-slate-400 dark:hover:text-slate-200"
           @click="searchQuery = ''"
         >
           &times;
@@ -153,7 +153,7 @@ function getCategoryBadgeClass(category) {
         <button
           type="button"
           class="shrink-0 rounded-xl px-2.5 py-1 font-medium transition active:scale-95"
-          :class="selectedCategory === 'all' ? 'bg-primary text-white font-bold shadow-xs' : 'bg-white border border-zinc-200/80 text-zinc-600 hover:bg-zinc-50'"
+          :class="selectedCategory === 'all' ? 'bg-primary text-white font-bold shadow-xs' : 'bg-card border border-zinc-200/80 text-zinc-600 hover:bg-zinc-50 dark:border-slate-700/70 dark:text-slate-300 dark:hover:bg-[#1E2538]'"
           @click="selectedCategory = 'all'"
         >
           Semua ({{ sortedExpenses.length }})
@@ -163,7 +163,7 @@ function getCategoryBadgeClass(category) {
           :key="cat"
           type="button"
           class="shrink-0 rounded-xl px-2.5 py-1 font-medium transition active:scale-95 whitespace-nowrap"
-          :class="selectedCategory === cat ? 'bg-primary text-white font-bold shadow-xs' : 'bg-white border border-zinc-200/80 text-zinc-600 hover:bg-zinc-50'"
+          :class="selectedCategory === cat ? 'bg-primary text-white font-bold shadow-xs' : 'bg-card border border-zinc-200/80 text-zinc-600 hover:bg-zinc-50 dark:border-slate-700/70 dark:text-slate-300 dark:hover:bg-[#1E2538]'"
           @click="selectedCategory = cat"
         >
           {{ cat }}
@@ -177,7 +177,7 @@ function getCategoryBadgeClass(category) {
         <div
           v-for="expense in filteredExpenses"
           :key="expense.id"
-          class="rounded-3xl border border-zinc-200/80 bg-white p-4 shadow-soft transition hover:border-zinc-300 space-y-2.5"
+          class="rounded-3xl border border-zinc-200/80 bg-card p-4 shadow-soft transition hover:border-zinc-300 space-y-2.5 dark:border-slate-700/60 dark:hover:border-slate-600"
         >
           <!-- Top Row: Category Badge & Date -->
           <div class="flex items-center justify-between gap-2">

@@ -9,11 +9,16 @@ const props = defineProps({
 })
 
 const variantClasses = {
-  neutral: 'bg-zinc-100 text-zinc-700',
-  success: 'bg-green-100 text-green-700',
-  warning: 'bg-amber-100 text-amber-700',
-  danger: 'bg-red-100 text-red-700',
-  primary: 'bg-primary/10 text-primary',
+  neutral:
+    'border border-zinc-200/80 bg-zinc-100 text-zinc-700 dark:border-slate-700/70 dark:bg-slate-800/80 dark:text-slate-200',
+  success:
+    'border border-emerald-200/80 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-300',
+  warning:
+    'border border-amber-200/80 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-300',
+  danger:
+    'border border-rose-200/80 bg-rose-50 text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-300',
+  primary:
+    'border border-primary/20 bg-primary/10 text-primary dark:border-indigo-400/30 dark:bg-indigo-500/15 dark:text-indigo-300',
 }
 
 const badgeClass = computed(() => [

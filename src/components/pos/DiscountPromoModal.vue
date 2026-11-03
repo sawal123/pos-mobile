@@ -2,7 +2,6 @@
 import { computed, ref, watch } from 'vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
-import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import { useCartStore } from '@/stores/cartStore'
 import { usePromoStore } from '@/stores/promoStore'
@@ -15,6 +14,10 @@ const props = defineProps({
   open: {
     type: Boolean,
     default: false,
+  },
+  initialTab: {
+    type: String,
+    default: '',
   },
 })
 
@@ -40,7 +43,12 @@ watch(
     promoErrorMessage.value = ''
     manualErrorMessage.value = ''
 
-    if (cartStore.manualDiscountValue > 0) {
+    if (props.initialTab === 'promo' || props.initialTab === 'manual') {
+      activeTab.value = props.initialTab
+      manualType.value = cartStore.manualDiscountType || 'fixed'
+      manualValueInput.value =
+        cartStore.manualDiscountValue > 0 ? String(cartStore.manualDiscountValue) : ''
+    } else if (cartStore.manualDiscountValue > 0) {
       activeTab.value = 'manual'
       manualType.value = cartStore.manualDiscountType
       manualValueInput.value = String(cartStore.manualDiscountValue)
@@ -276,54 +284,56 @@ function selectPromo(promo) {
       </div>
 
       <!-- TAB 2: Promo & Voucher -->
-      <div v-else class="space-y-4">
-        <div class="space-y-2">
-          <label class="text-xs font-semibold text-ink-secondary">Punya kode voucher?</label>
-          <div class="flex gap-2">
-            <BaseInput
-              :model-value="promoCodeInput"
-              placeholder="Contoh: DISKON10"
-              class="flex-1 uppercase"
-              @update:model-value="(val) => (promoCodeInput = val)"
+      <div v-else class="space-y-3.5">
+        <div class="space-y-1.5">
+          <label class="block text-xs font-semibold text-ink-secondary">Kode Voucher</label>
+          <div class="flex h-10 items-center gap-1.5 rounded-xl border border-zinc-200/90 bg-surface px-2 focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/15 dark:border-slate-700/70 dark:bg-[#121624]">
+            <input
+              :value="promoCodeInput"
+              type="text"
+              placeholder="Ketik kode (cth: DISKON10)"
+              class="min-w-0 flex-1 bg-transparent px-1.5 text-xs font-semibold uppercase text-ink-primary outline-none placeholder:normal-case placeholder:font-normal placeholder:text-ink-secondary/70"
+              @input="promoCodeInput = $event.target.value"
               @keydown.enter="applyVoucherCode"
             />
-            <BaseButton
-              variant="outline"
-              size="sm"
-              class="shrink-0 px-4"
+            <button
+              type="button"
+              class="h-7 shrink-0 rounded-lg bg-primary px-3 text-xs font-semibold text-white transition hover:bg-primary-light active:scale-95 cursor-pointer"
               @click="applyVoucherCode"
             >
               Terapkan
-            </BaseButton>
+            </button>
           </div>
-          <p v-if="promoErrorMessage" class="text-xs font-medium text-red-500">
+          <p v-if="promoErrorMessage" class="text-xs font-medium text-danger">
             {{ promoErrorMessage }}
           </p>
         </div>
 
-        <div class="border-t border-zinc-100 pt-3">
-          <p class="mb-2 text-xs font-semibold text-ink-secondary">Promo Tersedia</p>
+        <div class="border-t border-zinc-100 pt-3 dark:border-slate-700/50">
+          <p class="mb-2 text-xs font-semibold text-ink-secondary">Voucher &amp; Promo Aktif</p>
 
           <div v-if="promoStore.activePromos.length" class="max-h-60 space-y-2 overflow-y-auto no-scrollbar pr-0.5">
             <div
               v-for="promo in promoStore.activePromos"
               :key="promo.id"
-              class="flex items-center justify-between rounded-xl border p-3 transition"
-              :class="cartStore.appliedPromo?.id === promo.id
-                ? 'border-emerald-500 bg-emerald-50/50 dark:border-emerald-500/80 dark:bg-emerald-950/20'
-                : 'border-zinc-200 bg-white hover:border-primary/40'"
+              class="flex items-center justify-between gap-3 rounded-xl border px-3 py-2.5 transition"
+              :class="
+                cartStore.appliedPromo?.id === promo.id
+                  ? 'border-emerald-500/60 bg-emerald-50/70 dark:border-emerald-500/40 dark:bg-emerald-500/12'
+                  : 'border-zinc-200/80 bg-surface hover:border-primary/40 dark:border-slate-700/60 dark:bg-[#121726]'
+              "
             >
-              <div class="min-w-0 space-y-1 pr-2">
-                <div class="flex items-center gap-2">
-                  <span class="text-sm font-bold text-ink-primary">{{ promo.name }}</span>
+              <div class="min-w-0 space-y-0.5">
+                <div class="flex items-center gap-1.5">
+                  <span class="truncate text-xs font-bold text-ink-primary">{{ promo.name }}</span>
                   <span
                     v-if="promo.code"
-                    class="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[10px] font-bold text-zinc-600"
+                    class="shrink-0 rounded-md border border-primary/20 bg-primary/8 px-1.5 py-0.5 font-mono text-[10px] font-bold text-primary dark:border-indigo-400/30 dark:bg-indigo-500/15 dark:text-indigo-300"
                   >
                     {{ promo.code }}
                   </span>
                 </div>
-                <p class="text-xs text-ink-secondary">
+                <p class="text-[11px] text-ink-secondary">
                   <span v-if="(promo.discountType ?? promo.discount_type ?? promo.type) === 'percent'">
                     Diskon {{ Number(promo.discountValue ?? promo.discount_value ?? 0) / 100 }}%
                   </span>
@@ -342,18 +352,18 @@ function selectPromo(promo) {
               <div class="shrink-0">
                 <span
                   v-if="cartStore.appliedPromo?.id === promo.id"
-                  class="rounded-lg bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-800"
+                  class="rounded-lg bg-emerald-500/15 px-2.5 py-1 text-[11px] font-bold text-emerald-700 dark:text-emerald-300"
                 >
-                  Digunakan ✓
+                  Aktif ✓
                 </span>
-                <BaseButton
+                <button
                   v-else
-                  size="sm"
-                  variant="outline"
+                  type="button"
+                  class="rounded-lg border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-semibold text-primary transition hover:bg-primary hover:text-white active:scale-95 cursor-pointer dark:border-indigo-400/35 dark:bg-indigo-500/15 dark:text-indigo-300 dark:hover:bg-primary dark:hover:text-white"
                   @click="selectPromo(promo)"
                 >
                   Pakai
-                </BaseButton>
+                </button>
               </div>
             </div>
           </div>

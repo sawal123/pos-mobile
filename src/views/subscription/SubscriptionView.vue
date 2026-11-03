@@ -91,50 +91,55 @@ const statusView = computed(() => {
       return {
         badge: 'PREMIUM',
         subtitle: 'Langganan Premium aktif. Fitur cloud bisnis Anda sudah terbuka.',
-        cardClass: 'border-emerald-300 bg-gradient-to-br from-emerald-50 to-white',
-        badgeClass: 'bg-emerald-100 text-emerald-700',
-        iconClass: 'bg-emerald-100 text-emerald-600',
+        cardClass:
+          'border-emerald-300/90 bg-gradient-to-br from-emerald-50 via-white to-white dark:border-emerald-500/35 dark:from-emerald-950/55 dark:via-[#171C2B] dark:to-[#171C2B]',
+        badgeClass: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300',
+        iconClass: 'bg-emerald-100 text-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-300',
       }
     case 'expired':
       return {
         badge: 'EXPIRED',
         subtitle:
           'Langganan Premium sudah berakhir. Pilih paket untuk mengaktifkan kembali sinkronisasi cloud.',
-        cardClass: 'border-red-200 bg-gradient-to-br from-red-50 to-white',
-        badgeClass: 'bg-red-100 text-red-700',
-        iconClass: 'bg-red-100 text-red-600',
+        cardClass:
+          'border-red-200 bg-gradient-to-br from-red-50 via-white to-white dark:border-rose-500/35 dark:from-rose-950/50 dark:via-[#171C2B] dark:to-[#171C2B]',
+        badgeClass: 'bg-red-100 text-red-700 dark:bg-rose-500/20 dark:text-rose-300',
+        iconClass: 'bg-red-100 text-red-600 dark:bg-rose-500/20 dark:text-rose-300',
       }
     case 'pending':
       return {
         badge: 'MENUNGGU',
         subtitle: 'Pembayaran langganan belum selesai. Selesaikan untuk mengaktifkan Premium.',
-        cardClass: 'border-amber-300 bg-gradient-to-br from-amber-50 to-white',
-        badgeClass: 'bg-amber-100 text-amber-700',
-        iconClass: 'bg-amber-100 text-amber-600',
+        cardClass:
+          'border-amber-300/90 bg-gradient-to-br from-amber-50 via-white to-white dark:border-amber-500/35 dark:from-amber-950/45 dark:via-[#171C2B] dark:to-[#171C2B]',
+        badgeClass: 'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300',
+        iconClass: 'bg-amber-100 text-amber-600 dark:bg-amber-500/20 dark:text-amber-300',
       }
     case 'unverified':
       return {
         badge: 'BELUM TERVERIFIKASI',
         subtitle: 'Data terakhir yang diketahui. Status langganan belum dikonfirmasi ulang.',
-        cardClass: 'border-zinc-300 bg-gradient-to-br from-zinc-50 to-white',
-        badgeClass: 'bg-zinc-200 text-zinc-700',
-        iconClass: 'bg-zinc-100 text-zinc-500',
+        cardClass:
+          'border-zinc-300 bg-gradient-to-br from-zinc-50 via-white to-white dark:border-slate-700/80 dark:from-slate-800/55 dark:via-[#171C2B] dark:to-[#171C2B]',
+        badgeClass: 'bg-zinc-200 text-zinc-700 dark:bg-slate-700/70 dark:text-slate-200',
+        iconClass: 'bg-zinc-100 text-zinc-500 dark:bg-slate-800 dark:text-slate-300',
       }
     case 'error':
       return {
         badge: 'TIDAK DIKETAHUI',
         subtitle: 'Status langganan belum dapat dipastikan. Periksa koneksi lalu coba lagi.',
-        cardClass: 'border-zinc-200 bg-white',
-        badgeClass: 'bg-zinc-100 text-zinc-600',
-        iconClass: 'bg-zinc-100 text-zinc-500',
+        cardClass: 'border-zinc-200 bg-card dark:border-slate-700/80',
+        badgeClass: 'bg-zinc-100 text-zinc-600 dark:bg-slate-800 dark:text-slate-300',
+        iconClass: 'bg-zinc-100 text-zinc-500 dark:bg-slate-800 dark:text-slate-300',
       }
     default:
       return {
         badge: 'FREE',
         subtitle: 'Anda memakai paket Free. Pilih paket Premium untuk membuka fitur cloud.',
-        cardClass: 'border-amber-300 bg-gradient-to-br from-amber-50 to-white',
-        badgeClass: 'bg-amber-100 text-amber-700',
-        iconClass: 'bg-amber-100 text-amber-600',
+        cardClass:
+          'border-amber-300/90 bg-gradient-to-br from-amber-50 via-white to-white dark:border-amber-500/35 dark:from-amber-950/45 dark:via-[#171C2B] dark:to-[#171C2B]',
+        badgeClass: 'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300',
+        iconClass: 'bg-amber-100 text-amber-600 dark:bg-amber-500/20 dark:text-amber-300',
       }
   }
 })

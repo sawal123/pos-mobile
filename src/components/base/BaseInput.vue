@@ -40,7 +40,7 @@ const emit = defineEmits(['update:modelValue'])
       :placeholder="placeholder"
       :value="modelValue"
       :disabled="disabled"
-      class="h-12 rounded-2xl border border-zinc-200 bg-white px-4 text-sm text-ink-primary outline-none transition placeholder:text-zinc-400 focus:border-primary focus:ring-4 focus:ring-primary/10"
+      class="h-12 rounded-2xl border border-zinc-200 bg-white px-4 text-sm text-ink-primary outline-none transition placeholder:text-zinc-400 focus:border-primary focus:ring-4 focus:ring-primary/10 dark:border-slate-700/70 dark:bg-[#121624] dark:placeholder:text-slate-500"
       @input="emit('update:modelValue', $event.target.value)"
     />
 

@@ -29,18 +29,18 @@ const isMoreActive = computed(() => moreItems.value.some((item) => isActive(item
 
 <template>
   <nav class="fixed inset-x-0 bottom-0 z-30 px-3 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] md:hidden">
-    <div class="mx-auto grid max-w-xl grid-cols-5 gap-1 rounded-[1.5rem] border border-white/70 bg-white/85 p-1.5 shadow-[0_18px_45px_rgba(24,24,27,0.16)] backdrop-blur-xl">
+    <div class="mx-auto grid max-w-xl grid-cols-5 gap-1 rounded-[1.5rem] border border-white/70 bg-white/85 p-1.5 shadow-[0_18px_45px_rgba(24,24,27,0.16)] backdrop-blur-xl dark:border-slate-700/60 dark:bg-[#171C2B]/90 dark:shadow-[0_18px_45px_rgba(0,0,0,0.5)]">
       <RouterLink
         v-for="item in items.filter((navItem) => navItem.to)"
         :key="item.to"
         :to="item.to"
-        class="group flex min-h-14 flex-col items-center justify-center gap-1 rounded-2xl px-1 py-1.5 text-center text-[11px] font-medium transition sm:text-xs"
+        class="group flex min-h-14 flex-col items-center justify-center gap-1 rounded-2xl px-0.5 py-1.5 text-center text-[10px] font-medium transition sm:px-1 sm:text-xs"
         :class="isActive(item.to) ? 'text-primary' : 'text-zinc-500 hover:text-ink-primary'"
         data-testid="bottom-nav-item"
       >
         <span
           class="relative flex h-8 w-8 items-center justify-center rounded-2xl transition"
-          :class="isActive(item.to) ? 'bg-[linear-gradient(135deg,_rgba(73,69,214,0.16),_rgba(255,122,0,0.12))] shadow-soft' : 'group-hover:bg-zinc-100'"
+          :class="isActive(item.to) ? 'bg-[linear-gradient(135deg,_rgba(73,69,214,0.16),_rgba(255,122,0,0.12))] shadow-soft' : 'group-hover:bg-zinc-100 dark:group-hover:bg-slate-800'"
         >
           <AppIcon :name="item.icon" />
         </span>
@@ -50,14 +50,14 @@ const isMoreActive = computed(() => moreItems.value.some((item) => isActive(item
 
       <button
         type="button"
-        class="group flex min-h-14 flex-col items-center justify-center gap-1 rounded-2xl px-1 py-1.5 text-center text-[11px] font-medium transition sm:text-xs"
+        class="group flex min-h-14 flex-col items-center justify-center gap-1 rounded-2xl px-0.5 py-1.5 text-center text-[10px] font-medium transition sm:px-1 sm:text-xs"
         :class="isMoreActive || showMore ? 'text-primary' : 'text-zinc-500 hover:text-ink-primary'"
         data-testid="bottom-nav-item"
         @click="showMore = true"
       >
         <span
           class="flex h-8 w-8 items-center justify-center rounded-2xl transition"
-          :class="isMoreActive || showMore ? 'bg-[linear-gradient(135deg,_rgba(73,69,214,0.16),_rgba(255,122,0,0.12))] shadow-soft' : 'group-hover:bg-zinc-100'"
+          :class="isMoreActive || showMore ? 'bg-[linear-gradient(135deg,_rgba(73,69,214,0.16),_rgba(255,122,0,0.12))] shadow-soft' : 'group-hover:bg-zinc-100 dark:group-hover:bg-slate-800'"
         >
           <AppIcon name="more" />
         </span>

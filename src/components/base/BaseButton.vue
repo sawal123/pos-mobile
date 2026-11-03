@@ -26,9 +26,10 @@ const props = defineProps({
 
 const variantClasses = {
   primary: 'bg-primary text-white hover:bg-primary-light',
-  secondary: 'bg-white text-ink-primary ring-1 ring-zinc-200 hover:bg-zinc-50',
+  secondary:
+    'bg-card text-ink-primary ring-1 ring-zinc-200 hover:bg-zinc-50 dark:ring-slate-700/70 dark:hover:bg-slate-800/70',
   accent: 'bg-accent text-white hover:brightness-110',
-  ghost: 'bg-transparent text-ink-secondary hover:bg-zinc-100',
+  ghost: 'bg-transparent text-ink-secondary hover:bg-zinc-100 dark:hover:bg-slate-800/60',
   danger: 'bg-danger text-white hover:brightness-110',
 }
 

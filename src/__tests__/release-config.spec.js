@@ -19,8 +19,8 @@ const appBuildGradle = read('../../android/app/build.gradle')
 const androidGitignore = read('../../android/.gitignore')
 const keystoreExample = read('../../android/keystore.properties.example')
 
-const RELEASE_VERSION_NAME = '1.0.0'
-const RELEASE_VERSION_CODE = 10000
+const RELEASE_VERSION_NAME = '0.0.1'
+const RELEASE_VERSION_CODE = 1
 const APPLICATION_ID = 'com.posoffline.app'
 
 // Source selection lives between the header comment and the android block.
@@ -67,8 +67,8 @@ describe('P35 Android release configuration', () => {
     expect(capacitorConfig.appId).toBe(APPLICATION_ID)
   })
 
-  it('DB_VERSION tetap 4', () => {
-    expect(DB_VERSION).toBe(4)
+  it('DB_VERSION tetap 5', () => {
+    expect(DB_VERSION).toBe(5)
   })
 
   it('kredensial signing hanya dibaca dari env var atau keystore.properties', () => {

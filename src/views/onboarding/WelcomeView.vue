@@ -2,8 +2,11 @@
 import { useRouter } from 'vue-router'
 
 import AppIcon from '@/components/base/AppIcon.vue'
+import NexaPosLogo from '@/components/base/NexaPosLogo.vue'
+import { useThemeStore } from '@/stores/themeStore'
 
 const router = useRouter()
+const themeStore = useThemeStore()
 
 function goToCloudLogin() {
   router.push({ name: 'cloud-onboarding' })
@@ -15,15 +18,32 @@ function goToBusinessSetup() {
 </script>
 
 <template>
-  <div class="min-h-dvh bg-[#F7F8FC] text-ink-primary">
+  <div class="min-h-dvh bg-surface text-ink-primary transition-colors duration-200">
     <main class="mx-auto flex min-h-dvh w-full max-w-xl flex-col justify-center gap-6 px-4 py-8 sm:px-6">
-      <header class="space-y-2">
-        <p class="text-sm font-medium uppercase tracking-[0.18em] text-primary">Selamat datang</p>
-        <h1 class="text-2xl font-bold leading-tight sm:text-3xl">Bagaimana Anda ingin memulai?</h1>
-        <p class="text-sm leading-relaxed text-ink-secondary">
-          Pilih masuk jika bisnis Anda sudah terdaftar di Cloud. Pilih mulai baru untuk mengisi data
-          toko di perangkat ini.
-        </p>
+      <header class="space-y-3">
+        <div class="flex items-center justify-between gap-3">
+          <NexaPosLogo size="md" with-wordmark show-version />
+
+          <button
+            type="button"
+            data-testid="welcome-theme-toggle"
+            class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-zinc-200/90 bg-white text-zinc-700 shadow-xs transition hover:border-primary/40 hover:text-primary active:scale-95 cursor-pointer dark:border-slate-700/70 dark:bg-[#1B2133] dark:text-amber-300"
+            :title="themeStore.isDark ? 'Ganti ke Tema Light' : 'Ganti ke Tema Dark'"
+            :aria-label="themeStore.isDark ? 'Ganti ke Tema Light' : 'Ganti ke Tema Dark'"
+            @click="themeStore.toggleTheme()"
+          >
+            <AppIcon :name="themeStore.isDark ? 'sun' : 'moon'" class="h-4 w-4" />
+          </button>
+        </div>
+
+        <div class="space-y-1.5 pt-1">
+          <p class="text-xs font-bold uppercase tracking-[0.18em] text-primary">Selamat datang</p>
+          <h1 class="text-2xl font-bold leading-tight sm:text-3xl">Bagaimana Anda ingin memulai?</h1>
+          <p class="text-sm leading-relaxed text-ink-secondary">
+            Pilih masuk jika bisnis Anda sudah terdaftar di Cloud. Pilih mulai baru untuk mengisi data
+            toko di perangkat ini.
+          </p>
+        </div>
       </header>
 
       <div class="space-y-3" role="list">
@@ -32,7 +52,7 @@ function goToBusinessSetup() {
           type="button"
           role="listitem"
           data-testid="welcome-has-account"
-          class="group flex w-full items-start gap-4 rounded-2xl border border-primary/30 bg-white p-4 text-left shadow-sm transition hover:border-primary hover:bg-primary/5 active:scale-[0.99] sm:p-5"
+          class="group flex w-full items-start gap-4 rounded-2xl border border-primary/30 bg-card p-4 text-left shadow-sm transition hover:border-primary hover:bg-primary/5 active:scale-[0.99] dark:border-indigo-500/35 sm:p-5"
           @click="goToCloudLogin"
         >
           <span
@@ -57,11 +77,11 @@ function goToBusinessSetup() {
           type="button"
           role="listitem"
           data-testid="welcome-new-business"
-          class="group flex w-full items-start gap-4 rounded-2xl border border-zinc-200 bg-white p-4 text-left shadow-sm transition hover:border-primary/40 hover:bg-zinc-50 active:scale-[0.99] sm:p-5"
+          class="group flex w-full items-start gap-4 rounded-2xl border border-zinc-200 bg-card p-4 text-left shadow-sm transition hover:border-primary/40 hover:bg-zinc-50 active:scale-[0.99] dark:border-slate-700/60 dark:hover:bg-slate-800/50 sm:p-5"
           @click="goToBusinessSetup"
         >
           <span
-            class="flex size-11 shrink-0 items-center justify-center rounded-xl bg-zinc-100 text-ink-primary"
+            class="flex size-11 shrink-0 items-center justify-center rounded-xl bg-zinc-100 text-ink-primary dark:bg-slate-800"
             aria-hidden="true"
           >
             <AppIcon name="store" class="h-5 w-5" />

@@ -83,56 +83,66 @@ const badgeStyles = computed(() => {
   switch (uiStatus.value.status) {
     case SYNC_UI_SYNCING:
       return {
-        container: 'bg-primary/10 text-primary border-primary/20 hover:bg-primary/15',
-        dot: 'bg-primary animate-pulse',
+        container:
+          'bg-primary/10 text-primary border-primary/20 hover:bg-primary/15 dark:bg-indigo-500/15 dark:text-indigo-300 dark:border-indigo-400/30',
+        dot: 'bg-primary dark:bg-indigo-400 animate-pulse',
       }
     case SYNC_UI_CONFLICT:
       return {
-        container: 'bg-danger/10 text-danger border-danger/20 hover:bg-danger/15',
+        container:
+          'bg-danger/10 text-danger border-danger/20 hover:bg-danger/15 dark:bg-rose-500/15 dark:text-rose-300 dark:border-rose-400/30',
         dot: 'bg-danger animate-pulse',
       }
     case SYNC_UI_RECOVERY_REQUIRED:
     case SYNC_UI_RECONCILIATION_REQUIRED:
     case SYNC_UI_CLEANUP_FAILED:
       return {
-        container: 'bg-amber-500/10 text-amber-600 border-amber-500/20 hover:bg-amber-500/15',
-        dot: 'bg-amber-500',
+        container:
+          'bg-amber-500/10 text-amber-600 border-amber-500/20 hover:bg-amber-500/15 dark:bg-amber-500/15 dark:text-amber-300 dark:border-amber-400/30',
+        dot: 'bg-amber-500 dark:bg-amber-400',
       }
     case SYNC_UI_ACCESS_DENIED:
       return {
-        container: 'bg-danger/10 text-danger border-danger/20 hover:bg-danger/15',
+        container:
+          'bg-danger/10 text-danger border-danger/20 hover:bg-danger/15 dark:bg-rose-500/15 dark:text-rose-300 dark:border-rose-400/30',
         dot: 'bg-danger',
       }
     case SYNC_UI_RECONCILIATION_COMMITTED:
       return {
-        container: 'bg-sky-500/10 text-sky-600 border-sky-500/20 hover:bg-sky-500/15',
-        dot: 'bg-sky-500',
+        container:
+          'bg-sky-500/10 text-sky-600 border-sky-500/20 hover:bg-sky-500/15 dark:bg-sky-500/15 dark:text-sky-300 dark:border-sky-400/30',
+        dot: 'bg-sky-500 dark:bg-sky-400',
       }
     case SYNC_UI_RECONCILIATION_WAITING:
       return {
-        container: 'bg-zinc-100 text-zinc-600 border-zinc-200 hover:bg-zinc-200/70',
-        dot: 'bg-zinc-400',
+        container:
+          'bg-zinc-100 text-zinc-600 border-zinc-200 hover:bg-zinc-200/70 dark:bg-slate-800/80 dark:text-slate-300 dark:border-slate-700/70',
+        dot: 'bg-zinc-400 dark:bg-slate-400',
       }
     case SYNC_UI_OFFLINE:
       return {
-        container: 'bg-zinc-100 text-zinc-600 border-zinc-200 hover:bg-zinc-200/70',
-        dot: 'bg-zinc-400',
+        container:
+          'bg-zinc-100 text-zinc-600 border-zinc-200 hover:bg-zinc-200/70 dark:bg-slate-800/80 dark:text-slate-300 dark:border-slate-700/70',
+        dot: 'bg-zinc-400 dark:bg-slate-400',
       }
     case SYNC_UI_PENDING:
       return {
-        container: 'bg-sky-500/10 text-sky-600 border-sky-500/20 hover:bg-sky-500/15',
-        dot: 'bg-sky-500',
+        container:
+          'bg-sky-500/10 text-sky-600 border-sky-500/20 hover:bg-sky-500/15 dark:bg-sky-500/15 dark:text-sky-300 dark:border-sky-400/30',
+        dot: 'bg-sky-500 dark:bg-sky-400',
       }
     case SYNC_UI_UNKNOWN:
       return {
-        container: 'bg-zinc-100 text-zinc-500 border-zinc-200 hover:bg-zinc-200/70',
-        dot: 'bg-zinc-400',
+        container:
+          'bg-zinc-100 text-zinc-500 border-zinc-200 hover:bg-zinc-200/70 dark:bg-slate-800/80 dark:text-slate-300 dark:border-slate-700/70',
+        dot: 'bg-zinc-400 dark:bg-slate-400',
       }
     case SYNC_UI_CLEAR:
     default:
       return {
-        container: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20 hover:bg-emerald-500/15',
-        dot: 'bg-emerald-500',
+        container:
+          'bg-emerald-500/10 text-emerald-600 border-emerald-500/20 hover:bg-emerald-500/15 dark:bg-emerald-500/15 dark:text-emerald-300 dark:border-emerald-400/30',
+        dot: 'bg-emerald-500 dark:bg-emerald-400',
       }
   }
 })

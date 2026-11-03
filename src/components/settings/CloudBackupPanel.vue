@@ -225,13 +225,13 @@ watch(
 
 <template>
   <div
-    class="space-y-4 rounded-3xl border border-zinc-200 bg-surface/60 p-4"
+    class="space-y-4 rounded-3xl border border-zinc-200 bg-surface/60 p-4 dark:border-slate-700/60 dark:bg-[#121726]"
     data-testid="cloud-backup-section"
   >
     <div class="flex items-center justify-between">
       <div class="flex items-center gap-3">
         <span
-          class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary"
+          class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary dark:bg-indigo-500/20 dark:text-indigo-300"
         >
           <AppIcon name="cloud" />
         </span>
@@ -241,7 +241,7 @@ watch(
         </div>
       </div>
       <span
-        class="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-amber-700"
+        class="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-amber-700 dark:bg-amber-500/20 dark:text-amber-300"
       >
         Premium
       </span>
@@ -340,7 +340,7 @@ watch(
           <li
             v-for="backup in store.backups"
             :key="backup.uuid"
-            class="rounded-2xl bg-white px-3 py-2"
+            class="rounded-2xl border border-zinc-100 bg-card px-3 py-2 dark:border-slate-700/60"
             data-testid="cloud-backup-item"
           >
             <p class="text-sm font-medium text-ink-primary" data-testid="cloud-backup-item-date">

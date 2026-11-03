@@ -128,7 +128,7 @@ function handleQtyInput(event) {
 
     <div class="flex shrink-0 items-center gap-1.5">
       <!-- Compact Stepper [-] [qty] [+] -->
-      <div class="flex items-center rounded-xl border border-zinc-200/90 bg-white p-0.5 shadow-xs">
+      <div class="flex items-center rounded-xl border border-zinc-200/90 bg-card p-0.5 shadow-xs dark:border-slate-700/70 dark:bg-[#121624]">
         <button
           type="button"
           :class="stepperButtonClass"
@@ -140,7 +140,7 @@ function handleQtyInput(event) {
           -
         </button>
         <input
-          class="h-7 text-center text-xs font-bold text-ink-primary outline-none"
+          class="h-7 bg-transparent text-center text-xs font-bold text-ink-primary outline-none"
           :class="touch ? 'w-12' : 'w-11'"
           type="number"
           :step="step"

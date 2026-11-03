@@ -2,11 +2,35 @@
 <html lang="id">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" href="/favicon.ico" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="alternate icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#4945D6" />
-    <title>POS Mobile</title>
+    <title>NexaPos</title>
+    <script>
+      ;(function () {
+        try {
+          var savedTheme = window.localStorage && window.localStorage.getItem('nexapos-theme')
+          if (savedTheme === 'dark') {
+            document.documentElement.classList.add('dark')
+            document.documentElement.dataset.theme = 'dark'
+            document.documentElement.style.colorScheme = 'dark'
+            var meta = document.querySelector('meta[name="theme-color"]')
+            if (meta) meta.setAttribute('content', '#0F131F')
+          } else {
+            document.documentElement.dataset.theme = 'light'
+            document.documentElement.style.colorScheme = 'light'
+          }
+        } catch (e) {}
+      })()
+    </script>
     <style>
+      html.dark #boot-splash {
+        background-color: #0f131f;
+        background-image: linear-gradient(160deg, #0f131f 0%, #171c2b 100%);
+      }
+
       #boot-splash {
         position: fixed;
         inset: 0;
@@ -151,8 +175,16 @@
     <div id="app">
       <div id="boot-splash">
         <div class="boot-splash__brand">
-          <span class="boot-splash__logo">POS</span>
-          <h1 class="boot-splash__title">POS Mobile</h1>
+          <span class="boot-splash__logo" aria-hidden="true">
+            <svg width="46" height="46" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <line x1="341" y1="245" x2="341" y2="343" stroke="#FFFFFF" stroke-opacity="0.93" stroke-width="58" stroke-linecap="round" />
+              <line x1="171" y1="169" x2="171" y2="343" stroke="#FFFFFF" stroke-width="58" stroke-linecap="round" />
+              <line x1="171" y1="169" x2="341" y2="343" stroke="#FFFFFF" stroke-width="58" stroke-linecap="round" />
+              <circle cx="341" cy="169" r="35" fill="#FF7A00" />
+              <circle cx="341" cy="169" r="14" fill="#FFFFFF" />
+            </svg>
+          </span>
+          <h1 class="boot-splash__title">Nexa<span style="color: #FF9E2C">Pos</span></h1>
           <p class="boot-splash__subtitle">Kasir cepat, praktis, dan siap offline</p>
         </div>
         <div
@@ -164,7 +196,7 @@
           <span class="boot-splash__spinner" aria-hidden="true"></span>
           <p class="boot-splash__status">Menyiapkan aplikasi...</p>
         </div>
-        <p class="boot-splash__footer">POS Offline</p>
+        <p class="boot-splash__footer">NexaPos &bull; v0.0.1</p>
       </div>
     </div>
     <script type="module" src="/src/main.js"></script>

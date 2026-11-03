@@ -58,7 +58,7 @@ onUnmounted(() => {
       />
 
       <!-- Drawer Content -->
-      <div class="relative z-10 flex h-full w-72 max-w-[85vw] flex-col bg-white shadow-2xl">
+      <div class="relative z-10 flex h-full w-72 max-w-[85vw] flex-col bg-card shadow-2xl">
         <TabletNavRail is-drawer @close="isSidebarDrawerOpen = false" />
       </div>
     </div>
