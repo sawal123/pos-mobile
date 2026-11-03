@@ -261,12 +261,12 @@ function submitQuickMutation() {
     <template v-if="isOpen">
       <!-- Hero Card: Saldo Kas di Laci Saat Ini -->
       <BaseCard
-        class="relative overflow-hidden border border-emerald-200/80 bg-gradient-to-br from-emerald-50/70 via-white to-emerald-50/40 p-5 space-y-4 shadow-soft"
+        class="relative overflow-hidden border border-emerald-200/80 bg-gradient-to-br from-emerald-50/70 via-white to-emerald-50/40 p-5 space-y-4 shadow-soft dark:border-emerald-500/30 dark:from-emerald-950/45 dark:via-[#171C2B] dark:to-[#131826]"
         data-testid="shift-active-hero"
       >
         <div class="flex items-start justify-between gap-3">
           <div class="space-y-1">
-            <span class="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-800">
+            <span class="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-800 dark:text-emerald-300">
               <span class="h-2 w-2 rounded-full bg-emerald-500 animate-ping" />
               Kasir: {{ cashierStore.activeCashier?.name || 'Kasir Utama' }} • {{ businessStore.outlet || 'Outlet Utama' }}
             </span>
@@ -284,9 +284,9 @@ function submitQuickMutation() {
             </p>
           </div>
 
-          <div class="rounded-2xl bg-white/80 p-3 shadow-xs border border-emerald-100 text-right shrink-0">
+          <div class="rounded-2xl bg-white/80 p-3 shadow-xs border border-emerald-100 text-right shrink-0 dark:border-emerald-500/25 dark:bg-[#121726]/90">
             <p class="text-[10px] font-medium uppercase text-ink-secondary">Durasi Shift</p>
-            <p class="font-bold text-sm text-emerald-700" data-testid="shift-duration">
+            <p class="font-bold text-sm text-emerald-700 dark:text-emerald-300" data-testid="shift-duration">
               {{ durationText }}
             </p>
             <p class="text-[10px] text-ink-secondary mt-0.5">

@@ -34,6 +34,7 @@ import { useSyncAutoSyncStore } from './stores/syncAutoSyncStore'
 import { useSyncStatusStore } from './stores/syncStatusStore'
 import { useSyncReconciliationStore } from './stores/syncReconciliationStore'
 import { useSyncContextGuardStore } from './stores/syncContextGuardStore'
+import { useThemeStore } from './stores/themeStore'
 import { createRuntimeSignalService } from './services/runtime/runtimeSignalService'
 
 export function renderNativePersistenceFatal({
@@ -164,6 +165,7 @@ export async function bootstrapApp({
   const pinia = piniaFactory()
 
   app.use(pinia)
+  useThemeStore(pinia).initTheme()
 
   let persistence
 

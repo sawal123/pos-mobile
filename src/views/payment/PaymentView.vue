@@ -424,7 +424,7 @@ function goToTransactions() {
 </script>
 
 <template>
-  <div class="grid gap-5 pb-32 lg:grid-cols-[1fr_380px] xl:grid-cols-[1fr_400px] items-start md:pb-0">
+  <div class="grid gap-4 pb-40 lg:grid-cols-[1fr_380px] xl:grid-cols-[1fr_400px] items-start md:gap-5 md:pb-0">
     <!-- Left Column: Payment Details -->
     <section class="min-w-0 space-y-4">
       <div>
@@ -475,52 +475,55 @@ function goToTransactions() {
         </div>
       </BaseCard>
 
-      <!-- Compact Discount & Promo Section (before payment completion) -->
+      <!-- Minimalist Discount & Voucher Section -->
       <BaseCard
-        class="space-y-3 border border-zinc-200/70 p-4"
+        class="space-y-2.5 border border-zinc-200/70 p-3.5 dark:border-slate-700/60"
         data-testid="payment-discount-card"
       >
         <div class="flex items-center justify-between gap-2">
-          <div>
-            <p class="text-xs font-semibold text-ink-primary">Diskon &amp; Promo</p>
-            <p class="text-[11px] text-ink-secondary">Potongan harga sebelum bayar</p>
+          <div class="flex items-center gap-2 min-w-0">
+            <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary dark:bg-indigo-500/15 dark:text-indigo-300">
+              <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" />
+                <line x1="7" y1="7" x2="7.01" y2="7" />
+              </svg>
+            </span>
+            <span class="truncate text-xs font-semibold text-ink-primary">Diskon / Voucher</span>
           </div>
+
           <button
             type="button"
             data-testid="btn-open-promo-modal"
-            class="inline-flex items-center gap-1.5 rounded-xl border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-xs font-semibold text-primary hover:bg-primary/20 active:scale-95 transition cursor-pointer"
+            class="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-primary/25 bg-primary/8 px-2.5 py-1 text-[11px] font-semibold text-primary transition hover:bg-primary/15 active:scale-95 cursor-pointer dark:border-indigo-400/30 dark:bg-indigo-500/15 dark:text-indigo-300"
             @click="showPromoModal = true"
           >
-            <span>🏷️ Promo / Voucher</span>
+            <span>Pilih Voucher</span>
             <span
               v-if="promoStore.activePromos.length"
-              class="rounded-full bg-primary px-1.5 py-0.2 text-[10px] font-bold text-white"
+              class="rounded-full bg-primary px-1.5 py-0.2 font-mono text-[10px] font-bold text-white"
             >
               {{ promoStore.activePromos.length }}
             </span>
           </button>
         </div>
 
-        <!-- Active Discount / Promo Indicator -->
+        <!-- Active Discount / Promo Pill -->
         <div
           v-if="cartStore.appliedPromo || cartStore.discount > 0"
           data-testid="payment-active-discount"
-          class="flex items-center justify-between rounded-xl bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+          class="flex items-center justify-between gap-2 rounded-xl border border-emerald-200/80 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/12 dark:text-emerald-300"
         >
-          <div class="flex items-center gap-1.5 min-w-0">
-            <span>🏷️</span>
-            <span class="truncate font-semibold">
-              {{ cartStore.discountLabel || cartStore.appliedPromo?.name || 'Diskon' }}
-            </span>
-          </div>
-          <div class="flex items-center gap-2 shrink-0">
-            <span class="font-bold">-{{ formatCurrency(cartStore.discount) }}</span>
+          <span class="truncate font-semibold">
+            {{ cartStore.discountLabel || cartStore.appliedPromo?.name || 'Diskon' }}
+          </span>
+          <div class="flex shrink-0 items-center gap-1.5">
+            <span class="font-mono font-bold">-{{ formatCurrency(cartStore.discount) }}</span>
             <button
               type="button"
               data-testid="btn-remove-payment-discount"
               aria-label="Hapus diskon"
               title="Hapus diskon"
-              class="rounded-md px-1.5 py-0.5 text-xs text-zinc-500 hover:bg-red-100 hover:text-red-600 transition cursor-pointer"
+              class="flex h-5 w-5 items-center justify-center rounded-md text-[11px] text-emerald-700/70 transition hover:bg-rose-500/15 hover:text-rose-500 cursor-pointer dark:text-emerald-300/80"
               @click="handleRemovePaymentDiscount"
             >
               ✕
@@ -528,16 +531,20 @@ function goToTransactions() {
           </div>
         </div>
 
-        <!-- Inline Manual Discount Input (Rp / %) -->
-        <div class="flex items-center gap-2">
-          <div class="inline-flex shrink-0 rounded-xl border border-zinc-200 bg-zinc-50 p-0.5">
+        <!-- Unified Single-Row Manual Discount Input -->
+        <div
+          class="flex h-10 items-center gap-1.5 rounded-xl border border-zinc-200/90 bg-surface px-1.5 transition focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/15 dark:border-slate-700/70 dark:bg-[#121624]"
+        >
+          <div class="inline-flex h-7 shrink-0 items-center rounded-lg bg-card p-0.5 shadow-2xs dark:bg-[#1B2133]">
             <button
               type="button"
               data-testid="payment-discount-type-fixed"
-              class="rounded-lg px-2.5 py-1.5 text-xs font-bold transition cursor-pointer"
-              :class="inlineDiscountType === 'fixed'
-                ? 'bg-primary text-white shadow-xs'
-                : 'text-ink-secondary hover:text-ink-primary'"
+              class="h-6 rounded-md px-2 text-[11px] font-bold transition cursor-pointer"
+              :class="
+                inlineDiscountType === 'fixed'
+                  ? 'bg-primary text-white shadow-2xs'
+                  : 'text-ink-secondary hover:text-ink-primary'
+              "
               @click="switchInlineDiscountType('fixed')"
             >
               Rp
@@ -545,10 +552,12 @@ function goToTransactions() {
             <button
               type="button"
               data-testid="payment-discount-type-percent"
-              class="rounded-lg px-2.5 py-1.5 text-xs font-bold transition cursor-pointer"
-              :class="inlineDiscountType === 'percent'
-                ? 'bg-primary text-white shadow-xs'
-                : 'text-ink-secondary hover:text-ink-primary'"
+              class="h-6 rounded-md px-2 text-[11px] font-bold transition cursor-pointer"
+              :class="
+                inlineDiscountType === 'percent'
+                  ? 'bg-primary text-white shadow-2xs'
+                  : 'text-ink-secondary hover:text-ink-primary'
+              "
               @click="switchInlineDiscountType('percent')"
             >
               %
@@ -560,15 +569,15 @@ function goToTransactions() {
             type="text"
             inputmode="decimal"
             data-testid="payment-discount-input"
-            :placeholder="inlineDiscountType === 'percent' ? 'Diskon % (cth: 10)' : 'Nominal diskon Rp'"
-            class="min-w-0 flex-1 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs font-semibold text-ink-primary outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
+            :placeholder="inlineDiscountType === 'percent' ? 'Diskon % (cth: 10)' : 'Ketik diskon Rp...'"
+            class="min-w-0 flex-1 bg-transparent px-1.5 text-xs font-semibold text-ink-primary outline-none placeholder:font-normal placeholder:text-ink-secondary/70"
             @keydown.enter="applyInlineDiscount"
           />
 
           <button
             type="button"
             data-testid="btn-apply-payment-discount"
-            class="shrink-0 rounded-xl border border-zinc-200 bg-zinc-100 px-3 py-2 text-xs font-bold text-ink-primary hover:bg-zinc-200 active:scale-95 transition cursor-pointer"
+            class="h-7 shrink-0 rounded-lg bg-primary/12 px-2.5 text-[11px] font-bold text-primary transition hover:bg-primary hover:text-white active:scale-95 cursor-pointer dark:bg-indigo-500/20 dark:text-indigo-300 dark:hover:bg-primary dark:hover:text-white"
             @click="applyInlineDiscount"
           >
             Terapkan
@@ -701,13 +710,13 @@ function goToTransactions() {
          and the Android safe area, with the amount due next to the button. -->
     <div
       v-if="cartStore.items.length && !isPaymentCompleted"
-      class="fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+5.25rem)] z-30 px-4 md:hidden"
+      class="fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+5.6rem)] z-30 px-3.5 md:hidden"
       data-testid="mobile-payment-cta"
     >
-      <div class="flex items-center gap-3 rounded-2xl border border-zinc-200 bg-white/95 px-4 py-3 shadow-2xl backdrop-blur-md">
+      <div class="mx-auto flex max-w-xl items-center gap-3 rounded-2xl border border-zinc-200/90 bg-white/95 px-4 py-2.5 shadow-[0_12px_32px_rgba(15,19,31,0.16)] backdrop-blur-xl dark:border-slate-700/70 dark:bg-[#1B2133]/96 dark:shadow-[0_16px_36px_rgba(0,0,0,0.65)]">
         <div class="min-w-0 flex-1">
-          <p class="text-[11px] font-medium uppercase tracking-wide text-ink-secondary">Total Pembayaran</p>
-          <p class="truncate text-base font-bold text-ink-primary" data-testid="mobile-payment-total">
+          <p class="text-[10px] font-semibold uppercase tracking-wider text-ink-secondary">Total Pembayaran</p>
+          <p class="truncate font-mono text-base font-bold text-ink-primary" data-testid="mobile-payment-total">
             {{ formatCurrency(cartStore.total) }}
           </p>
         </div>
@@ -725,6 +734,7 @@ function goToTransactions() {
     <!-- Discount & Promo Modal -->
     <DiscountPromoModal
       :open="showPromoModal"
+      initial-tab="promo"
       @close="showPromoModal = false"
     />
 

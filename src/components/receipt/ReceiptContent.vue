@@ -226,7 +226,7 @@ const showCashSummary = computed(() => (
     <!-- Decorative Thermal Tear-off Zigzag Bottom (Screen only) -->
     <div
       class="h-3 w-full bg-surface print:hidden"
-      style="background-image: linear-gradient(135deg, #ffffff 50%, transparent 50%), linear-gradient(225deg, #ffffff 50%, transparent 50%); background-position: top left; background-size: 14px 14px; background-repeat: repeat-x;"
+      style="background-image: linear-gradient(135deg, var(--color-card) 50%, transparent 50%), linear-gradient(225deg, var(--color-card) 50%, transparent 50%); background-position: top left; background-size: 14px 14px; background-repeat: repeat-x;"
     />
   </article>
 </template>

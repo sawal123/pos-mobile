@@ -7,6 +7,8 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseSheet from '@/components/base/BaseSheet.vue'
+import NexaPosLogo from '@/components/base/NexaPosLogo.vue'
+import { APP_TAGLINE, APP_VERSION } from '@/constants/appInfo'
 import SettingsMenuItem from '@/components/settings/SettingsMenuItem.vue'
 import CloudBackupPanel from '@/components/settings/CloudBackupPanel.vue'
 import { clearLocalCache } from '@/services/localCacheService'
@@ -36,6 +38,7 @@ import { useSubscriptionStore } from '@/stores/subscriptionStore'
 import { useSyncStatusStore } from '@/stores/syncStatusStore'
 import { useSyncPullStore } from '@/stores/syncPullStore'
 import { useSyncContextGuardStore } from '@/stores/syncContextGuardStore'
+import { useThemeStore } from '@/stores/themeStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import { isValidTaxRate, useTaxStore } from '@/stores/taxStore'
 
@@ -52,6 +55,7 @@ const subscriptionStore = useSubscriptionStore()
 const syncStatusStore = useSyncStatusStore()
 const syncPullStore = useSyncPullStore()
 const syncContextGuardStore = useSyncContextGuardStore()
+const themeStore = useThemeStore()
 const transactionStore = useTransactionStore()
 const taxStore = useTaxStore()
 const router = useRouter()
@@ -144,49 +148,54 @@ const subscriptionView = computed(() => {
       return {
         badge: 'PREMIUM',
         subtitle: 'Kelola langganan dan sinkronisasi Anda.',
-        cardClass: 'border-emerald-300 bg-gradient-to-br from-emerald-50 to-white',
-        badgeClass: 'bg-emerald-100 text-emerald-700',
-        crownClass: 'bg-emerald-100 text-emerald-600',
+        cardClass:
+          'border-emerald-300/90 bg-gradient-to-br from-emerald-50 via-white to-white dark:border-emerald-500/35 dark:from-emerald-950/55 dark:via-[#171C2B] dark:to-[#171C2B]',
+        badgeClass: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300',
+        crownClass: 'bg-emerald-100 text-emerald-600 dark:bg-emerald-500/20 dark:text-emerald-300',
       }
     case 'expired':
       return {
         badge: 'EXPIRED',
         subtitle: 'Langganan Premium berakhir. Perbarui untuk mengaktifkan sinkronisasi cloud.',
-        cardClass: 'border-red-200 bg-gradient-to-br from-red-50 to-white',
-        badgeClass: 'bg-red-100 text-red-700',
-        crownClass: 'bg-red-100 text-red-600',
+        cardClass:
+          'border-red-200 bg-gradient-to-br from-red-50 via-white to-white dark:border-rose-500/35 dark:from-rose-950/50 dark:via-[#171C2B] dark:to-[#171C2B]',
+        badgeClass: 'bg-red-100 text-red-700 dark:bg-rose-500/20 dark:text-rose-300',
+        crownClass: 'bg-red-100 text-red-600 dark:bg-rose-500/20 dark:text-rose-300',
       }
     case 'pending':
       return {
         badge: 'MENUNGGU',
         subtitle: 'Pembayaran langganan belum selesai. Selesaikan untuk mengaktifkan Premium.',
-        cardClass: 'border-amber-300 bg-gradient-to-br from-amber-50 to-white',
-        badgeClass: 'bg-amber-100 text-amber-700',
-        crownClass: 'bg-amber-100 text-amber-600',
+        cardClass:
+          'border-amber-300/90 bg-gradient-to-br from-amber-50 via-white to-white dark:border-amber-500/35 dark:from-amber-950/45 dark:via-[#171C2B] dark:to-[#171C2B]',
+        badgeClass: 'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300',
+        crownClass: 'bg-amber-100 text-amber-600 dark:bg-amber-500/20 dark:text-amber-300',
       }
     case 'unverified':
       return {
         badge: 'BELUM TERVERIFIKASI',
         subtitle: 'Data terakhir yang diketahui. Status langganan belum dikonfirmasi ulang.',
-        cardClass: 'border-zinc-300 bg-gradient-to-br from-zinc-50 to-white',
-        badgeClass: 'bg-zinc-200 text-zinc-700',
-        crownClass: 'bg-zinc-100 text-zinc-500',
+        cardClass:
+          'border-zinc-300 bg-gradient-to-br from-zinc-50 via-white to-white dark:border-slate-700/80 dark:from-slate-800/55 dark:via-[#171C2B] dark:to-[#171C2B]',
+        badgeClass: 'bg-zinc-200 text-zinc-700 dark:bg-slate-700/70 dark:text-slate-200',
+        crownClass: 'bg-zinc-100 text-zinc-500 dark:bg-slate-800 dark:text-slate-300',
       }
     case 'error':
       return {
         badge: 'TIDAK DIKETAHUI',
         subtitle: 'Status langganan belum dapat dipastikan. Periksa koneksi lalu coba lagi.',
-        cardClass: 'border-zinc-200 bg-white',
-        badgeClass: 'bg-zinc-100 text-zinc-600',
-        crownClass: 'bg-zinc-100 text-zinc-500',
+        cardClass: 'border-zinc-200 bg-card dark:border-slate-700/80',
+        badgeClass: 'bg-zinc-100 text-zinc-600 dark:bg-slate-800 dark:text-slate-300',
+        crownClass: 'bg-zinc-100 text-zinc-500 dark:bg-slate-800 dark:text-slate-300',
       }
     default:
       return {
         badge: 'FREE',
         subtitle: 'Upgrade ke Premium untuk sinkronisasi data dan dashboard.',
-        cardClass: 'border-amber-300 bg-gradient-to-br from-amber-50 to-white',
-        badgeClass: 'bg-amber-100 text-amber-700',
-        crownClass: 'bg-amber-100 text-amber-600',
+        cardClass:
+          'border-amber-300/90 bg-gradient-to-br from-amber-50 via-white to-white dark:border-amber-500/35 dark:from-amber-950/45 dark:via-[#171C2B] dark:to-[#171C2B]',
+        badgeClass: 'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300',
+        crownClass: 'bg-amber-100 text-amber-600 dark:bg-amber-500/20 dark:text-amber-300',
       }
   }
 })
@@ -605,6 +614,80 @@ async function handleRestoreFileChange(event) {
       </div>
     </div>
 
+    <!-- Theme Appearance (Light / Dark + Adaptive Logo) -->
+    <BaseCard class="space-y-4" data-testid="theme-settings-card">
+      <div class="flex items-center justify-between gap-3">
+        <div class="flex items-center gap-3">
+          <span
+            class="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl"
+            :class="
+              themeStore.isDark
+                ? 'bg-amber-400/15 text-amber-300'
+                : 'bg-primary/10 text-primary'
+            "
+          >
+            <AppIcon :name="themeStore.isDark ? 'moon' : 'sun'" />
+          </span>
+          <div class="min-w-0">
+            <p class="text-xs uppercase tracking-[0.16em] text-ink-secondary">Tampilan</p>
+            <h3 class="truncate text-base font-semibold text-ink-primary">Tema Aplikasi</h3>
+          </div>
+        </div>
+
+        <NexaPosLogo size="xs" with-wordmark />
+      </div>
+
+      <div class="grid grid-cols-2 gap-2.5">
+        <button
+          type="button"
+          data-testid="theme-option-light"
+          :aria-pressed="!themeStore.isDark"
+          class="flex items-center gap-3 rounded-2xl border p-3 text-left transition active:scale-[0.99] cursor-pointer"
+          :class="
+            !themeStore.isDark
+              ? 'border-primary bg-primary/8 ring-2 ring-primary/20'
+              : 'border-zinc-200 bg-surface hover:border-primary/40'
+          "
+          @click="themeStore.setTheme('light')"
+        >
+          <span
+            class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl"
+            :class="!themeStore.isDark ? 'bg-primary text-white' : 'bg-zinc-100 text-ink-secondary'"
+          >
+            <AppIcon name="sun" class="h-4 w-4" />
+          </span>
+          <span class="min-w-0">
+            <span class="block text-sm font-semibold text-ink-primary">Light</span>
+            <span class="block truncate text-[11px] text-ink-secondary">Logo biru</span>
+          </span>
+        </button>
+
+        <button
+          type="button"
+          data-testid="theme-option-dark"
+          :aria-pressed="themeStore.isDark"
+          class="flex items-center gap-3 rounded-2xl border p-3 text-left transition active:scale-[0.99] cursor-pointer"
+          :class="
+            themeStore.isDark
+              ? 'border-indigo-400 bg-indigo-500/15 ring-2 ring-indigo-400/25'
+              : 'border-zinc-200 bg-surface hover:border-primary/40'
+          "
+          @click="themeStore.setTheme('dark')"
+        >
+          <span
+            class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl"
+            :class="themeStore.isDark ? 'bg-indigo-500 text-white' : 'bg-zinc-100 text-ink-secondary'"
+          >
+            <AppIcon name="moon" class="h-4 w-4" />
+          </span>
+          <span class="min-w-0">
+            <span class="block text-sm font-semibold text-ink-primary">Dark</span>
+            <span class="block truncate text-[11px] text-ink-secondary">Logo putih</span>
+          </span>
+        </button>
+      </div>
+    </BaseCard>
+
     <!-- Cloud account (PREM-M03) -->
     <BaseCard class="space-y-3" data-testid="cloud-account-card">
       <div class="flex items-center justify-between">
@@ -705,14 +788,14 @@ async function handleRestoreFileChange(event) {
     <!-- Subscription -->
     <div
       v-if="showSubscriptionSkeleton"
-      class="animate-pulse rounded-3xl border border-zinc-200 bg-white p-4"
+      class="animate-pulse rounded-3xl border border-zinc-200 bg-card p-4 dark:border-slate-700/60"
       data-testid="subscription-skeleton"
     >
       <div class="flex items-center gap-3">
-        <div class="h-11 w-11 rounded-2xl bg-zinc-100" />
+        <div class="h-11 w-11 rounded-2xl bg-zinc-100 dark:bg-slate-800" />
         <div class="flex-1 space-y-2">
-          <div class="h-3 w-20 rounded bg-zinc-100" />
-          <div class="h-3 w-52 rounded bg-zinc-100" />
+          <div class="h-3 w-20 rounded bg-zinc-100 dark:bg-slate-800" />
+          <div class="h-3 w-52 rounded bg-zinc-100 dark:bg-slate-800" />
         </div>
       </div>
     </div>
@@ -755,7 +838,7 @@ async function handleRestoreFileChange(event) {
 
           <p
             v-if="isPremium"
-            class="mt-1 text-xs font-semibold text-emerald-700"
+            class="mt-1 text-xs font-semibold text-emerald-700 dark:text-emerald-300"
             data-testid="subscription-plan"
           >
             Paket {{ subscriptionStore.planLabel }}
@@ -816,13 +899,13 @@ async function handleRestoreFileChange(event) {
       </div>
 
       <div
-        class="space-y-3 rounded-3xl border border-zinc-200 bg-surface/60 p-4"
+        class="space-y-3 rounded-3xl border border-zinc-200 bg-surface/60 p-4 dark:border-slate-700/60 dark:bg-[#121726]"
         data-testid="local-backup-section"
       >
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-3">
             <span
-              class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary"
+              class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary dark:bg-indigo-500/20 dark:text-indigo-300"
             >
               <AppIcon name="backup" />
             </span>
@@ -832,7 +915,7 @@ async function handleRestoreFileChange(event) {
             </div>
           </div>
           <span
-            class="rounded-full bg-emerald-100 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-emerald-700"
+            class="rounded-full bg-emerald-100 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300"
           >
             Gratis
           </span>
@@ -864,7 +947,7 @@ async function handleRestoreFileChange(event) {
         </div>
       </div>
 
-      <div class="space-y-3 rounded-3xl border border-zinc-200 bg-surface/60 p-4">
+      <div class="space-y-3 rounded-3xl border border-zinc-200 bg-surface/60 p-4 dark:border-slate-700/60 dark:bg-[#121726]">
         <p class="text-xs text-ink-secondary">
           Gunakan tombol ini untuk membersihkan cache lokal pada perangkat ini agar data segar kembali.
         </p>
@@ -935,7 +1018,7 @@ async function handleRestoreFileChange(event) {
               :disabled="!taxDraftEnabled"
               :aria-invalid="taxDraftEnabled && !taxRateValid"
               aria-describedby="tax-rate-help"
-              class="h-12 w-full rounded-2xl border border-zinc-200 bg-white px-4 pr-10 text-sm text-ink-primary outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/10 disabled:bg-zinc-100 disabled:text-zinc-500"
+              class="h-12 w-full rounded-2xl border border-zinc-200 bg-card px-4 pr-10 text-sm text-ink-primary outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/10 disabled:bg-zinc-100 disabled:text-zinc-500 dark:border-slate-700/70 dark:bg-[#121726] dark:disabled:bg-slate-800/60 dark:disabled:text-slate-500"
             />
             <span
               class="pointer-events-none absolute right-4 top-3.5 text-sm font-medium text-ink-secondary"
@@ -954,8 +1037,8 @@ async function handleRestoreFileChange(event) {
           </p>
         </div>
 
-        <div class="rounded-2xl border border-primary/10 bg-primary/5 p-4">
-          <p class="text-xs font-semibold uppercase tracking-widest text-primary">
+        <div class="rounded-2xl border border-primary/10 bg-primary/5 p-4 dark:border-indigo-400/20 dark:bg-indigo-500/10">
+          <p class="text-xs font-semibold uppercase tracking-widest text-primary dark:text-indigo-300">
             Simulasi transaksi
           </p>
           <div class="mt-3 flex items-center justify-between text-sm">
@@ -969,7 +1052,7 @@ async function handleRestoreFileChange(event) {
             }}</span>
           </div>
           <div
-            class="mt-3 flex items-center justify-between border-t border-primary/10 pt-3 text-sm font-semibold"
+            class="mt-3 flex items-center justify-between border-t border-primary/10 pt-3 text-sm font-semibold dark:border-indigo-400/20"
           >
             <span>Total</span>
             <span data-testid="tax-preview-total">{{
@@ -1025,8 +1108,8 @@ async function handleRestoreFileChange(event) {
             class="h-12 rounded-2xl border text-sm font-semibold transition"
             :class="
               printerStore.paperWidth === width
-                ? 'border-primary bg-primary/10 text-primary'
-                : 'border-zinc-200 bg-white text-ink-secondary'
+                ? 'border-primary bg-primary/10 text-primary dark:border-indigo-400/60 dark:bg-indigo-500/15 dark:text-indigo-200'
+                : 'border-zinc-200 bg-card text-ink-secondary dark:border-slate-700/70 dark:bg-[#121726]'
             "
             @click="handlePaperWidthChange(width)"
           >
@@ -1078,6 +1161,22 @@ async function handleRestoreFileChange(event) {
       <p v-if="!isNativePrinter" class="text-xs text-ink-secondary">
         Tes print Bluetooth hanya tersedia di perangkat Android.
       </p>
+    </BaseCard>
+
+    <BaseCard
+      class="flex items-center justify-between gap-3 border border-zinc-200/80"
+      data-testid="app-version-card"
+    >
+      <div class="min-w-0 space-y-1">
+        <NexaPosLogo size="sm" with-wordmark />
+        <p class="text-xs text-ink-secondary">{{ APP_TAGLINE }}</p>
+      </div>
+      <span
+        data-testid="app-version-badge"
+        class="shrink-0 rounded-full border border-primary/20 bg-primary/10 px-3 py-1 font-mono text-xs font-bold text-primary"
+      >
+        v{{ APP_VERSION }}
+      </span>
     </BaseCard>
 
     <BaseButton block variant="secondary" data-testid="settings-close-btn" @click="handleBack">

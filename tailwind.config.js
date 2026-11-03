@@ -1,5 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 export default {
+  darkMode: 'class',
   content: [
     './index.html',
     './src/**/*.{vue,js,ts,jsx,tsx}',
@@ -15,11 +16,11 @@ export default {
         accent: {
           DEFAULT: '#FF7A00',
         },
-        surface: '#F7F7FC',
-        card: '#FFFFFF',
+        surface: 'var(--color-surface)',
+        card: 'var(--color-card)',
         ink: {
-          primary: '#18181B',
-          secondary: '#71717A',
+          primary: 'var(--color-ink-primary)',
+          secondary: 'var(--color-ink-secondary)',
         },
         success: '#16A34A',
         warning: '#F59E0B',
@@ -33,9 +34,9 @@ export default {
         '3xl': '1.5rem',
       },
       boxShadow: {
-        soft: '0 2px 10px rgba(0,0,0,0.03)',
-        medium: '0 4px 15px rgba(0,0,0,0.05)',
-        'bottom-sheet': '0 -4px 20px rgba(0,0,0,0.08)',
+        soft: 'var(--shadow-soft)',
+        medium: 'var(--shadow-medium)',
+        'bottom-sheet': 'var(--shadow-bottom-sheet)',
       },
     },
   },

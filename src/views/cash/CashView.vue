@@ -114,7 +114,7 @@ const filteredEntries = computed(() => {
     </div>
 
     <!-- Unified Minimalist Financial Hero Card -->
-    <div class="rounded-3xl border border-zinc-200/80 bg-white p-5 shadow-soft space-y-4">
+    <div class="rounded-3xl border border-zinc-200/80 bg-card p-5 shadow-soft space-y-4 dark:border-slate-700/55">
       <div class="flex items-start justify-between gap-3">
         <div>
           <p class="text-xs font-semibold uppercase tracking-wider text-ink-secondary">Saldo Berjalan</p>
@@ -122,7 +122,7 @@ const filteredEntries = computed(() => {
             {{ formatCurrency(cashStore.balance) }}
           </h2>
         </div>
-        <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+        <div class="flex h-11 w-11 items-center justify-center rounded-2xl border border-primary/20 bg-primary/10 text-primary dark:border-indigo-400/25 dark:bg-indigo-500/15 dark:text-indigo-300">
           <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v12m-3-2.818.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
           </svg>
@@ -130,30 +130,36 @@ const filteredEntries = computed(() => {
       </div>
 
       <!-- Today In & Out Breakdown in 2 clean columns -->
-      <div class="grid grid-cols-2 gap-2.5 border-t border-zinc-100 pt-3.5">
-        <div class="flex items-center gap-2.5 rounded-2xl bg-emerald-50/70 p-3 border border-emerald-100/60">
-          <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700">
+      <div class="grid grid-cols-2 gap-2.5 border-t border-zinc-100 pt-3.5 dark:border-slate-700/50">
+        <div
+          data-testid="cash-in-summary-card"
+          class="flex items-center gap-2.5 rounded-2xl border border-emerald-200/80 bg-emerald-50/80 p-3 dark:border-emerald-500/25 dark:bg-emerald-500/10"
+        >
+          <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" d="M12 19V5m-7 7l7-7 7 7" />
             </svg>
           </div>
           <div class="min-w-0">
-            <p class="text-[11px] font-medium text-emerald-800">Kas Masuk Hari Ini</p>
-            <p class="text-sm font-bold text-emerald-700 truncate">
+            <p class="text-[11px] font-medium text-emerald-800 dark:text-emerald-200/85">Kas Masuk Hari Ini</p>
+            <p class="truncate font-mono text-sm font-bold text-emerald-700 dark:text-emerald-300">
               {{ formatCurrency(cashStore.todayCashIn) }}
             </p>
           </div>
         </div>
 
-        <div class="flex items-center gap-2.5 rounded-2xl bg-rose-50/70 p-3 border border-rose-100/60">
-          <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-rose-100 text-rose-700">
+        <div
+          data-testid="cash-out-summary-card"
+          class="flex items-center gap-2.5 rounded-2xl border border-rose-200/80 bg-rose-50/80 p-3 dark:border-rose-500/25 dark:bg-rose-500/10"
+        >
+          <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-rose-500/15 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" d="M12 5v14m7-7l-7 7-7-7" />
             </svg>
           </div>
           <div class="min-w-0">
-            <p class="text-[11px] font-medium text-rose-800">Kas Keluar Hari Ini</p>
-            <p class="text-sm font-bold text-rose-700 truncate">
+            <p class="text-[11px] font-medium text-rose-800 dark:text-rose-200/85">Kas Keluar Hari Ini</p>
+            <p class="truncate font-mono text-sm font-bold text-rose-700 dark:text-rose-300">
               {{ formatCurrency(cashStore.todayCashOut) }}
             </p>
           </div>
@@ -164,7 +170,7 @@ const filteredEntries = computed(() => {
       <div class="grid grid-cols-2 gap-2.5 pt-1">
         <button
           type="button"
-          class="flex items-center justify-center gap-1.5 rounded-2xl bg-emerald-600 px-4 py-2.5 text-xs font-semibold text-white shadow-soft hover:bg-emerald-700 active:scale-[0.98] transition whitespace-nowrap"
+          class="flex items-center justify-center gap-1.5 rounded-2xl bg-emerald-600 px-4 py-2.5 text-xs font-semibold text-white shadow-soft hover:bg-emerald-700 active:scale-[0.98] transition whitespace-nowrap cursor-pointer"
           @click="openRecordModal('in')"
         >
           <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
@@ -175,7 +181,7 @@ const filteredEntries = computed(() => {
 
         <button
           type="button"
-          class="flex items-center justify-center gap-1.5 rounded-2xl bg-rose-600 px-4 py-2.5 text-xs font-semibold text-white shadow-soft hover:bg-rose-700 active:scale-[0.98] transition whitespace-nowrap"
+          class="flex items-center justify-center gap-1.5 rounded-2xl bg-rose-600 px-4 py-2.5 text-xs font-semibold text-white shadow-soft hover:bg-rose-700 active:scale-[0.98] transition whitespace-nowrap cursor-pointer"
           @click="openRecordModal('out')"
         >
           <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
@@ -187,13 +193,13 @@ const filteredEntries = computed(() => {
     </div>
 
     <!-- Riwayat Kas Section -->
-    <div class="rounded-3xl border border-zinc-200/80 bg-white p-5 shadow-soft space-y-4">
+    <div class="rounded-3xl border border-zinc-200/80 bg-card p-5 shadow-soft space-y-4 dark:border-slate-700/55">
       <div class="flex items-center justify-between gap-3">
         <div>
           <h2 class="text-base font-bold text-ink-primary">Riwayat Kas</h2>
           <p class="text-xs text-ink-secondary">Catatan arus kas operasional</p>
         </div>
-        <span class="rounded-full bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-600">
+        <span class="rounded-full border border-zinc-200/80 bg-surface px-2.5 py-1 text-xs font-medium text-ink-secondary dark:border-slate-700/70 dark:bg-[#1E2538] dark:text-slate-300">
           {{ filteredEntries.length }} transaksi
         </span>
       </div>
@@ -202,11 +208,11 @@ const filteredEntries = computed(() => {
       <div class="flex items-center gap-1.5 text-xs overflow-x-auto pb-0.5 no-scrollbar">
         <button
           type="button"
-          class="rounded-full px-3 py-1.5 font-medium transition whitespace-nowrap"
+          class="rounded-full border px-3 py-1.5 font-semibold transition whitespace-nowrap cursor-pointer"
           :class="
             filterType === 'all'
-              ? 'bg-ink-primary text-white shadow-xs'
-              : 'bg-zinc-100 text-zinc-600 hover:bg-zinc-200/70'
+              ? 'border-primary bg-primary text-white shadow-xs'
+              : 'border-zinc-200/80 bg-surface text-ink-secondary hover:text-ink-primary dark:border-slate-700/70 dark:bg-[#1E2538] dark:text-slate-300'
           "
           @click="filterType = 'all'"
         >
@@ -214,11 +220,11 @@ const filteredEntries = computed(() => {
         </button>
         <button
           type="button"
-          class="rounded-full px-3 py-1.5 font-medium transition whitespace-nowrap"
+          class="rounded-full border px-3 py-1.5 font-semibold transition whitespace-nowrap cursor-pointer"
           :class="
             filterType === 'in'
-              ? 'bg-emerald-600 text-white shadow-xs'
-              : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+              ? 'border-emerald-600 bg-emerald-600 text-white shadow-xs'
+              : 'border-emerald-200/80 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-500/30 dark:bg-emerald-500/12 dark:text-emerald-300'
           "
           @click="filterType = 'in'"
         >
@@ -226,11 +232,11 @@ const filteredEntries = computed(() => {
         </button>
         <button
           type="button"
-          class="rounded-full px-3 py-1.5 font-medium transition whitespace-nowrap"
+          class="rounded-full border px-3 py-1.5 font-semibold transition whitespace-nowrap cursor-pointer"
           :class="
             filterType === 'out'
-              ? 'bg-rose-600 text-white shadow-xs'
-              : 'bg-rose-50 text-rose-700 hover:bg-rose-100'
+              ? 'border-rose-600 bg-rose-600 text-white shadow-xs'
+              : 'border-rose-200/80 bg-rose-50 text-rose-700 hover:bg-rose-100 dark:border-rose-500/30 dark:bg-rose-500/12 dark:text-rose-300'
           "
           @click="filterType = 'out'"
         >
@@ -239,7 +245,7 @@ const filteredEntries = computed(() => {
       </div>
 
       <!-- Ledger Entries List -->
-      <div v-if="filteredEntries.length > 0" class="divide-y divide-zinc-100">
+      <div v-if="filteredEntries.length > 0" class="divide-y divide-zinc-100 dark:divide-slate-700/50">
         <div
           v-for="entry in filteredEntries"
           :key="entry.id"
@@ -248,8 +254,12 @@ const filteredEntries = computed(() => {
         >
           <div class="flex items-center gap-3 min-w-0">
             <div
-              class="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl"
-              :class="entry.type === 'in' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'"
+              class="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl border"
+              :class="
+                entry.type === 'in'
+                  ? 'border-emerald-200/70 bg-emerald-50 text-emerald-700 dark:border-emerald-500/25 dark:bg-emerald-500/15 dark:text-emerald-300'
+                  : 'border-rose-200/70 bg-rose-50 text-rose-700 dark:border-rose-500/25 dark:bg-rose-500/15 dark:text-rose-300'
+              "
             >
               <svg
                 v-if="entry.type === 'in'"

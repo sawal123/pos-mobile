@@ -132,18 +132,18 @@ watch(
     </header>
 
     <!-- Eyecatching Live Card Preview -->
-    <section class="rounded-3xl border border-zinc-200/80 bg-white p-5 shadow-soft space-y-3">
+    <section class="rounded-3xl border border-zinc-200/80 bg-card p-5 shadow-soft space-y-3 dark:border-slate-700/60">
       <div class="flex items-center justify-between">
         <span class="text-xs font-semibold uppercase tracking-wider text-ink-secondary">
           Pratinjau Kartu Pelanggan
         </span>
-        <span class="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">
+        <span class="inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary dark:bg-indigo-500/20 dark:text-indigo-300">
           <span class="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
           Live Preview
         </span>
       </div>
 
-      <div class="rounded-2xl border border-zinc-200/70 bg-gradient-to-br from-surface to-white p-4 shadow-xs">
+      <div class="rounded-2xl border border-zinc-200/70 bg-gradient-to-br from-surface to-white p-4 shadow-xs dark:border-slate-700/70 dark:from-[#121726] dark:to-[#171C2B]">
         <div class="flex items-center gap-3.5">
           <div
             class="flex h-13 w-13 shrink-0 items-center justify-center rounded-2xl shadow-soft text-base font-black transition-transform duration-300"

@@ -1,8 +1,9 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 
+import AppIcon from '@/components/base/AppIcon.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import CartItem from '@/components/pos/CartItem.vue'
@@ -16,7 +17,6 @@ import { useProductStore } from '@/stores/productStore'
 import { useTaxStore } from '@/stores/taxStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useSyncPullStore } from '@/stores/syncPullStore'
-import { formatCurrency } from '@/utils/formatters'
 
 const productStore = useProductStore()
 const cartStore = useCartStore()
@@ -27,6 +27,11 @@ const router = useRouter()
 
 const { filterCategories, filteredProducts, searchQuery, selectedCategory } = storeToRefs(productStore)
 const { items, subtotal, tax, total } = storeToRefs(cartStore)
+
+const totalQty = computed(() => {
+  const sum = items.value.reduce((acc, item) => acc + (Number(item.qty) || 0), 0)
+  return Number.isInteger(sum) ? sum : Number(sum.toFixed(1))
+})
 
 const showCartSheet = ref(false)
 const showPromoModal = ref(false)
@@ -68,7 +73,10 @@ function handleCheckout() {
 </script>
 
 <template>
-  <div class="w-full min-w-0 space-y-4 md:space-y-5">
+  <div
+    class="w-full min-w-0 space-y-4 md:space-y-5"
+    :class="items.length ? 'pb-20 md:pb-0' : ''"
+  >
     <div class="grid gap-5 md:grid-cols-[1fr_340px] lg:grid-cols-[1fr_380px] xl:grid-cols-[1fr_420px] items-start">
       <!-- Left Column: Product Catalog -->
       <section class="min-w-0 space-y-3 sm:space-y-4">
@@ -164,37 +172,28 @@ function handleCheckout() {
       </section>
     </div>
 
-    <!-- Floating Mobile Checkout Bar for convenient POS checkout on phone screens -->
+    <!-- Floating Circular Cart Button with Total Qty Badge (Mobile) -->
     <div
       v-if="items.length"
-      class="fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+5.25rem)] z-20 px-4 py-2 md:hidden"
+      class="fixed right-4 bottom-[calc(env(safe-area-inset-bottom)+5.6rem)] z-20 md:hidden"
     >
-      <div class="flex items-center gap-2 rounded-2xl bg-ink-primary px-3 py-2.5 text-white shadow-2xl backdrop-blur-md">
-        <!-- Tapping the summary opens the cart bottom sheet for editing. -->
-        <button
-          type="button"
-          class="flex min-w-0 flex-1 items-center justify-between gap-3 rounded-xl px-1.5 py-1 text-left transition active:scale-[0.99]"
-          data-testid="mobile-cart-summary"
-          aria-label="Buka keranjang untuk ubah jumlah"
-          @click="openCartSheet"
-        >
-          <span class="min-w-0">
-            <span class="block text-xs text-white/70">{{ items.length }} item &bull; Total</span>
-            <span class="block truncate text-base font-bold text-white">{{ formatCurrency(total) }}</span>
-          </span>
-          <span class="shrink-0 text-[11px] font-semibold text-white/70">Ubah</span>
-        </button>
+      <button
+        type="button"
+        data-testid="mobile-cart-summary"
+        :aria-label="`Buka keranjang (${totalQty} pesanan)`"
+        title="Lihat detail keranjang"
+        class="group relative flex h-14 w-14 items-center justify-center rounded-full bg-primary text-white shadow-[0_12px_28px_rgba(73,69,214,0.45)] ring-4 ring-white/90 transition-all hover:scale-105 hover:bg-primary-light active:scale-95 cursor-pointer dark:ring-[#0F131F]/90 dark:shadow-[0_14px_32px_rgba(0,0,0,0.65)]"
+        @click="openCartSheet"
+      >
+        <AppIcon name="pos" class="h-6 w-6 transition-transform group-hover:-rotate-6" />
 
-        <button
-          type="button"
-          class="flex shrink-0 items-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white shadow-md transition active:scale-95"
-          data-testid="mobile-checkout-btn"
-          @click="handleCheckout"
+        <span
+          data-testid="mobile-cart-qty-badge"
+          class="absolute -right-1 -top-1 flex min-h-6 min-w-6 items-center justify-center rounded-full bg-[#FF7A00] px-1.5 font-mono text-xs font-extrabold leading-none text-white shadow-md ring-2 ring-white dark:ring-[#0F131F]"
         >
-          <span>Bayar</span>
-          <span aria-hidden="true">&rarr;</span>
-        </button>
-      </div>
+          {{ totalQty }}
+        </span>
+      </button>
     </div>
 
     <MobileCartSheet

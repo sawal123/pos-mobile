@@ -3,6 +3,8 @@ import { computed } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
 import AppIcon from '@/components/base/AppIcon.vue'
+import NexaPosLogo from '@/components/base/NexaPosLogo.vue'
+import { APP_VERSION } from '@/constants/appInfo'
 import { getOperationalMenuItems } from '@/navigation/operationalMenu'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCashierStore } from '@/stores/cashierStore'
@@ -27,11 +29,6 @@ const items = computed(() => [
   ...getOperationalMenuItems(businessStore.normalizedType),
 ])
 
-const businessInitial = computed(() => {
-  const name = businessStore.name || 'P'
-  return name.trim().charAt(0).toUpperCase()
-})
-
 const cashierInitial = computed(() => {
   const name = cashierStore.activeCashier?.name || 'K'
   return name.trim().charAt(0).toUpperCase()
@@ -52,22 +49,18 @@ function handleItemClick() {
   <aside
     :class="[
       isDrawer
-        ? 'flex h-full w-full flex-col bg-white'
-        : 'hidden w-64 shrink-0 border-r border-zinc-200/80 bg-white md:sticky md:top-0 md:flex md:h-screen md:flex-col md:self-start shadow-[1px_0_12px_rgba(0,0,0,0.03)] z-20',
+        ? 'flex h-full w-full flex-col bg-card'
+        : 'hidden w-64 shrink-0 border-r border-zinc-200/80 bg-card md:sticky md:top-0 md:flex md:h-screen md:flex-col md:self-start shadow-[1px_0_12px_rgba(0,0,0,0.03)] dark:border-slate-700/60 z-20',
     ]"
   >
     <!-- Brand Header -->
-    <div class="border-b border-zinc-100 bg-gradient-to-b from-zinc-50/80 to-white px-5 py-5">
+    <div class="border-b border-zinc-100 bg-gradient-to-b from-zinc-50/80 to-white px-5 py-5 dark:border-slate-700/50 dark:from-[#131826] dark:to-[#171C2B]">
       <div class="flex items-center justify-between gap-3">
         <div class="flex min-w-0 flex-1 items-center gap-3">
-          <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-tr from-primary to-indigo-500 text-white shadow-[0_4px_14px_rgba(73,69,214,0.32)]">
-            <span class="text-base font-black tracking-tight">
-              {{ businessInitial }}
-            </span>
-          </div>
+          <NexaPosLogo size="sm" />
           <div class="min-w-0 flex-1">
             <h2 class="truncate text-base font-bold tracking-tight text-ink-primary">
-              {{ businessStore.name || 'Demo POS Store' }}
+              {{ businessStore.name || 'NexaPos' }}
             </h2>
             <p class="truncate text-xs text-ink-secondary">
               {{ businessStore.outlet || 'Outlet Utama' }}
@@ -139,7 +132,7 @@ function handleItemClick() {
     </nav>
 
     <!-- Cashier / Shift Footer -->
-    <div class="border-t border-zinc-100 bg-zinc-50/60 p-3">
+    <div class="border-t border-zinc-100 bg-zinc-50/60 p-3 space-y-2">
       <div class="flex items-center gap-2.5 rounded-2xl border border-zinc-200/70 bg-white p-2.5 shadow-sm">
         <div class="relative flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-xs font-bold text-primary">
           <span>{{ cashierInitial }}</span>
@@ -154,6 +147,11 @@ function handleItemClick() {
             {{ shiftStore.isOpen ? 'Shift Aktif' : 'Shift Belum Buka' }}
           </p>
         </div>
+      </div>
+
+      <div class="flex items-center justify-between px-1.5 text-[10px] font-medium text-zinc-400">
+        <span class="font-bold text-[#4945D6] dark:text-white">NexaPos</span>
+        <span class="font-mono">v{{ APP_VERSION }}</span>
       </div>
     </div>
   </aside>

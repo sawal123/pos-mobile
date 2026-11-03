@@ -92,7 +92,7 @@ function onTitleUpdate(val) {
 
 function getCategoryAccent(cat, isSelected) {
   if (!isSelected) {
-    return 'border-zinc-200/90 bg-white text-ink-primary hover:border-primary/40 hover:bg-zinc-50/80'
+    return 'border-zinc-200/90 bg-card text-ink-primary hover:border-primary/40 hover:bg-zinc-50/80 dark:border-slate-700/70 dark:bg-[#121726] dark:hover:border-indigo-400/50 dark:hover:bg-[#192034]'
   }
 
   switch (cat) {
@@ -110,13 +110,13 @@ function getCategoryAccent(cat, isSelected) {
 function getCategoryBadgeClass(category) {
   switch (category) {
     case 'Operasional':
-      return 'bg-blue-50 text-blue-700 border-blue-200/70'
+      return 'bg-blue-50 text-blue-700 border-blue-200/70 dark:bg-sky-500/15 dark:text-sky-300 dark:border-sky-400/30'
     case 'Belanja Stok':
-      return 'bg-amber-50 text-amber-700 border-amber-200/70'
+      return 'bg-amber-50 text-amber-700 border-amber-200/70 dark:bg-amber-500/15 dark:text-amber-300 dark:border-amber-400/30'
     case 'Transportasi':
-      return 'bg-indigo-50 text-indigo-700 border-indigo-200/70'
+      return 'bg-indigo-50 text-indigo-700 border-indigo-200/70 dark:bg-indigo-500/15 dark:text-indigo-300 dark:border-indigo-400/30'
     default:
-      return 'bg-zinc-100 text-zinc-700 border-zinc-200'
+      return 'bg-zinc-100 text-zinc-700 border-zinc-200 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700'
   }
 }
 
@@ -261,10 +261,10 @@ watch(
     <form class="space-y-4" @submit.prevent="handleSubmit">
       <!-- 1. Hero Nominal Pengeluaran Card -->
       <section
-        class="overflow-hidden rounded-3xl border bg-white shadow-soft transition"
-        :class="errors.amount ? 'border-danger/60' : 'border-zinc-200/80'"
+        class="overflow-hidden rounded-3xl border bg-card shadow-soft transition"
+        :class="errors.amount ? 'border-danger/60' : 'border-zinc-200/80 dark:border-slate-700/60'"
       >
-        <div class="border-b border-zinc-100 bg-gradient-to-r from-rose-50/80 via-white to-zinc-50/60 px-4 py-3 sm:px-5">
+        <div class="border-b border-zinc-100 bg-gradient-to-r from-rose-50/80 via-white to-zinc-50/60 px-4 py-3 sm:px-5 dark:border-slate-700/60 dark:from-rose-950/45 dark:via-[#171C2B] dark:to-[#131826]">
           <div class="flex items-center justify-between gap-2">
             <label for="expense-amount-input" class="text-xs font-bold uppercase tracking-wider text-ink-secondary">
               Nominal Pengeluaran
@@ -272,7 +272,7 @@ watch(
             <span
               data-testid="expense-amount-preview"
               class="font-mono text-xs font-bold tabular-nums"
-              :class="parsedAmountPreview > 0 ? 'text-rose-600' : 'text-zinc-400'"
+              :class="parsedAmountPreview > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-zinc-400 dark:text-slate-500'"
             >
               {{ parsedAmountPreview > 0 ? `-${formatCurrency(parsedAmountPreview)}` : 'Rp 0' }}
             </span>
@@ -282,7 +282,7 @@ watch(
         <div class="space-y-3 p-4 sm:p-5">
           <!-- Large Nominal Input -->
           <div class="relative flex items-center">
-            <span class="pointer-events-none absolute left-4 text-base font-extrabold text-zinc-400">
+            <span class="pointer-events-none absolute left-4 text-base font-extrabold text-zinc-400 dark:text-slate-400">
               Rp
             </span>
             <input
@@ -293,11 +293,11 @@ watch(
               min="0"
               placeholder="0"
               data-testid="expense-amount-input"
-              class="h-14 w-full rounded-2xl border bg-zinc-50/60 pl-12 pr-20 font-mono text-2xl font-extrabold tabular-nums text-ink-primary outline-none transition placeholder:text-zinc-300 focus:bg-white focus:ring-4"
+              class="h-14 w-full rounded-2xl border bg-surface pl-12 pr-20 font-mono text-2xl font-extrabold tabular-nums text-ink-primary outline-none transition placeholder:text-zinc-300 focus:bg-card focus:ring-4 dark:bg-[#121726] dark:placeholder:text-slate-600 dark:focus:bg-[#151C2E]"
               :class="
                 errors.amount
                   ? 'border-danger focus:border-danger focus:ring-danger/10'
-                  : 'border-zinc-200 focus:border-primary focus:ring-primary/10'
+                  : 'border-zinc-200 focus:border-primary focus:ring-primary/10 dark:border-slate-700/70'
               "
               @input="onAmountInput"
             />
@@ -305,7 +305,7 @@ watch(
               v-if="Number(form.amount) > 0"
               type="button"
               data-testid="btn-reset-amount"
-              class="absolute right-3 rounded-xl border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-bold text-rose-600 transition hover:bg-rose-100 active:scale-95 cursor-pointer"
+              class="absolute right-3 rounded-xl border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-bold text-rose-600 transition hover:bg-rose-100 active:scale-95 cursor-pointer dark:border-rose-500/35 dark:bg-rose-500/15 dark:text-rose-300 dark:hover:bg-rose-500/25"
               @click="clearAmount"
             >
               Reset
@@ -322,7 +322,7 @@ watch(
                 v-for="amt in QUICK_AMOUNTS"
                 :key="amt"
                 type="button"
-                class="rounded-xl border border-zinc-200/90 bg-zinc-50/80 px-2 py-2 text-[11px] font-bold tabular-nums text-zinc-700 transition hover:border-primary/40 hover:bg-primary/5 hover:text-primary active:scale-95 cursor-pointer"
+                class="rounded-xl border border-zinc-200/90 bg-zinc-50/80 px-2 py-2 text-[11px] font-bold tabular-nums text-zinc-700 transition hover:border-primary/40 hover:bg-primary/5 hover:text-primary active:scale-95 cursor-pointer dark:border-slate-700/70 dark:bg-[#121726] dark:text-slate-200 dark:hover:border-indigo-400/50 dark:hover:bg-indigo-500/15 dark:hover:text-indigo-200"
                 @click="selectQuickAmount(amt)"
               >
                 +{{ formatCurrency(amt) }}
@@ -337,7 +337,7 @@ watch(
       </section>
 
       <!-- 2. Kategori & Rincian Pengeluaran Card -->
-      <section class="rounded-3xl border border-zinc-200/80 bg-white p-4 shadow-soft space-y-4 sm:p-5">
+      <section class="rounded-3xl border border-zinc-200/80 bg-card p-4 shadow-soft space-y-4 sm:p-5 dark:border-slate-700/60">
         <!-- Kategori Selector -->
         <div class="space-y-2">
           <div class="flex items-center justify-between">
@@ -359,7 +359,7 @@ watch(
             >
               <span
                 class="flex h-7 w-7 shrink-0 items-center justify-center rounded-xl"
-                :class="form.category === cat ? 'bg-white/20 text-white' : 'bg-zinc-100 text-zinc-600'"
+                :class="form.category === cat ? 'bg-white/20 text-white' : 'bg-zinc-100 text-zinc-600 dark:bg-slate-800 dark:text-slate-300'"
               >
                 <!-- Operasional icon -->
                 <svg v-if="cat === 'Operasional'" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -395,7 +395,7 @@ watch(
           </p>
         </div>
 
-        <div class="border-t border-zinc-100" />
+        <div class="border-t border-zinc-100 dark:border-slate-700/60" />
 
         <!-- Judul Pengeluaran + Quick Suggestions -->
         <div class="space-y-2">
@@ -413,7 +413,7 @@ watch(
               v-for="item in titleSuggestions"
               :key="item"
               type="button"
-              class="rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-0.5 text-[11px] font-medium text-ink-secondary transition hover:border-primary/40 hover:bg-primary/5 hover:text-primary active:scale-95 cursor-pointer"
+              class="rounded-full border border-zinc-200 bg-zinc-50 px-2.5 py-0.5 text-[11px] font-medium text-ink-secondary transition hover:border-primary/40 hover:bg-primary/5 hover:text-primary active:scale-95 cursor-pointer dark:border-slate-700/70 dark:bg-[#121726] dark:text-slate-300 dark:hover:border-indigo-400/50 dark:hover:bg-indigo-500/15 dark:hover:text-indigo-200"
               @click="applyTitleSuggestion(item)"
             >
               {{ item }}
@@ -439,14 +439,20 @@ watch(
             rows="3"
             data-testid="expense-note-input"
             placeholder="Nomor nota, nama toko pembelian, atau keterangan lainnya..."
-            class="w-full resize-none rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm text-ink-primary outline-none transition placeholder:text-zinc-400 focus:border-primary focus:ring-4 focus:ring-primary/10"
+            class="w-full resize-none rounded-2xl border border-zinc-200 bg-card px-4 py-3 text-sm text-ink-primary outline-none transition placeholder:text-zinc-400 focus:border-primary focus:ring-4 focus:ring-primary/10 dark:border-slate-700/70 dark:bg-[#121726] dark:placeholder:text-slate-500"
           />
         </div>
       </section>
 
       <!-- 3. Live Summary Preview & Submit Footer -->
-      <section class="rounded-3xl border border-zinc-200/80 bg-white p-4 shadow-soft space-y-3.5 sm:p-5">
-        <div class="flex items-center justify-between gap-3 rounded-2xl bg-zinc-50/90 px-3.5 py-2.5 border border-zinc-100">
+      <section
+        class="rounded-3xl border border-zinc-200/80 bg-card p-4 shadow-soft space-y-3.5 sm:p-5 dark:border-slate-700/60"
+        data-testid="expense-summary-footer"
+      >
+        <div
+          class="flex items-center justify-between gap-3 rounded-2xl border border-zinc-200/70 bg-surface px-3.5 py-2.5 dark:border-slate-700/70 dark:bg-[#121726]"
+          data-testid="expense-live-summary"
+        >
           <div class="min-w-0">
             <div class="flex items-center gap-1.5">
               <span
@@ -456,7 +462,7 @@ watch(
               >
                 {{ form.category }}
               </span>
-              <span v-else class="text-[11px] text-zinc-400">Belum pilih kategori</span>
+              <span v-else class="text-[11px] text-zinc-400 dark:text-slate-400">Belum pilih kategori</span>
             </div>
             <p class="mt-0.5 truncate text-xs font-semibold text-ink-primary">
               {{ form.title.trim() || 'Judul pengeluaran belum diisi' }}
@@ -465,7 +471,7 @@ watch(
 
           <div class="shrink-0 text-right">
             <p class="text-[10px] font-medium uppercase tracking-wide text-ink-secondary">Total Biaya</p>
-            <p class="font-mono text-sm font-extrabold tabular-nums text-rose-600">
+            <p class="font-mono text-sm font-extrabold tabular-nums text-rose-600 dark:text-rose-400">
               {{ parsedAmountPreview > 0 ? `-${formatCurrency(parsedAmountPreview)}` : 'Rp 0' }}
             </p>
           </div>
