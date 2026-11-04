@@ -747,8 +747,6 @@ export async function mapOutboxEntries(
 
       if (rawPromoSyncId && isUuid(rawPromoSyncId)) {
         saleChange.promo_sync_id = rawPromoSyncId.toLowerCase()
-      } else {
-        saleChange.promo_sync_id = null
       }
 
       if (salePaymentMethod) {

@@ -635,13 +635,13 @@ describe('P11: Transaction Mapping (Sale + Sale Items)', () => {
     expect(sale.payment_status).toBe('paid')
     expect(sale.cash_received).toBe(50000)
     expect(sale.change_amount).toBe(11500)
-    expect(sale.promo_sync_id).toBeNull()
+    expect(sale.promo_sync_id).toBeUndefined()
     expect(result.warnings).toHaveLength(0)
 
     expect(result.mappedQueueIds).toEqual(['q-trx-1'])
   })
 
-  it('maps valid UUID promoSyncId and sanitizes non-UUID promoSyncId to null', async () => {
+  it('maps valid UUID promoSyncId and omits non-UUID promoSyncId', async () => {
     const validPromoUuid = 'a0000000-0000-4000-8000-000000000001'
     const entries = [
       {
@@ -679,7 +679,7 @@ describe('P11: Transaction Mapping (Sale + Sale Items)', () => {
     const result = await mapOutboxEntries(entries, { registry })
     expect(result.changes.sales).toHaveLength(2)
     expect(result.changes.sales[0].promo_sync_id).toBe(validPromoUuid)
-    expect(result.changes.sales[1].promo_sync_id).toBeNull()
+    expect(result.changes.sales[1].promo_sync_id).toBeUndefined()
     expect(result.mappedQueueIds).toEqual(['q-trx-valid-promo', 'q-trx-invalid-promo'])
   })
 

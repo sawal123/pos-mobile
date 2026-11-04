@@ -243,7 +243,7 @@ describe('Mobile Promo Engine & Feature Parity', () => {
             paymentMethod: 'cash',
             subtotal: 100000,
             discount: 10000,
-            promoSyncId: 'promo-sync-xyz',
+            promoSyncId: 'a0000000-0000-4000-8000-000000000001',
             tax: 9000,
             total: 99000,
             items: [
@@ -257,7 +257,7 @@ describe('Mobile Promo Engine & Feature Parity', () => {
       expect(result.changes.sales).toHaveLength(1)
       const sale = result.changes.sales[0]
       expect(sale.discount_amount).toBe(10000)
-      expect(sale.promo_sync_id).toBe('promo-sync-xyz')
+      expect(sale.promo_sync_id).toBe('a0000000-0000-4000-8000-000000000001')
       expect(sale.total_amount).toBe(99000)
     })
 
