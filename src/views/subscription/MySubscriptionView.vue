@@ -454,6 +454,47 @@ defineExpose({
         </div>
       </dl>
 
+      <div
+        v-if="displayStatus === 'free'"
+        class="rounded-2xl border border-indigo-100 bg-gradient-to-br from-indigo-50/70 to-purple-50/40 p-4 space-y-3 dark:border-indigo-900/40 dark:from-indigo-950/40 dark:to-slate-900/50"
+        data-testid="free-benefits-card"
+      >
+        <div class="flex items-center gap-2 text-primary">
+          <AppIcon name="crown" class="h-4 w-4 shrink-0" />
+          <span class="text-xs font-bold uppercase tracking-wider">Manfaat Berlangganan Cloud</span>
+        </div>
+        <ul class="space-y-2 text-xs text-ink-primary">
+          <li class="flex items-start gap-2.5">
+            <span class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-bold">✓</span>
+            <div>
+              <strong class="font-semibold">Varian Menu &amp; Topping:</strong>
+              <span class="text-ink-secondary ml-1">Kustomisasi menu dengan opsi ukuran (Regular/Large), rasa, dan topping dengan penyesuaian harga otomatis.</span>
+            </div>
+          </li>
+          <li class="flex items-start gap-2.5">
+            <span class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-bold">✓</span>
+            <div>
+              <strong class="font-semibold">Sinkronisasi Cloud Real-time:</strong>
+              <span class="text-ink-secondary ml-1">Semua transaksi POS tersinkron otomatis ke cloud dan terhubung lintas kasir/perangkat.</span>
+            </div>
+          </li>
+          <li class="flex items-start gap-2.5">
+            <span class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-bold">✓</span>
+            <div>
+              <strong class="font-semibold">Web Dashboard &amp; Analitik Laba Rugi:</strong>
+              <span class="text-ink-secondary ml-1">Akses dashboard bisnis di laptop/PC, hitung HPP resep produk, dan kelola stok persediaan.</span>
+            </div>
+          </li>
+          <li class="flex items-start gap-2.5">
+            <span class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-bold">✓</span>
+            <div>
+              <strong class="font-semibold">Backup Cloud Otomatis:</strong>
+              <span class="text-ink-secondary ml-1">Data penjualan dan katalog aman di cloud, mudah dipulihkan kapan pun tanpa risiko hilang.</span>
+            </div>
+          </li>
+        </ul>
+      </div>
+
       <p
         v-if="displayStatus === 'free'"
         class="text-sm text-ink-secondary"

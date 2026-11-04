@@ -114,6 +114,7 @@ export function getMoreMenuItems(businessType) {
   return [
     { key: 'products', icon: 'products', label: productLabel, to: '/products' },
     { key: 'stock', icon: 'stock', label: 'Stok', to: '/stock' },
+    { key: 'promos', icon: 'promo', label: 'Promo', to: '/promos' },
     { key: 'customers', icon: 'customers', label: 'Pelanggan', to: '/customers' },
     { key: 'expenses', icon: 'expenses', label: 'Pengeluaran', to: '/expenses' },
     { key: 'shift', icon: 'shift', label: 'Shift', to: '/shift' },

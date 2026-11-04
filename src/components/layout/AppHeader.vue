@@ -41,6 +41,7 @@ const pageTitle = computed(() => {
     pos: 'POS',
     products: 'Produk / Layanan',
     stock: 'Stok',
+    promos: 'Promo & Diskon',
     customers: 'Pelanggan',
     expenses: 'Pengeluaran',
     cash: 'Kas',
