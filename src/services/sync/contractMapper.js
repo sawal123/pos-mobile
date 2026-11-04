@@ -738,9 +738,17 @@ export async function mapOutboxEntries(
         sold_at: new Date(soldAt).toISOString(),
       }
 
-      const promoSyncId = payload.promoSyncId ?? payload.promo_sync_id ?? payload.appliedPromo?.sync_id ?? payload.appliedPromo?.syncId ?? null
-      if (promoSyncId) {
-        saleChange.promo_sync_id = promoSyncId
+      const rawPromoSyncId =
+        payload.promoSyncId ??
+        payload.promo_sync_id ??
+        payload.appliedPromo?.sync_id ??
+        payload.appliedPromo?.syncId ??
+        null
+
+      if (rawPromoSyncId && isUuid(rawPromoSyncId)) {
+        saleChange.promo_sync_id = rawPromoSyncId.toLowerCase()
+      } else {
+        saleChange.promo_sync_id = null
       }
 
       if (salePaymentMethod) {

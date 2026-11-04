@@ -635,9 +635,52 @@ describe('P11: Transaction Mapping (Sale + Sale Items)', () => {
     expect(sale.payment_status).toBe('paid')
     expect(sale.cash_received).toBe(50000)
     expect(sale.change_amount).toBe(11500)
+    expect(sale.promo_sync_id).toBeNull()
     expect(result.warnings).toHaveLength(0)
 
     expect(result.mappedQueueIds).toEqual(['q-trx-1'])
+  })
+
+  it('maps valid UUID promoSyncId and sanitizes non-UUID promoSyncId to null', async () => {
+    const validPromoUuid = 'a0000000-0000-4000-8000-000000000001'
+    const entries = [
+      {
+        id: 'q-trx-valid-promo',
+        entityType: SYNC_ENTITY_TYPES.TRANSACTION,
+        entityId: 'trx-promo-valid',
+        operation: SYNC_OPERATIONS.UPSERT,
+        payload: {
+          id: 'trx-promo-valid',
+          invoiceNumber: 'INV-PROMO-1',
+          subtotal: 10000,
+          total: 10000,
+          promoSyncId: validPromoUuid,
+          createdAt: '2026-08-24T14:30:00.000Z',
+          items: [{ id: 'p1', name: 'Valid Item', price: 10000, qty: 1 }],
+        },
+      },
+      {
+        id: 'q-trx-invalid-promo',
+        entityType: SYNC_ENTITY_TYPES.TRANSACTION,
+        entityId: 'trx-promo-invalid',
+        operation: SYNC_OPERATIONS.UPSERT,
+        payload: {
+          id: 'trx-promo-invalid',
+          invoiceNumber: 'INV-PROMO-2',
+          subtotal: 10000,
+          total: 10000,
+          promoSyncId: 'local-promo-1730700000-abc',
+          createdAt: '2026-08-24T14:31:00.000Z',
+          items: [{ id: 'p1', name: 'Valid Item', price: 10000, qty: 1 }],
+        },
+      },
+    ]
+
+    const result = await mapOutboxEntries(entries, { registry })
+    expect(result.changes.sales).toHaveLength(2)
+    expect(result.changes.sales[0].promo_sync_id).toBe(validPromoUuid)
+    expect(result.changes.sales[1].promo_sync_id).toBeNull()
+    expect(result.mappedQueueIds).toEqual(['q-trx-valid-promo', 'q-trx-invalid-promo'])
   })
 
   it('fails atomically when a single sale item is invalid, producing no partial sales', async () => {
