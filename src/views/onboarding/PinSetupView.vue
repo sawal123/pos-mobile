@@ -81,7 +81,7 @@ function savePin() {
     return
   }
 
-  cashierStore.setPinConfigured(true)
+  cashierStore.setPin(pin.value)
   router.push('/shift/open')
 }
 </script>

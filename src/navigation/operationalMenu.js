@@ -52,6 +52,13 @@ export function getOperationalMenuItems(businessType) {
       to: '/customers',
     },
     {
+      key: 'promos',
+      icon: 'promo',
+      title: 'Promo',
+      subtitle: 'Diskon & voucher promo',
+      to: '/promos',
+    },
+    {
       key: 'expenses',
       icon: 'expenses',
       title: 'Pengeluaran',

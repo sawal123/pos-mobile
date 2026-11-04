@@ -39,6 +39,7 @@ import TransactionsView from '../views/transactions/TransactionsView.vue'
 import LaundryOrdersView from '../views/laundry/LaundryOrdersView.vue'
 import LaundryOrderCreateView from '../views/laundry/LaundryOrderCreateView.vue'
 import LaundryOrderDetailView from '../views/laundry/LaundryOrderDetailView.vue'
+import PromosView from '../views/promos/PromosView.vue'
 
 export function resolveStartupRoute({ businessStore, cashierStore, shiftStore }) {
   if (!businessStore.isSetup) {
@@ -139,6 +140,11 @@ const routes = [
         path: 'categories',
         name: 'categories',
         component: CategoriesView,
+      },
+      {
+        path: 'promos',
+        name: 'promos',
+        component: PromosView,
       },
       {
         path: 'customers',

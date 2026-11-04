@@ -175,6 +175,59 @@ export const usePromoStore = defineStore('promo', {
       this.promos = Array.isArray(promosList) ? promosList : []
     },
 
+    createPromo(promoData) {
+      const syncId = `local-promo-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`
+      const newPromo = {
+        id: syncId,
+        syncId,
+        syncVersion: 1,
+        name: String(promoData.name ?? '').trim(),
+        code: promoData.code ? String(promoData.code).trim().toUpperCase() : null,
+        discountType: promoData.discountType ?? 'fixed',
+        discountValue: Number(promoData.discountValue ?? 0),
+        scope: promoData.scope ?? 'all',
+        minPurchase: Number(promoData.minPurchase ?? 0),
+        maxDiscount:
+          promoData.maxDiscount !== undefined &&
+          promoData.maxDiscount !== null &&
+          promoData.maxDiscount !== ''
+            ? Number(promoData.maxDiscount)
+            : null,
+        weekdays: Array.isArray(promoData.weekdays) ? promoData.weekdays : null,
+        startsAt: promoData.startsAt ?? null,
+        endsAt: promoData.endsAt ?? null,
+        startTime: promoData.startTime ?? null,
+        endTime: promoData.endTime ?? null,
+        isStackable: Boolean(promoData.isStackable),
+        status: promoData.status ?? 'active',
+        targets: Array.isArray(promoData.targets) ? promoData.targets : [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }
+      this.upsertPromo(newPromo)
+      return newPromo
+    },
+
+    togglePromoStatus(promoId) {
+      const targetId = String(promoId)
+      const index = this.promos.findIndex(
+        (p) => String(p.id) === targetId || String(p.syncId) === targetId,
+      )
+      if (index >= 0) {
+        const nextStatus = this.promos[index].status === 'active' ? 'inactive' : 'active'
+        this.promos[index] = {
+          ...this.promos[index],
+          status: nextStatus,
+          updatedAt: new Date().toISOString(),
+        }
+        if (nextStatus === 'inactive' && String(this.appliedPromoId) === targetId) {
+          this.appliedPromoId = null
+        }
+        return nextStatus
+      }
+      return null
+    },
+
     upsertPromo(promo) {
       if (!promo) return
       const promoId = String(promo.id ?? promo.syncId)
