@@ -206,8 +206,11 @@ export async function mapOutboxEntries(
 
       const trimmedName = name.trim()
 
-      // Reserved filter category 'Semua' is strictly never pushed
-      if (trimmedName.toLowerCase() === SYNC_RESERVED_CATEGORY.toLowerCase()) {
+      // Reserved filter category 'Semua' and unassigned category 'Tanpa Kategori' are strictly never pushed
+      if (
+        trimmedName.toLowerCase() === SYNC_RESERVED_CATEGORY.toLowerCase() ||
+        trimmedName.toLowerCase() === 'tanpa kategori'
+      ) {
         continue
       }
 
@@ -281,7 +284,8 @@ export async function mapOutboxEntries(
       let categorySyncId = null
       if (
         isNonEmptyString(payload.category) &&
-        payload.category.trim().toLowerCase() !== SYNC_RESERVED_CATEGORY.toLowerCase()
+        payload.category.trim().toLowerCase() !== SYNC_RESERVED_CATEGORY.toLowerCase() &&
+        payload.category.trim().toLowerCase() !== 'tanpa kategori'
       ) {
         categorySyncId = await activeRegistry.resolveSyncId(
           SYNC_ENTITY_TYPES.CATEGORY,

@@ -263,7 +263,8 @@ export function createSyncBootstrapService({
       (cat) =>
         typeof cat === 'string' &&
         cat.trim().length > 0 &&
-        cat.trim().toLowerCase() !== SYNC_RESERVED_CATEGORY.toLowerCase(),
+        cat.trim().toLowerCase() !== SYNC_RESERVED_CATEGORY.toLowerCase() &&
+        cat.trim().toLowerCase() !== 'tanpa kategori',
     )
 
     const products = (productStore?.products ?? []).filter((p) => p && p.id !== undefined && p.id !== null)

@@ -2204,4 +2204,67 @@ describe('P13: Shared Registry & Production Wiring', () => {
     expect(productStore.products.map((p) => p.name)).toEqual(['Beras Ramos 5kg'])
     expect((await adapter.loadProducts()).products.map((p) => p.name)).toEqual(['Beras Ramos 5kg'])
   })
+
+  it('successfully applies remote product with category_sync_id = null (uncategorized / raw material like SKM)', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const productStore = useProductStore(pinia)
+
+    const adapter = createMemoryAdapter()
+    await adapter.initialize()
+
+    const prodSyncId = '33333333-3333-4333-8333-333333333333'
+    const transport = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      data: {
+        records: [
+          {
+            entity: 'products',
+            sync_sequence: 1,
+            data: {
+              sync_id: prodSyncId,
+              sync_version: 1,
+              category_sync_id: null,
+              name: 'SKM',
+              sku: 'RAW-SKM',
+              price: 0,
+              cost: 12000,
+              stock: 50,
+              unit: 'kaleng',
+              is_sellable: false,
+              kind: 'product',
+              status: 'active',
+            },
+          },
+        ],
+        next_cursor: 1,
+        server_sequence: 1,
+        has_more: false,
+      },
+    })
+
+    const queueService = createSyncQueueService({ adapter })
+    const registry = createSyncIdentityRegistry({ adapter })
+    const pullService = createSyncPullService({
+      adapter,
+      queueService,
+      registry,
+      pinia,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const result = await pullService.pullNow({
+      context: makeValidCloudContext(),
+      initialCloudRead: true,
+    })
+
+    expect(result.ok).toBe(true)
+    expect(result.applied).toBe(1)
+    const skm = productStore.products.find((p) => p.name === 'SKM')
+    expect(skm).toBeDefined()
+    expect(skm.category).toBeDefined()
+    expect(productStore.categories).toContain(skm.category)
+  })
 })

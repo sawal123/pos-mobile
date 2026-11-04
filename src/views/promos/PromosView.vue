@@ -454,3 +454,4 @@ function formatValidity(promo) {
     />
   </div>
 </template>
+

@@ -1445,51 +1445,50 @@ export function createSyncPullService({
           continue
         }
 
-        if (category_sync_id === null || category_sync_id === undefined) {
-          return {
-            ok: false,
-            code: 'REMOTE_PRODUCT_CATEGORY_REQUIRED_LOCALLY',
-            message: `Remote product "${name}" (${syncId}) has no category_sync_id.`,
-            error: {
-              code: 'REMOTE_PRODUCT_CATEGORY_REQUIRED_LOCALLY',
-              message: `Remote product "${name}" (${syncId}) has no category_sync_id.`,
-            },
-          }
-        }
-
-        let resolvedCategoryName = await activeRegistry.findLocalKeyBySyncId(
-          'category',
-          category_sync_id,
-        )
-
-        if (!resolvedCategoryName) {
-          const plannedBind = plannedRegistryBinds.find(
-            (p) =>
-              p.entityType === 'category' &&
-              p.syncId.toLowerCase() === category_sync_id.toLowerCase(),
-          )
-          if (plannedBind) {
-            resolvedCategoryName = plannedBind.newKey ?? plannedBind.key
-          }
-        }
-
-        if (!resolvedCategoryName || !nextCategories.includes(resolvedCategoryName)) {
-          return {
-            ok: false,
-            code: 'REMOTE_PRODUCT_CATEGORY_UNRESOLVED',
-            message: `Remote product "${name}" category_sync_id "${category_sync_id}" could not be resolved.`,
-            error: {
-              code: 'REMOTE_PRODUCT_CATEGORY_UNRESOLVED',
-              message: `Remote product "${name}" category_sync_id "${category_sync_id}" could not be resolved.`,
-            },
-          }
-        }
-
         let existingProd = nextProducts.find((p) => String(p.id).toLowerCase() === syncId)
         if (!existingProd) {
           const localKey = await activeRegistry.findLocalKeyBySyncId('product', syncId)
           if (localKey) {
             existingProd = nextProducts.find((p) => String(p.id) === String(localKey))
+          }
+        }
+
+        let resolvedCategoryName = null
+
+        if (category_sync_id) {
+          resolvedCategoryName = await activeRegistry.findLocalKeyBySyncId(
+            'category',
+            category_sync_id,
+          )
+
+          if (!resolvedCategoryName) {
+            const plannedBind = plannedRegistryBinds.find(
+              (p) =>
+                p.entityType === 'category' &&
+                p.syncId.toLowerCase() === category_sync_id.toLowerCase(),
+            )
+            if (plannedBind) {
+              resolvedCategoryName = plannedBind.newKey ?? plannedBind.key
+            }
+          }
+        }
+
+        // When a remote product has no category (category_sync_id is null / undefined)
+        // or its category cannot be resolved locally, gracefully fall back instead of failing sync.
+        if (!resolvedCategoryName || !nextCategories.includes(resolvedCategoryName)) {
+          if (existingProd && existingProd.category && nextCategories.includes(existingProd.category)) {
+            resolvedCategoryName = existingProd.category
+          } else {
+            const fallbackCategory =
+              nextCategories.find((c) =>
+                ['Tanpa Kategori', 'Umum', 'Lainnya', 'Bahan Baku'].includes(c),
+              ) ||
+              (nextCategories.length > 0 ? nextCategories[0] : 'Tanpa Kategori')
+
+            if (!nextCategories.includes(fallbackCategory)) {
+              nextCategories.push(fallbackCategory)
+            }
+            resolvedCategoryName = fallbackCategory
           }
         }
 
