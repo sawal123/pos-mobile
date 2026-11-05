@@ -32,6 +32,7 @@ export function createMemoryAdapter() {
     shiftState: null,
     cashState: null,
     printerState: null,
+    receiptSettings: null,
     syncQueue: [],
     deviceIdentifier: null,
     cloudContext: null,
@@ -155,6 +156,12 @@ export function createMemoryAdapter() {
     },
     async loadPrinterState() {
       return cloneValue(state.printerState)
+    },
+    async loadReceiptSettings() {
+      return cloneValue(state.receiptSettings)
+    },
+    async saveReceiptSettings(value) {
+      state.receiptSettings = cloneValue(value)
     },
     async savePrinterState(value) {
       state.printerState = cloneValue(value)
@@ -372,6 +379,7 @@ export function createMemoryAdapter() {
       try {
         state.business = cloneValue(snapshot.business)
         state.taxSettings = cloneValue(snapshot.taxSettings)
+        state.receiptSettings = cloneValue(snapshot.receiptSettings ?? null)
         state.products = cloneValue(snapshot.products)
         state.categories = cloneValue(
           snapshot.categories.filter((category) => String(category) !== RESERVED_CATEGORY),

@@ -6,6 +6,8 @@ import { useCashStore } from '@/stores/cashStore'
 import { useCustomerStore } from '@/stores/customerStore'
 import { useExpenseStore } from '@/stores/expenseStore'
 import { usePrinterStore } from '@/stores/printerStore'
+import { useReceiptStore } from '@/stores/receiptStore'
+import { normalizeReceiptSettings } from '@/services/printer/receiptSettings'
 import { useProductStore } from '@/stores/productStore'
 import { usePromoStore } from '@/stores/promoStore'
 import { useShiftStore } from '@/stores/shiftStore'
@@ -33,11 +35,23 @@ function createPersistenceContexts(pinia) {
   const cashStore = useCashStore(pinia)
   const shiftStore = useShiftStore(pinia)
   const printerStore = usePrinterStore(pinia)
+  const receiptStore = useReceiptStore(pinia)
   const taxStore = useTaxStore(pinia)
   const promoStore = usePromoStore(pinia)
   const variantStore = useVariantStore(pinia)
 
   return [
+    {
+      key: 'receipt',
+      store: receiptStore,
+      initialState: cloneValue(receiptStore.$state),
+      read() { return normalizeReceiptSettings(receiptStore.$state) },
+      async load(adapter) {
+        const state = await adapter.loadReceiptSettings?.()
+        return normalizeReceiptSettings(state)
+      },
+      async save(adapter, snapshot) { await adapter.saveReceiptSettings?.(snapshot) },
+    },
     {
       key: 'business',
       store: businessStore,

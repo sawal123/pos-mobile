@@ -1170,3 +1170,16 @@ describe('P8 native sqlite plugin fallback', () => {
     ).rejects.toThrow(memoryError)
   })
 })
+
+
+it('keeps receipt settings in SQLite after reopening the adapter', async () => {
+  const settings = { address: 'Jl. Uji 10', footer: 'Terima kasih', logo: { width: 8, height: 1, data: 'gQ==' } }
+  const adapter = createSQLiteAdapter()
+  await adapter.initialize()
+  await adapter.saveReceiptSettings(settings)
+  await adapter.close()
+  const reopened = createSQLiteAdapter()
+  await reopened.initialize()
+  expect(await reopened.loadReceiptSettings()).toEqual(settings)
+  await reopened.close()
+})

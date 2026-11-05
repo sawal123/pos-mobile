@@ -115,6 +115,7 @@ export async function printReceipt({
   business,
   printer,
   paperWidth,
+  receiptSettings,
   timeoutMs,
   capacitor = Capacitor,
   plugin,
@@ -138,7 +139,7 @@ export async function printReceipt({
       ...(await sendRaw({
         plugin,
         printer,
-        bytes: buildReceiptBytes({ transaction, business, paperWidth }),
+        bytes: buildReceiptBytes({ transaction, business, paperWidth, receiptSettings }),
         timeoutMs,
       })),
       mode: 'native',
@@ -152,6 +153,7 @@ export async function printTestReceipt({
   printer,
   paperWidth,
   business,
+  receiptSettings,
   timeoutMs,
   capacitor = Capacitor,
   plugin,
@@ -172,7 +174,7 @@ export async function printTestReceipt({
       ...(await sendRaw({
         plugin,
         printer,
-        bytes: buildTestReceiptBytes({ business, paperWidth, now }),
+        bytes: buildTestReceiptBytes({ business, paperWidth, now, receiptSettings }),
         timeoutMs,
       })),
       mode: 'native',

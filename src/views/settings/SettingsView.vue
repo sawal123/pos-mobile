@@ -11,6 +11,7 @@ import NexaPosLogo from '@/components/base/NexaPosLogo.vue'
 import { APP_VERSION } from '@/constants/appInfo'
 import SettingsMenuItem from '@/components/settings/SettingsMenuItem.vue'
 import SettingsSection from '@/components/settings/SettingsSection.vue'
+import ReceiptSettingsPanel from '@/components/settings/ReceiptSettingsPanel.vue'
 import CloudBackupPanel from '@/components/settings/CloudBackupPanel.vue'
 import { clearLocalCache } from '@/services/localCacheService'
 import {
@@ -33,6 +34,7 @@ import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useCustomerStore } from '@/stores/customerStore'
 import { useExpenseStore } from '@/stores/expenseStore'
 import { usePrinterStore } from '@/stores/printerStore'
+import { useReceiptStore } from '@/stores/receiptStore'
 import { useProductStore } from '@/stores/productStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import { useSubscriptionStore } from '@/stores/subscriptionStore'
@@ -50,6 +52,7 @@ const cloudStore = useCloudSessionStore()
 const customerStore = useCustomerStore()
 const expenseStore = useExpenseStore()
 const printerStore = usePrinterStore()
+const receiptStore = useReceiptStore()
 const productStore = useProductStore()
 const shiftStore = useShiftStore()
 const subscriptionStore = useSubscriptionStore()
@@ -318,6 +321,7 @@ function getStoreContext() {
   return {
     businessStore,
     taxStore,
+    receiptStore,
     productStore,
     customerStore,
     expenseStore,
@@ -405,6 +409,7 @@ async function handleTestPrint() {
       printer: printerStore.selectedPrinter,
       paperWidth: printerStore.paperWidth,
       business: buildBusinessSnapshot(),
+      receiptSettings: receiptStore.$state,
     })
 
     if (!result.success) {
@@ -777,6 +782,16 @@ async function handleRestoreFileChange(event) {
             </div>
           </form>
         </div>
+      </SettingsSection>
+      <SettingsSection
+        section-id="receipt"
+        title="Pengaturan Struk"
+        summary="Alamat, logo, dan footer"
+        icon="transactions"
+        :open="activeSection === 'receipt'"
+        @toggle="toggleSection('receipt')"
+      >
+        <ReceiptSettingsPanel />
       </SettingsSection>
       <SettingsSection
         section-id="printer"

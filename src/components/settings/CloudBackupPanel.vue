@@ -19,6 +19,7 @@ import { useProductStore } from '@/stores/productStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import { useSubscriptionStore } from '@/stores/subscriptionStore'
 import { useTaxStore } from '@/stores/taxStore'
+import { useReceiptStore } from '@/stores/receiptStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 
 const emit = defineEmits(['locked'])
@@ -36,6 +37,7 @@ const expenseStore = useExpenseStore()
 const productStore = useProductStore()
 const shiftStore = useShiftStore()
 const taxStore = useTaxStore()
+const receiptStore = useReceiptStore()
 const transactionStore = useTransactionStore()
 
 const locked = computed(() => store.isCloudBackupLocked)
@@ -82,6 +84,7 @@ function getStoreContext() {
   return {
     businessStore,
     taxStore,
+    receiptStore,
     productStore,
     customerStore,
     expenseStore,

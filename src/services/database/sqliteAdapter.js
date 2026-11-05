@@ -656,6 +656,12 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
     async loadPrinterState() {
       return readAppState(APP_STATE_KEYS.printer, null)
     },
+    async loadReceiptSettings() {
+      return readAppState(APP_STATE_KEYS.receipt, null)
+    },
+    async saveReceiptSettings(state) {
+      await writeAppState(APP_STATE_KEYS.receipt, state)
+    },
     async savePrinterState(state) {
       await writeAppState(APP_STATE_KEYS.printer, state)
     },
@@ -1115,6 +1121,11 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
         await db.run(
           'INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)',
           [APP_STATE_KEYS.tax, JSON.stringify(snapshot.taxSettings)],
+          false,
+        )
+        await db.run(
+          'INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)',
+          [APP_STATE_KEYS.receipt, JSON.stringify(snapshot.receiptSettings ?? null)],
           false,
         )
         await db.run(

@@ -11,6 +11,7 @@ export const APP_STATE_KEYS = {
   cash: 'cash_state',
   stockMovements: 'stock_movements_state',
   printer: 'printer_state',
+  receipt: 'receipt_settings',
   tax: 'tax_settings',
   promos: 'promos_state',
   variantGroups: 'variant_groups_state',
