@@ -10,6 +10,7 @@ import AppIcon from '@/components/base/AppIcon.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import CartItem from '@/components/pos/CartItem.vue'
+import CartCustomerInput from '@/components/pos/CartCustomerInput.vue'
 import CartSummary from '@/components/pos/CartSummary.vue'
 import CategoryPill from '@/components/pos/CategoryPill.vue'
 import DiscountPromoModal from '@/components/pos/DiscountPromoModal.vue'
@@ -260,6 +261,8 @@ function handleCheckout() {
               {{ items.length }} item
             </span>
           </div>
+
+          <CartCustomerInput input-id="desktop-cart-customer-phone" />
 
           <div
             v-if="items.length"

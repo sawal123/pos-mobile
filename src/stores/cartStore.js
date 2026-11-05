@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
 import { useTaxStore } from '@/stores/taxStore'
 import { usePromoStore } from '@/stores/promoStore'
+import { useCustomerStore } from '@/stores/customerStore'
+import { normalizeCustomerPhone } from '@/utils/customerPhone'
 
 function itemPrice(item) {
   return Number(item.price ?? item.unitPrice) || 0
@@ -27,11 +29,22 @@ function normalizeQuantity(value, item) {
 export const useCartStore = defineStore('cart', {
   state: () => ({
     items: [],
+    customerPhone: '',
+    customerId: null,
     appliedPromo: null,
     manualDiscountType: 'fixed', // 'fixed' | 'percent'
     manualDiscountValue: 0,
   }),
   getters: {
+    customerPhoneMatch: (state) => useCustomerStore().lookupByPhone(state.customerPhone),
+    selectedCustomer(state) {
+      if (state.customerId === null) return this.customerPhoneMatch.customer
+      const customer = useCustomerStore().getCustomerById(state.customerId)
+      return customer &&
+        normalizeCustomerPhone(customer.phone) === normalizeCustomerPhone(state.customerPhone)
+        ? customer
+        : null
+    },
     subtotal: (state) => state.items.reduce((sum, item) => sum + itemPrice(item) * itemQuantity(item), 0),
     discount(state) {
       if (state.appliedPromo) {
@@ -75,6 +88,19 @@ export const useCartStore = defineStore('cart', {
     },
   },
   actions: {
+    setCustomerPhone(phone) {
+      this.customerId = null
+      this.customerPhone = String(phone ?? '')
+    },
+    selectCustomer(customer) {
+      const stored = useCustomerStore().getCustomerById(customer?.id)
+      this.customerId = stored?.id ?? null
+      this.customerPhone = stored?.phone ?? ''
+    },
+    clearCustomer() {
+      this.customerPhone = ''
+      this.customerId = null
+    },
     applyPromo(promo) {
       this.appliedPromo = promo ?? null
       if (promo) {
@@ -211,9 +237,11 @@ export const useCartStore = defineStore('cart', {
     },
     removeItem(id) {
       this.items = this.items.filter((item) => item.id !== id && String(item.id) !== String(id))
+      if (!this.items.length) this.clearCustomer()
     },
     clearCart() {
       this.items = []
+      this.clearCustomer()
       this.appliedPromo = null
       this.manualDiscountType = 'fixed'
       this.manualDiscountValue = 0

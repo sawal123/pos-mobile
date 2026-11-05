@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { normalizeCustomerPhone } from '@/utils/customerPhone'
 
 function createCustomerId() {
   if (globalThis.crypto?.randomUUID) {
@@ -38,6 +39,21 @@ export const useCustomerStore = defineStore('customer', {
     customers: [],
   }),
   actions: {
+    lookupByPhone(phone) {
+      const normalized = normalizeCustomerPhone(phone)
+      if (!normalized) return { status: 'empty', customer: null }
+      const matches = [
+        ...new Map(
+          this.customers
+            .filter((customer) => normalizeCustomerPhone(customer.phone) === normalized)
+            .map((customer) => [String(customer.id), customer]),
+        ).values(),
+      ]
+      if (matches.length > 1) return { status: 'ambiguous', customer: null }
+      return matches.length === 1
+        ? { status: 'found', customer: matches[0] }
+        : { status: 'not-found', customer: null }
+    },
     getCustomerById(id) {
       return this.customers.find((customer) => String(customer.id) === String(id)) ?? null
     },
@@ -54,7 +70,8 @@ export const useCustomerStore = defineStore('customer', {
       }
 
       const parsedLimit = Number(limit)
-      const requested = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.floor(parsedLimit) : 5
+      const requested =
+        Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.floor(parsedLimit) : 5
       const max = Math.min(5, requested)
 
       return this.customers

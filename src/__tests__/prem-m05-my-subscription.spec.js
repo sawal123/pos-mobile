@@ -7,7 +7,10 @@ import { apiRequest } from '@/services/cloud/apiClient'
 import { _resetTokenStore, saveToken } from '@/services/cloud/tokenRepository'
 import { openCheckoutUrl } from '@/services/premium/checkoutLauncher'
 import { PAYMENT_STATUS } from '@/services/premium/paymentStatus'
-import { listSubscriptionPayments } from '@/services/premium/subscriptionCheckoutService'
+import {
+  cancelSubscriptionPayment,
+  listSubscriptionPayments,
+} from '@/services/premium/subscriptionCheckoutService'
 import {
   EXPIRING_SOON_THRESHOLD_DAYS,
   REMAINING_TIME_STATE,
@@ -339,6 +342,7 @@ describe('MySubscriptionView renewal and history', () => {
     expect(apiRequest.mock.calls[0][0]).toContain(`business_id=${BUSINESS_ID}`)
     expect(wrapper.find('[data-testid="history-payment-1"]').exists()).toBe(true)
 
+    apiRequest.mockResolvedValue(apiOk([]))
     context.cloudStore.selectedBusiness = {
       id: 20,
       name: 'Toko Lain',
@@ -422,5 +426,146 @@ describe('MySubscriptionView refresh, offline and auth failures', () => {
 
     expect(wrapper.find('[data-testid="membership-revoked"]').exists()).toBe(true)
     expect(snapshotLocalData(context.pinia)).toBe(before)
+  })
+})
+
+describe('subscription history cancellation', () => {
+  beforeEach(() => {
+    Object.defineProperty(window.navigator, 'onLine', { configurable: true, value: true })
+  })
+  it('sends only the payment identifier and rejects a mismatched cancellation response', async () => {
+    apiRequest.mockResolvedValue(apiOk(payment({ id: 77, status: 'cancelled' })))
+    expect((await cancelSubscriptionPayment({ token: TOKEN, paymentId: 77 })).ok).toBe(true)
+    expect(apiRequest).toHaveBeenCalledWith('/api/mobile/subscription/payments/77/cancel', {
+      method: 'POST',
+      token: TOKEN,
+    })
+    apiRequest.mockResolvedValue(apiOk(payment({ id: 78, status: 'cancelled' })))
+    expect((await cancelSubscriptionPayment({ token: TOKEN, paymentId: 77 })).code).toBe(
+      'MALFORMED_RESPONSE',
+    )
+  })
+
+  it('requires confirmation and reconciles the active checkout after cancellation', async () => {
+    const context = prepareContext()
+    context.checkoutStore.pending = {
+      paymentId: 77,
+      businessId: BUSINESS_ID,
+      status: 'pending',
+      redirectUrl: 'https://example.com/pay',
+    }
+    context.checkoutStore.payment = { id: 77, status: 'pending' }
+    let cancelled = false
+    apiRequest.mockImplementation(async (path) => {
+      if (path.endsWith('/cancel')) {
+        cancelled = true
+        return apiOk(payment({ status: 'cancelled', can_cancel: false }))
+      }
+      return apiOk([
+        payment({ status: cancelled ? 'cancelled' : 'pending', can_cancel: !cancelled }),
+      ])
+    })
+    const wrapper = await mountMySubscription(context)
+    await wrapper.get('[data-testid="cancel-payment-77"]').trigger('click')
+    expect(apiRequest.mock.calls.some(([path]) => path.endsWith('/cancel'))).toBe(false)
+    await wrapper.get('[data-testid="confirm-cancel-payment"]').trigger('click')
+    await flushPromises()
+    expect(context.checkoutStore.status).toBe('cancelled')
+    expect(context.checkoutStore.canResumePayment).toBe(false)
+    expect(wrapper.find('[data-testid="cancel-payment-77"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="history-payment-77"]').text()).toContain(
+      'Pembayaran dibatalkan',
+    )
+    wrapper.unmount()
+  })
+
+  it('keeps pending status and shows an error when cancellation is unconfirmed', async () => {
+    const context = prepareContext()
+    apiRequest.mockImplementation(async (path) =>
+      path.endsWith('/cancel')
+        ? apiErr(503, 'PAYMENT_CANCEL_FAILED')
+        : apiOk([payment({ status: 'pending', can_cancel: true })]),
+    )
+    const wrapper = await mountMySubscription(context)
+    await wrapper.get('[data-testid="cancel-payment-77"]').trigger('click')
+    await wrapper.get('[data-testid="confirm-cancel-payment"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="history-cancel-error"]').text()).toContain(
+      'belum dikonfirmasi',
+    )
+    expect(wrapper.get('[data-testid="history-payment-77"]').text()).toContain(
+      'Menunggu pembayaran',
+    )
+    wrapper.unmount()
+  })
+
+  it('only offers cancellation for pending payments authorized by the server', async () => {
+    const context = prepareContext()
+    apiRequest.mockResolvedValue(
+      apiOk([
+        payment({ id: 1, status: 'pending', can_cancel: false }),
+        payment({ id: 2, status: 'paid', can_cancel: true }),
+        payment({ id: 3, status: 'expired', can_cancel: true }),
+      ]),
+    )
+    const wrapper = await mountMySubscription(context)
+    expect(wrapper.find('[data-testid^="cancel-payment-"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('does not replace another business or checkout with a historical cancellation', async () => {
+    const context = prepareContext()
+    context.checkoutStore.pending = { paymentId: 99, businessId: BUSINESS_ID, status: 'pending' }
+    await context.checkoutStore.acceptHistoryPayment({ id: 77, status: 'cancelled' }, BUSINESS_ID)
+    expect(context.checkoutStore.pending.status).toBe('pending')
+    await context.checkoutStore.acceptHistoryPayment({ id: 99, status: 'cancelled' }, 20)
+    expect(context.checkoutStore.pending.status).toBe('pending')
+  })
+
+  it('ignores an older pending refresh after accepting cancellation', async () => {
+    const context = prepareContext()
+    await saveToken(TOKEN)
+    context.checkoutStore.pending = { paymentId: 77, businessId: BUSINESS_ID, status: 'pending' }
+    let resolveStatus
+    apiRequest.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveStatus = resolve
+        }),
+    )
+    const refreshing = context.checkoutStore.refreshStatus()
+    await flushPromises()
+    await context.checkoutStore.acceptHistoryPayment({ id: 77, status: 'cancelled' }, BUSINESS_ID)
+    resolveStatus(apiOk(payment({ status: 'pending' })))
+    await refreshing
+    expect(context.checkoutStore.status).toBe('cancelled')
+  })
+
+  it('ignores cancellation replies after switching businesses', async () => {
+    const context = prepareContext()
+    let resolveCancel
+    apiRequest.mockImplementation(async (path) =>
+      path.endsWith('/cancel')
+        ? new Promise((resolve) => {
+            resolveCancel = resolve
+          })
+        : apiOk([payment({ status: 'pending', can_cancel: true })]),
+    )
+    const wrapper = await mountMySubscription(context)
+    await wrapper.get('[data-testid="cancel-payment-77"]').trigger('click')
+    await wrapper.get('[data-testid="confirm-cancel-payment"]').trigger('click')
+    await flushPromises()
+    apiRequest.mockResolvedValue(apiOk([]))
+    context.cloudStore.selectedBusiness = {
+      id: 20,
+      name: 'Toko Lain',
+      subscription: { plan: 'free' },
+    }
+    await flushPromises()
+    resolveCancel(apiOk(payment({ status: 'cancelled' })))
+    await flushPromises()
+    expect(wrapper.find('[data-testid="history-payment-77"]').exists()).toBe(false)
+    expect(context.checkoutStore.payment).toBeNull()
+    wrapper.unmount()
   })
 })

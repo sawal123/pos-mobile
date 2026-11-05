@@ -1,14 +1,13 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Browser } from '@capacitor/browser'
-import { Capacitor } from '@capacitor/core'
 
+import SubscriptionPaymentHistory from '@/components/subscription/SubscriptionPaymentHistory.vue'
+import { useSubscriptionPaymentHistory } from '@/composables/useSubscriptionPaymentHistory'
 import AppIcon from '@/components/base/AppIcon.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
-import { resolveBaseUrl } from '@/services/cloud/apiClient'
 import {
   BENEFIT_AVAILABILITY,
   BENEFIT_AVAILABILITY_LABELS,
@@ -68,6 +67,16 @@ const subscriptionStore = useSubscriptionStore()
 const planStore = useSubscriptionPlanStore()
 const cloudStore = useCloudSessionStore()
 const checkoutStore = usePremiumCheckoutStore()
+const {
+  history,
+  historyLoading,
+  historyError,
+  cancellationError,
+  cancellingId,
+  offline,
+  loadPaymentHistory,
+  cancelPayment,
+} = useSubscriptionPaymentHistory()
 
 const benefits = PREMIUM_BENEFITS
 const localGuarantees = LOCAL_GUARANTEES
@@ -324,6 +333,7 @@ onMounted(() => {
     planStore.disableRenewalMode()
   }
   planStore.loadCatalog()
+  void loadPaymentHistory()
 })
 </script>
 
@@ -752,6 +762,19 @@ onMounted(() => {
     </BaseButton>
 
     <!-- AUTH REQUIRED MODAL -->
+    <SubscriptionPaymentHistory
+      v-if="cloudStore.isAuthenticated && cloudStore.isLinked"
+      :payments="history"
+      :loading="historyLoading"
+      :error="historyError"
+      :cancellation-error="cancellationError"
+      :cancelling-id="cancellingId"
+      :offline="offline"
+      :business-id="cloudStore.selectedBusiness?.id"
+      @refresh="loadPaymentHistory"
+      @cancel="cancelPayment"
+    />
+
     <BaseModal
       :open="showAuthRequiredModal"
       title="Akun Cloud Diperlukan"
@@ -760,7 +783,9 @@ onMounted(() => {
       <div class="space-y-4" data-testid="auth-required-modal">
         <p class="text-sm leading-relaxed text-ink-secondary">
           Untuk melanjutkan pembelian paket langganan
-          <strong class="text-ink-primary">{{ selectedOption?.name }} ({{ selectedOption?.periodLabel }})</strong>
+          <strong class="text-ink-primary"
+            >{{ selectedOption?.name }} ({{ selectedOption?.periodLabel }})</strong
+          >
           dan mengaktifkan sinkronisasi cloud, silakan masuk ke akun Cloud atau daftar akun baru.
         </p>
 
