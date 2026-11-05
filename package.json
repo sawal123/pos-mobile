@@ -18,12 +18,18 @@
   "dependencies": {
     "@aparajita/capacitor-secure-storage": "^8.0.0",
     "@capacitor-community/sqlite": "^8.1.1",
+    "@capacitor-mlkit/barcode-scanning": "^8.2.2",
     "@capacitor/android": "^8.5.0",
     "@capacitor/app": "^8.1.1",
     "@capacitor/browser": "^8.0.4",
     "@capacitor/core": "^8.5.0",
+    "@capacitor/filesystem": "^8.1.5",
     "@capacitor/network": "^8.0.1",
+    "@capacitor/share": "^8.0.3",
+    "@zxing/browser": "0.1.5",
+    "@zxing/library": "0.21.3",
     "pinia": "^4.0.2",
+    "qrcode": "^1.5.4",
     "vue": "^3.5.40",
     "vue-router": "^5.2.0"
   },

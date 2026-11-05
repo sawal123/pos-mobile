@@ -218,6 +218,7 @@ export function buildEmptyWorkspaceSnapshot() {
       mode: 'free',
     },
     tax: null,
+    receiptSettings: null,
     products: [],
     categories: [],
     stockMovements: [],
@@ -317,6 +318,7 @@ export async function captureActiveWorkspaceSnapshot(adapter) {
     version: 1,
     business: business ?? { name: '', type: '', owner: '', phone: '', outlet: 'Outlet Utama', mode: 'free' },
     tax: tax ?? null,
+    receiptSettings: await adapter.loadReceiptSettings?.() ?? null,
     products: productsBundle?.products ?? [],
     categories: productsBundle?.categories ?? [],
     stockMovements: productsBundle?.stockMovements ?? [],
@@ -352,6 +354,7 @@ export async function applyWorkspaceSnapshot(adapter, snapshot) {
 
   await adapter.saveBusiness(cloneValue(data.business))
   await adapter.saveTaxState(cloneValue(data.tax))
+  await adapter.saveReceiptSettings?.(cloneValue(data.receiptSettings ?? null))
   await adapter.saveProducts(
     cloneValue(data.products ?? []),
     cloneValue(data.categories ?? []),

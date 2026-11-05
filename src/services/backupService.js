@@ -1,5 +1,7 @@
+import { isValidProductCode, normalizeProductCode } from '@/services/products/productCodeService'
 import { EXPENSE_CATEGORIES } from '@/stores/expenseStore'
 import { DEFAULT_TAX_ENABLED, DEFAULT_TAX_RATE, isValidTaxRate } from '@/stores/taxStore'
+import { decodeReceiptLogo, MAX_ADDRESS_LENGTH, MAX_FOOTER_LENGTH, normalizeReceiptSettings } from '@/services/printer/receiptSettings'
 import { isUuid } from '@/services/sync/syncIdentityRegistry'
 
 export const BACKUP_SCHEMA = 'pos-mobile-backup'
@@ -302,6 +304,13 @@ function validateProductsData(productsSection) {
       return 'File backup tidak valid.'
     }
 
+    if (
+      product.barcode !== undefined &&
+      product.barcode !== null &&
+      !isValidProductCode(product.barcode, { allowEmpty: true })
+    )
+      return 'Kode barcode backup tidak valid.'
+
     if (product.imageData !== undefined && typeof product.imageData !== 'string') {
       return 'File backup tidak valid.'
     }
@@ -313,6 +322,7 @@ function validateProductsData(productsSection) {
 function normalizeProductForRestore(product) {
   return {
     ...product,
+    barcode: normalizeProductCode(product.barcode),
     imageData: typeof product.imageData === 'string' ? product.imageData : '',
   }
 }
@@ -519,6 +529,7 @@ function normalizeBackupData(data) {
   }
 
   const normalized = { ...data }
+  if (normalized.receiptSettings === undefined) normalized.receiptSettings = normalizeReceiptSettings()
 
   // Backward compatibility: older backup versions did not persist cash ledger
   // or stock movement history yet default them to empty collections.
@@ -716,6 +727,7 @@ function buildPortableSyncMetadata(syncMetadata, data) {
 export function createBackupPayload(stores) {
   const data = {
     business: buildBusinessData(stores.businessStore),
+    receiptSettings: normalizeReceiptSettings(stores.receiptStore),
     taxSettings: stores.taxStore
       ? { enabled: stores.taxStore.enabled, rate: stores.taxStore.rate }
       : { enabled: DEFAULT_TAX_ENABLED, rate: DEFAULT_TAX_RATE },
@@ -751,6 +763,7 @@ export async function createBackupPayloadFromPersistence({ adapter, scheduler = 
     const [
       business,
       taxState,
+      receiptSettings,
       productState,
       customers,
       expenses,
@@ -761,6 +774,7 @@ export async function createBackupPayloadFromPersistence({ adapter, scheduler = 
     ] = await Promise.all([
       adapter.loadBusiness(),
       typeof adapter.loadTaxState === 'function' ? adapter.loadTaxState() : null,
+      typeof adapter.loadReceiptSettings === 'function' ? adapter.loadReceiptSettings() : null,
       adapter.loadProducts(),
       adapter.loadCustomers(),
       adapter.loadExpenses(),
@@ -775,6 +789,7 @@ export async function createBackupPayloadFromPersistence({ adapter, scheduler = 
     return createBackupPayload({
       businessStore: business,
       taxStore: taxState,
+      receiptStore: receiptSettings,
       productStore: productState,
       customerStore: { customers },
       expenseStore: { expenses },
@@ -815,6 +830,11 @@ export function validateBackupPayload(payload) {
   const dataError =
     ensureDataSections(data) ||
     validateBusinessData(data.business) ||
+    (!isObject(data.receiptSettings)
+      || typeof data.receiptSettings.address !== 'string' || data.receiptSettings.address.length > MAX_ADDRESS_LENGTH
+      || typeof data.receiptSettings.footer !== 'string' || data.receiptSettings.footer.length > MAX_FOOTER_LENGTH
+      || (data.receiptSettings.logo !== null && !decodeReceiptLogo(data.receiptSettings.logo))
+      ? 'File backup tidak valid: pengaturan struk.' : '') ||
     (!validateTaxSettings(data.taxSettings) ? 'File backup tidak valid: pengaturan pajak.' : '') ||
     validateProductsData(data.products) ||
     validateStockMovementsData(data.stockMovements) ||
@@ -1005,6 +1025,7 @@ export function buildRestoreSnapshotFromBackupPayload(payload, { currentBusiness
         enabled: data.taxSettings.enabled,
         rate: Number(data.taxSettings.rate),
       },
+      receiptSettings: normalizeReceiptSettings(data.receiptSettings),
       products: data.products.products.map((product) => normalizeProductForRestore(product)),
       categories: [...data.products.categories],
       stockMovements: data.stockMovements.map((movement) => ({ ...movement })),
@@ -1045,6 +1066,8 @@ export function restoreBackupPayload(payload, stores) {
   }
 
   const { data } = validation
+
+  stores.receiptStore?.$patch(normalizeReceiptSettings(data.receiptSettings))
 
   stores.taxStore?.$patch({
     enabled: data.taxSettings.enabled,

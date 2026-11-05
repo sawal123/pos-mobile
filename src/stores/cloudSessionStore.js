@@ -72,6 +72,7 @@ function mapBusinessEntry(b) {
     business_type_status: businessType ? 'valid' : (hasBusinessType ? 'unknown' : 'legacy'),
     role: normalizeRole(b.role ?? b.role_name ?? null),
     sync_capabilities: b.sync_capabilities ?? null,
+    catalog_capabilities: { product_barcode_v1: b.catalog_capabilities?.product_barcode_v1 === true },
     cloud_access: b.cloud_access,
     subscription: b.subscription ?? null,
     outlets: (b.outlets ?? []).map((o) => ({
@@ -495,6 +496,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       business_type_raw: business.business_type_raw ?? null,
       business_type_status: business.business_type_status ?? 'legacy',
       subscription: business.subscription ?? null,
+      catalog_capabilities: business.catalog_capabilities ?? null,
     }
   }
 
@@ -817,6 +819,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
               // screen can show the last known plan across an app restart. It is
               // display data only and never authorizes access.
               subscription: selectedBusiness.value.subscription ?? null,
+              catalog_capabilities: selectedBusiness.value.catalog_capabilities ?? null,
             }
           : null,
         selectedOutlet: selectedOutlet.value

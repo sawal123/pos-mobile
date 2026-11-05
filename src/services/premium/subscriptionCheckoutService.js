@@ -33,6 +33,8 @@ export const CHECKOUT_ERROR_CODE = Object.freeze({
   SUBSCRIPTION_PURCHASE_FORBIDDEN: 'SUBSCRIPTION_PURCHASE_FORBIDDEN',
   MOBILE_TOKEN_REQUIRED: 'MOBILE_TOKEN_REQUIRED',
   PAYMENT_NOT_FOUND: 'PAYMENT_NOT_FOUND',
+  PAYMENT_NOT_PENDING: 'PAYMENT_NOT_PENDING',
+  PAYMENT_CANCEL_FAILED: 'PAYMENT_CANCEL_FAILED',
   UNAUTHENTICATED: 'UNAUTHENTICATED',
   MALFORMED_RESPONSE: 'MALFORMED_RESPONSE',
   NETWORK_ERROR: 'NETWORK_ERROR',
@@ -95,6 +97,10 @@ export function normalizeSubscriptionPayment(data) {
     amount: Number.isFinite(amount) ? amount : null,
     status,
     paidAt: toIsoOrNull(data.paid_at),
+    createdAt: toIsoOrNull(data.created_at),
+    expiresAt: toIsoOrNull(data.expires_at),
+    orderId: typeof data.order_id === 'string' ? data.order_id : null,
+    canCancel: data.can_cancel === true,
     subscription,
   }
 }
@@ -113,6 +119,30 @@ function mapError(result) {
     return { code: backendCode, status }
   }
   return { code: CHECKOUT_ERROR_CODE.REQUEST_FAILED, status }
+}
+
+export async function cancelSubscriptionPayment({
+  token,
+  paymentId,
+  path = resolvePaymentsPath(),
+} = {}) {
+  if (paymentId === null || paymentId === undefined || `${paymentId}`.trim() === '') {
+    return { ok: false, code: CHECKOUT_ERROR_CODE.MALFORMED_RESPONSE }
+  }
+  try {
+    const result = await apiRequest(
+      `${String(path).replace(/\/+$/, '')}/${encodeURIComponent(String(paymentId))}/cancel`,
+      { method: 'POST', token },
+    )
+    if (!result?.ok) return { ok: false, ...mapError(result) }
+    const payment = normalizeSubscriptionPayment(result.data?.data)
+    if (!payment || String(payment.id) !== String(paymentId) || payment.status !== 'cancelled') {
+      return { ok: false, code: CHECKOUT_ERROR_CODE.MALFORMED_RESPONSE }
+    }
+    return { ok: true, payment }
+  } catch {
+    return { ok: false, code: CHECKOUT_ERROR_CODE.NETWORK_ERROR }
+  }
 }
 
 /**

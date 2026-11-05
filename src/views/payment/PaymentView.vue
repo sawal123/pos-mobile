@@ -12,7 +12,6 @@ import CartSummary from '@/components/pos/CartSummary.vue'
 import DiscountPromoModal from '@/components/pos/DiscountPromoModal.vue'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCartStore } from '@/stores/cartStore'
-import { useCustomerStore } from '@/stores/customerStore'
 import { useProductStore } from '@/stores/productStore'
 import { usePromoStore } from '@/stores/promoStore'
 import { useTaxStore } from '@/stores/taxStore'
@@ -21,6 +20,7 @@ import { useSyncStatusStore } from '@/stores/syncStatusStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { resolveLocalOperationService } from '@/services/database/localOperationService'
 import { formatCurrency } from '@/utils/formatters'
+import { normalizeCustomerPhone } from '@/utils/customerPhone'
 
 const QUICK_CASH_AMOUNTS = [20000, 50000, 100000, 200000, 500000]
 
@@ -31,14 +31,12 @@ const syncStatusStore = useSyncStatusStore()
 const cartStore = useCartStore()
 const promoStore = usePromoStore()
 const taxStore = useTaxStore()
-const customerStore = useCustomerStore()
 const productStore = useProductStore()
 const localOperations = resolveLocalOperationService()
 const router = useRouter()
 
 const selectedMethod = ref('cash')
-const selectedCustomerId = ref('')
-const customerQuery = ref('')
+const customerQuery = ref(cartStore.selectedCustomer?.name ?? cartStore.customerPhone)
 const cashReceived = ref('')
 const isProcessing = ref(false)
 const hasAttemptedSubmit = ref(false)
@@ -121,34 +119,22 @@ const paymentMethods = [
 ]
 
 const isCashMethod = computed(() => selectedMethod.value === 'cash')
-const selectedCustomer = computed(() => customerStore.getCustomerById(selectedCustomerId.value))
+const selectedCustomer = computed(() => cartStore.selectedCustomer)
 
 function onSelectCustomer(customer) {
-  selectedCustomerId.value = customer.id
+  cartStore.selectCustomer(customer)
   customerQuery.value = customer.name
 }
 
 function clearCustomer() {
-  selectedCustomerId.value = ''
+  cartStore.clearCustomer()
   customerQuery.value = ''
 }
 
-// Mengetik ulang sampai tidak cocok lagi = kembali Walk-in Customer
+// Share the customer with the cart and resolve an exact phone match automatically.
 watch(customerQuery, (value) => {
-  if (!selectedCustomerId.value) {
-    return
-  }
-
-  const selected = customerStore.getCustomerById(selectedCustomerId.value)
-
-  if (!selected) {
-    selectedCustomerId.value = ''
-    return
-  }
-
-  if (selected.name.trim() !== `${value}`.trim()) {
-    selectedCustomerId.value = ''
-  }
+  if (selectedCustomer.value?.name.trim() === String(value).trim()) return
+  cartStore.setCustomerPhone(normalizeCustomerPhone(value) ? value : '')
 })
 
 const parsedCashReceived = computed(() => {

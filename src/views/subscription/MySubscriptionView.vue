@@ -1,15 +1,12 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import AppIcon from '@/components/base/AppIcon.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
-import { getToken } from '@/services/cloud/tokenRepository'
-import {
-  CHECKOUT_ERROR_CODE,
-  listSubscriptionPayments,
-} from '@/services/premium/subscriptionCheckoutService'
+import SubscriptionPaymentHistory from '@/components/subscription/SubscriptionPaymentHistory.vue'
+import { useSubscriptionPaymentHistory } from '@/composables/useSubscriptionPaymentHistory'
 import {
   PAYMENT_STATUS,
   isTerminalPaymentStatus,
@@ -35,10 +32,15 @@ const subscriptionStore = useSubscriptionStore()
 const checkoutStore = usePremiumCheckoutStore()
 const planStore = useSubscriptionPlanStore()
 
-const history = ref([])
-const historyBusinessId = ref(null)
-const historyLoading = ref(false)
-const historyError = ref('')
+const {
+  history,
+  historyLoading,
+  historyError,
+  cancellationError,
+  cancellingId,
+  loadPaymentHistory,
+  cancelPayment,
+} = useSubscriptionPaymentHistory()
 const refreshError = ref('')
 const refreshing = ref(false)
 const offline = ref(typeof navigator !== 'undefined' ? navigator.onLine === false : false)
@@ -107,11 +109,10 @@ const canStartOnlineFlow = computed(
   () => offline.value !== true && cloudStore.isAuthenticated && cloudStore.isLinked,
 )
 
-const primaryCtaLabel = computed(() =>
-  displayStatus.value === 'free' ? 'Upgrade ke Premium' : 'Perpanjang Langganan',
-)
-
 const pendingPayment = computed(() => {
+  const paymentBusinessId = checkoutStore.pending?.businessId ?? checkoutStore.attempt?.businessId
+  if (paymentBusinessId != null && String(paymentBusinessId) !== String(activeBusinessId.value))
+    return null
   if (checkoutStore.pending?.status === PAYMENT_STATUS.PENDING) return checkoutStore.pending
   if (checkoutStore.payment?.status === PAYMENT_STATUS.PENDING) return checkoutStore.payment
   return null
@@ -146,63 +147,6 @@ function paymentToneClass(status) {
       return 'bg-amber-100 text-amber-700'
     default:
       return 'bg-zinc-100 text-zinc-700'
-  }
-}
-
-function resetHistoryForBusiness() {
-  history.value = []
-  historyBusinessId.value = activeBusinessId.value
-  historyError.value = ''
-}
-
-async function loadPaymentHistory() {
-  if (!cloudStore.isAuthenticated || !cloudStore.isLinked || activeBusinessId.value === null) {
-    resetHistoryForBusiness()
-    return { ok: false, code: 'NO_LINKED_BUSINESS' }
-  }
-
-  historyLoading.value = true
-  historyError.value = ''
-
-  try {
-    const token = await getToken().catch(() => null)
-    if (!token) {
-      history.value = []
-      historyError.value = 'Sesi Cloud tidak valid. Silakan masuk kembali.'
-      return { ok: false, code: 'NO_TOKEN' }
-    }
-
-    const businessId = activeBusinessId.value
-    const result = await listSubscriptionPayments({ token, businessId })
-
-    if (!result.ok) {
-      history.value = []
-      if (result.code === CHECKOUT_ERROR_CODE.UNAUTHENTICATED) {
-        await cloudStore.invalidateCloudSession()
-        historyError.value = 'Sesi Cloud tidak valid. Silakan masuk kembali.'
-      } else if (
-        Number(result.status) === 403 ||
-        result.code === CHECKOUT_ERROR_CODE.BUSINESS_ACCESS_DENIED
-      ) {
-        historyError.value = 'Akses riwayat pembayaran ditolak.'
-      } else if (result.code === CHECKOUT_ERROR_CODE.NETWORK_ERROR) {
-        historyError.value = 'Status belum diperiksa ulang.'
-      } else {
-        historyError.value = 'Riwayat pembayaran tidak dapat dimuat.'
-      }
-      return result
-    }
-
-    if (businessId !== activeBusinessId.value) {
-      resetHistoryForBusiness()
-      return { ok: false, code: 'BUSINESS_CHANGED' }
-    }
-
-    historyBusinessId.value = businessId
-    history.value = result.payments.slice(0, 20)
-    return { ok: true }
-  } finally {
-    historyLoading.value = false
   }
 }
 
@@ -284,10 +228,6 @@ function handleOffline() {
   offline.value = true
 }
 
-watch(activeBusinessId, () => {
-  resetHistoryForBusiness()
-})
-
 onMounted(async () => {
   if (typeof window !== 'undefined') {
     window.addEventListener('online', handleOnline)
@@ -344,7 +284,9 @@ defineExpose({
       <p class="text-sm text-ink-secondary">
         Masuk kembali untuk melihat status langganan bisnis Cloud.
       </p>
-      <BaseButton data-testid="session-login-cta" @click="goToCloud"><span>Masuk<span class="sr-only"> ke Cloud</span></span></BaseButton>
+      <BaseButton data-testid="session-login-cta" @click="goToCloud"
+        ><span>Masuk<span class="sr-only"> ke Cloud</span></span></BaseButton
+      >
     </BaseCard>
 
     <BaseCard
@@ -356,7 +298,9 @@ defineExpose({
       <p class="text-sm text-ink-secondary">
         Pilih bisnis Cloud lain yang masih authorized. Data POS lokal tetap aman.
       </p>
-      <BaseButton data-testid="revoked-cloud-cta" @click="goToCloud"><span>Kelola<span class="sr-only"> Akun Cloud</span></span></BaseButton>
+      <BaseButton data-testid="revoked-cloud-cta" @click="goToCloud"
+        ><span>Kelola<span class="sr-only"> Akun Cloud</span></span></BaseButton
+      >
     </BaseCard>
 
     <BaseCard v-else class="space-y-4" data-testid="subscription-management-card">
@@ -465,31 +409,55 @@ defineExpose({
         </div>
         <ul class="space-y-2 text-xs text-ink-primary">
           <li class="flex items-start gap-2.5">
-            <span class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-bold">✓</span>
+            <span
+              class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-bold"
+              >✓</span
+            >
             <div>
               <strong class="font-semibold">Varian Menu &amp; Topping:</strong>
-              <span class="text-ink-secondary ml-1">Kustomisasi menu dengan opsi ukuran (Regular/Large), rasa, dan topping dengan penyesuaian harga otomatis.</span>
+              <span class="text-ink-secondary ml-1"
+                >Kustomisasi menu dengan opsi ukuran (Regular/Large), rasa, dan topping dengan
+                penyesuaian harga otomatis.</span
+              >
             </div>
           </li>
           <li class="flex items-start gap-2.5">
-            <span class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-bold">✓</span>
+            <span
+              class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-bold"
+              >✓</span
+            >
             <div>
               <strong class="font-semibold">Sinkronisasi Cloud Real-time:</strong>
-              <span class="text-ink-secondary ml-1">Semua transaksi POS tersinkron otomatis ke cloud dan terhubung lintas kasir/perangkat.</span>
+              <span class="text-ink-secondary ml-1"
+                >Semua transaksi POS tersinkron otomatis ke cloud dan terhubung lintas
+                kasir/perangkat.</span
+              >
             </div>
           </li>
           <li class="flex items-start gap-2.5">
-            <span class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-bold">✓</span>
+            <span
+              class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-bold"
+              >✓</span
+            >
             <div>
               <strong class="font-semibold">Web Dashboard &amp; Analitik Laba Rugi:</strong>
-              <span class="text-ink-secondary ml-1">Akses dashboard bisnis di laptop/PC, hitung HPP resep produk, dan kelola stok persediaan.</span>
+              <span class="text-ink-secondary ml-1"
+                >Akses dashboard bisnis di laptop/PC, hitung HPP resep produk, dan kelola stok
+                persediaan.</span
+              >
             </div>
           </li>
           <li class="flex items-start gap-2.5">
-            <span class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-bold">✓</span>
+            <span
+              class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-bold"
+              >✓</span
+            >
             <div>
               <strong class="font-semibold">Backup Cloud Otomatis:</strong>
-              <span class="text-ink-secondary ml-1">Data penjualan dan katalog aman di cloud, mudah dipulihkan kapan pun tanpa risiko hilang.</span>
+              <span class="text-ink-secondary ml-1"
+                >Data penjualan dan katalog aman di cloud, mudah dipulihkan kapan pun tanpa risiko
+                hilang.</span
+              >
             </div>
           </li>
         </ul>
@@ -505,7 +473,12 @@ defineExpose({
 
       <div class="flex flex-wrap gap-3">
         <BaseButton data-testid="renewal-cta" :disabled="refreshing" @click="goToPlanSelection">
-          <span>{{ displayStatus === 'free' ? 'Upgrade' : 'Perpanjang' }}<span class="sr-only">{{ displayStatus === 'free' ? ' ke Premium' : ' Langganan' }}</span></span>
+          <span
+            >{{ displayStatus === 'free' ? 'Upgrade' : 'Perpanjang'
+            }}<span class="sr-only">{{
+              displayStatus === 'free' ? ' ke Premium' : ' Langganan'
+            }}</span></span
+          >
         </BaseButton>
         <BaseButton
           variant="secondary"
@@ -586,64 +559,17 @@ defineExpose({
       </p>
     </BaseCard>
 
-    <BaseCard class="space-y-3" data-testid="payment-history-section">
-      <div class="flex items-center justify-between gap-3">
-        <div>
-          <h3 class="text-base font-semibold text-ink-primary">Riwayat Pembayaran</h3>
-          <p class="text-xs text-ink-secondary">Maksimal 20 pembayaran terbaru dari backend.</p>
-        </div>
-        <BaseButton
-          size="sm"
-          variant="secondary"
-          :disabled="historyLoading"
-          @click="loadPaymentHistory"
-        >
-          Muat
-        </BaseButton>
-      </div>
-
-      <p v-if="historyLoading" class="text-sm text-ink-secondary" data-testid="history-loading">
-        Memuat riwayat...
-      </p>
-      <p
-        v-else-if="historyError"
-        class="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-700"
-        data-testid="history-error"
-      >
-        {{ historyError }}
-      </p>
-      <p v-else-if="!history.length" class="text-sm text-ink-secondary" data-testid="history-empty">
-        Belum ada riwayat pembayaran.
-      </p>
-      <div v-else class="space-y-2" data-testid="history-list">
-        <div
-          v-for="payment in history"
-          :key="payment.id"
-          class="rounded-2xl border border-zinc-200 px-4 py-3"
-          :data-testid="`history-payment-${payment.id}`"
-        >
-          <div class="flex items-center justify-between gap-3">
-            <div>
-              <p class="text-sm font-semibold text-ink-primary">
-                {{ periodLabel(payment.billingPeriod) }}
-              </p>
-              <p class="text-xs text-ink-secondary">
-                {{ formatServerDateTime(payment.paidAt) || '-' }}
-              </p>
-            </div>
-            <span
-              class="rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide"
-              :class="paymentToneClass(payment.status)"
-            >
-              {{ paymentStatusLabel(payment.status) }}
-            </span>
-          </div>
-          <p class="mt-2 text-sm font-medium text-ink-primary">
-            {{ formatAmount(payment) }}
-          </p>
-        </div>
-      </div>
-    </BaseCard>
+    <SubscriptionPaymentHistory
+      :payments="history"
+      :loading="historyLoading"
+      :error="historyError"
+      :cancellation-error="cancellationError"
+      :cancelling-id="cancellingId"
+      :offline="offline"
+      :business-id="activeBusinessId"
+      @refresh="loadPaymentHistory"
+      @cancel="cancelPayment"
+    />
 
     <p
       v-if="actionNotice"

@@ -6,6 +6,7 @@ import { createAppRouter } from '@/router'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCashierStore } from '@/stores/cashierStore'
 import { usePrinterStore } from '@/stores/printerStore'
+import { useReceiptStore } from '@/stores/receiptStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import ReceiptView from '@/views/transactions/ReceiptView.vue'
 
@@ -223,4 +224,19 @@ describe('P33 receipt view printing', () => {
       'Struk berhasil dikirim ke printer.',
     )
   })
+})
+
+
+it('uses saved receipt settings in both the preview and print request', async () => {
+  const { wrapper, pinia } = await mountReceiptView()
+  const settings = { address: 'Jl. Baru 12', footer: 'Belanja lagi ya!', logo: { width: 8, height: 1, data: 'gQ==' } }
+  useReceiptStore(pinia).saveSettings(settings)
+  await flushPromises()
+  expect(wrapper.get('[data-testid="receipt-address"]').text()).toBe(settings.address)
+  expect(wrapper.get('[data-testid="receipt-footer"]').text()).toBe(settings.footer)
+  expect(wrapper.find('[data-testid="receipt-logo"]').exists()).toBe(true)
+  await wrapper.get('[data-testid="btn-print-receipt"]').trigger('click')
+  await flushPromises()
+  expect(printReceiptMock.mock.calls[0][0].receiptSettings).toEqual(settings)
+  wrapper.unmount()
 })

@@ -3,6 +3,11 @@ import { computed, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRoute, useRouter } from 'vue-router'
 
+import ProductScannerSheet from '@/components/scanner/ProductScannerSheet.vue'
+import ProductQrModal from '@/components/products/ProductQrModal.vue'
+import { useRetailProductCodes } from '@/composables/useRetailProductCodes'
+import { useCloudSessionStore } from '@/stores/cloudSessionStore'
+
 import AppIcon from '@/components/base/AppIcon.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
@@ -13,6 +18,13 @@ const businessStore = useBusinessStore()
 const productStore = useProductStore()
 const route = useRoute()
 const router = useRouter()
+const cloudStore = useCloudSessionStore()
+const { isRetail, canManageCodes, scanContext } = useRetailProductCodes()
+const showScanner = ref(false)
+const showQr = ref(false)
+const savedProduct = computed(() =>
+  isEditMode.value ? productStore.getProductById(route.params.id) : null,
+)
 
 const { categories } = storeToRefs(productStore)
 
@@ -20,6 +32,7 @@ const form = reactive({
   name: '',
   category: '',
   sku: '',
+  barcode: '',
   cost: 0,
   price: 0,
   stock: 0,
@@ -48,6 +61,7 @@ function resetForm() {
   form.name = ''
   form.category = categories.value[0] ?? ''
   form.sku = ''
+  form.barcode = ''
   form.cost = 0
   form.price = 0
   form.stock = 0
@@ -80,6 +94,7 @@ function loadProduct() {
   form.name = product.name
   form.category = product.category
   form.sku = product.sku ?? ''
+  form.barcode = product.barcode ?? ''
   form.cost = product.cost ?? 0
   form.price = product.price
   form.stock = product.stock
@@ -168,6 +183,7 @@ async function handleSubmit() {
     name: form.name,
     category: form.category,
     sku: form.sku,
+    ...(isRetail.value ? { barcode: form.barcode } : {}),
     cost: form.cost,
     price: form.price,
     stock: form.stock,
@@ -186,11 +202,17 @@ async function handleSubmit() {
 
   if (!result.success) {
     errors.value = result.errors ?? {}
-    formError.value = result.errors?.form ?? ''
+    formError.value = result.errors?.form || (!isRetail.value && result.errors?.barcode) || ''
     return
   }
 
   errors.value = {}
+  try {
+    await cloudStore.scheduler?.flush?.()
+  } catch {
+    formError.value = 'Produk belum tersimpan pada perangkat. Coba lagi.'
+    return
+  }
   await router.push({ name: 'products' })
 }
 
@@ -244,8 +266,18 @@ watch(
       v-if="formError"
       class="flex items-center gap-3 rounded-2xl border border-red-200 bg-red-50 p-3.5 text-xs text-red-700 shadow-xs"
     >
-      <svg class="h-4 w-4 shrink-0 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+      <svg
+        class="h-4 w-4 shrink-0 text-red-600"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+        />
       </svg>
       <p class="font-medium">{{ formError }}</p>
     </div>
@@ -267,8 +299,16 @@ watch(
             />
             <div v-else class="flex flex-col items-center justify-center text-zinc-400">
               <svg class="h-6 w-6 stroke-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-                <path stroke-linecap="round" stroke-linejoin="round" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"
+                />
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"
+                />
               </svg>
               <span class="mt-1 text-[10px] font-medium">Foto</span>
             </div>
@@ -277,17 +317,37 @@ watch(
           <!-- Upload Actions & Details -->
           <div class="min-w-0 flex-1 space-y-1.5">
             <div>
-              <p class="text-sm font-bold text-ink-primary">Foto {{ isLaundry ? 'Layanan' : 'Produk' }}</p>
+              <p class="text-sm font-bold text-ink-primary">
+                Foto {{ isLaundry ? 'Layanan' : 'Produk' }}
+              </p>
               <p class="text-[11px] text-ink-secondary">Format JPG, PNG (otomatis diperkecil)</p>
             </div>
 
             <div class="flex flex-wrap items-center gap-2 pt-0.5">
-              <label class="inline-flex h-8 cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-zinc-200/90 bg-white px-3 text-xs font-semibold text-ink-primary shadow-2xs transition hover:bg-zinc-50 active:scale-95">
-                <svg class="h-3.5 w-3.5 text-ink-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+              <label
+                class="inline-flex h-8 cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-zinc-200/90 bg-white px-3 text-xs font-semibold text-ink-primary shadow-2xs transition hover:bg-zinc-50 active:scale-95"
+              >
+                <svg
+                  class="h-3.5 w-3.5 text-ink-secondary"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
+                  />
                 </svg>
                 <span>{{ form.imageData ? 'Ganti Foto' : 'Pilih Foto' }}</span>
-                <input class="hidden" type="file" accept="image/*" data-testid="product-image-input" @change="handleImageChange" />
+                <input
+                  class="hidden"
+                  type="file"
+                  accept="image/*"
+                  data-testid="product-image-input"
+                  @change="handleImageChange"
+                />
               </label>
 
               <button
@@ -307,7 +367,9 @@ watch(
 
       <!-- 2. Informasi Utama (Nama, Kategori, SKU) -->
       <section class="rounded-3xl border border-zinc-200/80 bg-white p-4 shadow-soft space-y-3.5">
-        <h2 class="text-xs font-bold uppercase tracking-wider text-ink-secondary">Informasi Dasar</h2>
+        <h2 class="text-xs font-bold uppercase tracking-wider text-ink-secondary">
+          Informasi Dasar
+        </h2>
 
         <!-- Nama Produk -->
         <div class="space-y-1">
@@ -334,9 +396,16 @@ watch(
                   {{ category }}
                 </option>
               </select>
-              <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3 text-ink-secondary">
+              <div
+                class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3 text-ink-secondary"
+              >
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M19 9l-7 7-7-7"
+                  />
                 </svg>
               </div>
             </div>
@@ -347,10 +416,67 @@ watch(
           <div v-if="!isLaundry" class="space-y-1">
             <BaseInput
               :model-value="form.sku"
-              label="SKU / Barcode"
+              :label="isRetail ? 'SKU' : 'SKU / Barcode'"
+              :disabled="isRetail && !canManageCodes"
               placeholder="Kode unik (opsional)"
               @update:model-value="form.sku = $event"
             />
+            <p v-if="errors.sku" class="text-xs text-danger" role="alert">{{ errors.sku }}</p>
+          </div>
+          <div v-if="isRetail" class="space-y-2 sm:col-span-2">
+            <label for="product-barcode" class="block text-sm font-medium text-ink-secondary"
+              >Barcode / Kode Scan</label
+            >
+            <div class="flex items-center gap-2">
+              <input
+                id="product-barcode"
+                v-model="form.barcode"
+                data-testid="product-barcode-input"
+                type="text"
+                maxlength="255"
+                :disabled="!canManageCodes"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="Scan atau ketik barcode kemasan"
+                class="h-12 min-w-0 flex-1 rounded-2xl border border-zinc-200 bg-card px-4 font-mono text-sm text-ink-primary outline-none focus:border-primary disabled:opacity-60 dark:border-slate-700"
+              />
+              <button
+                type="button"
+                data-testid="product-barcode-scan"
+                aria-label="Scan barcode produk"
+                :disabled="!canManageCodes"
+                class="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary disabled:opacity-50"
+                @click="showScanner = true"
+              >
+                <AppIcon name="scan" />
+              </button>
+            </div>
+            <p v-if="errors.barcode" class="text-xs text-danger" role="alert">
+              {{ errors.barcode }}
+            </p>
+            <p class="text-xs leading-relaxed text-ink-secondary">
+              {{
+                canManageCodes
+                  ? 'Kosongkan untuk membuat kode internal saat disimpan.'
+                  : 'Kode Cloud dikelola oleh pengelola katalog.'
+              }}
+            </p>
+            <p
+              v-if="savedProduct?.barcode && form.barcode.trim() !== savedProduct.barcode"
+              class="text-xs text-amber-600"
+            >
+              Mengganti kode akan membuat label QR lama tidak berlaku. Buat label baru setelah
+              menyimpan.
+            </p>
+            <button
+              v-if="savedProduct"
+              type="button"
+              data-testid="edit-product-qr"
+              class="inline-flex min-h-10 items-center gap-2 text-sm font-semibold text-primary"
+              @click="showQr = true"
+            >
+              <AppIcon name="qr" /> QR Produk Tersimpan
+            </button>
           </div>
         </div>
       </section>
@@ -387,8 +513,13 @@ watch(
       </section>
 
       <!-- 4. Inventaris & Stok (Produk Ritel/FnB) -->
-      <section v-if="!isLaundry" class="rounded-3xl border border-zinc-200/80 bg-white p-4 shadow-soft space-y-3.5">
-        <h2 class="text-xs font-bold uppercase tracking-wider text-ink-secondary">Inventaris & Stok</h2>
+      <section
+        v-if="!isLaundry"
+        class="rounded-3xl border border-zinc-200/80 bg-white p-4 shadow-soft space-y-3.5"
+      >
+        <h2 class="text-xs font-bold uppercase tracking-wider text-ink-secondary">
+          Inventaris & Stok
+        </h2>
 
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <!-- Stok Awal -->
@@ -431,8 +562,13 @@ watch(
       </section>
 
       <!-- 4b. Spesifikasi Layanan Laundry -->
-      <section v-else class="rounded-3xl border border-zinc-200/80 bg-white p-4 shadow-soft space-y-3.5">
-        <h2 class="text-xs font-bold uppercase tracking-wider text-ink-secondary">Spesifikasi Layanan</h2>
+      <section
+        v-else
+        class="rounded-3xl border border-zinc-200/80 bg-white p-4 shadow-soft space-y-3.5"
+      >
+        <h2 class="text-xs font-bold uppercase tracking-wider text-ink-secondary">
+          Spesifikasi Layanan
+        </h2>
 
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <!-- Pricing Unit -->
@@ -478,7 +614,11 @@ watch(
           <div class="min-w-0">
             <p class="text-sm font-bold text-ink-primary">Tampilkan di Kasir POS</p>
             <p class="text-xs text-ink-secondary">
-              {{ form.isActive ? 'Menu aktif dan langsung muncul di daftar kasir' : 'Menu dinonaktifkan dari kasir POS' }}
+              {{
+                form.isActive
+                  ? 'Menu aktif dan langsung muncul di daftar kasir'
+                  : 'Menu dinonaktifkan dari kasir POS'
+              }}
             </p>
           </div>
 
@@ -495,8 +635,19 @@ watch(
               class="pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out flex items-center justify-center text-[10px]"
               :class="form.isActive ? 'translate-x-5 text-primary' : 'translate-x-0 text-zinc-400'"
             >
-              <svg v-if="form.isActive" class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" />
+              <svg
+                v-if="form.isActive"
+                class="h-3.5 w-3.5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="3"
+                  d="M5 13l4 4L19 7"
+                />
               </svg>
             </span>
           </button>
@@ -514,13 +665,16 @@ watch(
           Batal
         </BaseButton>
 
-        <BaseButton
-          type="submit"
-          class="h-11 text-sm font-bold shadow-soft"
-        >
-          Simpan
-        </BaseButton>
+        <BaseButton type="submit" class="h-11 text-sm font-bold shadow-soft"> Simpan </BaseButton>
       </div>
     </form>
+    <ProductScannerSheet
+      :open="showScanner && isRetail"
+      :context-key="scanContext"
+      title="Scan Barcode Produk"
+      @close="showScanner = false"
+      @scanned="form.barcode = $event"
+    />
+    <ProductQrModal :open="showQr && isRetail" :product="savedProduct" @close="showQr = false" />
   </div>
 </template>

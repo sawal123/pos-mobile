@@ -6,6 +6,7 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseSheet from '@/components/base/BaseSheet.vue'
 import ReceiptContent from '@/components/receipt/ReceiptContent.vue'
+import { useReceiptStore } from '@/stores/receiptStore'
 import {
   isNativePrinterPlatform,
   listPairedPrinters,
@@ -20,6 +21,7 @@ const route = useRoute()
 const router = useRouter()
 const businessStore = useBusinessStore()
 const printerStore = usePrinterStore()
+const receiptStore = useReceiptStore()
 const transactionStore = useTransactionStore()
 
 const isPrinting = ref(false)
@@ -116,6 +118,7 @@ async function handlePrint() {
       business: business.value,
       printer: printerStore.selectedPrinter,
       paperWidth: printerStore.paperWidth,
+      receiptSettings: receiptStore.$state,
     })
 
     if (!result.success) {
@@ -342,7 +345,7 @@ async function handlePrint() {
     </div>
 
     <!-- Thermal Paper Receipt Preview -->
-    <ReceiptContent v-if="transaction" :transaction="transaction" :business="business" />
+    <ReceiptContent v-if="transaction" :transaction="transaction" :business="business" :receipt-settings="receiptStore.$state" />
 
     <BaseCard v-else>
       <p class="text-sm text-ink-secondary">Transaksi tidak ditemukan.</p>

@@ -48,6 +48,7 @@ async function mountSettings() {
 
   await flushPromises()
 
+  await wrapper.find('[data-testid="settings-section-printer"]').trigger('click')
   return { wrapper, ...context }
 }
 

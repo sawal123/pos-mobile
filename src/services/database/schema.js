@@ -1,5 +1,5 @@
 export const DB_NAME = 'pos_mobile'
-export const DB_VERSION = 6
+export const DB_VERSION = 7
 
 export const APP_META_KEYS = {
   initialized: 'data_initialized',
@@ -11,6 +11,7 @@ export const APP_STATE_KEYS = {
   cash: 'cash_state',
   stockMovements: 'stock_movements_state',
   printer: 'printer_state',
+  receipt: 'receipt_settings',
   tax: 'tax_settings',
   promos: 'promos_state',
   variantGroups: 'variant_groups_state',
@@ -162,4 +163,5 @@ export const MIGRATIONS = {
   );
   CREATE INDEX IF NOT EXISTS idx_variant_groups_status ON variant_groups(status);
   `,
+  7: `ALTER TABLE products ADD COLUMN barcode TEXT NOT NULL DEFAULT '';`,
 }

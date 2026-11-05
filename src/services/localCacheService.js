@@ -1,4 +1,6 @@
 import { useBusinessStore } from '@/stores/businessStore'
+import { useReceiptStore } from '@/stores/receiptStore'
+import { normalizeReceiptSettings } from '@/services/printer/receiptSettings'
 import { useCartStore } from '@/stores/cartStore'
 import { useCashStore } from '@/stores/cashStore'
 import { useCashierStore } from '@/stores/cashierStore'
@@ -82,6 +84,7 @@ export async function clearLocalCache({
         await resolvedAdapter.saveCashierState(null)
       }
       if (resetBusiness && typeof resolvedAdapter.saveBusiness === 'function') {
+        await resolvedAdapter.saveReceiptSettings?.(normalizeReceiptSettings())
         await resolvedAdapter.saveBusiness({
           name: '',
           type: '',
@@ -197,6 +200,7 @@ export async function clearLocalCache({
   } catch {}
 
   if (resetBusiness) {
+    useReceiptStore(pinia).$reset()
     try {
       const businessStore = useBusinessStore(pinia)
       businessStore.name = ''

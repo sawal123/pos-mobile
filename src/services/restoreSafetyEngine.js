@@ -180,6 +180,7 @@ async function verifyPersistedTarget({ adapter, scheduler, payload }) {
   const expectedPayload = createBackupPayload({
     businessStore: target.snapshot.business,
     taxStore: target.snapshot.taxSettings,
+    receiptStore: target.snapshot.receiptSettings,
     productStore: {
       products: target.snapshot.products,
       categories: target.snapshot.categories,

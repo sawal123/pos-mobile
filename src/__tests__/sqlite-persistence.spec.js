@@ -67,13 +67,8 @@ const { fakeDb, nativeState } = vi.hoisted(() => {
       } else if (normalized.startsWith('INSERT INTO categories')) {
         state.categories.push({ name: values[0] })
       } else if (normalized.startsWith('INSERT INTO products')) {
-        state.products.push({
-          id: values[0], name: values[1], category: values[2], sku: values[3],
-          cost: values[4], price: values[5], stock: values[6], unit: values[7],
-          min_stock: values[8], kind: values[9], pricing_unit: values[10],
-          min_quantity: values[11], estimated_duration: values[12], image_data: values[13],
-          is_active: values[14],
-        })
+        const columns = /INSERT INTO products\s*\(([^)]+)\)/i.exec(normalized)[1].split(',').map((column) => column.trim())
+        state.products.push(Object.fromEntries(columns.map((column, index) => [column, values[index]])))
       } else if (normalized.startsWith('INSERT INTO customers')) {
         state.customers.push({ id: values[0], name: values[1], phone: values[2], email: values[3] })
       } else if (normalized.startsWith('INSERT INTO expenses')) {
@@ -679,6 +674,7 @@ describe('P8 sqlite persistence foundation', () => {
       name: 'Cuci Premium',
       category: 'Laundry',
       sku: 'LDR-001',
+      barcode: '0012345678905',
       cost: 4500,
       price: 12000,
       stock: 0,
@@ -698,6 +694,7 @@ describe('P8 sqlite persistence foundation', () => {
 
     expect(runtime.productStore.getProductById(created.product.id)).toMatchObject({
       name: 'Cuci Premium',
+      barcode: '0012345678905',
       category: 'Laundry',
       sku: 'LDR-001',
       cost: 4500,
@@ -1172,4 +1169,17 @@ describe('P8 native sqlite plugin fallback', () => {
       initializePersistence(createPinia(), { adapter: memoryAdapter }),
     ).rejects.toThrow(memoryError)
   })
+})
+
+
+it('keeps receipt settings in SQLite after reopening the adapter', async () => {
+  const settings = { address: 'Jl. Uji 10', footer: 'Terima kasih', logo: { width: 8, height: 1, data: 'gQ==' } }
+  const adapter = createSQLiteAdapter()
+  await adapter.initialize()
+  await adapter.saveReceiptSettings(settings)
+  await adapter.close()
+  const reopened = createSQLiteAdapter()
+  await reopened.initialize()
+  expect(await reopened.loadReceiptSettings()).toEqual(settings)
+  await reopened.close()
 })

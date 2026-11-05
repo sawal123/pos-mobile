@@ -132,6 +132,7 @@ describe('Dark & Light Theme + Contrast-Adaptive NexaPos Logo', () => {
     })
     await flushPromises()
 
+    await settingsWrapper.find('[data-testid="settings-section-appearance"]').trigger('click')
     const darkOption = settingsWrapper.find('[data-testid="theme-option-dark"]')
     const lightOption = settingsWrapper.find('[data-testid="theme-option-light"]')
     const logos = settingsWrapper.findAll('[data-testid="nexapos-logo"]')

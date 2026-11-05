@@ -32,6 +32,7 @@ export function createMemoryAdapter() {
     shiftState: null,
     cashState: null,
     printerState: null,
+    receiptSettings: null,
     syncQueue: [],
     deviceIdentifier: null,
     cloudContext: null,
@@ -91,13 +92,13 @@ export function createMemoryAdapter() {
     },
     async loadProducts() {
       return {
-        products: cloneValue(state.products),
+        products: cloneValue(state.products).map((product) => ({ ...product, barcode: product.barcode ?? '' })),
         categories: cloneValue(state.categories),
         stockMovements: cloneValue(state.stockMovements),
       }
     },
     async saveProducts(products, categories, stockMovements) {
-      state.products = cloneValue(products)
+      state.products = cloneValue(products).map((product) => ({ ...product, barcode: product.barcode ?? '' }))
       state.categories = cloneValue(
         categories.filter((category) => String(category) !== RESERVED_CATEGORY),
       )
@@ -155,6 +156,12 @@ export function createMemoryAdapter() {
     },
     async loadPrinterState() {
       return cloneValue(state.printerState)
+    },
+    async loadReceiptSettings() {
+      return cloneValue(state.receiptSettings)
+    },
+    async saveReceiptSettings(value) {
+      state.receiptSettings = cloneValue(value)
     },
     async savePrinterState(value) {
       state.printerState = cloneValue(value)
@@ -372,6 +379,7 @@ export function createMemoryAdapter() {
       try {
         state.business = cloneValue(snapshot.business)
         state.taxSettings = cloneValue(snapshot.taxSettings)
+        state.receiptSettings = cloneValue(snapshot.receiptSettings ?? null)
         state.products = cloneValue(snapshot.products)
         state.categories = cloneValue(
           snapshot.categories.filter((category) => String(category) !== RESERVED_CATEGORY),

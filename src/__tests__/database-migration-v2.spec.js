@@ -139,8 +139,8 @@ beforeEach(() => {
 })
 
 describe('P9 database migration v2/v3/v4', () => {
-  it('DB_VERSION sekarang 4', () => {
-    expect(DB_VERSION).toBe(4)
+  it('DB_VERSION sekarang 7', () => {
+    expect(DB_VERSION).toBe(7)
   })
 
   it('migrasi v2 mendefinisikan sync_queue', () => {
@@ -181,7 +181,7 @@ describe('P9 database migration v2/v3/v4', () => {
 
     await adapter.initialize()
 
-    expect(await adapter.getSchemaVersion()).toBe(4)
+    expect(await adapter.getSchemaVersion()).toBe(DB_VERSION)
   })
 
   it('existing v1 memory DB dapat upgrade ke v4', async () => {
@@ -190,7 +190,7 @@ describe('P9 database migration v2/v3/v4', () => {
     await adapter.setSchemaVersion(1)
     await adapter.initialize()
 
-    expect(await adapter.getSchemaVersion()).toBe(4)
+    expect(await adapter.getSchemaVersion()).toBe(DB_VERSION)
   })
 
   it.each([2, 3])('existing v%s memory DB dapat upgrade ke v4', async (version) => {
@@ -199,7 +199,7 @@ describe('P9 database migration v2/v3/v4', () => {
     await adapter.setSchemaVersion(version)
     await adapter.initialize()
 
-    expect(await adapter.getSchemaVersion()).toBe(4)
+    expect(await adapter.getSchemaVersion()).toBe(DB_VERSION)
   })
 
   it('fresh SQLite DB menghasilkan schema v4', async () => {
@@ -207,7 +207,7 @@ describe('P9 database migration v2/v3/v4', () => {
 
     await adapter.initialize()
 
-    expect(await adapter.getSchemaVersion()).toBe(4)
+    expect(await adapter.getSchemaVersion()).toBe(DB_VERSION)
   })
 
   it('existing v1 SQLite DB dapat upgrade ke v4', async () => {
@@ -216,7 +216,7 @@ describe('P9 database migration v2/v3/v4', () => {
 
     await adapter.initialize()
 
-    expect(await adapter.getSchemaVersion()).toBe(4)
+    expect(await adapter.getSchemaVersion()).toBe(DB_VERSION)
   })
 
   it('migration v2 membuat sync_queue di SQLite', async () => {
@@ -259,13 +259,13 @@ describe('P9 database migration v2/v3/v4', () => {
     )
   })
 
-  it('upgrade list memiliki toVersion 1, 2, 3, dan 4', async () => {
+  it('upgrade list mencakup semua versi termasuk barcode v7', async () => {
     const adapter = createSQLiteAdapter()
 
     await adapter.initialize()
 
     const [, upgrade] = addUpgradeStatementMock.mock.calls[0]
-    expect(upgrade.map(({ toVersion }) => toVersion)).toEqual([1, 2, 3, 4])
+    expect(upgrade.map(({ toVersion }) => toVersion)).toEqual(Array.from({ length: DB_VERSION }, (_, index) => index + 1))
 
     const v1 = upgrade.find(({ toVersion }) => toVersion === 1)
     expect(v1.statements.join('\n')).toMatch(/CREATE TABLE IF NOT EXISTS business/)
@@ -287,7 +287,7 @@ describe('P9 database migration v2/v3/v4', () => {
 
     await adapter.initialize()
 
-    expect(await adapter.getSchemaVersion()).toBe(4)
+    expect(await adapter.getSchemaVersion()).toBe(DB_VERSION)
 
     const executed = fakeUserVersion.executedUpgradeSql
     const v1Index = executed.findIndex((sql) => sql.includes('CREATE TABLE IF NOT EXISTS business'))
@@ -312,7 +312,7 @@ describe('P9 database migration v2/v3/v4', () => {
 
     await adapter.initialize()
 
-    expect(await adapter.getSchemaVersion()).toBe(4)
+    expect(await adapter.getSchemaVersion()).toBe(DB_VERSION)
 
     const executed = fakeUserVersion.executedUpgradeSql
     expect(executed.some((sql) => sql.includes('CREATE TABLE IF NOT EXISTS sync_queue'))).toBe(true)
@@ -328,7 +328,7 @@ describe('P9 database migration v2/v3/v4', () => {
 
     await adapter.initialize()
 
-    expect(await adapter.getSchemaVersion()).toBe(4)
+    expect(await adapter.getSchemaVersion()).toBe(DB_VERSION)
 
     const executed = fakeUserVersion.executedUpgradeSql
     expect(executed.some((sql) => sql.includes('ALTER TABLE products ADD COLUMN sku'))).toBe(true)
@@ -343,7 +343,7 @@ describe('P9 database migration v2/v3/v4', () => {
 
     await adapter.initialize()
 
-    expect(await adapter.getSchemaVersion()).toBe(4)
+    expect(await adapter.getSchemaVersion()).toBe(DB_VERSION)
 
     const executed = fakeUserVersion.executedUpgradeSql
     expect(executed.some((sql) => sql.includes('ALTER TABLE products ADD COLUMN image_data'))).toBe(true)
@@ -371,13 +371,13 @@ describe('P9 database migration v2/v3/v4', () => {
     }
   })
 
-  it('existing v4 reinitialize aman (native open tidak upgrade ulang)', async () => {
-    fakeUserVersion.userVersion = 4
+  it('existing current version reinitialize aman (native open tidak upgrade ulang)', async () => {
+    fakeUserVersion.userVersion = DB_VERSION
     const adapter = createSQLiteAdapter()
 
     await adapter.initialize()
 
-    expect(await adapter.getSchemaVersion()).toBe(4)
+    expect(await adapter.getSchemaVersion()).toBe(DB_VERSION)
     expect(fakeUserVersion.executedUpgradeSql).toEqual([])
   })
 
@@ -412,7 +412,7 @@ describe('P9 database migration v2/v3/v4', () => {
     await adapter.initialize()
     await adapter.initialize()
 
-    expect(await adapter.getSchemaVersion()).toBe(4)
+    expect(await adapter.getSchemaVersion()).toBe(DB_VERSION)
   })
 
   it('memory sync_queue siap dipakai setelah migrasi v2', async () => {
@@ -475,17 +475,17 @@ describe('P9 database migration v2/v3/v4', () => {
     expect(dbLike.executed.some((sql) => /DROP TABLE\s+transactions/i.test(sql))).toBe(false)
   })
 
-  it('version > 4 ditolak (tidak downgrade) pada memory', async () => {
+  it('future version ditolak (tidak downgrade) pada memory', async () => {
     const adapter = createMemoryAdapter()
 
-    await adapter.setSchemaVersion(5)
+    await adapter.setSchemaVersion(DB_VERSION + 1)
 
     await expect(adapter.initialize()).rejects.toThrow(/future/i)
-    expect(await adapter.getSchemaVersion()).toBe(5)
+    expect(await adapter.getSchemaVersion()).toBe(DB_VERSION + 1)
   })
 
-  it('version > 4 ditolak (tidak downgrade) pada SQLite', async () => {
-    fakeUserVersion.userVersion = 5
+  it('future version ditolak (tidak downgrade) pada SQLite', async () => {
+    fakeUserVersion.userVersion = DB_VERSION + 1
     const adapter = createSQLiteAdapter()
 
     await expect(adapter.initialize()).rejects.toThrow(/future/i)
@@ -522,7 +522,7 @@ describe('P9 database migration v2/v3/v4', () => {
 
     await adapter.initialize()
 
-    expect(await adapter.getSchemaVersion()).toBe(4)
+    expect(await adapter.getSchemaVersion()).toBe(DB_VERSION)
     expect(await adapter.countSyncQueueItems()).toBe(1)
   })
 })

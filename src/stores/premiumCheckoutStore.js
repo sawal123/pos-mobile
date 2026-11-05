@@ -108,6 +108,7 @@ function pickPendingFields(record) {
 }
 
 export const usePremiumCheckoutStore = defineStore('premiumCheckout', () => {
+  let statusVersion = 0
   // ── State ──────────────────────────────────────────────────────────────────
   const phase = ref(CHECKOUT_PHASE.IDLE)
   /** The current attempt: display price is kept here only, never sent to API. */
@@ -233,6 +234,7 @@ export const usePremiumCheckoutStore = defineStore('premiumCheckout', () => {
       return { ok: false, code: 'INVALID_OPTION' }
     }
 
+    statusVersion += 1
     attempt.value = {
       key: createIdempotencyKey(),
       businessId,
@@ -356,16 +358,28 @@ export const usePremiumCheckoutStore = defineStore('premiumCheckout', () => {
    * authority: returning from the payment page never marks a payment paid.
    */
   async function refreshStatus() {
+    const version = ++statusVersion
     const paymentId = payment.value?.id ?? pending.value?.paymentId ?? null
     if (paymentId === null) return { ok: false, code: 'NO_PAYMENT' }
 
     const cloudStore = useCloudSessionStore()
+    const scope = `${cloudStore.user?.id}:${cloudStore.selectedBusiness?.id}`
     if (!cloudStore.isAuthenticated) return { ok: false, code: 'NOT_AUTHENTICATED' }
 
     const token = await safeToken()
+    if (
+      version !== statusVersion ||
+      scope !== `${cloudStore.user?.id}:${cloudStore.selectedBusiness?.id}`
+    )
+      return { ok: false, code: 'STALE' }
     if (!token) return { ok: false, code: 'NOT_AUTHENTICATED' }
 
     const result = await fetchSubscriptionPayment({ token, paymentId })
+    if (
+      version !== statusVersion ||
+      scope !== `${cloudStore.user?.id}:${cloudStore.selectedBusiness?.id}`
+    )
+      return { ok: false, code: 'STALE' }
     lastCheckedAt.value = new Date().toISOString()
 
     if (!result.ok) {
@@ -482,8 +496,27 @@ export const usePremiumCheckoutStore = defineStore('premiumCheckout', () => {
     await persistPending()
   }
 
+  async function acceptHistoryPayment(serverPayment, businessId) {
+    const currentBusinessId = pending.value?.businessId ?? attempt.value?.businessId
+    const currentPaymentId = payment.value?.id ?? pending.value?.paymentId
+    if (
+      String(currentBusinessId) !== String(businessId) ||
+      String(currentPaymentId) !== String(serverPayment.id)
+    )
+      return
+    statusVersion += 1
+    stopPolling('terminal')
+    payment.value = serverPayment
+    setPhaseFromStatus(serverPayment.status)
+    error.value = null
+    errorCode.value = null
+    await updatePendingFromPayment(serverPayment)
+    if (serverPayment.status === PAYMENT_STATUS.CANCELLED) attempt.value = null
+  }
+
   /** A fresh attempt after a terminal/cancelled payment or a reset. */
   function resetAttempt() {
+    statusVersion += 1
     stopPolling('reset')
     attempt.value = null
     payment.value = null
@@ -529,6 +562,7 @@ export const usePremiumCheckoutStore = defineStore('premiumCheckout', () => {
     createCheckout,
     launchPayment,
     refreshStatus,
+    acceptHistoryPayment,
     completeActivation,
     startPolling,
     stopPolling,

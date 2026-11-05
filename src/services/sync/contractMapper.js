@@ -1,3 +1,4 @@
+import { isValidProductCode, normalizeProductCode } from '@/services/products/productCodeService'
 import { createSyncIdentityRegistry, buildProductSyncSku, isUuid } from './syncIdentityRegistry'
 import { SYNC_RESERVED_CATEGORY, SYNC_ENTITY_TYPES, SYNC_OPERATIONS } from './syncConstants'
 
@@ -64,7 +65,7 @@ function extractServerSyncVersion(serverVersions, entityKey, syncId) {
 
 export async function mapOutboxEntries(
   entries = [],
-  { registry = null, adapter = null, scheduler = null, serverVersions: serverVersionsParam = null } = {},
+  { registry = null, adapter = null, scheduler = null, serverVersions: serverVersionsParam = null, catalogCapabilities = null } = {},
 ) {
   let activeRegistry = registry
   if (!activeRegistry && adapter) {
@@ -243,6 +244,10 @@ export async function mapOutboxEntries(
     // ── 4. Product mapping
     if (entityType === SYNC_ENTITY_TYPES.PRODUCT) {
       const prodId = payload.id ?? entityId
+      if (payload.barcode != null && !isValidProductCode(payload.barcode, { allowEmpty: true })) {
+        blocked.push({ queueId, entityType, entityId, operation, code: 'INVALID_PRODUCT_BARCODE', message: 'Kode barcode produk tidak valid.' })
+        continue
+      }
 
       if (!isNonEmptyString(payload.name)) {
         blocked.push({
@@ -302,11 +307,17 @@ export async function mapOutboxEntries(
         category_sync_id: categorySyncId,
         name: payload.name.trim(),
         sku,
-        barcode: null,
         price: payload.price,
         kind,
         status,
       }
+
+      const barcode = normalizeProductCode(payload.barcode)
+      if (barcode) {
+        productChange.barcode = barcode
+        if (catalogCapabilities?.product_barcode_v1 === true) productChange.barcode_action = 'set'
+      }
+      // Empty/legacy fields never imply an explicit barcode clear.
 
       if (typeof payload.cost === 'number' && Number.isFinite(payload.cost) && payload.cost >= 0) {
         productChange.cost = payload.cost

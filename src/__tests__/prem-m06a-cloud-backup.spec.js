@@ -965,6 +965,7 @@ async function mountSettings(pinia, router) {
 
   const wrapper = mount(SettingsView, { global: { plugins: [pinia, router] } })
   await flushPromises()
+  await wrapper.find('[data-testid="settings-section-data"]').trigger('click')
   return wrapper
 }
 

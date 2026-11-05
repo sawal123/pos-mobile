@@ -4,6 +4,7 @@ import { computed, watch } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseSheet from '@/components/base/BaseSheet.vue'
 import CartItem from '@/components/pos/CartItem.vue'
+import CartCustomerInput from '@/components/pos/CartCustomerInput.vue'
 import { useCartStore } from '@/stores/cartStore'
 import { useTaxStore } from '@/stores/taxStore'
 import { formatCurrency } from '@/utils/formatters'
@@ -46,7 +47,8 @@ function checkout() {
 
 <template>
   <BaseSheet :open="open" title="Keranjang" @close="close">
-    <div data-testid="mobile-cart-sheet" class="flex flex-col gap-3">
+    <div data-testid="mobile-cart-sheet" class="flex max-h-[calc(100dvh-8rem)] flex-col gap-3 overflow-y-auto">
+      <CartCustomerInput v-if="items.length" input-id="mobile-cart-customer-phone" />
       <div
         v-if="items.length"
         data-testid="mobile-cart-list"

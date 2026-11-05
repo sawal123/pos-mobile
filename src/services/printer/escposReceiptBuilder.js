@@ -2,6 +2,8 @@
 // Only printable ASCII is emitted, so unsupported Unicode degrades to '?' instead
 // of producing malformed output that could stall the printer.
 
+import { decodeReceiptLogo, normalizeReceiptSettings } from './receiptSettings'
+
 const ESC = 0x1B
 const LF = 0x0A
 
@@ -202,13 +204,14 @@ function normalizeItem(item) {
   }
 }
 
-function buildHeaderLines(business, width) {
+function buildHeaderLines(business, width, address = '') {
   const lines = [sanitizePrinterText(business?.name || '-'), sanitizePrinterText(business?.outlet || '-')]
 
   if (business?.phone) {
     lines.push(sanitizePrinterText(business.phone))
   }
 
+  lines.push(...address.split('\n').filter(Boolean))
   return lines.map((line) => wrapText(line, width)).flat()
 }
 
@@ -276,16 +279,18 @@ function buildItemLines(items, width) {
   return lines
 }
 
-export function createReceiptCommands({ transaction, business, paperWidth } = {}) {
+export function createReceiptCommands({ transaction, business, paperWidth, receiptSettings } = {}) {
+  const settings = normalizeReceiptSettings(receiptSettings)
   const width = resolveCharsPerLine(paperWidth)
   const separator = createSeparator(width)
   const items = Array.isArray(transaction?.items) ? transaction.items : []
   const commands = [{ type: 'init' }]
 
   commands.push({ type: 'align', value: 'center' })
+  if (settings.logo) commands.push({ type: 'image', value: settings.logo })
   commands.push({ type: 'bold', value: true })
 
-  for (const line of buildHeaderLines(business, width)) {
+  for (const line of buildHeaderLines(business, width, settings.address)) {
     commands.push({ type: 'text', value: line })
   }
 
@@ -353,21 +358,33 @@ export function createReceiptCommands({ transaction, business, paperWidth } = {}
     }
   }
 
+  if (settings.footer) {
+    commands.push({ type: 'text', value: separator }, { type: 'align', value: 'center' })
+    for (const paragraph of settings.footer.split('\n')) {
+      for (const line of wrapText(paragraph, width)) commands.push({ type: 'text', value: line })
+    }
+    commands.push({ type: 'align', value: 'left' })
+  }
   commands.push({ type: 'feed', lines: FOOTER_FEED_LINES })
 
   return commands
 }
 
-export function createTestReceiptCommands({ business, paperWidth, now = new Date() } = {}) {
+export function createTestReceiptCommands({ business, paperWidth, now = new Date(), receiptSettings } = {}) {
+  const settings = normalizeReceiptSettings(receiptSettings)
   const width = resolveCharsPerLine(paperWidth)
   const normalizedWidth = normalizePaperWidth(paperWidth)
   const separator = createSeparator(width)
   const commands = [{ type: 'init' }, { type: 'align', value: 'center' }, { type: 'bold', value: true }]
 
+  if (settings.logo) commands.push({ type: 'image', value: settings.logo })
   commands.push({ type: 'text', value: sanitizePrinterText(business?.name || 'POS OFFLINE') })
   commands.push({ type: 'text', value: 'TEST PRINTER' })
   commands.push({ type: 'bold', value: false })
 
+  for (const paragraph of settings.address.split('\n').filter(Boolean)) {
+    for (const line of wrapText(paragraph, width)) commands.push({ type: 'text', value: line })
+  }
   for (const line of wrapText('Printer Bluetooth berhasil terhubung.', width)) {
     commands.push({ type: 'text', value: line })
   }
@@ -377,6 +394,9 @@ export function createTestReceiptCommands({ business, paperWidth, now = new Date
   commands.push({ type: 'text', value: separator })
   commands.push({ type: 'text', value: 'POS OFFLINE' })
   commands.push({ type: 'text', value: separator })
+  for (const paragraph of settings.footer.split('\n').filter(Boolean)) {
+    for (const line of wrapText(paragraph, width)) commands.push({ type: 'text', value: line })
+  }
   commands.push({ type: 'align', value: 'left' })
   commands.push({ type: 'feed', lines: FOOTER_FEED_LINES })
 
@@ -399,6 +419,18 @@ export function commandsToBytes(commands) {
 
     if (command.type === 'bold') {
       bytes.push(ESC, 0x45, command.value ? 1 : 0)
+      continue
+    }
+
+    if (command.type === 'image') {
+      const image = command.value
+      const raster = decodeReceiptLogo(image)
+      if (raster) {
+        const widthBytes = image.width / 8
+        // ESC/POS GS v 0, normal-size monochrome raster (203 dpi).
+        // https://download4.epson.biz/sec_pubs/pos/reference_en/escpos/gs_lv_0.html
+        bytes.push(0x1D, 0x76, 0x30, 0, widthBytes & 0xFF, widthBytes >> 8, image.height & 0xFF, image.height >> 8, ...raster, LF)
+      }
       continue
     }
 
