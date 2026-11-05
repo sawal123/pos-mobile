@@ -339,7 +339,7 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
         db.query('SELECT name FROM categories ORDER BY name ASC'),
         db.query(
           `SELECT id, name, category, sku, cost, price, stock, unit, min_stock,
-             kind, pricing_unit, min_quantity, estimated_duration, image_data, is_sellable, is_active, variant_group_ids
+             kind, pricing_unit, min_quantity, estimated_duration, image_data, is_sellable, is_active, variant_group_ids, barcode
            FROM products ORDER BY rowid ASC`,
         ),
       ])
@@ -351,6 +351,7 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
           name: row.name,
           category: row.category,
           sku: row.sku ?? '',
+          barcode: row.barcode ?? '',
           cost: Number(row.cost ?? 0),
           price: Number(row.price),
           unitPrice: Number(row.price),
@@ -386,8 +387,8 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
           await db.run(
             `INSERT INTO products
               (id, name, category, sku, cost, price, stock, unit, min_stock,
-               kind, pricing_unit, min_quantity, estimated_duration, image_data, is_sellable, is_active, variant_group_ids)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               kind, pricing_unit, min_quantity, estimated_duration, image_data, is_sellable, is_active, variant_group_ids, barcode)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               String(product.id),
               product.name,
@@ -408,6 +409,7 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
               Array.isArray(product.variantGroupIds)
                 ? JSON.stringify(product.variantGroupIds)
                 : (typeof product.variantGroupIds === 'string' ? product.variantGroupIds : '[]'),
+              product.barcode ?? '',
             ],
             false,
           )
@@ -1048,8 +1050,8 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
           await db.run(
             `INSERT INTO products
               (id, name, category, sku, cost, price, stock, unit, min_stock,
-               kind, pricing_unit, min_quantity, estimated_duration, image_data, is_active)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               kind, pricing_unit, min_quantity, estimated_duration, image_data, is_active, barcode)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               String(product.id),
               product.name,
@@ -1066,6 +1068,7 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
               product.estimatedDuration ?? '',
               product.imageData ?? '',
               product.isActive ? 1 : 0,
+              product.barcode ?? '',
             ],
             false,
           )

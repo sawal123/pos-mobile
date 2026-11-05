@@ -1,7 +1,10 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
+
+import ProductScannerSheet from '@/components/scanner/ProductScannerSheet.vue'
+import { useRetailProductCodes } from '@/composables/useRetailProductCodes'
 
 import AppIcon from '@/components/base/AppIcon.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
@@ -27,8 +30,47 @@ const cloudStore = useCloudSessionStore()
 const syncPullStore = useSyncPullStore()
 const variantStore = useVariantStore()
 const router = useRouter()
+const { isRetail, scanContext } = useRetailProductCodes()
+const showScanner = ref(false)
+const scanFeedback = ref('')
+const scanError = ref(false)
+let scanVariantContext = null
 
-const { filterCategories, filteredProducts, searchQuery, selectedCategory } = storeToRefs(productStore)
+function handleScanned(code) {
+  if (!showScanner.value || !isRetail.value) return
+  showScanner.value = false
+  const result = productStore.resolveScanCode(code)
+  scanError.value = !result.success
+  if (!result.success) {
+    scanFeedback.value = result.error
+    return
+  }
+  const outcome = handleProductAdd(result.product)
+  if (outcome === 'variant') {
+    scanVariantContext = scanContext.value
+    scanFeedback.value = 'Pilih varian untuk menambahkan produk.'
+  } else scanFeedback.value = `${result.product.name} ditambahkan ke keranjang.`
+}
+
+function closeVariantSheet() {
+  showVariantSheet.value = false
+  selectedVariantProduct.value = null
+  if (scanVariantContext !== null) scanFeedback.value = ''
+  scanVariantContext = null
+}
+
+watch(
+  scanContext,
+  () => {
+    showScanner.value = false
+    scanFeedback.value = ''
+    closeVariantSheet()
+  },
+  { flush: 'sync' },
+)
+
+const { filterCategories, filteredProducts, searchQuery, selectedCategory } =
+  storeToRefs(productStore)
 const { items, subtotal, tax, total } = storeToRefs(cartStore)
 
 const totalQty = computed(() => {
@@ -51,13 +93,20 @@ function handleProductAdd(product) {
   if (groups.length > 0) {
     selectedVariantProduct.value = product
     showVariantSheet.value = true
-    return
+    return 'variant'
   }
   cartStore.addItem(product)
+  return 'added'
 }
 
 function handleVariantConfirm({ product, selectedOptions }) {
+  if (scanVariantContext !== null && scanVariantContext !== scanContext.value) {
+    closeVariantSheet()
+    return
+  }
   cartStore.addItem(product, selectedOptions)
+  if (scanVariantContext !== null) scanFeedback.value = `${product.name} ditambahkan ke keranjang.`
+  scanVariantContext = null
   showVariantSheet.value = false
   selectedVariantProduct.value = null
 }
@@ -99,20 +148,49 @@ function handleCheckout() {
 </script>
 
 <template>
-  <div
-    class="w-full min-w-0 space-y-4 md:space-y-5"
-    :class="items.length ? 'pb-20 md:pb-0' : ''"
-  >
-    <div class="grid gap-5 md:grid-cols-[1fr_340px] lg:grid-cols-[1fr_380px] xl:grid-cols-[1fr_420px] items-start">
+  <div class="w-full min-w-0 space-y-4 md:space-y-5" :class="items.length ? 'pb-20 md:pb-0' : ''">
+    <div
+      class="grid gap-5 md:grid-cols-[1fr_340px] lg:grid-cols-[1fr_380px] xl:grid-cols-[1fr_420px] items-start"
+    >
       <!-- Left Column: Product Catalog -->
       <section class="min-w-0 space-y-3 sm:space-y-4">
         <div class="space-y-3">
-          <BaseInput
-            :model-value="searchQuery"
-            placeholder="Cari produk..."
-            aria-label="Cari produk"
-            @update:model-value="productStore.setSearchQuery"
-          />
+          <div class="flex items-start gap-2">
+            <BaseInput
+              class="min-w-0 flex-1"
+              :model-value="searchQuery"
+              placeholder="Cari produk..."
+              aria-label="Cari produk"
+              @update:model-value="productStore.setSearchQuery"
+            />
+            <button
+              v-if="isRetail"
+              type="button"
+              data-testid="pos-scan-button"
+              aria-label="Scan QR atau barcode produk"
+              class="flex h-12 shrink-0 items-center gap-2 rounded-2xl bg-primary px-4 text-sm font-semibold text-white transition active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+              @click="showScanner = true"
+            >
+              <AppIcon name="scan" /><span>Scan</span>
+            </button>
+          </div>
+          <div
+            v-if="scanFeedback"
+            class="flex flex-wrap items-center justify-between gap-2 rounded-2xl px-4 py-3 text-sm"
+            :class="scanError ? 'bg-danger/10 text-danger' : 'bg-primary/10 text-primary'"
+            role="status"
+            data-testid="pos-scan-feedback"
+          >
+            <p class="min-w-0 break-words">{{ scanFeedback }}</p>
+            <button
+              v-if="scanError"
+              type="button"
+              class="min-h-10 font-semibold underline"
+              @click="showScanner = true"
+            >
+              Scan Lagi
+            </button>
+          </div>
 
           <div class="flex gap-2 overflow-x-auto pb-1 sm:gap-3">
             <CategoryPill
@@ -125,7 +203,11 @@ function handleCheckout() {
           </div>
         </div>
 
-        <div v-if="filteredProducts.length" class="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3 2xl:grid-cols-4" data-testid="pos-product-grid">
+        <div
+          v-if="filteredProducts.length"
+          class="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-3 2xl:grid-cols-4"
+          data-testid="pos-product-grid"
+        >
           <ProductCard
             v-for="product in filteredProducts"
             :key="product.id"
@@ -134,14 +216,29 @@ function handleCheckout() {
           />
         </div>
         <BaseCard v-else-if="syncPullStore.loading" class="py-12 text-center space-y-3">
-          <div class="inline-flex size-10 items-center justify-center rounded-full bg-primary/10 text-primary animate-spin">
+          <div
+            class="inline-flex size-10 items-center justify-center rounded-full bg-primary/10 text-primary animate-spin"
+          >
             <svg class="size-5" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              <circle
+                class="opacity-25"
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                stroke-width="4"
+              ></circle>
+              <path
+                class="opacity-75"
+                fill="currentColor"
+                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+              ></path>
             </svg>
           </div>
           <p class="text-base font-semibold text-ink-primary">Memuat menu dari Cloud...</p>
-          <p class="text-xs text-ink-secondary">Mengambil katalog produk &amp; kategori terbaru dari server...</p>
+          <p class="text-xs text-ink-secondary">
+            Mengambil katalog produk &amp; kategori terbaru dari server...
+          </p>
         </BaseCard>
         <BaseCard v-else class="py-10 text-center">
           <p class="text-base font-semibold text-ink-primary">Produk tidak ditemukan</p>
@@ -164,7 +261,10 @@ function handleCheckout() {
             </span>
           </div>
 
-          <div v-if="items.length" class="no-scrollbar max-h-[calc(100vh-340px)] space-y-3 overflow-y-auto pr-1">
+          <div
+            v-if="items.length"
+            class="no-scrollbar max-h-[calc(100vh-340px)] space-y-3 overflow-y-auto pr-1"
+          >
             <CartItem
               v-for="item in items"
               :key="item.id"
@@ -177,7 +277,9 @@ function handleCheckout() {
           </div>
           <div v-else class="py-8 text-center text-sm text-ink-secondary">
             <p class="font-medium text-ink-primary">Belum ada item yang ditambahkan.</p>
-            <p class="mt-1 text-xs text-ink-secondary">Pilih produk di sebelah kiri untuk menambahkan ke keranjang.</p>
+            <p class="mt-1 text-xs text-ink-secondary">
+              Pilih produk di sebelah kiri untuk menambahkan ke keranjang.
+            </p>
           </div>
         </BaseCard>
 
@@ -230,9 +332,13 @@ function handleCheckout() {
     />
 
     <!-- Discount & Promo Selection Modal -->
-    <DiscountPromoModal
-      :open="showPromoModal"
-      @close="closePromoModal"
+    <DiscountPromoModal :open="showPromoModal" @close="closePromoModal" />
+
+    <ProductScannerSheet
+      :open="showScanner && isRetail"
+      :context-key="scanContext"
+      @close="showScanner = false"
+      @scanned="handleScanned"
     />
 
     <!-- Variant Selection Bottom Sheet -->
@@ -240,7 +346,7 @@ function handleCheckout() {
       :open="showVariantSheet"
       :product="selectedVariantProduct"
       :variant-groups="activeVariantGroupsForProduct"
-      @close="showVariantSheet = false"
+      @close="closeVariantSheet"
       @confirm="handleVariantConfirm"
     />
   </div>

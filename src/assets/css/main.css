@@ -345,3 +345,12 @@ a {
     color-scheme: light;
   }
 }
+
+/* Native ML Kit preview is behind the WebView; expose only the scanner UI. */
+html.product-scanner-native,
+body.product-scanner-native {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+body.product-scanner-native > #app { visibility: hidden; }
+body.product-scanner-native .product-scanner-overlay { visibility: visible; }

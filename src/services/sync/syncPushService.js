@@ -1336,7 +1336,11 @@ export function createSyncPushService({
 
           let mapped
           try {
-            mapped = await mapOutboxEntries([entry], { registry: activeRegistry, adapter })
+            mapped = await mapOutboxEntries([entry], {
+              registry: activeRegistry,
+              adapter,
+              catalogCapabilities: cloudStore?.capabilityState === 'verified' ? cloudStore.selectedBusiness?.catalog_capabilities : null,
+            })
           } catch (mapErr) {
             console.error(`Failed to map queue item ${entry.id}.`, mapErr)
             blocked.push({

@@ -36,6 +36,10 @@
         </provider>
     </application>
 
+    <!-- Camera is requested only when the product scanner is opened. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />

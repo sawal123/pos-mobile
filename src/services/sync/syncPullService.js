@@ -1,3 +1,4 @@
+import { isValidProductCode, normalizeProductCode } from '@/services/products/productCodeService'
 import { pullSyncChanges } from './syncPullTransport'
 import { isUuid } from './syncIdentityRegistry'
 import { createSyncIdentityRegistry } from './syncIdentityRegistry'
@@ -734,6 +735,9 @@ export function createSyncPullService({
             message: `Server returned an invalid record: ${JSON.stringify(record)}`,
             error: { code: 'INVALID_PULL_RECORD', message: 'Invalid record shape' },
           }
+        }
+        if (record.entity === 'products' && record.data.barcode != null && !isValidProductCode(record.data.barcode, { allowEmpty: true })) {
+          return { ok: false, code: 'INVALID_PULL_RECORD', message: 'Kode barcode produk Cloud tidak valid.', error: { code: 'INVALID_PULL_RECORD', message: 'Invalid product barcode' } }
         }
         allRecords.push(record)
       }
@@ -1497,7 +1501,9 @@ export function createSyncPullService({
         const remoteStock = Number(stock)
         const remoteMinStock = Number(min_stock)
         const remoteMinQuantity = Number(min_quantity)
-        const remoteSku = typeof sku === 'string' ? sku : (typeof barcode === 'string' ? barcode : '')
+        const remoteSku = typeof sku === 'string' ? sku : ''
+        const hasRemoteBarcode = Object.prototype.hasOwnProperty.call(data, 'barcode')
+        const remoteBarcode = normalizeProductCode(barcode)
         const remoteIsActive = normalizeRemoteIsActive(data)
 
         // Accepted remote records converge normal mutable fields to the server
@@ -1507,6 +1513,7 @@ export function createSyncPullService({
           existingProd.name = name
           existingProd.category = resolvedCategoryName
           if (remoteSku) existingProd.sku = remoteSku
+          if (hasRemoteBarcode) existingProd.barcode = remoteBarcode
           existingProd.price = Number(price)
           existingProd.unitPrice = Number(price)
           existingProd.kind = remoteKind
@@ -1541,6 +1548,7 @@ export function createSyncPullService({
             name,
             category: resolvedCategoryName,
             sku: remoteSku,
+            barcode: remoteBarcode,
             price: Number(price),
             unitPrice: Number(price),
             kind: remoteKind,

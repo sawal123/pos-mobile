@@ -88,7 +88,16 @@ function createPersistenceContexts(pinia) {
         }
       },
       async load(adapter) {
-        return adapter.loadProducts()
+        const loaded = await adapter.loadProducts()
+        return loaded
+          ? {
+              ...loaded,
+              products: loaded.products.map((product) => ({
+                ...product,
+                barcode: typeof product.barcode === 'string' ? product.barcode : '',
+              })),
+            }
+          : loaded
       },
       async save(adapter, snapshot) {
         await adapter.saveProducts(snapshot.products, snapshot.categories, snapshot.stockMovements)

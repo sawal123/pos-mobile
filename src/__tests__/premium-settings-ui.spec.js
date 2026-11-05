@@ -14,10 +14,10 @@
  * - Business context change never shows the previous entitlement
  */
 
-import { flushPromises, mount } from '@vue/test-utils'
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { nextTick } from 'vue'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { createAppRouter } from '@/router'
 import { ENTITLEMENT_STATUS, resolveEntitlement } from '@/services/subscription/entitlementService'
@@ -27,6 +27,8 @@ import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useSubscriptionStore } from '@/stores/subscriptionStore'
 import SettingsView from '@/views/settings/SettingsView.vue'
 import SubscriptionView from '@/views/subscription/SubscriptionView.vue'
+
+enableAutoUnmount(afterEach)
 
 const FUTURE = '2030-01-01T00:00:00.000Z'
 const PAST = '2000-01-01T00:00:00.000Z'
@@ -77,20 +79,26 @@ function setCloudContext(
   cloud.error = error
 }
 
-async function mountSettings(context) {
+async function mountSettings(context, section = 'cloud') {
   await context.router.push('/settings')
   await flushPromises()
 
   const wrapper = mount(SettingsView, {
+    attachTo: document.body,
     global: { plugins: [context.pinia, context.router] },
   })
   await flushPromises()
 
+  if (section) await wrapper.find(`[data-testid="settings-section-${section}"]`).trigger('click')
   return wrapper
 }
 
 beforeEach(() => {
   setActivePinia(createPinia())
+})
+
+afterEach(() => {
+  document.body.innerHTML = ''
 })
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -287,7 +295,9 @@ describe('Settings — Free state', () => {
     setCloudContext(context, { subscription: { plan: 'free' } })
     const wrapper = await mountSettings(context)
 
-    const backup = wrapper.find('[data-testid="settings-menu-backup"]')
+    await wrapper.find('[data-testid="settings-section-data"]').trigger('click')
+    const backup = wrapper.find('[data-testid="local-backup-now"]')
+    expect(backup.isVisible()).toBe(true)
     expect(backup.exists()).toBe(true)
     expect(backup.attributes('aria-haspopup')).toBeUndefined()
   })
@@ -508,5 +518,43 @@ describe('Subscription view', () => {
     expect(wrapper.find('[data-testid="subscription-placeholder"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="premium-benefits"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="subscription-badge"]').text()).toBe('FREE')
+  })
+})
+
+describe('Settings compact categories', () => {
+  it('starts with five collapsed categories and reveals only the selected category', async () => {
+    const wrapper = await mountSettings(prepareContext(), null)
+    const headings = wrapper.findAll('[data-testid^="settings-section-"]')
+    expect(headings).toHaveLength(5)
+    expect(headings.every((heading) => heading.attributes('aria-expanded') === 'false')).toBe(true)
+    expect(wrapper.find('[data-testid="tax-settings-card"]').isVisible()).toBe(false)
+    expect(wrapper.find('[data-testid="backup-card"]').isVisible()).toBe(false)
+
+    await wrapper.find('[data-testid="settings-section-tax"]').trigger('click')
+    expect(wrapper.find('[data-testid="tax-settings-card"]').isVisible()).toBe(true)
+    expect(wrapper.find('[data-testid="settings-section-tax"]').attributes('aria-expanded')).toBe(
+      'true',
+    )
+
+    await wrapper.find('[data-testid="settings-section-data"]').trigger('click')
+    expect(wrapper.find('[data-testid="tax-settings-card"]').isVisible()).toBe(false)
+    expect(wrapper.find('[data-testid="backup-card"]').isVisible()).toBe(true)
+    expect(wrapper.findAll('[aria-expanded="true"]')).toHaveLength(1)
+    expect(wrapper.findAll('[data-testid="local-backup-now"]')).toHaveLength(1)
+    expect(wrapper.findAll('[data-testid="btn-clear-cache"]')).toHaveLength(1)
+
+    await wrapper.find('[data-testid="settings-section-data"]').trigger('click')
+    expect(wrapper.find('[data-testid="backup-card"]').isVisible()).toBe(false)
+    expect(wrapper.findAll('[aria-expanded="true"]')).toHaveLength(0)
+  })
+
+  it('preserves an unsaved tax draft when switching categories', async () => {
+    const wrapper = await mountSettings(prepareContext(), 'tax')
+    await wrapper.find('[data-testid="tax-enabled-switch"]').setValue(true)
+    await wrapper.find('[data-testid="tax-rate-input"]').setValue('7.5')
+    await wrapper.find('[data-testid="settings-section-printer"]').trigger('click')
+    await wrapper.find('[data-testid="settings-section-tax"]').trigger('click')
+    expect(wrapper.find('[data-testid="tax-rate-input"]').element.value).toBe('7.5')
+    expect(wrapper.find('[data-testid="tax-enabled-switch"]').element.checked).toBe(true)
   })
 })

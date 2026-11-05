@@ -91,13 +91,13 @@ export function createMemoryAdapter() {
     },
     async loadProducts() {
       return {
-        products: cloneValue(state.products),
+        products: cloneValue(state.products).map((product) => ({ ...product, barcode: product.barcode ?? '' })),
         categories: cloneValue(state.categories),
         stockMovements: cloneValue(state.stockMovements),
       }
     },
     async saveProducts(products, categories, stockMovements) {
-      state.products = cloneValue(products)
+      state.products = cloneValue(products).map((product) => ({ ...product, barcode: product.barcode ?? '' }))
       state.categories = cloneValue(
         categories.filter((category) => String(category) !== RESERVED_CATEGORY),
       )

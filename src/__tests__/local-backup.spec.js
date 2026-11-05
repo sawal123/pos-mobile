@@ -315,6 +315,7 @@ async function mountSettings() {
     },
   })
 
+  await wrapper.find('[data-testid="settings-section-data"]').trigger('click')
   return { wrapper, ...context }
 }
 
@@ -612,6 +613,7 @@ describe('P7 local backup & restore JSON', () => {
     expect(context.productStore.products).toEqual([
       {
         id: 'p-backup',
+        barcode: '',
         name: 'Latte',
         category: 'Minuman',
         price: 28000,

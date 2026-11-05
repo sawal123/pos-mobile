@@ -9,6 +9,8 @@ const props = defineProps({
 })
 
 const icons = {
+  scan: ['M4 8V4h4', 'M16 4h4v4', 'M20 16v4h-4', 'M8 20H4v-4', 'M7 9v6', 'M10 8v8', 'M13 9v6', 'M16 8v8'],
+  qr: ['M3 3h6v6H3Z', 'M15 3h6v6h-6Z', 'M3 15h6v6H3Z', 'M15 15h2v2h-2Z', 'M19 15h2v6h-6v-2'],
   home: [
     'M3 10.5 12 3l9 7.5',
     'M5 9.5V21h14V9.5',

@@ -1,5 +1,16 @@
 import { defineStore } from 'pinia'
 
+import { useBusinessStore } from '@/stores/businessStore'
+import { useCloudSessionStore } from '@/stores/cloudSessionStore'
+import {
+  canManageProductCodes,
+  findProductCodeConflict,
+  generateProductCode,
+  isValidProductCode,
+  normalizeProductCode,
+  resolveProductCode,
+} from '@/services/products/productCodeService'
+
 import { getBusinessTemplate } from '@/data/businessTemplates'
 
 const DEFAULT_FILTER_CATEGORY = 'Semua'
@@ -13,14 +24,18 @@ function normalizeNumber(value, fallback = 0) {
 function normalizeProduct(product) {
   const kind = product.kind ?? (product.pricingUnit ? 'service' : 'product')
   const price = normalizeNumber(product.price ?? product.unitPrice)
-  const isSellable = product.isSellable !== undefined
-    ? Boolean(product.isSellable)
-    : (product.is_sellable !== undefined ? Boolean(product.is_sellable) : true)
+  const isSellable =
+    product.isSellable !== undefined
+      ? Boolean(product.isSellable)
+      : product.is_sellable !== undefined
+        ? Boolean(product.is_sellable)
+        : true
 
   return {
     ...product,
     kind,
-    sku: product.sku ?? product.barcode ?? '',
+    sku: product.sku ?? '',
+    barcode: normalizeProductCode(product.barcode),
     cost: normalizeNumber(product.cost ?? product.hpp ?? product.estimatedCost),
     price,
     unitPrice: price,
@@ -104,19 +119,19 @@ function validateProductInput(payload, categories) {
   const price = isBlankValue(payload.price ?? payload.unitPrice)
     ? Number.NaN
     : Number(payload.price ?? payload.unitPrice)
-  const cost = isBlankValue(payload.cost ?? payload.hpp)
-    ? 0
-    : Number(payload.cost ?? payload.hpp)
-  const stock = kind === 'service'
-    ? 0
-    : (isBlankValue(payload.stock) ? Number.NaN : Number(payload.stock))
+  const cost = isBlankValue(payload.cost ?? payload.hpp) ? 0 : Number(payload.cost ?? payload.hpp)
+  const stock =
+    kind === 'service' ? 0 : isBlankValue(payload.stock) ? Number.NaN : Number(payload.stock)
   const minStock = isBlankValue(payload.minStock) ? 0 : Number(payload.minStock)
   const minQuantity = isBlankValue(payload.minQuantity) ? 0 : Number(payload.minQuantity)
   const unit = normalizeName(payload.unit ?? 'pcs')
   const pricingUnit = normalizeName(payload.pricingUnit ?? 'kg')
-  const isSellable = payload.isSellable !== undefined
-    ? Boolean(payload.isSellable)
-    : (payload.is_sellable !== undefined ? Boolean(payload.is_sellable) : true)
+  const isSellable =
+    payload.isSellable !== undefined
+      ? Boolean(payload.isSellable)
+      : payload.is_sellable !== undefined
+        ? Boolean(payload.is_sellable)
+        : true
 
   if (!name) {
     errors.name = 'Nama produk wajib diisi.'
@@ -131,15 +146,17 @@ function validateProductInput(payload, categories) {
   }
 
   if (Number.isNaN(price) || price < 0) {
-    errors.price = kind === 'service'
-      ? 'Harga per unit harus berupa angka dan minimal 0.'
-      : 'Harga jual harus berupa angka dan minimal 0.'
+    errors.price =
+      kind === 'service'
+        ? 'Harga per unit harus berupa angka dan minimal 0.'
+        : 'Harga jual harus berupa angka dan minimal 0.'
   }
 
   if (Number.isNaN(cost) || cost < 0) {
-    errors.cost = kind === 'service'
-      ? 'Estimasi HPP/unit harus berupa angka dan minimal 0.'
-      : 'HPP harus berupa angka dan minimal 0.'
+    errors.cost =
+      kind === 'service'
+        ? 'Estimasi HPP/unit harus berupa angka dan minimal 0.'
+        : 'HPP harus berupa angka dan minimal 0.'
   }
 
   if (Number.isNaN(stock) || stock < 0) {
@@ -169,7 +186,8 @@ function validateProductInput(payload, categories) {
       kind,
       name,
       category,
-      sku: normalizeName(payload.sku ?? payload.barcode ?? ''),
+      sku: normalizeProductCode(payload.sku ?? ''),
+      barcode: normalizeProductCode(payload.barcode ?? ''),
       cost: Number.isNaN(cost) ? 0 : cost,
       price: Number.isNaN(price) ? 0 : price,
       unitPrice: Number.isNaN(price) ? 0 : price,
@@ -184,6 +202,60 @@ function validateProductInput(payload, categories) {
       isActive: payload.isActive ?? true,
     },
   }
+}
+
+function prepareProductCode(payload, products, existing = null) {
+  const cloud = useCloudSessionStore()
+  const retail = useBusinessStore().normalizedType === 'Grosir / Toko Kelontong'
+  const permitted = canManageProductCodes(cloud)
+  const next = {
+    ...payload,
+    barcode: payload.barcode === undefined ? (existing?.barcode ?? '') : payload.barcode,
+  }
+  const errors = {}
+  if (!isValidProductCode(next.barcode, { allowEmpty: true })) {
+    errors.barcode = 'Kode harus berupa teks maksimal 255 karakter tanpa karakter kontrol.'
+    return { payload: next, errors }
+  }
+  next.barcode = normalizeProductCode(next.barcode)
+  if (
+    retail &&
+    permitted &&
+    !next.barcode &&
+    (payload.kind ?? existing?.kind) !== 'service' &&
+    (payload.isSellable ?? payload.is_sellable ?? existing?.isSellable ?? existing?.is_sellable) !==
+      false
+  ) {
+    try {
+      next.barcode = generateProductCode(products)
+    } catch (error) {
+      errors.barcode = error.message
+    }
+  }
+  if (
+    (next.barcode !== (existing?.barcode ?? '') ||
+      normalizeProductCode(next.sku) !== (existing?.sku ?? '')) &&
+    !permitted
+  ) {
+    errors[next.barcode !== (existing?.barcode ?? '') ? 'barcode' : 'sku'] =
+      'Hanya pengelola katalog yang dapat membuat atau mengubah kode produk Cloud.'
+  }
+  if (
+    !existing ||
+    next.barcode !== (existing.barcode ?? '') ||
+    normalizeProductCode(next.sku) !== (existing.sku ?? '')
+  ) {
+    const conflict = findProductCodeConflict(products, next, existing?.id ?? null)
+    if (conflict) {
+      const field =
+        next.barcode &&
+        [conflict.sku, conflict.barcode].map(normalizeProductCode).includes(next.barcode)
+          ? 'barcode'
+          : 'sku'
+      errors[field] = 'Kode barcode atau SKU sudah digunakan produk lain.'
+    }
+  }
+  return { payload: next, errors }
 }
 
 function validateCategoryName(name, categories, currentName = null) {
@@ -266,12 +338,13 @@ export const useProductStore = defineStore('product', {
       return list
     },
     lowStockProducts(state) {
-      return state.products.filter((product) => (
-        (product.kind ?? 'product') !== 'service'
-        && product.isActive
-        && Number(product.minStock ?? 0) > 0
-        && Number(product.stock ?? 0) <= Number(product.minStock ?? 0)
-      ))
+      return state.products.filter(
+        (product) =>
+          (product.kind ?? 'product') !== 'service' &&
+          product.isActive &&
+          Number(product.minStock ?? 0) > 0 &&
+          Number(product.stock ?? 0) <= Number(product.minStock ?? 0),
+      )
     },
   },
   actions: {
@@ -295,7 +368,11 @@ export const useProductStore = defineStore('product', {
       return this.products.find((product) => String(product.id) === String(id)) ?? null
     },
     createProduct(payload) {
-      const { errors, isValid, values } = validateProductInput(payload, this.categories)
+      const prepared = prepareProductCode(payload, this.products)
+      const validation = validateProductInput(prepared.payload, this.categories)
+      const errors = { ...validation.errors, ...prepared.errors }
+      const values = validation.values
+      const isValid = Object.keys(errors).length === 0
 
       if (!isValid) {
         return {
@@ -329,7 +406,11 @@ export const useProductStore = defineStore('product', {
         }
       }
 
-      const { errors, isValid, values } = validateProductInput(payload, this.categories)
+      const prepared = prepareProductCode(payload, this.products, existingProduct)
+      const validation = validateProductInput(prepared.payload, this.categories)
+      const errors = { ...validation.errors, ...prepared.errors }
+      const values = validation.values
+      const isValid = Object.keys(errors).length === 0
 
       if (!isValid) {
         return {
@@ -344,6 +425,7 @@ export const useProductStore = defineStore('product', {
       existingProduct.category = values.category
       existingProduct.kind = values.kind
       existingProduct.sku = values.sku
+      existingProduct.barcode = values.barcode
       existingProduct.cost = values.cost
       existingProduct.price = values.price
       existingProduct.unitPrice = values.unitPrice
@@ -353,9 +435,8 @@ export const useProductStore = defineStore('product', {
       existingProduct.pricingUnit = values.pricingUnit
       existingProduct.minQuantity = values.minQuantity
       existingProduct.estimatedDuration = values.estimatedDuration
-      existingProduct.imageData = payload.imageData === undefined
-        ? existingProduct.imageData
-        : values.imageData
+      existingProduct.imageData =
+        payload.imageData === undefined ? existingProduct.imageData : values.imageData
       existingProduct.isActive = values.isActive
 
       // Stock is authoritative: any stock change outside Adjust Stok still
@@ -383,6 +464,29 @@ export const useProductStore = defineStore('product', {
         errors: {},
         movement: recordedMovement,
       }
+    },
+    resolveScanCode(code) {
+      return resolveProductCode(this.products, code)
+    },
+    ensureProductBarcode(id) {
+      const product = this.getProductById(id)
+      if (!product) return { success: false, errors: { form: 'Produk tidak ditemukan.' } }
+      if (
+        useBusinessStore().normalizedType !== 'Grosir / Toko Kelontong' ||
+        product.kind === 'service' ||
+        product.isSellable === false ||
+        product.is_sellable === false
+      ) {
+        return {
+          success: false,
+          errors: { form: 'QR produk hanya tersedia untuk barang jual grosir.' },
+        }
+      }
+      if (product.barcode) return { success: true, product }
+      if (!canManageProductCodes(useCloudSessionStore())) {
+        return { success: false, errors: { form: 'Minta pengelola katalog membuat kode produk.' } }
+      }
+      return this.updateProduct(id, { ...product, barcode: '' })
     },
     toggleProductActive(id) {
       const product = this.getProductById(id)
@@ -502,7 +606,8 @@ export const useProductStore = defineStore('product', {
           })
         }
 
-        const variants = item.variants_snapshot ?? item.variantsSnapshot ?? item.selectedOptions ?? []
+        const variants =
+          item.variants_snapshot ?? item.variantsSnapshot ?? item.selectedOptions ?? []
         if (Array.isArray(variants)) {
           for (const variant of variants) {
             const ingId =
@@ -514,7 +619,8 @@ export const useProductStore = defineStore('product', {
 
             if (ingId && ingQty > 0) {
               const ingProd =
-                this.getProductById(ingId) || this.products.find((p) => p.syncId === ingId || p.id === ingId)
+                this.getProductById(ingId) ||
+                this.products.find((p) => p.syncId === ingId || p.id === ingId)
               if (ingProd) {
                 const totalDeduct = ingQty * normalizeNumber(item.qty)
                 this.adjustStock(ingProd.id, {
@@ -568,11 +674,9 @@ export const useProductStore = defineStore('product', {
       }
 
       this.categories.splice(index, 1, validation.value)
-      this.products = this.products.map((product) => (
-        product.category === currentName
-          ? { ...product, category: validation.value }
-          : product
-      ))
+      this.products = this.products.map((product) =>
+        product.category === currentName ? { ...product, category: validation.value } : product,
+      )
 
       if (this.selectedCategory === currentName) {
         this.selectedCategory = validation.value

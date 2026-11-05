@@ -1,3 +1,4 @@
+import { isValidProductCode, normalizeProductCode } from '@/services/products/productCodeService'
 import { EXPENSE_CATEGORIES } from '@/stores/expenseStore'
 import { DEFAULT_TAX_ENABLED, DEFAULT_TAX_RATE, isValidTaxRate } from '@/stores/taxStore'
 import { isUuid } from '@/services/sync/syncIdentityRegistry'
@@ -302,6 +303,13 @@ function validateProductsData(productsSection) {
       return 'File backup tidak valid.'
     }
 
+    if (
+      product.barcode !== undefined &&
+      product.barcode !== null &&
+      !isValidProductCode(product.barcode, { allowEmpty: true })
+    )
+      return 'Kode barcode backup tidak valid.'
+
     if (product.imageData !== undefined && typeof product.imageData !== 'string') {
       return 'File backup tidak valid.'
     }
@@ -313,6 +321,7 @@ function validateProductsData(productsSection) {
 function normalizeProductForRestore(product) {
   return {
     ...product,
+    barcode: normalizeProductCode(product.barcode),
     imageData: typeof product.imageData === 'string' ? product.imageData : '',
   }
 }

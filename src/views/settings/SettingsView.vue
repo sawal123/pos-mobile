@@ -8,8 +8,9 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseSheet from '@/components/base/BaseSheet.vue'
 import NexaPosLogo from '@/components/base/NexaPosLogo.vue'
-import { APP_TAGLINE, APP_VERSION } from '@/constants/appInfo'
+import { APP_VERSION } from '@/constants/appInfo'
 import SettingsMenuItem from '@/components/settings/SettingsMenuItem.vue'
+import SettingsSection from '@/components/settings/SettingsSection.vue'
 import CloudBackupPanel from '@/components/settings/CloudBackupPanel.vue'
 import { clearLocalCache } from '@/services/localCacheService'
 import {
@@ -83,6 +84,12 @@ function saveTaxSettings() {
   })
 
   taxFeedback.value = result.success ? 'Pengaturan pajak berhasil disimpan.' : result.error
+}
+
+const activeSection = ref(null)
+
+function toggleSection(section) {
+  activeSection.value = activeSection.value === section ? null : section
 }
 
 const lockedFeature = ref(null)
@@ -265,7 +272,10 @@ async function handleClearCache() {
         await syncContextGuardStore.check()
         const pullRes = await syncPullStore.pullNow({ initialCloudRead: true })
         if (pullRes.ok) {
-          setFeedback('success', 'Data cache dibersihkan dan menu produk Cloud berhasil dimuat ulang!')
+          setFeedback(
+            'success',
+            'Data cache dibersihkan dan menu produk Cloud berhasil dimuat ulang!',
+          )
         }
       } catch (pullErr) {
         console.warn('Auto-pull after clear cache error:', pullErr)
@@ -282,50 +292,6 @@ function handleCloudLocked() {
   lockedFeature.value = { title: 'Backup Cloud' }
 }
 
-const settingsMenu = computed(() => [
-  {
-    key: 'sync',
-    icon: 'sync',
-    title: 'Sinkronisasi',
-    subtitle: isPremium.value ? 'Sinkronkan data ke cloud' : 'Memerlukan Premium',
-    testid: 'settings-menu-sync',
-    locked: !isPremium.value,
-    to: { name: 'sync' },
-  },
-  {
-    key: 'cloud',
-    icon: 'cloud',
-    title: 'Akun Cloud',
-    subtitle: cloudAccountSubtitle.value,
-    testid: 'settings-menu-cloud',
-    to: { name: 'cloud' },
-  },
-  {
-    key: 'backup',
-    icon: 'backup',
-    title: 'Backup Data',
-    subtitle: 'Simpan salinan data ke file lokal',
-    testid: 'settings-menu-backup',
-    action: 'backup',
-  },
-  {
-    key: 'restore',
-    icon: 'restore',
-    title: 'Restore Backup',
-    subtitle: 'Pulihkan data dari file backup',
-    testid: 'settings-menu-restore',
-    action: 'restore',
-  },
-  {
-    key: 'clear-cache',
-    icon: 'trash',
-    title: 'Hapus Data Cache',
-    subtitle: 'Bersihkan data cache menu produk, transaksi, dan riwayat',
-    testid: 'settings-menu-clear-cache',
-    action: 'clearCache',
-  },
-])
-
 const lockedFeatureMessage = computed(() => {
   const label = lockedFeature.value?.title ?? 'Fitur ini'
   return `${label} memerlukan langganan Premium untuk menyinkronkan data antar perangkat.`
@@ -340,30 +306,12 @@ function handleBack() {
   router.back()
 }
 
-function handleMenuSelect(item) {
-  if (item.locked) {
-    lockedFeature.value = item
+function handleSyncSelect() {
+  if (!isPremium.value) {
+    lockedFeature.value = { title: 'Sinkronisasi' }
     return
   }
-
-  if (item.action === 'backup') {
-    handleBackup()
-    return
-  }
-
-  if (item.action === 'restore') {
-    handleRestoreClick()
-    return
-  }
-
-  if (item.action === 'clearCache') {
-    showClearCacheConfirm.value = true
-    return
-  }
-
-  if (item.to) {
-    router.push(item.to)
-  }
+  router.push({ name: 'sync' })
 }
 
 function getStoreContext() {
@@ -544,7 +492,7 @@ async function handleRestoreFileChange(event) {
 </script>
 
 <template>
-  <div class="mx-auto max-w-3xl space-y-5">
+  <div class="mx-auto max-w-2xl space-y-4">
     <input
       ref="backupInputRef"
       class="hidden"
@@ -557,235 +505,41 @@ async function handleRestoreFileChange(event) {
       <button
         type="button"
         data-testid="settings-back-btn"
-        class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-zinc-200 bg-white text-ink-primary transition active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+        class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-zinc-200 bg-card text-ink-primary transition active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
         aria-label="Kembali"
         @click="handleBack"
       >
         <AppIcon name="chevron-left" />
       </button>
       <div class="min-w-0">
-        <p class="text-xs font-medium uppercase tracking-[0.18em] text-primary">Pengaturan</p>
-        <h2 class="truncate text-2xl font-semibold text-ink-primary">Pengaturan aplikasi</h2>
+        <h2 class="truncate text-2xl font-semibold text-ink-primary">Pengaturan</h2>
       </div>
     </div>
 
-    <!-- Active business -->
-    <BaseCard v-if="businessStore.name" class="space-y-3" data-testid="active-business-card">
+    <BaseCard v-if="businessStore.name" data-testid="active-business-card">
       <div class="flex items-center gap-3">
         <span
-          class="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary"
+          class="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary"
         >
           <AppIcon name="store" />
         </span>
-        <div class="min-w-0">
-          <p class="text-xs uppercase tracking-[0.16em] text-ink-secondary">Bisnis Aktif</p>
-          <h3 class="truncate text-base font-semibold text-ink-primary" data-testid="business-name">
+        <div class="min-w-0 flex-1">
+          <h3 class="truncate text-sm font-semibold text-ink-primary" data-testid="business-name">
             {{ businessStore.name }}
           </h3>
+          <p class="mt-1 flex min-w-0 gap-1 text-xs text-ink-secondary">
+            <span class="truncate" data-testid="business-outlet">{{
+              businessStore.outlet || '-'
+            }}</span>
+            <span aria-hidden="true">&middot;</span>
+            <span class="truncate" data-testid="business-type">{{
+              businessStore.normalizedType || '-'
+            }}</span>
+          </p>
         </div>
-      </div>
-      <div class="flex flex-wrap gap-2">
-        <span
-          class="inline-flex items-center rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary"
-          data-testid="business-type"
-        >
-          {{ businessStore.normalizedType || '-' }}
-        </span>
-        <span
-          class="inline-flex items-center rounded-full bg-surface px-3 py-1 text-xs font-medium text-ink-secondary"
-          data-testid="business-outlet"
-        >
-          {{ businessStore.outlet || '-' }}
-        </span>
       </div>
     </BaseCard>
 
-    <div
-      v-else
-      class="animate-pulse rounded-3xl border border-zinc-200 bg-white p-4"
-      data-testid="active-business-skeleton"
-    >
-      <div class="flex items-center gap-3">
-        <div class="h-11 w-11 rounded-2xl bg-zinc-100" />
-        <div class="flex-1 space-y-2">
-          <div class="h-3 w-24 rounded bg-zinc-100" />
-          <div class="h-3 w-40 rounded bg-zinc-100" />
-        </div>
-      </div>
-    </div>
-
-    <!-- Theme Appearance (Light / Dark + Adaptive Logo) -->
-    <BaseCard class="space-y-4" data-testid="theme-settings-card">
-      <div class="flex items-center justify-between gap-3">
-        <div class="flex items-center gap-3">
-          <span
-            class="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl"
-            :class="
-              themeStore.isDark
-                ? 'bg-amber-400/15 text-amber-300'
-                : 'bg-primary/10 text-primary'
-            "
-          >
-            <AppIcon :name="themeStore.isDark ? 'moon' : 'sun'" />
-          </span>
-          <div class="min-w-0">
-            <p class="text-xs uppercase tracking-[0.16em] text-ink-secondary">Tampilan</p>
-            <h3 class="truncate text-base font-semibold text-ink-primary">Tema Aplikasi</h3>
-          </div>
-        </div>
-
-        <NexaPosLogo size="xs" with-wordmark />
-      </div>
-
-      <div class="grid grid-cols-2 gap-2.5">
-        <button
-          type="button"
-          data-testid="theme-option-light"
-          :aria-pressed="!themeStore.isDark"
-          class="flex items-center gap-3 rounded-2xl border p-3 text-left transition active:scale-[0.99] cursor-pointer"
-          :class="
-            !themeStore.isDark
-              ? 'border-primary bg-primary/8 ring-2 ring-primary/20'
-              : 'border-zinc-200 bg-surface hover:border-primary/40'
-          "
-          @click="themeStore.setTheme('light')"
-        >
-          <span
-            class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl"
-            :class="!themeStore.isDark ? 'bg-primary text-white' : 'bg-zinc-100 text-ink-secondary'"
-          >
-            <AppIcon name="sun" class="h-4 w-4" />
-          </span>
-          <span class="min-w-0">
-            <span class="block text-sm font-semibold text-ink-primary">Light</span>
-            <span class="block truncate text-[11px] text-ink-secondary">Logo biru</span>
-          </span>
-        </button>
-
-        <button
-          type="button"
-          data-testid="theme-option-dark"
-          :aria-pressed="themeStore.isDark"
-          class="flex items-center gap-3 rounded-2xl border p-3 text-left transition active:scale-[0.99] cursor-pointer"
-          :class="
-            themeStore.isDark
-              ? 'border-indigo-400 bg-indigo-500/15 ring-2 ring-indigo-400/25'
-              : 'border-zinc-200 bg-surface hover:border-primary/40'
-          "
-          @click="themeStore.setTheme('dark')"
-        >
-          <span
-            class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl"
-            :class="themeStore.isDark ? 'bg-indigo-500 text-white' : 'bg-zinc-100 text-ink-secondary'"
-          >
-            <AppIcon name="moon" class="h-4 w-4" />
-          </span>
-          <span class="min-w-0">
-            <span class="block text-sm font-semibold text-ink-primary">Dark</span>
-            <span class="block truncate text-[11px] text-ink-secondary">Logo putih</span>
-          </span>
-        </button>
-      </div>
-    </BaseCard>
-
-    <!-- Cloud account (PREM-M03) -->
-    <BaseCard class="space-y-3" data-testid="cloud-account-card">
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-3">
-          <span
-            class="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary"
-          >
-            <AppIcon name="cloud" />
-          </span>
-          <div class="min-w-0">
-            <p class="text-xs uppercase tracking-[0.16em] text-ink-secondary">Akun Cloud</p>
-            <h3
-              class="truncate text-base font-semibold text-ink-primary"
-              data-testid="cloud-account-status"
-            >
-              {{ cloudLinked ? 'Terhubung' : 'Belum terhubung' }}
-            </h3>
-          </div>
-        </div>
-        <span
-          class="rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide"
-          :class="cloudLinked ? 'bg-emerald-100 text-emerald-700' : 'bg-zinc-100 text-zinc-600'"
-          data-testid="cloud-account-badge"
-        >
-          {{ cloudLinked ? 'Cloud' : 'Lokal' }}
-        </span>
-      </div>
-
-      <dl v-if="cloudLinked" class="space-y-1 text-xs text-ink-secondary">
-        <div class="flex items-center justify-between">
-          <dt>Akun</dt>
-          <dd class="font-medium text-ink-primary" data-testid="cloud-account-email">
-            {{ cloudAccount }}
-          </dd>
-        </div>
-        <div class="flex items-center justify-between">
-          <dt>Bisnis Cloud</dt>
-          <dd class="font-medium text-ink-primary" data-testid="cloud-account-business">
-            {{ cloudStore.selectedBusiness?.name ?? '-' }}
-          </dd>
-        </div>
-        <div class="flex items-center justify-between">
-          <dt>Subscription</dt>
-          <dd class="font-medium text-ink-primary" data-testid="cloud-account-subscription">
-            {{ cloudSubscriptionLabel }}
-          </dd>
-        </div>
-        <div class="flex items-center justify-between">
-          <dt>Status diperiksa</dt>
-          <dd class="font-medium text-ink-primary" data-testid="cloud-account-checked">
-            {{ cloudCheckedLabel }}
-          </dd>
-        </div>
-      </dl>
-
-      <p v-else class="text-xs text-ink-secondary">
-        Hubungkan POS ini dengan akun Cloud dan Dashboard. POS tetap dapat digunakan tanpa Cloud.
-      </p>
-
-      <div class="flex flex-wrap gap-2">
-        <BaseButton
-          v-if="!cloudLinked"
-          size="sm"
-          data-testid="cloud-login-entry"
-          @click="goToCloud"
-        >
-          Masuk
-        </BaseButton>
-        <template v-else>
-          <BaseButton
-            size="sm"
-            variant="secondary"
-            data-testid="settings-cloud-account-entry"
-            @click="goToCloud"
-          >
-            Kelola Akun / Ganti Email
-          </BaseButton>
-          <BaseButton
-            size="sm"
-            variant="secondary"
-            data-testid="settings-my-subscription-entry"
-            @click="goToSubscription"
-          >
-            Langganan
-          </BaseButton>
-          <BaseButton
-            size="sm"
-            variant="danger"
-            data-testid="cloud-disconnect"
-            @click="showDisconnectConfirm = true"
-          >
-            Putuskan
-          </BaseButton>
-        </template>
-      </div>
-    </BaseCard>
-
-    <!-- Subscription -->
     <div
       v-if="showSubscriptionSkeleton"
       class="animate-pulse rounded-3xl border border-zinc-200 bg-card p-4 dark:border-slate-700/60"
@@ -804,7 +558,7 @@ async function handleRestoreFileChange(event) {
       v-else
       type="button"
       data-testid="subscription-card"
-      class="w-full rounded-3xl border-2 p-4 text-left shadow-soft transition active:scale-[0.99] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+      class="w-full rounded-3xl border p-4 text-left shadow-soft transition active:scale-[0.99] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
       :class="subscriptionView.cardClass"
       aria-label="Kelola langganan"
       @click="goToSubscription"
@@ -835,7 +589,392 @@ async function handleRestoreFileChange(event) {
           >
             {{ subscriptionView.subtitle }}
           </p>
+        </div>
 
+        <AppIcon name="chevron-right" class="text-ink-secondary" />
+      </div>
+    </button>
+
+    <BaseCard
+      class="divide-y divide-zinc-100 overflow-hidden !p-0 dark:divide-slate-700/45"
+      data-testid="settings-menu"
+    >
+      <SettingsSection
+        section-id="appearance"
+        title="Tampilan"
+        :summary="themeStore.isDark ? 'Tema gelap' : 'Tema terang'"
+        :icon="themeStore.isDark ? 'moon' : 'sun'"
+        :open="activeSection === 'appearance'"
+        @toggle="toggleSection('appearance')"
+      >
+        <!-- Theme Appearance (Light / Dark + Adaptive Logo) -->
+        <div class="space-y-4" data-testid="theme-settings-card">
+          <div class="grid grid-cols-2 gap-2.5">
+            <button
+              type="button"
+              data-testid="theme-option-light"
+              :aria-pressed="!themeStore.isDark"
+              class="flex items-center gap-3 rounded-2xl border p-3 text-left transition active:scale-[0.99] cursor-pointer"
+              :class="
+                !themeStore.isDark
+                  ? 'border-primary bg-primary/8 ring-2 ring-primary/20'
+                  : 'border-zinc-200 bg-surface hover:border-primary/40'
+              "
+              @click="themeStore.setTheme('light')"
+            >
+              <span
+                class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl"
+                :class="
+                  !themeStore.isDark ? 'bg-primary text-white' : 'bg-zinc-100 text-ink-secondary'
+                "
+              >
+                <AppIcon name="sun" class="h-4 w-4" />
+              </span>
+              <span class="min-w-0">
+                <span class="block text-sm font-semibold text-ink-primary">Terang</span>
+              </span>
+            </button>
+
+            <button
+              type="button"
+              data-testid="theme-option-dark"
+              :aria-pressed="themeStore.isDark"
+              class="flex items-center gap-3 rounded-2xl border p-3 text-left transition active:scale-[0.99] cursor-pointer"
+              :class="
+                themeStore.isDark
+                  ? 'border-indigo-400 bg-indigo-500/15 ring-2 ring-indigo-400/25'
+                  : 'border-zinc-200 bg-surface hover:border-primary/40'
+              "
+              @click="themeStore.setTheme('dark')"
+            >
+              <span
+                class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl"
+                :class="
+                  themeStore.isDark ? 'bg-indigo-500 text-white' : 'bg-zinc-100 text-ink-secondary'
+                "
+              >
+                <AppIcon name="moon" class="h-4 w-4" />
+              </span>
+              <span class="min-w-0">
+                <span class="block text-sm font-semibold text-ink-primary">Gelap</span>
+              </span>
+            </button>
+          </div>
+        </div>
+      </SettingsSection>
+      <SettingsSection
+        section-id="tax"
+        title="Pajak"
+        :summary="taxStore.enabled ? `${taxStore.rate}% per transaksi` : 'Tidak aktif'"
+        icon="expenses"
+        :open="activeSection === 'tax'"
+        @toggle="toggleSection('tax')"
+      >
+        <div class="space-y-5" data-testid="tax-settings-card">
+          <p class="text-xs leading-relaxed text-ink-secondary">
+            Berlaku untuk transaksi baru. Transaksi sebelumnya tidak berubah.
+          </p>
+
+          <form class="space-y-5" @submit.prevent="saveTaxSettings">
+            <label
+              class="flex cursor-pointer items-center justify-between gap-4 rounded-2xl bg-surface px-4 py-4"
+            >
+              <span>
+                <span class="block text-sm font-semibold text-ink-primary">Aktifkan pajak</span>
+                <span class="mt-1 block text-xs leading-relaxed text-ink-secondary"
+                  >Nonaktifkan untuk transaksi tanpa pajak.</span
+                >
+              </span>
+              <input
+                v-model="taxDraftEnabled"
+                data-testid="tax-enabled-switch"
+                type="checkbox"
+                role="switch"
+                :aria-checked="taxDraftEnabled"
+                class="size-5 shrink-0 accent-primary"
+              />
+            </label>
+
+            <div class="space-y-2">
+              <label for="tax-rate-input" class="block text-sm font-medium text-ink-primary"
+                >Persentase pajak</label
+              >
+              <div class="relative">
+                <input
+                  id="tax-rate-input"
+                  v-model="taxDraftRate"
+                  data-testid="tax-rate-input"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.01"
+                  inputmode="decimal"
+                  :disabled="!taxDraftEnabled"
+                  :aria-invalid="taxDraftEnabled && !taxRateValid"
+                  aria-describedby="tax-rate-help"
+                  class="h-12 w-full rounded-2xl border border-zinc-200 bg-card px-4 pr-10 text-sm text-ink-primary outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/10 disabled:bg-zinc-100 disabled:text-zinc-500 dark:border-slate-700/70 dark:bg-[#121726] dark:disabled:bg-slate-800/60 dark:disabled:text-slate-500"
+                />
+                <span
+                  class="pointer-events-none absolute right-4 top-3.5 text-sm font-medium text-ink-secondary"
+                  >%</span
+                >
+              </div>
+              <p id="tax-rate-help" class="text-xs text-ink-secondary">
+                Isi angka 0–100 dengan maksimal 2 angka desimal.
+              </p>
+              <p
+                v-if="taxDraftEnabled && !taxRateValid"
+                class="text-xs font-medium text-danger"
+                data-testid="tax-validation-error"
+              >
+                Persentase pajak tidak valid.
+              </p>
+            </div>
+
+            <div
+              class="rounded-2xl border border-primary/10 bg-primary/5 p-4 dark:border-indigo-400/20 dark:bg-indigo-500/10"
+            >
+              <p
+                class="text-xs font-semibold uppercase tracking-widest text-primary dark:text-indigo-300"
+              >
+                Simulasi transaksi
+              </p>
+              <div class="mt-3 flex items-center justify-between text-sm">
+                <span class="text-ink-secondary">Subtotal</span>
+                <span class="font-medium text-ink-primary">Rp 100.000</span>
+              </div>
+              <div
+                v-if="taxDraftEnabled"
+                class="mt-2 flex items-center justify-between gap-3 text-sm"
+              >
+                <span class="text-ink-secondary">Pajak ({{ taxDraftRate || '0' }}%)</span>
+                <span class="font-medium text-ink-primary">{{
+                  taxRateValid ? `Rp ${taxPreview.toLocaleString('id-ID')}` : '—'
+                }}</span>
+              </div>
+              <div
+                class="mt-3 flex items-center justify-between border-t border-primary/10 pt-3 text-sm font-semibold dark:border-indigo-400/20"
+              >
+                <span>Total</span>
+                <span data-testid="tax-preview-total">{{
+                  taxRateValid ? `Rp ${(100000 + taxPreview).toLocaleString('id-ID')}` : '—'
+                }}</span>
+              </div>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-3">
+              <BaseButton type="submit" data-testid="save-tax-settings" :disabled="!taxRateValid">
+                Simpan
+              </BaseButton>
+              <span
+                v-if="taxFeedback"
+                class="text-xs text-ink-secondary"
+                role="status"
+                data-testid="tax-feedback"
+              >
+                {{ taxFeedback }}
+              </span>
+            </div>
+          </form>
+        </div>
+      </SettingsSection>
+      <SettingsSection
+        section-id="printer"
+        title="Printer Bluetooth"
+        :summary="printerStatusText"
+        icon="transactions"
+        :open="activeSection === 'printer'"
+        @toggle="toggleSection('printer')"
+      >
+        <div class="space-y-4" data-testid="printer-settings-card">
+          <div class="rounded-2xl bg-surface px-4 py-3">
+            <p class="text-xs text-ink-secondary">Status</p>
+            <p class="text-sm font-medium text-ink-primary" data-testid="printer-status">
+              {{ printerStatusText }}
+            </p>
+            <p
+              v-if="printerStore.hasSelectedPrinter"
+              class="text-xs text-ink-secondary"
+              data-testid="printer-address"
+            >
+              {{ printerStore.selectedPrinter.address }}
+            </p>
+          </div>
+
+          <div>
+            <p class="text-xs font-medium text-ink-secondary">Ukuran kertas</p>
+            <div class="mt-2 grid grid-cols-2 gap-2">
+              <button
+                v-for="width in paperWidths"
+                :key="width"
+                type="button"
+                :data-testid="`paper-width-${width}`"
+                class="h-12 rounded-2xl border text-sm font-semibold transition"
+                :class="
+                  printerStore.paperWidth === width
+                    ? 'border-primary bg-primary/10 text-primary dark:border-indigo-400/60 dark:bg-indigo-500/15 dark:text-indigo-200'
+                    : 'border-zinc-200 bg-card text-ink-secondary dark:border-slate-700/70 dark:bg-[#121726]'
+                "
+                @click="handlePaperWidthChange(width)"
+              >
+                {{ width }} mm
+              </button>
+            </div>
+          </div>
+
+          <p
+            v-if="printerFeedbackMessage"
+            class="rounded-2xl px-4 py-3 text-sm"
+            :class="
+              printerFeedbackType === 'error'
+                ? 'bg-danger/10 text-danger'
+                : 'bg-emerald-100 text-emerald-700'
+            "
+            data-testid="printer-feedback"
+          >
+            {{ printerFeedbackMessage }}
+          </p>
+
+          <div class="flex flex-wrap gap-3">
+            <BaseButton
+              variant="secondary"
+              :disabled="printerBusy"
+              data-testid="btn-select-printer"
+              @click="handleSelectPrinterClick"
+            >
+              Pilih
+            </BaseButton>
+            <BaseButton
+              variant="secondary"
+              :disabled="printerBusy || !printerStore.hasSelectedPrinter || !isNativePrinter"
+              data-testid="btn-test-print"
+              @click="handleTestPrint"
+            >
+              Tes
+            </BaseButton>
+            <BaseButton
+              variant="ghost"
+              :disabled="!printerStore.hasSelectedPrinter"
+              data-testid="btn-forget-printer"
+              @click="handleForgetPrinter"
+            >
+              Lupakan
+            </BaseButton>
+          </div>
+
+          <p v-if="!isNativePrinter" class="text-xs text-ink-secondary">
+            Tes print Bluetooth hanya tersedia di perangkat Android.
+          </p>
+        </div>
+      </SettingsSection>
+      <SettingsSection
+        section-id="cloud"
+        title="Akun Cloud"
+        :summary="cloudAccountSubtitle"
+        icon="cloud"
+        :open="activeSection === 'cloud'"
+        @toggle="toggleSection('cloud')"
+      >
+        <!-- Cloud account (PREM-M03) -->
+        <div class="space-y-3" data-testid="cloud-account-card">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-3">
+              <span
+                class="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary"
+              >
+                <AppIcon name="cloud" />
+              </span>
+              <div class="min-w-0">
+                <p class="text-xs uppercase tracking-[0.16em] text-ink-secondary">Akun Cloud</p>
+                <h3
+                  class="truncate text-base font-semibold text-ink-primary"
+                  data-testid="cloud-account-status"
+                >
+                  {{ cloudLinked ? 'Terhubung' : 'Belum terhubung' }}
+                </h3>
+              </div>
+            </div>
+            <span
+              class="rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide"
+              :class="cloudLinked ? 'bg-emerald-100 text-emerald-700' : 'bg-zinc-100 text-zinc-600'"
+              data-testid="cloud-account-badge"
+            >
+              {{ cloudLinked ? 'Cloud' : 'Lokal' }}
+            </span>
+          </div>
+
+          <dl v-if="cloudLinked" class="space-y-1 text-xs text-ink-secondary">
+            <div class="flex items-start justify-between gap-4">
+              <dt class="shrink-0">Akun</dt>
+              <dd
+                class="min-w-0 break-words text-right font-medium text-ink-primary"
+                data-testid="cloud-account-email"
+              >
+                {{ cloudAccount }}
+              </dd>
+            </div>
+            <div class="flex items-start justify-between gap-4">
+              <dt class="shrink-0">Bisnis Cloud</dt>
+              <dd
+                class="min-w-0 break-words text-right font-medium text-ink-primary"
+                data-testid="cloud-account-business"
+              >
+                {{ cloudStore.selectedBusiness?.name ?? '-' }}
+              </dd>
+            </div>
+            <div class="flex items-start justify-between gap-4">
+              <dt class="shrink-0">Subscription</dt>
+              <dd
+                class="min-w-0 break-words text-right font-medium text-ink-primary"
+                data-testid="cloud-account-subscription"
+              >
+                {{ cloudSubscriptionLabel }}
+              </dd>
+            </div>
+            <div class="flex items-start justify-between gap-4">
+              <dt class="shrink-0">Status diperiksa</dt>
+              <dd
+                class="min-w-0 break-words text-right font-medium text-ink-primary"
+                data-testid="cloud-account-checked"
+              >
+                {{ cloudCheckedLabel }}
+              </dd>
+            </div>
+          </dl>
+
+          <p v-else class="text-xs text-ink-secondary">
+            Hubungkan POS ini dengan akun Cloud dan Dashboard. POS tetap dapat digunakan tanpa
+            Cloud.
+          </p>
+
+          <div class="flex flex-wrap gap-2">
+            <BaseButton
+              v-if="!cloudLinked"
+              size="sm"
+              data-testid="cloud-login-entry"
+              @click="goToCloud"
+            >
+              Masuk
+            </BaseButton>
+            <template v-else>
+              <BaseButton
+                size="sm"
+                variant="secondary"
+                data-testid="settings-cloud-account-entry"
+                @click="goToCloud"
+              >
+                Kelola Akun / Ganti Email
+              </BaseButton>
+              <BaseButton
+                size="sm"
+                variant="danger"
+                data-testid="cloud-disconnect"
+                @click="showDisconnectConfirm = true"
+              >
+                Putuskan
+              </BaseButton>
+            </template>
+          </div>
           <p
             v-if="isPremium"
             class="mt-1 text-xs font-semibold text-emerald-700 dark:text-emerald-300"
@@ -869,96 +1008,85 @@ async function handleRestoreFileChange(event) {
               <span class="font-medium text-ink-primary">{{ lastSyncLabel }}</span>
             </p>
           </div>
+          <SettingsMenuItem
+            icon="sync"
+            title="Sinkronisasi"
+            :subtitle="isPremium ? 'Sinkronkan data ke cloud' : 'Memerlukan Premium'"
+            testid="settings-menu-sync"
+            :locked="!isPremium"
+            @select="handleSyncSelect"
+          />
         </div>
-
-        <AppIcon name="chevron-right" class="text-ink-secondary" />
-      </div>
-    </button>
-
-    <!-- Settings menu -->
-    <BaseCard class="space-y-1" data-testid="settings-menu">
-      <SettingsMenuItem
-        v-for="item in settingsMenu"
-        :key="item.key"
-        :icon="item.icon"
-        :title="item.title"
-        :subtitle="item.subtitle"
-        :testid="item.testid"
-        :locked="item.locked"
-        @select="handleMenuSelect(item)"
-      />
-    </BaseCard>
-
-    <!-- Backup data: local (free) vs cloud (premium) -->
-    <BaseCard class="space-y-5" data-testid="backup-card">
-      <div>
-        <h3 class="text-lg font-semibold text-ink-primary">Backup Data</h3>
-        <p class="mt-1 text-sm text-ink-secondary">
-          Simpan salinan data POS Anda. Backup Lokal tetap gratis; Backup Cloud memerlukan Premium.
-        </p>
-      </div>
-
-      <div
-        class="space-y-3 rounded-3xl border border-zinc-200 bg-surface/60 p-4 dark:border-slate-700/60 dark:bg-[#121726]"
-        data-testid="local-backup-section"
+      </SettingsSection>
+      <SettingsSection
+        section-id="data"
+        title="Backup & Data"
+        summary="Backup, pemulihan, dan cache"
+        icon="backup"
+        :open="activeSection === 'data'"
+        @toggle="toggleSection('data')"
       >
-        <div class="flex items-center justify-between">
-          <div class="flex items-center gap-3">
-            <span
-              class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary dark:bg-indigo-500/20 dark:text-indigo-300"
-            >
-              <AppIcon name="backup" />
-            </span>
-            <div class="min-w-0">
-              <h4 class="text-base font-semibold text-ink-primary">Backup Lokal</h4>
-              <p class="text-xs text-ink-secondary">Backup data ke perangkat ini.</p>
+        <!-- Backup data: local (free) vs cloud (premium) -->
+        <div class="space-y-5" data-testid="backup-card">
+          <div
+            class="space-y-3 rounded-3xl border border-zinc-200 bg-surface/60 p-4 dark:border-slate-700/60 dark:bg-[#121726]"
+            data-testid="local-backup-section"
+          >
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <span
+                  class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary dark:bg-indigo-500/20 dark:text-indigo-300"
+                >
+                  <AppIcon name="backup" />
+                </span>
+                <div class="min-w-0">
+                  <h4 class="text-base font-semibold text-ink-primary">Backup Lokal</h4>
+                  <p class="text-xs text-ink-secondary">Backup data ke perangkat ini.</p>
+                </div>
+              </div>
+              <span
+                class="rounded-full bg-emerald-100 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300"
+              >
+                Gratis
+              </span>
+            </div>
+
+            <div class="flex flex-wrap gap-2">
+              <BaseButton data-testid="local-backup-now" @click="handleBackup">
+                Backup Data
+              </BaseButton>
+              <BaseButton
+                variant="secondary"
+                data-testid="settings-menu-restore"
+                @click="handleRestoreClick"
+              >
+                Restore Backup
+              </BaseButton>
             </div>
           </div>
-          <span
-            class="rounded-full bg-emerald-100 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300"
-          >
-            Gratis
-          </span>
+
+          <CloudBackupPanel @locked="handleCloudLocked" />
         </div>
 
-        <BaseButton data-testid="local-backup-now" @click="handleBackup">
-          Backup
-        </BaseButton>
-      </div>
-
-      <CloudBackupPanel @locked="handleCloudLocked" />
-    </BaseCard>
-
-    <!-- Local Data Cache Management -->
-    <BaseCard class="space-y-4" data-testid="cache-settings-card">
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-3">
-          <span
-            class="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-danger/10 text-danger"
-          >
-            <AppIcon name="trash" />
-          </span>
-          <div class="min-w-0">
-            <h3 class="text-base font-semibold text-ink-primary">Data Cache Lokal</h3>
-            <p class="text-xs text-ink-secondary">
-              Bersihkan cache menu, produk, dan transaksi langsung dari aplikasi tanpa perlu ke pengaturan sistem HP.
+        <div
+          class="mt-5 space-y-3 border-t border-zinc-200 pt-5 dark:border-slate-700/60"
+          data-testid="cache-settings-card"
+        >
+          <div>
+            <h4 class="text-sm font-semibold text-ink-primary">Cache Lokal</h4>
+            <p class="mt-1 text-xs leading-relaxed text-ink-secondary">
+              Bersihkan data produk, transaksi, dan riwayat pada perangkat ini.
             </p>
           </div>
+          <BaseButton
+            variant="danger"
+            data-testid="btn-clear-cache"
+            @click="showClearCacheConfirm = true"
+          >
+            Hapus Cache
+          </BaseButton>
         </div>
-      </div>
-
-      <div class="space-y-3 rounded-3xl border border-zinc-200 bg-surface/60 p-4 dark:border-slate-700/60 dark:bg-[#121726]">
-        <p class="text-xs text-ink-secondary">
-          Gunakan tombol ini untuk membersihkan cache lokal pada perangkat ini agar data segar kembali.
-        </p>
-        <BaseButton
-          variant="danger"
-          data-testid="btn-clear-cache"
-          @click="showClearCacheConfirm = true"
-        >
-          Hapus
-        </BaseButton>
-      </div>
+      </SettingsSection>
     </BaseCard>
 
     <p
@@ -973,203 +1101,12 @@ async function handleRestoreFileChange(event) {
       {{ feedbackMessage }}
     </p>
 
-    <BaseCard class="space-y-5" data-testid="tax-settings-card">
-      <div>
-        <h3 class="text-lg font-semibold text-ink-primary">Pengaturan Pajak</h3>
-        <p class="mt-1 text-sm text-ink-secondary">
-          Atur pajak untuk transaksi POS berikutnya. Transaksi sebelumnya tidak berubah.
-        </p>
-      </div>
-
-      <form class="space-y-5" @submit.prevent="saveTaxSettings">
-        <label
-          class="flex cursor-pointer items-center justify-between gap-4 rounded-2xl bg-surface px-4 py-4"
-        >
-          <span>
-            <span class="block text-sm font-semibold text-ink-primary">Aktifkan pajak</span>
-            <span class="mt-1 block text-xs leading-relaxed text-ink-secondary"
-              >Nonaktifkan untuk transaksi tanpa pajak.</span
-            >
-          </span>
-          <input
-            v-model="taxDraftEnabled"
-            data-testid="tax-enabled-switch"
-            type="checkbox"
-            role="switch"
-            :aria-checked="taxDraftEnabled"
-            class="size-5 shrink-0 accent-primary"
-          />
-        </label>
-
-        <div class="space-y-2">
-          <label for="tax-rate-input" class="block text-sm font-medium text-ink-primary"
-            >Persentase pajak</label
-          >
-          <div class="relative">
-            <input
-              id="tax-rate-input"
-              v-model="taxDraftRate"
-              data-testid="tax-rate-input"
-              type="number"
-              min="0"
-              max="100"
-              step="0.01"
-              inputmode="decimal"
-              :disabled="!taxDraftEnabled"
-              :aria-invalid="taxDraftEnabled && !taxRateValid"
-              aria-describedby="tax-rate-help"
-              class="h-12 w-full rounded-2xl border border-zinc-200 bg-card px-4 pr-10 text-sm text-ink-primary outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/10 disabled:bg-zinc-100 disabled:text-zinc-500 dark:border-slate-700/70 dark:bg-[#121726] dark:disabled:bg-slate-800/60 dark:disabled:text-slate-500"
-            />
-            <span
-              class="pointer-events-none absolute right-4 top-3.5 text-sm font-medium text-ink-secondary"
-              >%</span
-            >
-          </div>
-          <p id="tax-rate-help" class="text-xs text-ink-secondary">
-            Isi angka 0–100 dengan maksimal 2 angka desimal.
-          </p>
-          <p
-            v-if="taxDraftEnabled && !taxRateValid"
-            class="text-xs font-medium text-danger"
-            data-testid="tax-validation-error"
-          >
-            Persentase pajak tidak valid.
-          </p>
-        </div>
-
-        <div class="rounded-2xl border border-primary/10 bg-primary/5 p-4 dark:border-indigo-400/20 dark:bg-indigo-500/10">
-          <p class="text-xs font-semibold uppercase tracking-widest text-primary dark:text-indigo-300">
-            Simulasi transaksi
-          </p>
-          <div class="mt-3 flex items-center justify-between text-sm">
-            <span class="text-ink-secondary">Subtotal</span>
-            <span class="font-medium text-ink-primary">Rp 100.000</span>
-          </div>
-          <div v-if="taxDraftEnabled" class="mt-2 flex items-center justify-between gap-3 text-sm">
-            <span class="text-ink-secondary">Pajak ({{ taxDraftRate || '0' }}%)</span>
-            <span class="font-medium text-ink-primary">{{
-              taxRateValid ? `Rp ${taxPreview.toLocaleString('id-ID')}` : '—'
-            }}</span>
-          </div>
-          <div
-            class="mt-3 flex items-center justify-between border-t border-primary/10 pt-3 text-sm font-semibold dark:border-indigo-400/20"
-          >
-            <span>Total</span>
-            <span data-testid="tax-preview-total">{{
-              taxRateValid ? `Rp ${(100000 + taxPreview).toLocaleString('id-ID')}` : '—'
-            }}</span>
-          </div>
-        </div>
-
-        <div class="flex flex-wrap items-center gap-3">
-          <BaseButton type="submit" data-testid="save-tax-settings" :disabled="!taxRateValid">
-            Simpan
-          </BaseButton>
-          <span
-            v-if="taxFeedback"
-            class="text-xs text-ink-secondary"
-            role="status"
-            data-testid="tax-feedback"
-          >
-            {{ taxFeedback }}
-          </span>
-        </div>
-      </form>
-    </BaseCard>
-
-    <BaseCard class="space-y-4" data-testid="printer-settings-card">
-      <div class="flex items-center justify-between">
-        <h3 class="text-base font-semibold text-ink-primary">Printer Bluetooth</h3>
-        <span class="text-xs text-ink-secondary">Android</span>
-      </div>
-
-      <div class="rounded-2xl bg-surface px-4 py-3">
-        <p class="text-xs text-ink-secondary">Status</p>
-        <p class="text-sm font-medium text-ink-primary" data-testid="printer-status">
-          {{ printerStatusText }}
-        </p>
-        <p
-          v-if="printerStore.hasSelectedPrinter"
-          class="text-xs text-ink-secondary"
-          data-testid="printer-address"
-        >
-          {{ printerStore.selectedPrinter.address }}
-        </p>
-      </div>
-
-      <div>
-        <p class="text-xs font-medium text-ink-secondary">Paper</p>
-        <div class="mt-2 grid grid-cols-2 gap-2">
-          <button
-            v-for="width in paperWidths"
-            :key="width"
-            type="button"
-            :data-testid="`paper-width-${width}`"
-            class="h-12 rounded-2xl border text-sm font-semibold transition"
-            :class="
-              printerStore.paperWidth === width
-                ? 'border-primary bg-primary/10 text-primary dark:border-indigo-400/60 dark:bg-indigo-500/15 dark:text-indigo-200'
-                : 'border-zinc-200 bg-card text-ink-secondary dark:border-slate-700/70 dark:bg-[#121726]'
-            "
-            @click="handlePaperWidthChange(width)"
-          >
-            {{ width }} mm
-          </button>
-        </div>
-      </div>
-
-      <p
-        v-if="printerFeedbackMessage"
-        class="rounded-2xl px-4 py-3 text-sm"
-        :class="
-          printerFeedbackType === 'error'
-            ? 'bg-danger/10 text-danger'
-            : 'bg-emerald-100 text-emerald-700'
-        "
-        data-testid="printer-feedback"
-      >
-        {{ printerFeedbackMessage }}
-      </p>
-
-      <div class="flex flex-wrap gap-3">
-        <BaseButton
-          variant="secondary"
-          :disabled="printerBusy"
-          data-testid="btn-select-printer"
-          @click="handleSelectPrinterClick"
-        >
-          Pilih
-        </BaseButton>
-        <BaseButton
-          variant="secondary"
-          :disabled="printerBusy || !printerStore.hasSelectedPrinter || !isNativePrinter"
-          data-testid="btn-test-print"
-          @click="handleTestPrint"
-        >
-          Tes
-        </BaseButton>
-        <BaseButton
-          variant="ghost"
-          :disabled="!printerStore.hasSelectedPrinter"
-          data-testid="btn-forget-printer"
-          @click="handleForgetPrinter"
-        >
-          Lupakan
-        </BaseButton>
-      </div>
-
-      <p v-if="!isNativePrinter" class="text-xs text-ink-secondary">
-        Tes print Bluetooth hanya tersedia di perangkat Android.
-      </p>
-    </BaseCard>
-
     <BaseCard
-      class="flex items-center justify-between gap-3 border border-zinc-200/80"
+      class="flex items-center justify-between gap-3 !border-0 !bg-transparent !px-1 !py-2 !shadow-none"
       data-testid="app-version-card"
     >
       <div class="min-w-0 space-y-1">
         <NexaPosLogo size="sm" with-wordmark />
-        <p class="text-xs text-ink-secondary">{{ APP_TAGLINE }}</p>
       </div>
       <span
         data-testid="app-version-badge"
@@ -1178,10 +1115,6 @@ async function handleRestoreFileChange(event) {
         v{{ APP_VERSION }}
       </span>
     </BaseCard>
-
-    <BaseButton block variant="secondary" data-testid="settings-close-btn" @click="handleBack">
-      Tutup
-    </BaseButton>
 
     <BaseModal :open="Boolean(lockedFeature)" title="Fitur Premium" @close="lockedFeature = null">
       <div class="space-y-4" data-testid="locked-feature-modal">
@@ -1242,7 +1175,9 @@ async function handleRestoreFileChange(event) {
     >
       <div class="space-y-4" data-testid="settings-disconnect-modal">
         <p class="text-sm text-ink-secondary">
-          Apakah Anda yakin ingin memutuskan akun Cloud? Sesi Cloud akan diputuskan dan seluruh data cache lokal (menu produk, transaksi, riwayat kas, dan shift) akan dibersihkan agar data tidak tumpang tindih saat login dengan akun lain.
+          Apakah Anda yakin ingin memutuskan akun Cloud? Sesi Cloud akan diputuskan dan seluruh data
+          cache lokal (menu produk, transaksi, riwayat kas, dan shift) akan dibersihkan agar data
+          tidak tumpang tindih saat login dengan akun lain.
         </p>
         <div class="flex flex-wrap gap-2">
           <BaseButton
@@ -1270,10 +1205,12 @@ async function handleRestoreFileChange(event) {
     >
       <div class="space-y-4" data-testid="clear-cache-modal">
         <p class="text-sm text-ink-secondary">
-          Apakah Anda yakin ingin menghapus data cache lokal? Semua data menu produk, transaksi, riwayat kas, dan shift yang tersimpan di perangkat ini akan dibersihkan.
+          Apakah Anda yakin ingin menghapus data cache lokal? Semua data menu produk, transaksi,
+          riwayat kas, dan shift yang tersimpan di perangkat ini akan dibersihkan.
         </p>
         <p class="text-xs text-amber-600 bg-amber-50 p-2.5 rounded-xl border border-amber-200">
-          Pastikan transaksi penting sudah disinkronkan ke Cloud atau dibackup sebelum menghapus cache.
+          Pastikan transaksi penting sudah disinkronkan ke Cloud atau dibackup sebelum menghapus
+          cache.
         </p>
         <div class="flex flex-wrap gap-2">
           <BaseButton

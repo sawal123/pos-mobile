@@ -120,7 +120,8 @@ describe('dynamic POS tax configuration', () => {
     const wrapper = mount(SettingsView, { global: { plugins: [ctx.pinia, ctx.router] } })
     await flushPromises()
 
-    expect(wrapper.find('[data-testid="tax-settings-card"]').exists()).toBe(true)
+    await wrapper.find('[data-testid="settings-section-tax"]').trigger('click')
+    expect(wrapper.find('[data-testid="tax-settings-card"]').isVisible()).toBe(true)
     const input = wrapper.find('[data-testid="tax-rate-input"]')
     await input.setValue('7.5')
     await wrapper.find('[data-testid="tax-settings-card"] form').trigger('submit')

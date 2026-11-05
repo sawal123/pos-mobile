@@ -168,7 +168,7 @@ describe('Settings entry point', () => {
     const wrapper = mount(SettingsView, { global: { plugins: [context.pinia, context.router] } })
     await flushPromises()
 
-    await wrapper.find('[data-testid="settings-my-subscription-entry"]').trigger('click')
+    await wrapper.find('[data-testid="subscription-card"]').trigger('click')
     await flushPromises()
 
     expect(context.router.currentRoute.value.name).toBe('my-subscription')

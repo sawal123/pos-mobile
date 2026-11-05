@@ -341,7 +341,7 @@ describe('P11: Product Mapping', () => {
     expect(p.name).toBe('Kopi Susu Gula Aren')
     expect(p.price).toBe(18000)
     expect(p.status).toBe('active')
-    expect(p.barcode).toBeNull()
+    expect(p).not.toHaveProperty('barcode')
     expect(p.sku).toBe(`MOBILE-${p.sync_id}`)
     expect(isUuid(p.sync_id)).toBe(true)
     expect(isUuid(p.category_sync_id)).toBe(true)
