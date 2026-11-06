@@ -30,6 +30,16 @@ const isLaundry = computed(() => businessStore.normalizedType === 'Laundry')
 const products = computed(() => productStore.products)
 const categories = computed(() => productStore.categories || [])
 
+// Filter strictly sellable items for the Menu view (persediaan/supplies separated to Stock)
+const isSellableProduct = (p) => {
+  const sellable = p.isSellable !== undefined ? p.isSellable : p.is_sellable
+  return sellable === undefined || sellable === true || sellable === 1 || sellable === '1'
+}
+
+const sellableProducts = computed(() => {
+  return products.value.filter(isSellableProduct)
+})
+
 // Search and filters
 const searchQuery = ref('')
 const selectedCategory = ref('Semua')
@@ -44,14 +54,14 @@ onMounted(async () => {
   }
 })
 
-// Metrics
-const totalProductsCount = computed(() => products.value.length)
-const activeProductsCount = computed(() => products.value.filter((p) => p.isActive).length)
+// Metrics (focused on sellable menu items)
+const totalProductsCount = computed(() => sellableProducts.value.length)
+const activeProductsCount = computed(() => sellableProducts.value.filter((p) => p.isActive).length)
 const totalCategoriesCount = computed(() => categories.value.length)
 
-// Filtered products list
+// Filtered products list (Sellable Menu items only)
 const filteredProducts = computed(() => {
-  let list = products.value
+  let list = sellableProducts.value
 
   // Filter by category
   if (selectedCategory.value !== 'Semua') {
@@ -141,12 +151,12 @@ function resetFilters() {
         <div class="min-w-0">
           <div class="flex items-center gap-2">
             <span class="text-[11px] font-bold uppercase tracking-widest text-primary">
-              {{ isLaundry ? 'Katalog Layanan' : 'Katalog & Menu' }}
+              {{ isLaundry ? 'Katalog Layanan' : 'Katalog Menu' }}
             </span>
             <span class="inline-flex h-1.5 w-1.5 rounded-full bg-primary" />
           </div>
           <h1 class="truncate text-xl font-black tracking-tight text-ink-primary sm:text-2xl">
-            {{ isLaundry ? 'Daftar Layanan' : 'Daftar Produk' }}
+            {{ isLaundry ? 'Daftar Layanan' : 'Menu & Produk Dijual' }}
           </h1>
         </div>
       </div>
@@ -181,6 +191,25 @@ function resetFilters() {
         </BaseButton>
       </div>
     </header>
+
+    <!-- Segmented Navigation: Pemisah Antara Menu Dijual dan Persediaan STOK -->
+    <section class="grid grid-cols-2 p-1 bg-surface border border-zinc-200/80 rounded-2xl gap-1">
+      <button
+        type="button"
+        class="flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-bold transition shadow-xs bg-white text-primary"
+      >
+        <AppIcon name="products" class="h-4 w-4 text-primary" />
+        <span>{{ isLaundry ? 'Layanan Dijual' : 'Menu Dijual' }}</span>
+      </button>
+      <button
+        type="button"
+        class="flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-semibold text-ink-secondary hover:text-ink-primary hover:bg-white/50 transition"
+        @click="router.push('/stock')"
+      >
+        <AppIcon name="stock" class="h-4 w-4 text-ink-secondary" />
+        <span>Persediaan Stok</span>
+      </button>
+    </section>
 
     <!-- Compact Hero Metrics -->
     <section
@@ -451,18 +480,6 @@ function resetFilters() {
                 class="rounded-md bg-indigo-50 px-2 py-0.5 font-medium text-indigo-600"
               >
                 {{ product.pricingUnit }}
-              </span>
-              <span
-                v-if="(product.kind ?? 'product') !== 'service' && product.stock !== undefined"
-                class="rounded-md px-2 py-0.5 font-medium text-[11px]"
-                :class="
-                  Number(product.stock) <= Number(product.minStock || 0) &&
-                  Number(product.minStock || 0) > 0
-                    ? 'bg-amber-100 text-amber-700'
-                    : 'bg-zinc-100 text-zinc-600'
-                "
-              >
-                Stok: {{ product.stock }}
               </span>
             </div>
           </div>

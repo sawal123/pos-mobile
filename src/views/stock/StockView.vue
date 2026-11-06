@@ -190,8 +190,8 @@ function handleStockAdjustment() {
         </button>
 
         <div class="min-w-0">
-          <p class="text-[9px] font-bold uppercase tracking-wider text-primary">Logistik & Inventaris</p>
-          <h1 class="text-xs sm:text-sm font-bold tracking-tight text-ink-primary whitespace-nowrap">Stok Produk</h1>
+          <p class="text-[9px] font-bold uppercase tracking-wider text-primary">Logistik & Persediaan</p>
+          <h1 class="text-xs sm:text-sm font-bold tracking-tight text-ink-primary whitespace-nowrap">Persediaan & Stok Produk</h1>
         </div>
       </div>
 
@@ -211,6 +211,25 @@ function handleStockAdjustment() {
         Stok Aman
       </span>
     </header>
+
+    <!-- Segmented Navigation: Pemisah Antara Menu Dijual dan Persediaan STOK -->
+    <section class="grid grid-cols-2 p-1 bg-surface border border-zinc-200/80 rounded-2xl gap-1">
+      <button
+        type="button"
+        class="flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-semibold text-ink-secondary hover:text-ink-primary hover:bg-white/50 transition"
+        @click="router.push('/products')"
+      >
+        <AppIcon name="products" class="h-4 w-4 text-ink-secondary" />
+        <span>Menu Dijual</span>
+      </button>
+      <button
+        type="button"
+        class="flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-xs font-bold transition shadow-xs bg-white text-primary"
+      >
+        <AppIcon name="stock" class="h-4 w-4 text-primary" />
+        <span>Persediaan Stok</span>
+      </button>
+    </section>
 
     <!-- Unified Minimalist Metrics Card (3 Columns) -->
     <section class="rounded-3xl border border-zinc-200/80 bg-white p-4 sm:p-5 shadow-soft">
@@ -406,7 +425,7 @@ function handleStockAdjustment() {
               <svg class="h-3.5 w-3.5 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
               </svg>
-              <span>Adjust</span>
+              <span>Adjust Stok</span>
             </button>
           </div>
         </div>
@@ -599,7 +618,7 @@ function handleStockAdjustment() {
             Batal
           </BaseButton>
           <BaseButton block variant="primary" @click="handleStockAdjustment">
-            Simpan
+            Simpan Perubahan
           </BaseButton>
         </div>
       </div>
