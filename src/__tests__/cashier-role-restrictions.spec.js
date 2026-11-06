@@ -348,3 +348,4 @@ describe('Cashier Role Restrictions in Mobile', () => {
     })
   })
 })
+

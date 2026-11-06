@@ -115,11 +115,11 @@ export function evaluatePromoDiscount(promo, cartItems = [], customer = null) {
 
     eligibleAmount = totalSubtotal
     eligibleQuantity = cartItems.reduce((sum, item) => sum + (Number(item.qty) || 0), 0)
-  } else if (scope === 'product') {
+  } else if (scope === 'product' || scope === 'item') {
     const targets = Array.isArray(promo.targets) ? promo.targets : []
     const targetSyncIds = new Set(
       targets
-        .filter((t) => (t.target_type ?? t.targetType) === 'product')
+        .filter((t) => (t.target_type ?? t.targetType) === 'product' || (t.target_type ?? t.targetType) === 'item')
         .map((t) => String(t.target_sync_id ?? t.targetSyncId ?? t.target_id ?? t.targetId).toLowerCase()),
     )
 
