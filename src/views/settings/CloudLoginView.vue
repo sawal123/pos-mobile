@@ -1984,10 +1984,24 @@ onMounted(async () => {
                 Siap mulai berjualan
               </h3>
               <p class="mt-1 text-sm leading-relaxed text-ink-secondary">
-                Siapkan PIN kasir untuk melanjutkan ke POS.
+                {{
+                  cashierStore.activeCashier?.pinConfigured
+                    ? 'PIN kasir dan sesi shift telah disinkronkan dari Cloud. Kasir siap melakukan transaksi.'
+                    : 'Siapkan PIN kasir untuk melanjutkan ke POS.'
+                }}
               </p>
               <div class="mt-4 flex flex-wrap gap-2.5">
                 <BaseButton
+                  v-if="cashierStore.activeCashier?.pinConfigured"
+                  id="cloud-onboarding-continue-pos-btn"
+                  data-testid="cloud-onboarding-continue-pos"
+                  variant="primary"
+                  @click="router.push({ name: 'pos' })"
+                >
+                  Mulai Transaksi POS
+                </BaseButton>
+                <BaseButton
+                  v-if="!cashierStore.activeCashier?.pinConfigured"
                   id="cloud-onboarding-continue-pin-btn"
                   data-testid="cloud-onboarding-continue-pin"
                   variant="primary"

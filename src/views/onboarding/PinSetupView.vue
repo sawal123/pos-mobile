@@ -34,6 +34,10 @@ function focusPinInput() {
 }
 
 onMounted(() => {
+  if (businessStore.mode === 'cloud' && cashierStore.activeCashier?.pinConfigured) {
+    router.replace('/home')
+    return
+  }
   focusPinInput()
 })
 

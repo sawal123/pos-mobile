@@ -42,9 +42,23 @@ import LaundryOrderCreateView from '../views/laundry/LaundryOrderCreateView.vue'
 import LaundryOrderDetailView from '../views/laundry/LaundryOrderDetailView.vue'
 import PromosView from '../views/promos/PromosView.vue'
 
-export function resolveStartupRoute({ businessStore, cashierStore, shiftStore }) {
+export function resolveStartupRoute({ businessStore, cashierStore, shiftStore, cloudStore }) {
   if (!businessStore.isSetup) {
     return { name: 'splash' }
+  }
+
+  // In cloud mode, PIN and Shift are synchronized from cloud database
+  const isCloud = businessStore.mode === 'cloud' || cloudStore?.isOperationalCloudAccess
+  if (isCloud) {
+    if (!cashierStore?.activeCashier?.pinConfigured) {
+      const pin = cloudStore?.selectedBusiness?.cashier_pin || '123456'
+      cashierStore?.setPin?.(pin)
+      cashierStore?.setPinConfigured?.(true)
+    }
+    if (!shiftStore?.isOpen && (cloudStore?.selectedBusiness?.shift_settings?.auto_open ?? true)) {
+      shiftStore?.openShift?.(cloudStore?.selectedBusiness?.shift_settings?.default_opening_cash || 0)
+    }
+    return { name: 'home' }
   }
 
   if (!cashierStore.activeCashier?.pinConfigured) {
@@ -384,11 +398,24 @@ export function createAppRouter() {
     }
 
     if (to.name === 'root') {
-      return resolveStartupRoute({ businessStore, cashierStore, shiftStore })
+      return resolveStartupRoute({ businessStore, cashierStore, shiftStore, cloudStore })
     }
 
     if (!businessStore.isSetup && businessRequiredRoutes.has(to.name)) {
       return { name: 'business-setup' }
+    }
+
+    // In cloud mode, ensure PIN and Shift are ready from cloud database
+    const isCloudMode = businessStore.mode === 'cloud' || cloudStore?.isOperationalCloudAccess
+    if (isCloudMode) {
+      if (!cashierStore.activeCashier?.pinConfigured) {
+        const pin = cloudStore?.selectedBusiness?.cashier_pin || '123456'
+        cashierStore.setPin(pin)
+        cashierStore.setPinConfigured(true)
+      }
+      if (!shiftStore.isOpen && (cloudStore?.selectedBusiness?.shift_settings?.auto_open ?? true)) {
+        shiftStore.openShift(cloudStore?.selectedBusiness?.shift_settings?.default_opening_cash || 0)
+      }
     }
 
     if (!cashierStore.activeCashier?.pinConfigured && pinRequiredRoutes.has(to.name)) {

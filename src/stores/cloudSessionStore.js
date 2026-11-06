@@ -4,6 +4,8 @@ import { ref, computed } from 'vue'
 import { normalizeCloudBusinessType } from '@/data/businessTemplates'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useTaxStore } from '@/stores/taxStore'
+import { useCashierStore } from '@/stores/cashierStore'
+import { useShiftStore } from '@/stores/shiftStore'
 import {
   cloudLogin,
   cloudGoogleLogin,
@@ -78,6 +80,11 @@ function mapBusinessEntry(b) {
       enabled: Boolean(b.tax_settings.enabled),
       rate: Number(b.tax_settings.rate) || 0,
     } : null,
+    cashier_pin: typeof b.cashier_pin === 'string' && b.cashier_pin ? b.cashier_pin : '123456',
+    shift_settings: b.shift_settings && typeof b.shift_settings === 'object' ? {
+      auto_open: b.shift_settings.auto_open !== false,
+      default_opening_cash: Number(b.shift_settings.default_opening_cash) || 0,
+    } : { auto_open: true, default_opening_cash: 0 },
     cloud_access: b.cloud_access,
     subscription: b.subscription ?? null,
     outlets: (b.outlets ?? []).map((o) => ({
@@ -2281,10 +2288,18 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       workspaceRegistry.value = result.registry
       error.value = null
       try {
-        const { useCashierStore } = await import('@/stores/cashierStore')
         const cashierStore = useCashierStore()
         if (cashierStore?.activeCashier) {
+          const pin = business?.cashier_pin || '123456'
+          cashierStore.setPin(pin)
           cashierStore.activeCashier.pinConfigured = true
+        }
+        const shiftStore = useShiftStore()
+        const shiftSettings = business?.shift_settings
+        const shouldAutoOpen = shiftSettings ? shiftSettings.auto_open !== false : true
+        const defaultOpeningCash = Number(shiftSettings?.default_opening_cash) || 0
+        if (shouldAutoOpen && !shiftStore.isOpen) {
+          shiftStore.openShift(defaultOpeningCash)
         }
       } catch {
         // Best effort UI refresh; the workspace activation remains authoritative.
@@ -2321,10 +2336,18 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       await persistCloudContext(_adapter, { throwOnError: true })
       error.value = null
       try {
-        const { useCashierStore } = await import('@/stores/cashierStore')
         const cashierStore = useCashierStore()
         if (cashierStore?.activeCashier) {
+          const pin = business?.cashier_pin || '123456'
+          cashierStore.setPin(pin)
           cashierStore.activeCashier.pinConfigured = true
+        }
+        const shiftStore = useShiftStore()
+        const shiftSettings = business?.shift_settings
+        const shouldAutoOpen = shiftSettings ? shiftSettings.auto_open !== false : true
+        const defaultOpeningCash = Number(shiftSettings?.default_opening_cash) || 0
+        if (shouldAutoOpen && !shiftStore.isOpen) {
+          shiftStore.openShift(defaultOpeningCash)
         }
       } catch {
         // Best effort UI refresh; the workspace activation remains authoritative.
@@ -2723,6 +2746,31 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       } catch {
         // Safe fallback if tax store not active
       }
+    }
+
+    // Apply PIN kasir dari database Cloud
+    try {
+      const cashierStore = useCashierStore()
+      if (cashierStore?.activeCashier) {
+        const pin = business?.cashier_pin || '123456'
+        cashierStore.setPin(pin)
+        cashierStore.setPinConfigured(true)
+      }
+    } catch {
+      // Safe fallback if cashier store not active
+    }
+
+    // Apply Shift dari database Cloud (auto-open jika belum aktif)
+    try {
+      const shiftStore = useShiftStore()
+      const shiftSettings = business?.shift_settings
+      const shouldAutoOpen = shiftSettings ? shiftSettings.auto_open !== false : true
+      const defaultOpeningCash = Number(shiftSettings?.default_opening_cash) || 0
+      if (shouldAutoOpen && !shiftStore.isOpen) {
+        shiftStore.openShift(defaultOpeningCash)
+      }
+    } catch {
+      // Safe fallback if shift store not active
     }
   }
 
@@ -3129,6 +3177,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     getPersistenceScheduler,
     adapter: computed(() => _adapter),
     scheduler: computed(() => _scheduler),
+    applyBusinessContext,
     invalidateCloudSession: handleInvalidToken,
     login,
     loginWithGoogle,
