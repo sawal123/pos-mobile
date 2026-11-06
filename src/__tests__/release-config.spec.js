@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url'
 
 import { describe, expect, it } from 'vitest'
 
+import { APP_VERSION } from '@/constants/appInfo'
 import { DB_VERSION } from '@/services/database/schema'
 
 // Static guard for the Android release configuration: version wiring, package
@@ -19,8 +20,8 @@ const appBuildGradle = read('../../android/app/build.gradle')
 const androidGitignore = read('../../android/.gitignore')
 const keystoreExample = read('../../android/keystore.properties.example')
 
-const RELEASE_VERSION_NAME = '0.0.1'
-const RELEASE_VERSION_CODE = 1
+const RELEASE_VERSION_NAME = '1.0.1'
+const RELEASE_VERSION_CODE = 10001
 const APPLICATION_ID = 'com.posoffline.app'
 
 // Source selection lives between the header comment and the android block.
@@ -49,6 +50,7 @@ describe('P35 Android release configuration', () => {
     expect(packageJson.version).toBe(RELEASE_VERSION_NAME)
     expect(packageLock.version).toBe(RELEASE_VERSION_NAME)
     expect(packageLock.packages[''].version).toBe(RELEASE_VERSION_NAME)
+    expect(APP_VERSION).toBe(RELEASE_VERSION_NAME)
   })
 
   it('versionName/versionCode Android mengikuti policy versi', () => {
@@ -60,6 +62,8 @@ describe('P35 Android release configuration', () => {
     const [major, minor, patch] = RELEASE_VERSION_NAME.split('.').map(Number)
 
     expect(RELEASE_VERSION_CODE).toBe(major * 10000 + minor * 100 + patch)
+    // The previously documented 1.0.0 release used 10000. Never downgrade it.
+    expect(RELEASE_VERSION_CODE).toBeGreaterThan(10000)
   })
 
   it('applicationId dan Capacitor appId tetap com.posoffline.app', () => {

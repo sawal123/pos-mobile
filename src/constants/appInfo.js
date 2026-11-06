@@ -1,4 +1,4 @@
 export const APP_NAME = 'NexaPos'
-export const APP_VERSION = '0.0.1'
+export const APP_VERSION = '1.0.1'
 export const APP_TAGLINE = 'Kasir cepat, praktis, dan siap offline'
 
