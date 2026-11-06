@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 
 import { normalizeCloudBusinessType } from '@/data/businessTemplates'
 import { useBusinessStore } from '@/stores/businessStore'
+import { useTaxStore } from '@/stores/taxStore'
 import {
   cloudLogin,
   cloudGoogleLogin,
@@ -73,6 +74,10 @@ function mapBusinessEntry(b) {
     role: normalizeRole(b.role ?? b.role_name ?? null),
     sync_capabilities: b.sync_capabilities ?? null,
     catalog_capabilities: { product_barcode_v1: b.catalog_capabilities?.product_barcode_v1 === true },
+    tax_settings: b.tax_settings && typeof b.tax_settings === 'object' ? {
+      enabled: Boolean(b.tax_settings.enabled),
+      rate: Number(b.tax_settings.rate) || 0,
+    } : null,
     cloud_access: b.cloud_access,
     subscription: b.subscription ?? null,
     outlets: (b.outlets ?? []).map((o) => ({
@@ -495,6 +500,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       business_type: business.business_type ?? null,
       business_type_raw: business.business_type_raw ?? null,
       business_type_status: business.business_type_status ?? 'legacy',
+      tax_settings: business.tax_settings ?? null,
       subscription: business.subscription ?? null,
       catalog_capabilities: business.catalog_capabilities ?? null,
     }
@@ -2706,6 +2712,18 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     role.value = normalizeRole(business?.role ?? null)
     syncCapabilities.value = business?.sync_capabilities ?? null
     deviceContext.value = business?.device_context ?? null
+
+    if (business?.tax_settings && typeof business.tax_settings === 'object') {
+      try {
+        const taxStore = useTaxStore()
+        taxStore.setSettings({
+          enabled: Boolean(business.tax_settings.enabled),
+          rate: Number(business.tax_settings.rate),
+        })
+      } catch {
+        // Safe fallback if tax store not active
+      }
+    }
   }
 
   /**

@@ -14,6 +14,7 @@ import SettingsSection from '@/components/settings/SettingsSection.vue'
 import ReceiptSettingsPanel from '@/components/settings/ReceiptSettingsPanel.vue'
 import CloudBackupPanel from '@/components/settings/CloudBackupPanel.vue'
 import { clearLocalCache } from '@/services/localCacheService'
+import { apiRequest } from '@/services/cloud/apiClient'
 import {
   RESTORE_CONFIRMATION_MESSAGE,
   createBackupPayload,
@@ -71,12 +72,25 @@ const taxRateValid = computed(() => !taxDraftEnabled.value || isValidTaxRate(tax
 watch([taxDraftEnabled, taxDraftRate], () => {
   taxFeedback.value = ''
 })
+watch(() => [taxStore.enabled, taxStore.rate], ([newEnabled, newRate]) => {
+  if (taxDraftEnabled.value !== newEnabled) {
+    taxDraftEnabled.value = newEnabled
+  }
+  if (Number(taxDraftRate.value) !== Number(newRate)) {
+    taxDraftRate.value = String(newRate)
+  }
+})
 const taxPreview = computed(() => {
   if (!taxDraftEnabled.value || !taxRateValid.value) return 0
   return Math.round((100000 * Number(taxDraftRate.value)) / 100)
 })
 
-function saveTaxSettings() {
+async function saveTaxSettings() {
+  if (isCashier.value) {
+    taxFeedback.value = 'Kasir tidak dapat mengubah pengaturan pajak.'
+    return
+  }
+
   const result = taxStore.setSettings({
     enabled: taxDraftEnabled.value,
     rate: taxDraftEnabled.value
@@ -87,6 +101,20 @@ function saveTaxSettings() {
   })
 
   taxFeedback.value = result.success ? 'Pengaturan pajak berhasil disimpan.' : result.error
+
+  if (result.success && cloudStore.isLinked && cloudStore.selectedBusiness?.id) {
+    try {
+      await apiRequest(`/api/mobile/businesses/${cloudStore.selectedBusiness.id}/tax-settings`, {
+        method: 'PATCH',
+        body: {
+          tax_enabled: taxStore.enabled,
+          tax_rate: taxStore.rate,
+        },
+      })
+    } catch {
+      // offline fallback: locally persisted
+    }
+  }
 }
 
 const activeSection = ref(null)
@@ -702,7 +730,8 @@ async function handleRestoreFileChange(event) {
                 type="checkbox"
                 role="switch"
                 :aria-checked="taxDraftEnabled"
-                class="size-5 shrink-0 accent-primary"
+                :disabled="isCashier"
+                class="size-5 shrink-0 accent-primary disabled:opacity-50"
               />
             </label>
 
@@ -720,7 +749,7 @@ async function handleRestoreFileChange(event) {
                   max="100"
                   step="0.01"
                   inputmode="decimal"
-                  :disabled="!taxDraftEnabled"
+                  :disabled="!taxDraftEnabled || isCashier"
                   :aria-invalid="taxDraftEnabled && !taxRateValid"
                   aria-describedby="tax-rate-help"
                   class="h-12 w-full rounded-2xl border border-zinc-200 bg-card px-4 pr-10 text-sm text-ink-primary outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/10 disabled:bg-zinc-100 disabled:text-zinc-500 dark:border-slate-700/70 dark:bg-[#121726] dark:disabled:bg-slate-800/60 dark:disabled:text-slate-500"
@@ -774,7 +803,7 @@ async function handleRestoreFileChange(event) {
             </div>
 
             <div class="flex flex-wrap items-center gap-3">
-              <BaseButton type="submit" data-testid="save-tax-settings" :disabled="!taxRateValid">
+              <BaseButton type="submit" data-testid="save-tax-settings" :disabled="!taxRateValid || isCashier">
                 Simpan
               </BaseButton>
               <span
@@ -786,6 +815,9 @@ async function handleRestoreFileChange(event) {
                 {{ taxFeedback }}
               </span>
             </div>
+            <p v-if="isCashier" class="text-xs text-amber-600 dark:text-amber-400">
+              Pengaturan pajak hanya dapat diubah oleh pemilik bisnis.
+            </p>
           </form>
         </div>
       </SettingsSection>

@@ -346,6 +346,34 @@ describe('Cashier Role Restrictions in Mobile', () => {
       // Subscription card is rendered for owner
       expect(wrapper.find('[data-testid="subscription-card"]').exists()).toBe(true)
     })
+
+    it('disables tax settings modification in SettingsView for cashier', async () => {
+      cloudStore.role = 'cashier'
+
+      const router = createRouter({
+        history: createMemoryHistory(),
+        routes: [{ path: '/settings', component: SettingsView }],
+      })
+
+      const wrapper = mount(SettingsView, {
+        global: {
+          plugins: [pinia, router],
+          stubs: {
+            AppIcon: true,
+            BaseButton: { template: '<button :disabled="$attrs.disabled"><slot /></button>' },
+            BaseCard: { template: '<div><slot /></div>' },
+            BaseModal: true,
+            CloudBackupPanel: true,
+          },
+        },
+      })
+
+      expect(wrapper.vm.isCashier).toBe(true)
+      const saveBtn = wrapper.find('[data-testid="save-tax-settings"]')
+      expect(saveBtn.attributes('disabled')).toBeDefined()
+      const switchInp = wrapper.find('[data-testid="tax-enabled-switch"]')
+      expect(switchInp.attributes('disabled')).toBeDefined()
+    })
   })
 })
 
