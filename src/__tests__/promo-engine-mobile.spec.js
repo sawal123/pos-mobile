@@ -9,6 +9,7 @@ import {
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCartStore } from '@/stores/cartStore'
 import { useCashierStore } from '@/stores/cashierStore'
+import { useCustomerStore } from '@/stores/customerStore'
 import { useProductStore } from '@/stores/productStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import { useTaxStore } from '@/stores/taxStore'
@@ -155,6 +156,38 @@ describe('Mobile Promo Engine & Feature Parity', () => {
       // 2 qty * (20.000 - 12.000) = 16.000 savings
       expect(evaluatePromoDiscount(promo, sampleItems)).toBe(16000)
     })
+
+    it('enforces customer scope promo: requires customer', () => {
+      const promo = {
+        type: 'percent',
+        scope: 'customer',
+        discount_value: 1000, // 10%
+        targets: [],
+      }
+      // Without customer -> 0
+      expect(evaluatePromoDiscount(promo, sampleItems, null)).toBe(0)
+
+      // With customer -> 10% of 55.000 = 5.500
+      const customer = { id: 'cust-1', name: 'Budi' }
+      expect(evaluatePromoDiscount(promo, sampleItems, customer)).toBe(5500)
+    })
+
+    it('enforces specific customer targets', () => {
+      const promo = {
+        type: 'fixed',
+        scope: 'customer',
+        discount_value: 10000,
+        targets: [{ target_type: 'customer', target_sync_id: 'cust-vip' }],
+      }
+
+      // Non-matching customer -> 0
+      const regCustomer = { id: 'cust-regular', name: 'Joko' }
+      expect(evaluatePromoDiscount(promo, sampleItems, regCustomer)).toBe(0)
+
+      // Matching customer -> 10000
+      const vipCustomer = { id: 'cust-vip', name: 'VIP Budi' }
+      expect(evaluatePromoDiscount(promo, sampleItems, vipCustomer)).toBe(10000)
+    })
   })
 
   describe('cartStore integration with promoStore', () => {
@@ -195,6 +228,44 @@ describe('Mobile Promo Engine & Feature Parity', () => {
       expect(cartStore.appliedPromo).not.toBeNull()
       cartStore.clearCart()
       expect(cartStore.appliedPromo).toBeNull()
+      expect(cartStore.discount).toBe(0)
+    })
+
+    it('applies customer scope promo only when customer is selected in cartStore', () => {
+      const cartStore = useCartStore()
+      const promoStore = usePromoStore()
+      const customerStore = useCustomerStore()
+
+      cartStore.clearCart()
+      cartStore.clearCustomer()
+
+      const cust = { id: 'cust-10', name: 'Member VIP', phone: '08123456789' }
+      customerStore.customers = [cust]
+
+      cartStore.addItem({ id: 'p1', name: 'Produk A', price: 100000 })
+
+      const customerPromo = {
+        id: 'promo-cust',
+        sync_id: 'promo-cust-sync',
+        name: 'Diskon Member 10%',
+        type: 'percent',
+        scope: 'customer',
+        discount_value: 1000, // 10%
+        status: 'active',
+        targets: [{ target_type: 'customer', target_sync_id: 'cust-10' }],
+      }
+      promoStore.setPromos([customerPromo])
+      cartStore.applyPromo(customerPromo)
+
+      // 1. Without customer -> discount is 0
+      expect(cartStore.discount).toBe(0)
+
+      // 2. Select matching customer -> discount becomes 10.000
+      cartStore.selectCustomer(cust)
+      expect(cartStore.discount).toBe(10000)
+
+      // 3. Clear customer -> discount becomes 0
+      cartStore.clearCustomer()
       expect(cartStore.discount).toBe(0)
     })
   })

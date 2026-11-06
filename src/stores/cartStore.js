@@ -49,7 +49,7 @@ export const useCartStore = defineStore('cart', {
     discount(state) {
       if (state.appliedPromo) {
         const promoStore = usePromoStore()
-        return promoStore.calculateDiscount(state.appliedPromo, state.items)
+        return promoStore.calculateDiscount(state.appliedPromo, state.items, this.selectedCustomer)
       }
 
       const rawValue = Number(state.manualDiscountValue) || 0

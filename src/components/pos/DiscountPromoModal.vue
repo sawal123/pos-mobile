@@ -140,11 +140,21 @@ function applyVoucherCode() {
     return
   }
 
+  if (promo.scope === 'customer' && !cartStore.selectedCustomer) {
+    promoErrorMessage.value = 'Promo ini khusus untuk pelanggan terdaftar. Silakan pilih pelanggan di kasir terlebih dahulu.'
+    return
+  }
+
   cartStore.applyPromo(promo)
   emit('close')
 }
 
 function selectPromo(promo) {
+  if (promo.scope === 'customer' && !cartStore.selectedCustomer) {
+    promoErrorMessage.value = 'Promo ini khusus untuk pelanggan terdaftar. Silakan pilih pelanggan di kasir terlebih dahulu.'
+    return
+  }
+
   cartStore.applyPromo(promo)
   emit('close')
 }
@@ -331,6 +341,12 @@ function selectPromo(promo) {
                     class="shrink-0 rounded-md border border-primary/20 bg-primary/8 px-1.5 py-0.5 font-mono text-[10px] font-bold text-primary dark:border-indigo-400/30 dark:bg-indigo-500/15 dark:text-indigo-300"
                   >
                     {{ promo.code }}
+                  </span>
+                  <span
+                    v-if="promo.scope === 'customer'"
+                    class="shrink-0 rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-bold text-amber-700 dark:border-amber-400/30 dark:bg-amber-500/15 dark:text-amber-300"
+                  >
+                    Khusus Pelanggan
                   </span>
                 </div>
                 <p class="text-[11px] text-ink-secondary">

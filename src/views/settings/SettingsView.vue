@@ -219,6 +219,9 @@ const cloudAccountSubtitle = computed(() => {
 // PREM-M03: Cloud link presentation (display only, never authorizes)
 const cloudLinked = computed(() => cloudStore.isLinked)
 const cloudAccount = computed(() => cloudStore.user?.email || '-')
+const isCashier = computed(
+  () => cloudStore.role === 'cashier' || cloudStore.isCashierContext === true,
+)
 const subscriptionEntryTitle = computed(() => (cloudLinked.value ? 'Langganan Saya' : 'Langganan'))
 
 const cloudSubscriptionLabel = computed(() => {
@@ -301,6 +304,7 @@ const lockedFeatureMessage = computed(() => {
 })
 
 function goToSubscription() {
+  if (isCashier.value) return
   lockedFeature.value = null
   router.push({ name: cloudLinked.value ? 'my-subscription' : 'subscription' })
 }
@@ -545,60 +549,62 @@ async function handleRestoreFileChange(event) {
       </div>
     </BaseCard>
 
-    <div
-      v-if="showSubscriptionSkeleton"
-      class="animate-pulse rounded-3xl border border-zinc-200 bg-card p-4 dark:border-slate-700/60"
-      data-testid="subscription-skeleton"
-    >
-      <div class="flex items-center gap-3">
-        <div class="h-11 w-11 rounded-2xl bg-zinc-100 dark:bg-slate-800" />
-        <div class="flex-1 space-y-2">
-          <div class="h-3 w-20 rounded bg-zinc-100 dark:bg-slate-800" />
-          <div class="h-3 w-52 rounded bg-zinc-100 dark:bg-slate-800" />
+    <template v-if="!isCashier">
+      <div
+        v-if="showSubscriptionSkeleton"
+        class="animate-pulse rounded-3xl border border-zinc-200 bg-card p-4 dark:border-slate-700/60"
+        data-testid="subscription-skeleton"
+      >
+        <div class="flex items-center gap-3">
+          <div class="h-11 w-11 rounded-2xl bg-zinc-100 dark:bg-slate-800" />
+          <div class="flex-1 space-y-2">
+            <div class="h-3 w-20 rounded bg-zinc-100 dark:bg-slate-800" />
+            <div class="h-3 w-52 rounded bg-zinc-100 dark:bg-slate-800" />
+          </div>
         </div>
       </div>
-    </div>
 
-    <button
-      v-else
-      type="button"
-      data-testid="subscription-card"
-      class="w-full rounded-3xl border p-4 text-left shadow-soft transition active:scale-[0.99] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
-      :class="subscriptionView.cardClass"
-      aria-label="Kelola langganan"
-      @click="goToSubscription"
-    >
-      <div class="flex items-center gap-3">
-        <span
-          class="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl"
-          :class="subscriptionView.crownClass"
-        >
-          <AppIcon name="crown" />
-        </span>
+      <button
+        v-else
+        type="button"
+        data-testid="subscription-card"
+        class="w-full rounded-3xl border p-4 text-left shadow-soft transition active:scale-[0.99] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+        :class="subscriptionView.cardClass"
+        aria-label="Kelola langganan"
+        @click="goToSubscription"
+      >
+        <div class="flex items-center gap-3">
+          <span
+            class="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl"
+            :class="subscriptionView.crownClass"
+          >
+            <AppIcon name="crown" />
+          </span>
 
-        <div class="min-w-0 flex-1">
-          <div class="flex flex-wrap items-center gap-2">
-            <span class="text-sm font-semibold text-ink-primary">{{ subscriptionEntryTitle }}</span>
-            <span
-              class="rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide"
-              :class="subscriptionView.badgeClass"
-              data-testid="subscription-badge"
+          <div class="min-w-0 flex-1">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="text-sm font-semibold text-ink-primary">{{ subscriptionEntryTitle }}</span>
+              <span
+                class="rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide"
+                :class="subscriptionView.badgeClass"
+                data-testid="subscription-badge"
+              >
+                {{ subscriptionView.badge }}
+              </span>
+            </div>
+
+            <p
+              class="mt-1 text-xs leading-relaxed text-ink-secondary"
+              data-testid="subscription-subtitle"
             >
-              {{ subscriptionView.badge }}
-            </span>
+              {{ subscriptionView.subtitle }}
+            </p>
           </div>
 
-          <p
-            class="mt-1 text-xs leading-relaxed text-ink-secondary"
-            data-testid="subscription-subtitle"
-          >
-            {{ subscriptionView.subtitle }}
-          </p>
+          <AppIcon name="chevron-right" class="text-ink-secondary" />
         </div>
-
-        <AppIcon name="chevron-right" class="text-ink-secondary" />
-      </div>
-    </button>
+      </button>
+    </template>
 
     <BaseCard
       class="divide-y divide-zinc-100 overflow-hidden !p-0 dark:divide-slate-700/45"
@@ -937,7 +943,7 @@ async function handleRestoreFileChange(event) {
                 {{ cloudStore.selectedBusiness?.name ?? '-' }}
               </dd>
             </div>
-            <div class="flex items-start justify-between gap-4">
+            <div v-if="!isCashier" class="flex items-start justify-between gap-4">
               <dt class="shrink-0">Subscription</dt>
               <dd
                 class="min-w-0 break-words text-right font-medium text-ink-primary"
@@ -991,7 +997,7 @@ async function handleRestoreFileChange(event) {
             </template>
           </div>
           <p
-            v-if="isPremium"
+            v-if="!isCashier && isPremium"
             class="mt-1 text-xs font-semibold text-emerald-700 dark:text-emerald-300"
             data-testid="subscription-plan"
           >
@@ -999,7 +1005,7 @@ async function handleRestoreFileChange(event) {
           </p>
 
           <p
-            v-if="isPremium && expiresAtLabel"
+            v-if="!isCashier && isPremium && expiresAtLabel"
             class="text-xs text-ink-secondary"
             data-testid="subscription-expiry"
           >
@@ -1007,7 +1013,7 @@ async function handleRestoreFileChange(event) {
           </p>
 
           <p
-            v-if="subscriptionStatus === 'unverified' && subscriptionStore.entitlement.plan"
+            v-if="!isCashier && subscriptionStatus === 'unverified' && subscriptionStore.entitlement.plan"
             class="mt-1 text-xs text-ink-secondary"
             data-testid="subscription-last-known-plan"
           >

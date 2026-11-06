@@ -6,10 +6,16 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import PromoCreateModal from '@/components/promos/PromoCreateModal.vue'
 import { usePromoStore } from '@/stores/promoStore'
+import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { formatCurrency } from '@/utils/formatters'
 
 const router = useRouter()
 const promoStore = usePromoStore()
+const cloudStore = useCloudSessionStore()
+
+const isCashier = computed(
+  () => cloudStore.role === 'cashier' || cloudStore.isCashierContext === true,
+)
 
 const searchQuery = ref('')
 const filterStatus = ref('all') // 'all' | 'active' | 'inactive'
@@ -52,6 +58,7 @@ const filteredPromos = computed(() => {
 })
 
 function handleToggleStatus(promo) {
+  if (isCashier.value) return
   const promoId = promo.id || promo.syncId
   const newStatus = promoStore.togglePromoStatus(promoId)
   showToast(
@@ -62,12 +69,14 @@ function handleToggleStatus(promo) {
 }
 
 function handleDeletePromo(promo) {
+  if (isCashier.value) return
   const promoId = promo.id || promo.syncId
   promoStore.removePromo(promoId)
   showToast(`Promo "${promo.name}" telah dihapus.`)
 }
 
 function handlePromoCreated(newPromo) {
+  if (isCashier.value) return
   showToast(`Promo "${newPromo.name}" berhasil dibuat!`)
 }
 
@@ -133,6 +142,7 @@ function formatValidity(promo) {
       </div>
 
       <BaseButton
+        v-if="!isCashier"
         variant="primary"
         class="gap-1.5 shadow-sm"
         @click="showCreateModal = true"
@@ -343,7 +353,7 @@ function formatValidity(promo) {
             <!-- Scope -->
             <span class="flex items-center gap-1">
               <span class="text-zinc-400">•</span>
-              {{ promo.scope === 'category' ? `Kategori khusus` : 'Semua produk' }}
+              {{ promo.scope === 'category' ? `Kategori khusus` : (promo.scope === 'customer' ? 'Khusus Pelanggan' : 'Semua produk') }}
             </span>
 
             <!-- Validity -->
@@ -360,7 +370,7 @@ function formatValidity(promo) {
             ID: <span class="font-mono text-[10px]">{{ String(promo.syncId || promo.id).slice(0, 16) }}...</span>
           </div>
 
-          <div class="flex items-center gap-2">
+          <div v-if="!isCashier" class="flex items-center gap-2">
             <!-- Toggle status button -->
             <button
               type="button"
@@ -423,7 +433,7 @@ function formatValidity(promo) {
         }}
       </p>
 
-      <div class="mt-4">
+      <div v-if="!isCashier" class="mt-4">
         <BaseButton
           variant="primary"
           class="gap-1.5"

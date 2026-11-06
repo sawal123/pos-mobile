@@ -4,6 +4,7 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import PinConfirmationModal from '@/components/auth/PinConfirmationModal.vue'
 import { usePromoStore } from '@/stores/promoStore'
 import { useProductStore } from '@/stores/productStore'
+import { useCustomerStore } from '@/stores/customerStore'
 
 const props = defineProps({
   open: {
@@ -16,6 +17,7 @@ const emit = defineEmits(['close', 'saved'])
 
 const promoStore = usePromoStore()
 const productStore = useProductStore()
+const customerStore = useCustomerStore()
 
 const name = ref('')
 const code = ref('')
@@ -23,8 +25,9 @@ const discountType = ref('fixed') // 'fixed' | 'percent'
 const discountValue = ref('')
 const minPurchase = ref('')
 const maxDiscount = ref('')
-const scope = ref('all') // 'all' | 'category'
+const scope = ref('all') // 'all' | 'category' | 'customer'
 const selectedCategory = ref('')
+const selectedCustomer = ref('')
 const startsAt = ref('')
 const endsAt = ref('')
 const isActive = ref(true)
@@ -41,6 +44,7 @@ function resetForm() {
   maxDiscount.value = ''
   scope.value = 'all'
   selectedCategory.value = ''
+  selectedCustomer.value = ''
   startsAt.value = ''
   endsAt.value = ''
   isActive.value = true
@@ -58,6 +62,7 @@ watch(
 )
 
 const categories = computed(() => productStore.categories || [])
+const customers = computed(() => customerStore.customers || [])
 
 function handleCodeInput(event) {
   code.value = String(event.target.value || '').toUpperCase().replace(/[^A-Z0-9_-]/g, '')
@@ -112,8 +117,10 @@ function handlePinConfirmed() {
     endsAt: endsAt.value ? new Date(endsAt.value).toISOString() : null,
     targets:
       scope.value === 'category' && selectedCategory.value
-        ? [{ type: 'category', value: selectedCategory.value }]
-        : [],
+        ? [{ target_type: 'category', target_sync_id: selectedCategory.value, value: selectedCategory.value }]
+        : (scope.value === 'customer' && selectedCustomer.value
+            ? [{ target_type: 'customer', target_sync_id: selectedCustomer.value, value: selectedCustomer.value }]
+            : []),
   }
 
   const createdPromo = promoStore.createPromo(promoPayload)
@@ -301,7 +308,7 @@ function handlePinConfirmed() {
             <label class="mb-1 block text-xs font-semibold text-ink-secondary">
               Berlaku Untuk
             </label>
-            <div class="grid grid-cols-2 gap-2">
+            <div class="grid grid-cols-3 gap-1.5">
               <button
                 type="button"
                 class="h-10 rounded-2xl border text-xs font-bold transition cursor-pointer"
@@ -312,7 +319,7 @@ function handlePinConfirmed() {
                 ]"
                 @click="scope = 'all'"
               >
-                Semua Menu / Produk
+                Semua Menu
               </button>
               <button
                 type="button"
@@ -324,7 +331,19 @@ function handlePinConfirmed() {
                 ]"
                 @click="scope = 'category'"
               >
-                Kategori Tertentu
+                Kategori
+              </button>
+              <button
+                type="button"
+                class="h-10 rounded-2xl border text-xs font-bold transition cursor-pointer"
+                :class="[
+                  scope === 'customer'
+                    ? 'border-primary bg-primary/10 text-primary dark:border-indigo-400 dark:bg-indigo-500/20 dark:text-indigo-300'
+                    : 'border-zinc-200 bg-surface text-ink-secondary hover:border-zinc-300 dark:border-slate-700/70 dark:bg-[#121624]',
+                ]"
+                @click="scope = 'customer'"
+              >
+                Pelanggan
               </button>
             </div>
 
@@ -339,6 +358,22 @@ function handlePinConfirmed() {
                   {{ cat }}
                 </option>
               </select>
+            </div>
+
+            <!-- Pilih Pelanggan jika scope customer -->
+            <div v-if="scope === 'customer'" class="mt-2">
+              <select
+                v-model="selectedCustomer"
+                class="h-11 w-full rounded-2xl border border-zinc-200 bg-white px-3 text-sm text-ink-primary outline-none transition focus:border-primary focus:ring-4 focus:ring-primary/10 dark:border-slate-700/70 dark:bg-[#121624]"
+              >
+                <option value="">-- Semua Pelanggan Terdaftar (Member) --</option>
+                <option v-for="cust in customers" :key="cust.id" :value="cust.syncId || cust.id">
+                  {{ cust.name }}{{ cust.phone ? ` (${cust.phone})` : '' }}
+                </option>
+              </select>
+              <p class="mt-1 text-[11px] text-ink-secondary">
+                Pilih pelanggan tertentu atau biarkan "Semua Pelanggan Terdaftar" untuk seluruh member.
+              </p>
             </div>
           </div>
 

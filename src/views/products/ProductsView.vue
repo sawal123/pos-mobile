@@ -22,6 +22,10 @@ const router = useRouter()
 const { isRetail } = useRetailProductCodes()
 const qrProduct = ref(null)
 
+const isCashier = computed(
+  () => cloudStore.role === 'cashier' || cloudStore.isCashierContext === true,
+)
+
 const isLaundry = computed(() => businessStore.normalizedType === 'Laundry')
 const products = computed(() => productStore.products)
 const categories = computed(() => productStore.categories || [])
@@ -83,10 +87,12 @@ function handleToggle(product) {
 }
 
 function promptDelete(product) {
+  if (isCashier.value) return
   productToDelete.value = product
 }
 
 function confirmDelete() {
+  if (isCashier.value) return
   if (productToDelete.value) {
     productStore.deleteProduct(productToDelete.value.id)
     productToDelete.value = null
@@ -98,10 +104,12 @@ function cancelDelete() {
 }
 
 function goToCreate() {
+  if (isCashier.value) return
   router.push({ name: 'product-create' })
 }
 
 function goToEdit(product) {
+  if (isCashier.value) return
   router.push({ name: 'product-edit', params: { id: product.id } })
 }
 
@@ -156,6 +164,7 @@ function resetFilters() {
 
         <!-- Tambah Produk Button -->
         <BaseButton
+          v-if="!isCashier"
           size="sm"
           class="h-9 font-semibold shadow-soft whitespace-nowrap"
           @click="goToCreate"
@@ -537,6 +546,7 @@ function resetFilters() {
             </button>
             <!-- Edit Icon Button (Pure Icon, No Text) -->
             <button
+              v-if="!isCashier"
               type="button"
               class="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-zinc-200/90 bg-white text-ink-primary shadow-2xs transition hover:bg-zinc-50 active:scale-95"
               title="Edit produk"
@@ -560,6 +570,7 @@ function resetFilters() {
 
             <!-- Delete Icon Button -->
             <button
+              v-if="!isCashier"
               type="button"
               class="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-red-100 bg-red-50 text-red-600 transition hover:bg-red-100 active:scale-95"
               title="Hapus produk"
@@ -616,7 +627,7 @@ function resetFilters() {
         Mulai tambahkan {{ isLaundry ? 'layanan laundry' : 'produk' }} baru untuk mulai melakukan
         transaksi penjualan di POS.
       </p>
-      <div class="mt-5 flex justify-center gap-2">
+      <div v-if="!isCashier" class="mt-5 flex justify-center gap-2">
         <BaseButton size="sm" @click="goToCreate">
           <svg class="mr-1 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path

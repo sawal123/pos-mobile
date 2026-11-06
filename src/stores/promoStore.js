@@ -1,4 +1,14 @@
 import { defineStore } from 'pinia'
+import { useCloudSessionStore } from './cloudSessionStore.js'
+
+function isCashierRole() {
+  try {
+    const cloudStore = useCloudSessionStore()
+    return cloudStore.role === 'cashier' || cloudStore.isCashierContext === true
+  } catch {
+    return false
+  }
+}
 
 /**
  * Validates if a promo is currently active according to its date, weekday, and happy hour schedule.
@@ -51,7 +61,7 @@ export function isPromoActive(promo, now = new Date()) {
 /**
  * Evaluates the eligible subtotal and calculated discount amount for a given cart.
  */
-export function evaluatePromoDiscount(promo, cartItems = []) {
+export function evaluatePromoDiscount(promo, cartItems = [], customer = null) {
   if (!promo || !Array.isArray(cartItems) || cartItems.length === 0) {
     return 0
   }
@@ -75,6 +85,34 @@ export function evaluatePromoDiscount(promo, cartItems = []) {
   let eligibleQuantity = 0
 
   if (scope === 'all') {
+    eligibleAmount = totalSubtotal
+    eligibleQuantity = cartItems.reduce((sum, item) => sum + (Number(item.qty) || 0), 0)
+  } else if (scope === 'customer') {
+    if (!customer) {
+      return 0
+    }
+
+    const targets = Array.isArray(promo.targets) ? promo.targets : []
+    const customerTargets = targets.filter(
+      (t) => (t.target_type ?? t.targetType ?? t.type) === 'customer'
+    )
+
+    if (customerTargets.length > 0) {
+      const targetCustomerIds = new Set(
+        customerTargets.map((t) =>
+          String(t.target_sync_id ?? t.targetSyncId ?? t.target_id ?? t.targetId ?? t.value ?? '').toLowerCase()
+        )
+      )
+
+      const custId = String(customer.id ?? customer.syncId ?? customer.sync_id ?? '').toLowerCase()
+      const custPhone = String(customer.phone ?? '').toLowerCase()
+      const matches = (custId && targetCustomerIds.has(custId)) || (custPhone && targetCustomerIds.has(custPhone))
+
+      if (!matches) {
+        return 0
+      }
+    }
+
     eligibleAmount = totalSubtotal
     eligibleQuantity = cartItems.reduce((sum, item) => sum + (Number(item.qty) || 0), 0)
   } else if (scope === 'product') {
@@ -187,6 +225,9 @@ export const usePromoStore = defineStore('promo', {
     },
 
     createPromo(promoData) {
+      if (isCashierRole()) {
+        throw new Error('Kasir tidak diizinkan menambah promo.')
+      }
       const syncId = generatePromoSyncId()
       const newPromo = {
         id: syncId,
@@ -220,6 +261,9 @@ export const usePromoStore = defineStore('promo', {
     },
 
     togglePromoStatus(promoId) {
+      if (isCashierRole()) {
+        return null
+      }
       const targetId = String(promoId)
       const index = this.promos.findIndex(
         (p) => String(p.id) === targetId || String(p.syncId) === targetId,
@@ -254,6 +298,9 @@ export const usePromoStore = defineStore('promo', {
     },
 
     removePromo(promoId) {
+      if (isCashierRole()) {
+        return
+      }
       const targetId = String(promoId)
       this.promos = this.promos.filter(
         (p) => String(p.id) !== targetId && String(p.syncId) !== targetId,
@@ -291,8 +338,8 @@ export const usePromoStore = defineStore('promo', {
       )
     },
 
-    calculateDiscount(promo, cartItems) {
-      return evaluatePromoDiscount(promo, cartItems)
+    calculateDiscount(promo, cartItems, customer = null) {
+      return evaluatePromoDiscount(promo, cartItems, customer)
     },
   },
 })

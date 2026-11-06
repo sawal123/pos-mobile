@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { useBusinessStore } from '../stores/businessStore'
 import { useCartStore } from '../stores/cartStore'
 import { useCashierStore } from '../stores/cashierStore'
+import { useCloudSessionStore } from '../stores/cloudSessionStore'
 import { useShiftStore } from '../stores/shiftStore'
 import { useTransactionStore } from '../stores/transactionStore'
 import AppLayout from '../layouts/AppLayout.vue'
@@ -369,6 +370,18 @@ export function createAppRouter() {
     const shiftStore = useShiftStore()
     const cartStore = useCartStore()
     const transactionStore = useTransactionStore()
+    const cloudStore = useCloudSessionStore()
+
+    const isCashier = cloudStore.role === 'cashier' || cloudStore.isCashierContext === true
+
+    if (isCashier) {
+      if (['subscription', 'my-subscription', 'premium-checkout', 'premium-payment-status'].includes(to.name)) {
+        return { name: 'settings' }
+      }
+      if (['product-create', 'product-edit'].includes(to.name)) {
+        return { name: 'products' }
+      }
+    }
 
     if (to.name === 'root') {
       return resolveStartupRoute({ businessStore, cashierStore, shiftStore })

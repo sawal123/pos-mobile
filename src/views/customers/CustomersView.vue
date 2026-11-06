@@ -8,12 +8,18 @@ import BaseBadge from '@/components/base/BaseBadge.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import { useCustomerStore } from '@/stores/customerStore'
+import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { isPaidTransaction, useTransactionStore } from '@/stores/transactionStore'
 import { formatCurrency, formatDateTime } from '@/utils/formatters'
 
 const customerStore = useCustomerStore()
 const transactionStore = useTransactionStore()
+const cloudStore = useCloudSessionStore()
 const router = useRouter()
+
+const isCashier = computed(
+  () => cloudStore.role === 'cashier' || cloudStore.isCashierContext === true,
+)
 
 const { customers } = storeToRefs(customerStore)
 
@@ -173,10 +179,12 @@ function goToEdit(customer) {
 }
 
 function confirmDelete(customer) {
+  if (isCashier.value) return
   customerToDelete.value = customer
 }
 
 function executeDelete() {
+  if (isCashier.value) return
   if (customerToDelete.value) {
     customerStore.deleteCustomer(customerToDelete.value.id)
     if (selectedCustomer.value?.id === customerToDelete.value.id) {
@@ -447,7 +455,7 @@ function viewCustomerDetail(customer) {
                 Edit
               </BaseButton>
 
-              <BaseButton size="sm" variant="danger" class="h-7 px-2 text-xs" @click="confirmDelete(customer)">
+              <BaseButton v-if="!isCashier" size="sm" variant="danger" class="h-7 px-2 text-xs" @click="confirmDelete(customer)">
                 <svg class="mr-0.5 h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                 </svg>

@@ -16,6 +16,15 @@ import { getBusinessTemplate } from '@/data/businessTemplates'
 const DEFAULT_FILTER_CATEGORY = 'Semua'
 const DEFAULT_FILTER_CATEGORY_KEY = DEFAULT_FILTER_CATEGORY.toLowerCase()
 
+function isCashierRole() {
+  try {
+    const cloudStore = useCloudSessionStore()
+    return cloudStore.role === 'cashier' || cloudStore.isCashierContext === true
+  } catch {
+    return false
+  }
+}
+
 function normalizeNumber(value, fallback = 0) {
   const number = Number(value)
   return Number.isFinite(number) ? number : fallback
@@ -368,6 +377,12 @@ export const useProductStore = defineStore('product', {
       return this.products.find((product) => String(product.id) === String(id)) ?? null
     },
     createProduct(payload) {
+      if (isCashierRole()) {
+        return {
+          success: false,
+          errors: { form: 'Kasir tidak diizinkan menambah produk.' },
+        }
+      }
       const prepared = prepareProductCode(payload, this.products)
       const validation = validateProductInput(prepared.payload, this.categories)
       const errors = { ...validation.errors, ...prepared.errors }
@@ -395,6 +410,12 @@ export const useProductStore = defineStore('product', {
       }
     },
     updateProduct(id, payload) {
+      if (isCashierRole()) {
+        return {
+          success: false,
+          errors: { form: 'Kasir tidak diizinkan mengubah produk.' },
+        }
+      }
       const existingProduct = this.getProductById(id)
 
       if (!existingProduct) {
@@ -499,6 +520,9 @@ export const useProductStore = defineStore('product', {
       return true
     },
     deleteProduct(id) {
+      if (isCashierRole()) {
+        return false
+      }
       const currentLength = this.products.length
       this.products = this.products.filter((product) => String(product.id) !== String(id))
 
@@ -638,6 +662,12 @@ export const useProductStore = defineStore('product', {
       }
     },
     createCategory(name) {
+      if (isCashierRole()) {
+        return {
+          success: false,
+          error: 'Kasir tidak diizinkan menambah kategori.',
+        }
+      }
       const validation = validateCategoryName(name, this.categories)
 
       if (!validation.isValid) {
@@ -655,6 +685,12 @@ export const useProductStore = defineStore('product', {
       }
     },
     updateCategory(currentName, nextName) {
+      if (isCashierRole()) {
+        return {
+          success: false,
+          error: 'Kasir tidak diizinkan mengubah kategori.',
+        }
+      }
       const index = this.categories.findIndex((category) => category === currentName)
 
       if (index === -1) {
@@ -688,6 +724,12 @@ export const useProductStore = defineStore('product', {
       }
     },
     deleteCategory(name) {
+      if (isCashierRole()) {
+        return {
+          success: false,
+          error: 'Kasir tidak diizinkan menghapus kategori.',
+        }
+      }
       const isUsed = this.products.some((product) => product.category === name)
 
       if (isUsed) {

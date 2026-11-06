@@ -1,5 +1,15 @@
 import { defineStore } from 'pinia'
 import { normalizeCustomerPhone } from '@/utils/customerPhone'
+import { useCloudSessionStore } from '@/stores/cloudSessionStore'
+
+function isCashierRole() {
+  try {
+    const cloudStore = useCloudSessionStore()
+    return cloudStore.role === 'cashier' || cloudStore.isCashierContext === true
+  } catch {
+    return false
+  }
+}
 
 function createCustomerId() {
   if (globalThis.crypto?.randomUUID) {
@@ -161,6 +171,9 @@ export const useCustomerStore = defineStore('customer', {
       }
     },
     deleteCustomer(id) {
+      if (isCashierRole()) {
+        return false
+      }
       const initialLength = this.customers.length
       this.customers = this.customers.filter((customer) => String(customer.id) !== String(id))
 

@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { storeToRefs } from 'pinia'
 
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -13,6 +13,10 @@ import { useSyncPullStore } from '@/stores/syncPullStore'
 const cloudStore = useCloudSessionStore()
 const productStore = useProductStore()
 const syncPullStore = useSyncPullStore()
+
+const isCashier = computed(
+  () => cloudStore.role === 'cashier' || cloudStore.isCashierContext === true,
+)
 
 const { categories } = storeToRefs(productStore)
 
@@ -35,12 +39,15 @@ const editCategoryName = ref('')
 const message = ref('')
 const error = ref('')
 
+const categoryToDelete = ref('')
+
 function resetFeedback() {
   message.value = ''
   error.value = ''
 }
 
 function handleCreateCategory() {
+  if (isCashier.value) return
   resetFeedback()
 
   const result = productStore.createCategory(newCategoryName.value)
@@ -55,6 +62,7 @@ function handleCreateCategory() {
 }
 
 function openEditModal(category) {
+  if (isCashier.value) return
   resetFeedback()
   editingCategory.value = category
   editCategoryName.value = category
@@ -66,6 +74,7 @@ function closeEditModal() {
 }
 
 function handleUpdateCategory() {
+  if (isCashier.value) return
   resetFeedback()
 
   const result = productStore.updateCategory(editingCategory.value, editCategoryName.value)
@@ -79,13 +88,20 @@ function handleUpdateCategory() {
   closeEditModal()
 }
 
-function handleDeleteCategory(category) {
+function promptDeleteCategory(category) {
+  if (isCashier.value) return
   resetFeedback()
+  categoryToDelete.value = category
+}
 
-  if (!window.confirm(`Hapus kategori "${category}"?`)) {
+function confirmDeleteCategory() {
+  if (isCashier.value || !categoryToDelete.value) {
+    categoryToDelete.value = ''
     return
   }
 
+  const category = categoryToDelete.value
+  categoryToDelete.value = ''
   const result = productStore.deleteCategory(category)
 
   if (!result.success) {
@@ -107,7 +123,7 @@ function handleDeleteCategory(category) {
       </p>
     </section>
 
-    <BaseCard class="space-y-4">
+    <BaseCard v-if="!isCashier" class="space-y-4">
       <div class="flex items-center justify-between">
         <h2 class="text-lg font-semibold text-ink-primary">Tambah Kategori</h2>
       </div>
@@ -149,9 +165,9 @@ function handleDeleteCategory(category) {
             <p class="text-sm text-ink-secondary">Kategori ini tersedia untuk form produk dan filter POS.</p>
           </div>
 
-          <div class="flex flex-wrap gap-2">
+          <div v-if="!isCashier" class="flex flex-wrap gap-2">
             <BaseButton size="sm" variant="secondary" @click="openEditModal(category)">Edit</BaseButton>
-            <BaseButton size="sm" variant="danger" @click="handleDeleteCategory(category)">Hapus</BaseButton>
+            <BaseButton size="sm" variant="danger" @click="promptDeleteCategory(category)">Hapus</BaseButton>
           </div>
         </div>
       </div>
@@ -173,6 +189,20 @@ function handleDeleteCategory(category) {
         <div class="flex flex-wrap gap-3">
           <BaseButton @click="handleUpdateCategory">Simpan</BaseButton>
           <BaseButton variant="secondary" @click="closeEditModal">Batal</BaseButton>
+        </div>
+      </div>
+    </BaseModal>
+
+    <!-- Modal Konfirmasi Hapus Kategori -->
+    <BaseModal :open="Boolean(categoryToDelete)" title="Hapus Kategori" @close="categoryToDelete = ''">
+      <div class="space-y-4">
+        <p class="text-sm text-ink-secondary">
+          Apakah Anda yakin ingin menghapus kategori <span class="font-bold text-ink-primary">"{{ categoryToDelete }}"</span>?
+        </p>
+
+        <div class="flex flex-wrap gap-3">
+          <BaseButton variant="danger" @click="confirmDeleteCategory">Hapus</BaseButton>
+          <BaseButton variant="secondary" @click="categoryToDelete = ''">Batal</BaseButton>
         </div>
       </div>
     </BaseModal>
