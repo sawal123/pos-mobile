@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import ProductVariantSheet from '@/components/pos/ProductVariantSheet.vue'
+import ProductsView from '@/views/products/ProductsView.vue'
+import ProductFormView from '@/views/products/ProductFormView.vue'
+import { createAppRouter } from '@/router'
+import { useBusinessStore } from '@/stores/businessStore'
+import { useCashierStore } from '@/stores/cashierStore'
 import { useVariantStore } from '@/stores/variantStore'
 import { useCartStore } from '@/stores/cartStore'
 import { useProductStore } from '@/stores/productStore'
@@ -420,5 +425,92 @@ describe('Product Variants Feature - Mobile POS', () => {
     expect(product).toBeDefined()
     expect(product.variantGroupIds).toEqual([vgUuid])
     expect(variantStore.hasVariants(product)).toBe(true)
+  })
+
+  it('7. ProductsView shows locked Varian button and opens Upgrade ke Paket Cloud modal when not on Cloud', async () => {
+    const businessStore = useBusinessStore()
+    const cashierStore = useCashierStore()
+    businessStore.setBusiness({
+      name: 'Kedai Kopi Lokal',
+      type: 'Cafe',
+      owner: 'Owner',
+      phone: '08123456789',
+      outlet: 'Utama',
+      mode: 'free',
+    })
+    cashierStore.setPinConfigured(true)
+
+    const router = createAppRouter()
+    await router.push('/products')
+    await router.isReady()
+
+    const wrapper = mount(ProductsView, {
+      global: {
+        plugins: [pinia, router],
+        stubs: {
+          teleport: true,
+        },
+      },
+    })
+
+    const variantBtn = wrapper.find('[data-testid="products-variants-btn"]')
+    expect(variantBtn.exists()).toBe(true)
+    expect(variantBtn.text()).toContain('Varian')
+
+    await variantBtn.trigger('click')
+
+    const lockModal = wrapper.find('[data-testid="variant-cloud-lock-modal"]')
+    expect(lockModal.exists()).toBe(true)
+    expect(lockModal.text()).toContain('Penambahan Varian Menu Terkunci')
+    expect(lockModal.text()).toContain('upgrade ke Paket Cloud')
+
+    const upgradeBtn = wrapper.find('[data-testid="variant-lock-upgrade-btn"]')
+    expect(upgradeBtn.exists()).toBe(true)
+    await upgradeBtn.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.name).toBe('subscription')
+  })
+
+  it('8. ProductFormView shows locked Varian Menu section with lock icon and Upgrade ke Paket Cloud CTA when not on Cloud', async () => {
+    const businessStore = useBusinessStore()
+    const cashierStore = useCashierStore()
+    businessStore.setBusiness({
+      name: 'Kedai Kopi Lokal',
+      type: 'Cafe',
+      owner: 'Owner',
+      phone: '08123456789',
+      outlet: 'Utama',
+      mode: 'free',
+    })
+    cashierStore.setPinConfigured(true)
+
+    const router = createAppRouter()
+    await router.push('/products/create')
+    await router.isReady()
+
+    const wrapper = mount(ProductFormView, {
+      global: {
+        plugins: [pinia, router],
+        stubs: {
+          teleport: true,
+        },
+      },
+    })
+
+    const lockedSection = wrapper.find('[data-testid="product-form-variants-locked"]')
+    expect(lockedSection.exists()).toBe(true)
+    expect(lockedSection.text()).toContain('Penambahan Varian Menu Terkunci')
+    expect(lockedSection.text()).toContain('upgrade ke Paket Cloud')
+
+    const lockedAddBtn = wrapper.find('[data-testid="btn-locked-add-variant"]')
+    expect(lockedAddBtn.exists()).toBe(true)
+    await lockedAddBtn.trigger('click')
+    expect(wrapper.find('[data-testid="variant-cloud-lock-modal"]').exists()).toBe(true)
+
+    const upgradeBtn = wrapper.find('[data-testid="btn-upgrade-cloud-variant"]')
+    expect(upgradeBtn.exists()).toBe(true)
+    await upgradeBtn.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.name).toBe('subscription')
   })
 })

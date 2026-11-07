@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import ProductQrModal from '@/components/products/ProductQrModal.vue'
+import VariantCloudLockModal from '@/components/products/VariantCloudLockModal.vue'
 import { useRetailProductCodes } from '@/composables/useRetailProductCodes'
 
 import AppIcon from '@/components/base/AppIcon.vue'
@@ -11,16 +12,32 @@ import BaseModal from '@/components/base/BaseModal.vue'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useProductStore } from '@/stores/productStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
+import { useSubscriptionStore } from '@/stores/subscriptionStore'
 import { useSyncPullStore } from '@/stores/syncPullStore'
+import { useVariantStore } from '@/stores/variantStore'
 import { formatCurrency } from '@/utils/formatters'
 
 const businessStore = useBusinessStore()
 const productStore = useProductStore()
 const cloudStore = useCloudSessionStore()
+const subscriptionStore = useSubscriptionStore()
 const syncPullStore = useSyncPullStore()
+const variantStore = useVariantStore()
 const router = useRouter()
 const { isRetail } = useRetailProductCodes()
 const qrProduct = ref(null)
+const showVariantModal = ref(false)
+
+const hasCloudAccess = computed(
+  () =>
+    subscriptionStore.isPremium === true ||
+    subscriptionStore.hasCloudAccess === true ||
+    cloudStore.isOperationalCloudAccess === true,
+)
+
+function getProductVariantCount(product) {
+  return variantStore.getProductVariantGroups(product).length
+}
 
 const isCashier = computed(
   () => cloudStore.role === 'cashier' || cloudStore.isCashierContext === true,
@@ -162,6 +179,33 @@ function resetFilters() {
       </div>
 
       <div class="flex items-center gap-2 shrink-0">
+        <!-- Varian Menu (Locked when not Cloud) -->
+        <button
+          v-if="!isLaundry"
+          type="button"
+          data-testid="products-variants-btn"
+          class="inline-flex h-9 items-center gap-1.5 rounded-xl border px-3 text-xs font-semibold shadow-xs transition active:scale-95"
+          :class="
+            hasCloudAccess
+              ? 'border-zinc-200/90 bg-white text-ink-primary hover:bg-zinc-50'
+              : 'border-amber-200/90 bg-amber-50/70 text-amber-800 hover:bg-amber-100/70'
+          "
+          @click="showVariantModal = true"
+        >
+          <AppIcon
+            :name="hasCloudAccess ? 'variants' : 'lock'"
+            class="h-3.5 w-3.5"
+            :class="hasCloudAccess ? 'text-primary' : 'text-amber-600'"
+          />
+          <span>Varian</span>
+          <span
+            v-if="!hasCloudAccess"
+            class="hidden sm:inline rounded-md bg-amber-200/80 px-1.5 py-0.2 text-[9px] font-extrabold uppercase tracking-wide text-amber-900"
+          >
+            Cloud
+          </span>
+        </button>
+
         <!-- Kelola Kategori Button -->
         <button
           type="button"
@@ -481,6 +525,12 @@ function resetFilters() {
               >
                 {{ product.pricingUnit }}
               </span>
+              <span
+                v-if="getProductVariantCount(product) > 0"
+                class="rounded-md bg-indigo-50 px-2 py-0.5 font-semibold text-indigo-600"
+              >
+                {{ getProductVariantCount(product) }} Varian
+              </span>
             </div>
           </div>
 
@@ -692,6 +742,7 @@ function resetFilters() {
       :product="qrProduct"
       @close="qrProduct = null"
     />
+    <VariantCloudLockModal :open="showVariantModal" @close="showVariantModal = false" />
   </div>
 </template>
 

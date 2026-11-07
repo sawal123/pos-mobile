@@ -5,8 +5,11 @@ import { useRoute, useRouter } from 'vue-router'
 
 import ProductScannerSheet from '@/components/scanner/ProductScannerSheet.vue'
 import ProductQrModal from '@/components/products/ProductQrModal.vue'
+import VariantCloudLockModal from '@/components/products/VariantCloudLockModal.vue'
 import { useRetailProductCodes } from '@/composables/useRetailProductCodes'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
+import { useSubscriptionStore } from '@/stores/subscriptionStore'
+import { useVariantStore } from '@/stores/variantStore'
 
 import AppIcon from '@/components/base/AppIcon.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -19,12 +22,35 @@ const productStore = useProductStore()
 const route = useRoute()
 const router = useRouter()
 const cloudStore = useCloudSessionStore()
+const subscriptionStore = useSubscriptionStore()
+const variantStore = useVariantStore()
 const { isRetail, canManageCodes, scanContext } = useRetailProductCodes()
 const showScanner = ref(false)
 const showQr = ref(false)
+const showVariantModal = ref(false)
 const savedProduct = computed(() =>
   isEditMode.value ? productStore.getProductById(route.params.id) : null,
 )
+
+const isCashier = computed(
+  () => cloudStore.role === 'cashier' || cloudStore.isCashierContext === true,
+)
+
+const hasCloudAccess = computed(
+  () =>
+    subscriptionStore.isPremium === true ||
+    subscriptionStore.hasCloudAccess === true ||
+    cloudStore.isOperationalCloudAccess === true,
+)
+
+const assignedVariantGroups = computed(() =>
+  savedProduct.value ? variantStore.getProductVariantGroups(savedProduct.value) : [],
+)
+
+function goToUpgradeCloud() {
+  if (isCashier.value) return
+  router.push({ name: cloudStore.isLinked ? 'my-subscription' : 'subscription' })
+}
 
 const { categories } = storeToRefs(productStore)
 
@@ -512,6 +538,119 @@ watch(
         </div>
       </section>
 
+      <!-- 3b. Varian Menu (Locked with Upgrade to Cloud when not Cloud) -->
+      <section
+        v-if="!isLaundry"
+        data-testid="product-form-variants-section"
+        class="rounded-3xl border border-zinc-200/80 bg-white p-4 shadow-soft space-y-3.5"
+      >
+        <div class="flex items-center justify-between gap-2">
+          <div class="flex items-center gap-2">
+            <h2 class="text-xs font-bold uppercase tracking-wider text-ink-secondary">
+              Varian Menu
+            </h2>
+          </div>
+
+          <span
+            v-if="!hasCloudAccess"
+            class="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-700"
+          >
+            <AppIcon name="lock" class="h-3 w-3" />
+            <span>Paket Cloud</span>
+          </span>
+          <span
+            v-else
+            class="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-primary"
+          >
+            <AppIcon name="cloud" class="h-3 w-3" />
+            <span>Cloud Aktif</span>
+          </span>
+        </div>
+
+        <!-- Locked State for Non-Cloud Users -->
+        <div
+          v-if="!hasCloudAccess"
+          data-testid="product-form-variants-locked"
+          class="space-y-3 rounded-2xl border border-amber-200/90 bg-amber-50/60 p-3.5"
+        >
+          <div class="flex items-start gap-3">
+            <span
+              class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-amber-100 text-amber-600"
+            >
+              <AppIcon name="lock" class="h-5 w-5" />
+            </span>
+            <div class="min-w-0 space-y-1">
+              <p class="text-sm font-bold text-ink-primary">Penambahan Varian Menu Terkunci</p>
+              <p
+                class="text-xs leading-relaxed text-ink-secondary"
+                data-testid="product-form-variants-lock-text"
+              >
+                Fitur penambahan varian menu (ukuran cup, level gula, suhu, topping) hanya tersedia
+                pada Paket Cloud. Silakan upgrade ke Paket Cloud untuk mengaktifkan fitur ini.
+              </p>
+            </div>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-2 pt-0.5">
+            <button
+              type="button"
+              data-testid="btn-locked-add-variant"
+              class="inline-flex h-9 items-center gap-1.5 rounded-xl border border-zinc-200 bg-white/80 px-3 text-xs font-semibold text-ink-secondary shadow-2xs transition hover:bg-white active:scale-95"
+              @click="showVariantModal = true"
+            >
+              <AppIcon name="lock" class="h-3.5 w-3.5 text-amber-500" />
+              <span>Tambah Varian Menu</span>
+            </button>
+
+            <BaseButton
+              v-if="!isCashier"
+              type="button"
+              size="sm"
+              data-testid="btn-upgrade-cloud-variant"
+              class="h-9 text-xs font-bold"
+              @click="goToUpgradeCloud"
+            >
+              <AppIcon name="cloud" class="h-3.5 w-3.5" />
+              <span>Upgrade ke Paket Cloud</span>
+            </BaseButton>
+          </div>
+        </div>
+
+        <!-- Cloud Active State -->
+        <div v-else class="space-y-3" data-testid="product-form-variants-cloud">
+          <div v-if="assignedVariantGroups.length > 0" class="flex flex-wrap gap-1.5">
+            <span
+              v-for="group in assignedVariantGroups"
+              :key="group.id || group.syncId"
+              class="inline-flex items-center gap-1.5 rounded-xl border border-indigo-200/80 bg-indigo-50/70 px-3 py-1 text-xs font-semibold text-primary"
+            >
+              <AppIcon name="variants" class="h-3.5 w-3.5" />
+              <span>{{ group.name }} ({{ (group.options || []).length }} opsi)</span>
+            </span>
+          </div>
+
+          <div
+            class="flex items-start justify-between gap-3 rounded-2xl border border-zinc-200/80 bg-surface/70 p-3 text-xs"
+          >
+            <div class="flex items-start gap-2.5">
+              <AppIcon name="cloud" class="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+              <p class="leading-relaxed text-ink-secondary">
+                Penambahan &amp; pengaturan varian menu dikelola melalui
+                <strong class="font-semibold text-ink-primary">Dashboard Web Cloud</strong>, lalu
+                otomatis tersinkron ke POS Mobile.
+              </p>
+            </div>
+            <button
+              type="button"
+              class="shrink-0 rounded-xl border border-zinc-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-primary shadow-2xs transition hover:bg-zinc-50"
+              @click="showVariantModal = true"
+            >
+              Lihat
+            </button>
+          </div>
+        </div>
+      </section>
+
       <!-- 4. Inventaris & Stok (Produk Ritel/FnB) -->
       <section
         v-if="!isLaundry"
@@ -676,5 +815,6 @@ watch(
       @scanned="form.barcode = $event"
     />
     <ProductQrModal :open="showQr && isRetail" :product="savedProduct" @close="showQr = false" />
+    <VariantCloudLockModal :open="showVariantModal" @close="showVariantModal = false" />
   </div>
 </template>
