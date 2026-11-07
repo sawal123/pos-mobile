@@ -14,12 +14,13 @@ import SettingsMenuItem from '@/components/settings/SettingsMenuItem.vue'
 import SettingsSection from '@/components/settings/SettingsSection.vue'
 import ReceiptSettingsPanel from '@/components/settings/ReceiptSettingsPanel.vue'
 import CloudBackupPanel from '@/components/settings/CloudBackupPanel.vue'
+import LocalDataExportPanel from '@/components/settings/LocalDataExportPanel.vue'
 import { clearLocalCache } from '@/services/localCacheService'
+import { saveOrShareJsonBackup } from '@/services/dataExportService'
 import { apiRequest } from '@/services/cloud/apiClient'
 import {
   RESTORE_CONFIRMATION_MESSAGE,
   createBackupPayload,
-  downloadBackupFile,
   validateBackupPayload,
 } from '@/services/backupService'
 import { RESTORE_MODE, getActiveRestoreSafetyEngine } from '@/services/restoreSafetyEngine'
@@ -483,10 +484,14 @@ async function handleTestPrint() {
   }
 }
 
-function handleBackup() {
-  const payload = createBackupPayload(getStoreContext())
-  downloadBackupFile(payload)
-  setFeedback('success', 'Backup berhasil dibuat.')
+async function handleBackup() {
+  try {
+    const payload = createBackupPayload(getStoreContext())
+    await saveOrShareJsonBackup(payload)
+    setFeedback('success', 'Backup berhasil dibuat.')
+  } catch (err) {
+    setFeedback('error', `Gagal membuat file backup: ${err?.message || err}`)
+  }
 }
 
 function handleRestoreClick() {
@@ -1115,11 +1120,15 @@ async function handleRestoreFileChange(event) {
       >
         <!-- Backup data: local (free) vs cloud (premium) -->
         <div class="space-y-5" data-testid="backup-card">
+          <LocalDataExportPanel
+            @feedback="({ type, message }) => setFeedback(type, message)"
+          />
+
           <div
             class="space-y-3 rounded-3xl border border-zinc-200 bg-surface/60 p-4 dark:border-slate-700/60 dark:bg-[#121726]"
             data-testid="local-backup-section"
           >
-            <div class="flex items-center justify-between">
+            <div class="flex items-center justify-between gap-3">
               <div class="flex items-center gap-3">
                 <span
                   class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary dark:bg-indigo-500/20 dark:text-indigo-300"
@@ -1127,12 +1136,16 @@ async function handleRestoreFileChange(event) {
                   <AppIcon name="backup" />
                 </span>
                 <div class="min-w-0">
-                  <h4 class="text-base font-semibold text-ink-primary">Backup Lokal</h4>
-                  <p class="text-xs text-ink-secondary">Backup data ke perangkat ini.</p>
+                  <h4 class="text-base font-semibold text-ink-primary">
+                    Backup &amp; Restore Sistem (.json)
+                  </h4>
+                  <p class="text-xs text-ink-secondary">
+                    Simpan file sistem untuk dipulihkan kembali saat ganti HP atau install ulang.
+                  </p>
                 </div>
               </div>
               <span
-                class="rounded-full bg-emerald-100 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300"
+                class="shrink-0 rounded-full bg-emerald-100 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300"
               >
                 Gratis
               </span>
@@ -1140,7 +1153,7 @@ async function handleRestoreFileChange(event) {
 
             <div class="flex flex-wrap gap-2">
               <BaseButton data-testid="local-backup-now" @click="handleBackup">
-                Backup Data
+                Backup Data (.json)
               </BaseButton>
               <BaseButton
                 variant="secondary"
