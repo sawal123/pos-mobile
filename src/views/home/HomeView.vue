@@ -5,7 +5,9 @@ import { RouterLink } from 'vue-router'
 import AppIcon from '@/components/base/AppIcon.vue'
 import BaseBadge from '@/components/base/BaseBadge.vue'
 import HomeSalesChart from '@/components/home/HomeSalesChart.vue'
+import SyncLockedModal from '@/components/sync/SyncLockedModal.vue'
 import { usePullToRefresh } from '@/composables/usePullToRefresh'
+import { useSyncAccess } from '@/composables/useSyncAccess'
 import { getOperationalMenuItems } from '@/navigation/operationalMenu'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCashStore } from '@/stores/cashStore'
@@ -25,7 +27,22 @@ const syncStatusStore = useSyncStatusStore()
 const transactionStore = useTransactionStore()
 const cloudStore = useCloudSessionStore()
 const syncPullStore = useSyncPullStore()
+const { isSyncLocked } = useSyncAccess()
+const showSyncLockedModal = ref(false)
 const refreshRoot = ref(null)
+
+function isMenuItemLocked(item) {
+  return item.key === 'sync' && isSyncLocked.value
+}
+
+function handleMenuTileClick(event, item, navigate) {
+  if (isMenuItemLocked(item)) {
+    event.preventDefault()
+    showSyncLockedModal.value = true
+    return
+  }
+  navigate(event)
+}
 
 onMounted(async () => {
   if (cloudStore.isLinked && cloudStore.isOperationalCloudAccess) {
@@ -242,28 +259,64 @@ const laundryStatusSummaries = computed(() => {
             v-for="item in menuItems"
             :key="item.key"
             :to="item.to"
-            :data-testid="`home-menu-${item.key}`"
-            class="group flex flex-col justify-between rounded-2xl border border-zinc-200/80 bg-white p-4 shadow-soft transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-primary/20 active:scale-[0.98]"
+            custom
+            v-slot="{ href, navigate }"
           >
-            <div class="flex items-start justify-between">
-              <span
-                class="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary transition group-hover:bg-primary group-hover:text-white"
-              >
-                <AppIcon :name="item.icon" class="h-5 w-5" />
-              </span>
-            </div>
+            <a
+              :href="href"
+              :data-testid="`home-menu-${item.key}`"
+              :aria-haspopup="isMenuItemLocked(item) ? 'dialog' : undefined"
+              :class="[
+                'group flex flex-col justify-between rounded-2xl border p-4 shadow-soft transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-primary/20 active:scale-[0.98]',
+                isMenuItemLocked(item)
+                  ? 'border-amber-200/90 bg-amber-50/40 hover:border-amber-300 dark:border-amber-500/30 dark:bg-amber-950/20'
+                  : 'border-zinc-200/80 bg-white hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md',
+              ]"
+              @click="handleMenuTileClick($event, item, navigate)"
+            >
+              <div class="flex items-start justify-between gap-2">
+                <span
+                  :class="[
+                    'flex h-11 w-11 items-center justify-center rounded-xl transition',
+                    isMenuItemLocked(item)
+                      ? 'bg-amber-100 text-amber-600 dark:bg-amber-500/20 dark:text-amber-300'
+                      : 'bg-primary/10 text-primary group-hover:bg-primary group-hover:text-white',
+                  ]"
+                >
+                  <AppIcon :name="item.icon" class="h-5 w-5" />
+                </span>
 
-            <div class="mt-3.5">
-              <span class="block text-sm font-bold text-ink-primary group-hover:text-primary transition">
-                {{ item.title }}
-              </span>
-              <span class="mt-0.5 block text-xs leading-tight text-ink-secondary line-clamp-1">
-                {{ item.subtitle }}
-              </span>
-            </div>
+                <span
+                  v-if="isMenuItemLocked(item)"
+                  data-testid="home-menu-sync-lock"
+                  class="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-700 dark:bg-amber-500/25 dark:text-amber-200"
+                >
+                  <AppIcon name="lock" class="h-3 w-3" />
+                  <span>Cloud</span>
+                </span>
+              </div>
+
+              <div class="mt-3.5">
+                <span
+                  :class="[
+                    'block text-sm font-bold transition',
+                    isMenuItemLocked(item)
+                      ? 'text-ink-primary'
+                      : 'text-ink-primary group-hover:text-primary',
+                  ]"
+                >
+                  {{ item.title }}
+                </span>
+                <span class="mt-0.5 block text-xs leading-tight text-ink-secondary line-clamp-1">
+                  {{ isMenuItemLocked(item) ? 'Terkunci · Khusus Cloud' : item.subtitle }}
+                </span>
+              </div>
+            </a>
           </RouterLink>
         </div>
       </section>
     </div>
+
+    <SyncLockedModal :open="showSyncLockedModal" @close="showSyncLockedModal = false" />
   </div>
 </template>

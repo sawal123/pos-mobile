@@ -5,7 +5,6 @@ import { useRouter } from 'vue-router'
 import AppIcon from '@/components/base/AppIcon.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
-import BaseModal from '@/components/base/BaseModal.vue'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCashStore } from '@/stores/cashStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
@@ -40,7 +39,6 @@ const isSyncing = ref(false)
 const isPulling = ref(false)
 const isClearingCache = ref(false)
 const syncFeedback = ref(null) // { type: 'success' | 'error', message: string }
-const showDisconnectConfirm = ref(false)
 const autoSyncDraft = ref(syncAutoSyncStore.enabled)
 
 onMounted(async () => {
@@ -225,19 +223,8 @@ async function handleClearAndPull() {
   }
 }
 
-async function confirmDisconnect() {
-  showDisconnectConfirm.value = false
-  await clearLocalCache({
-    pinia: null,
-    adapter: cloudStore.adapter,
-    scheduler: cloudStore.scheduler,
-    resetBusiness: true,
-  })
-  await cloudStore.logout()
-  syncFeedback.value = {
-    type: 'success',
-    message: 'Hubungan Cloud berhasil diputuskan dan data cache lokal telah dibersihkan.',
-  }
+function handleOpenSettingsCloud() {
+  router.push({ name: 'settings', query: { section: 'cloud' } })
 }
 
 function handleBack() {
@@ -361,39 +348,30 @@ function handleBack() {
       <!-- If Not Authenticated -->
       <div v-else class="rounded-2xl bg-surface p-4 text-xs text-ink-secondary space-y-1">
         <p class="font-semibold text-ink-primary">Belum terhubung ke Akun Cloud</p>
-        <p>Hubungkan aplikasi POS ini dengan akun Cloud untuk menyinkronkan data antar perangkat dan dashboard web.</p>
+        <p>
+          Silakan login ke Akun Cloud melalui menu Pengaturan untuk menyinkronkan data antar
+          perangkat dan dashboard web.
+        </p>
       </div>
 
-      <!-- Action Buttons -->
-      <div class="flex flex-wrap gap-2 pt-1">
+      <!-- Settings Redirect Note (Login & Logout strictly live in Settings) -->
+      <div
+        class="flex flex-wrap items-center justify-between gap-2.5 border-t border-zinc-200/60 pt-3 dark:border-slate-700/50"
+      >
+        <p class="text-xs text-ink-secondary">
+          Pengaturan <strong class="font-semibold text-ink-primary">Login</strong>, kelola akun, dan
+          <strong class="font-semibold text-ink-primary">Logout</strong> Cloud terletak di menu
+          <strong class="font-semibold text-ink-primary">Pengaturan</strong>.
+        </p>
         <BaseButton
-          v-if="!cloudStore.isAuthenticated"
           size="sm"
-          data-testid="btn-login-cloud"
-          @click="router.push('/cloud')"
+          variant="secondary"
+          data-testid="btn-sync-open-settings"
+          @click="handleOpenSettingsCloud"
         >
-          Masuk
+          <AppIcon name="settings" class="h-4 w-4" />
+          <span>Buka Pengaturan</span>
         </BaseButton>
-
-        <template v-else>
-          <BaseButton
-            size="sm"
-            variant="secondary"
-            data-testid="btn-manage-cloud"
-            @click="router.push('/cloud')"
-          >
-            Kelola
-          </BaseButton>
-          <BaseButton
-            size="sm"
-            variant="ghost"
-            class="text-danger hover:bg-danger/10"
-            data-testid="btn-disconnect-cloud"
-            @click="showDisconnectConfirm = true"
-          >
-            Putuskan
-          </BaseButton>
-        </template>
       </div>
     </BaseCard>
 
@@ -568,34 +546,5 @@ function handleBack() {
         </div>
       </div>
     </BaseCard>
-
-    <!-- Disconnect Modal -->
-    <BaseModal
-      :open="showDisconnectConfirm"
-      title="Putuskan Cloud"
-      @close="showDisconnectConfirm = false"
-    >
-      <div class="space-y-4" data-testid="sync-disconnect-modal">
-        <p class="text-sm text-ink-secondary">
-          Sesi Cloud akan diputuskan dari POS ini. Seluruh data cache lokal (menu produk, transaksi, dan sesi kasir lokal) akan dibersihkan agar aman saat berganti akun.
-        </p>
-        <div class="flex flex-wrap gap-2">
-          <BaseButton
-            variant="danger"
-            data-testid="sync-disconnect-confirm"
-            @click="confirmDisconnect"
-          >
-            Putuskan
-          </BaseButton>
-          <BaseButton
-            variant="ghost"
-            data-testid="sync-disconnect-cancel"
-            @click="showDisconnectConfirm = false"
-          >
-            Batal
-          </BaseButton>
-        </div>
-      </div>
-    </BaseModal>
   </div>
 </template>

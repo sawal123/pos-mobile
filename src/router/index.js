@@ -4,7 +4,9 @@ import { useCartStore } from '../stores/cartStore'
 import { useCashierStore } from '../stores/cashierStore'
 import { useCloudSessionStore } from '../stores/cloudSessionStore'
 import { useShiftStore } from '../stores/shiftStore'
+import { useSubscriptionStore } from '../stores/subscriptionStore'
 import { useTransactionStore } from '../stores/transactionStore'
+import { resolveSyncAccess } from '../composables/useSyncAccess'
 import AppLayout from '../layouts/AppLayout.vue'
 import BusinessSetupView from '../views/onboarding/BusinessSetupView.vue'
 import PinSetupView from '../views/onboarding/PinSetupView.vue'
@@ -424,6 +426,14 @@ export function createAppRouter() {
 
     if (!shiftStore.isOpen && shiftRequiredRoutes.has(to.name)) {
       return { name: 'open-shift' }
+    }
+
+    if (to.name === 'sync') {
+      const subscriptionStore = useSubscriptionStore()
+      const { isSyncLocked } = resolveSyncAccess({ cloudStore, subscriptionStore })
+      if (isSyncLocked) {
+        return { name: 'settings', query: { section: 'cloud' } }
+      }
     }
 
     if (to.name === 'pos' && businessStore.normalizedType === 'Laundry') {

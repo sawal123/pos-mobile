@@ -6,9 +6,11 @@ import AppHeader from '@/components/layout/AppHeader.vue'
 import BottomNavigation from '@/components/layout/BottomNavigation.vue'
 import TabletNavRail from '@/components/layout/TabletNavRail.vue'
 import OfflineSyncPromptModal from '@/components/sync/OfflineSyncPromptModal.vue'
+import SyncLockedModal from '@/components/sync/SyncLockedModal.vue'
 
 const route = useRoute()
 const isSidebarDrawerOpen = ref(false)
+const showDrawerSyncLockedModal = ref(false)
 
 const isSidebarHiddenRoute = computed(() => {
   const path = route.path
@@ -59,7 +61,11 @@ onUnmounted(() => {
 
       <!-- Drawer Content -->
       <div class="relative z-10 flex h-full w-72 max-w-[85vw] flex-col bg-card shadow-2xl">
-        <TabletNavRail is-drawer @close="isSidebarDrawerOpen = false" />
+        <TabletNavRail
+          is-drawer
+          @close="isSidebarDrawerOpen = false"
+          @open-sync-lock="showDrawerSyncLockedModal = true"
+        />
       </div>
     </div>
 
@@ -89,6 +95,10 @@ onUnmounted(() => {
     <!-- Modal to prompt sync when internet reconnects with unsynced transactions -->
     <div class="print:hidden">
       <OfflineSyncPromptModal />
+      <SyncLockedModal
+        :open="showDrawerSyncLockedModal"
+        @close="showDrawerSyncLockedModal = false"
+      />
     </div>
   </div>
 </template>

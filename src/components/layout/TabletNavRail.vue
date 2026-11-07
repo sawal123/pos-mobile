@@ -1,9 +1,11 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { RouterLink, useRoute } from 'vue-router'
 
 import AppIcon from '@/components/base/AppIcon.vue'
 import NexaPosLogo from '@/components/base/NexaPosLogo.vue'
+import SyncLockedModal from '@/components/sync/SyncLockedModal.vue'
+import { useSyncAccess } from '@/composables/useSyncAccess'
 import { APP_VERSION } from '@/constants/appInfo'
 import { getOperationalMenuItems } from '@/navigation/operationalMenu'
 import { useBusinessStore } from '@/stores/businessStore'
@@ -17,17 +19,23 @@ const props = defineProps({
   },
 })
 
-const emit = defineEmits(['close'])
+const emit = defineEmits(['close', 'open-sync-lock'])
 
 const route = useRoute()
 const businessStore = useBusinessStore()
 const cashierStore = useCashierStore()
 const shiftStore = useShiftStore()
+const { isSyncLocked } = useSyncAccess()
+const showSyncLockedModal = ref(false)
 
 const items = computed(() => [
   { key: 'home', icon: 'home', title: 'Home', to: '/home' },
   ...getOperationalMenuItems(businessStore.normalizedType),
 ])
+
+function isItemLocked(item) {
+  return item.key === 'sync' && isSyncLocked.value
+}
 
 const cashierInitial = computed(() => {
   const name = cashierStore.activeCashier?.name || 'K'
@@ -38,10 +46,22 @@ function isActive(path) {
   return route.path === path || route.path.startsWith(`${path}/`)
 }
 
-function handleItemClick() {
+function handleNavClick(event, item, navigate) {
+  if (isItemLocked(item)) {
+    event.preventDefault()
+    if (props.isDrawer) {
+      emit('close')
+      emit('open-sync-lock')
+    } else {
+      showSyncLockedModal.value = true
+    }
+    return
+  }
+
   if (props.isDrawer) {
     emit('close')
   }
+  navigate(event)
 }
 </script>
 
@@ -102,32 +122,57 @@ function handleItemClick() {
         v-for="item in items"
         :key="item.to"
         :to="item.to"
-        @click="handleItemClick"
-        class="group relative flex items-center gap-3 rounded-2xl px-3.5 py-2.5 text-sm font-semibold transition-all duration-200"
-        :class="isActive(item.to)
-          ? 'nav-item-active bg-gradient-to-r from-primary to-indigo-600 !text-white text-white shadow-[0_6px_18px_rgba(73,69,214,0.28)]'
-          : 'text-zinc-600 hover:bg-zinc-100/90 hover:text-ink-primary hover:translate-x-1'"
-        :style="isActive(item.to) ? 'color: #ffffff !important;' : ''"
+        custom
+        v-slot="{ href, navigate }"
       >
-        <span
-          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition-colors"
-          :class="isActive(item.to)
-            ? 'bg-white/20 !text-white text-white'
-            : 'bg-zinc-100 text-zinc-500 group-hover:bg-primary/10 group-hover:text-primary'"
+        <a
+          :href="href"
+          :data-testid="`rail-menu-${item.key}`"
+          :aria-haspopup="isItemLocked(item) ? 'dialog' : undefined"
+          class="group relative flex items-center gap-3 rounded-2xl px-3.5 py-2.5 text-sm font-semibold transition-all duration-200"
+          :class="
+            isActive(item.to) && !isItemLocked(item)
+              ? 'nav-item-active bg-gradient-to-r from-primary to-indigo-600 !text-white text-white shadow-[0_6px_18px_rgba(73,69,214,0.28)]'
+              : 'text-zinc-600 hover:bg-zinc-100/90 hover:text-ink-primary hover:translate-x-1'
+          "
+          :style="isActive(item.to) && !isItemLocked(item) ? 'color: #ffffff !important;' : ''"
+          @click="handleNavClick($event, item, navigate)"
         >
-          <AppIcon :name="item.icon" class="h-4 w-4" />
-        </span>
-        <span
-          class="truncate font-semibold"
-          :class="isActive(item.to) ? '!text-white text-white' : 'text-zinc-600 group-hover:text-ink-primary'"
-          :style="isActive(item.to) ? 'color: #ffffff !important;' : ''"
-        >
-          {{ item.title }}
-        </span>
-        <span
-          v-if="isActive(item.to)"
-          class="ml-auto h-2 w-2 rounded-full bg-white shadow-[0_0_8px_rgba(255,255,255,0.9)]"
-        />
+          <span
+            class="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition-colors"
+            :class="
+              isItemLocked(item)
+                ? 'bg-amber-100 text-amber-600 dark:bg-amber-500/20 dark:text-amber-300'
+                : isActive(item.to)
+                  ? 'bg-white/20 !text-white text-white'
+                  : 'bg-zinc-100 text-zinc-500 group-hover:bg-primary/10 group-hover:text-primary'
+            "
+          >
+            <AppIcon :name="item.icon" class="h-4 w-4" />
+          </span>
+          <span
+            class="truncate font-semibold"
+            :class="
+              isActive(item.to) && !isItemLocked(item)
+                ? '!text-white text-white'
+                : 'text-zinc-600 group-hover:text-ink-primary'
+            "
+            :style="isActive(item.to) && !isItemLocked(item) ? 'color: #ffffff !important;' : ''"
+          >
+            {{ item.title }}
+          </span>
+          <span
+            v-if="isItemLocked(item)"
+            data-testid="rail-menu-sync-lock"
+            class="ml-auto inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-700 dark:bg-amber-500/25 dark:text-amber-200"
+          >
+            <AppIcon name="lock" class="h-3 w-3" />
+          </span>
+          <span
+            v-else-if="isActive(item.to)"
+            class="ml-auto h-2 w-2 rounded-full bg-white shadow-[0_0_8px_rgba(255,255,255,0.9)]"
+          />
+        </a>
       </RouterLink>
     </nav>
 
@@ -154,6 +199,8 @@ function handleItemClick() {
         <span class="font-mono">v{{ APP_VERSION }}</span>
       </div>
     </div>
+
+    <SyncLockedModal :open="showSyncLockedModal" @close="showSyncLockedModal = false" />
   </aside>
 </template>
 

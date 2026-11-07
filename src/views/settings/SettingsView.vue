@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 import AppIcon from '@/components/base/AppIcon.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -8,6 +8,7 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import BaseSheet from '@/components/base/BaseSheet.vue'
 import NexaPosLogo from '@/components/base/NexaPosLogo.vue'
+import { useSyncAccess } from '@/composables/useSyncAccess'
 import { APP_VERSION } from '@/constants/appInfo'
 import SettingsMenuItem from '@/components/settings/SettingsMenuItem.vue'
 import SettingsSection from '@/components/settings/SettingsSection.vue'
@@ -63,6 +64,8 @@ const syncContextGuardStore = useSyncContextGuardStore()
 const themeStore = useThemeStore()
 const transactionStore = useTransactionStore()
 const taxStore = useTaxStore()
+const { isSyncLocked, isSyncUnlocked } = useSyncAccess()
+const route = useRoute()
 const router = useRouter()
 
 const taxDraftEnabled = ref(taxStore.enabled)
@@ -117,7 +120,29 @@ async function saveTaxSettings() {
   }
 }
 
-const activeSection = ref(null)
+const VALID_SETTINGS_SECTIONS = new Set([
+  'appearance',
+  'tax',
+  'printer',
+  'receipt',
+  'cloud',
+  'data',
+])
+
+const activeSection = ref(
+  typeof route?.query?.section === 'string' && VALID_SETTINGS_SECTIONS.has(route.query.section)
+    ? route.query.section
+    : null,
+)
+
+watch(
+  () => route?.query?.section,
+  (section) => {
+    if (typeof section === 'string' && VALID_SETTINGS_SECTIONS.has(section)) {
+      activeSection.value = section
+    }
+  },
+)
 
 function toggleSection(section) {
   activeSection.value = activeSection.value === section ? null : section
@@ -328,6 +353,9 @@ function handleCloudLocked() {
 
 const lockedFeatureMessage = computed(() => {
   const label = lockedFeature.value?.title ?? 'Fitur ini'
+  if (!cloudStore.isAuthenticated) {
+    return `${label} terkunci karena Anda belum login Akun Cloud dan masih menggunakan paket Free (memerlukan Premium).`
+  }
   return `${label} memerlukan langganan Premium untuk menyinkronkan data antar perangkat.`
 })
 
@@ -342,7 +370,7 @@ function handleBack() {
 }
 
 function handleSyncSelect() {
-  if (!isPremium.value) {
+  if (isSyncLocked.value) {
     lockedFeature.value = { title: 'Sinkronisasi' }
     return
   }
@@ -1007,26 +1035,26 @@ async function handleRestoreFileChange(event) {
               data-testid="cloud-login-entry"
               @click="goToCloud"
             >
-              Masuk
+              {{ cloudStore.isAuthenticated ? 'Pilih Bisnis / Kelola Akun' : 'Masuk' }}
             </BaseButton>
-            <template v-else>
-              <BaseButton
-                size="sm"
-                variant="secondary"
-                data-testid="settings-cloud-account-entry"
-                @click="goToCloud"
-              >
-                Kelola Akun / Ganti Email
-              </BaseButton>
-              <BaseButton
-                size="sm"
-                variant="danger"
-                data-testid="cloud-disconnect"
-                @click="showDisconnectConfirm = true"
-              >
-                Putuskan
-              </BaseButton>
-            </template>
+            <BaseButton
+              v-else
+              size="sm"
+              variant="secondary"
+              data-testid="settings-cloud-account-entry"
+              @click="goToCloud"
+            >
+              Kelola Akun / Ganti Email
+            </BaseButton>
+            <BaseButton
+              v-if="cloudStore.isAuthenticated"
+              size="sm"
+              variant="danger"
+              data-testid="cloud-disconnect"
+              @click="showDisconnectConfirm = true"
+            >
+              Logout / Putuskan
+            </BaseButton>
           </div>
           <p
             v-if="!isCashier && isPremium"
@@ -1064,9 +1092,15 @@ async function handleRestoreFileChange(event) {
           <SettingsMenuItem
             icon="sync"
             title="Sinkronisasi"
-            :subtitle="isPremium ? 'Sinkronkan data ke cloud' : 'Memerlukan Premium'"
+            :subtitle="
+              isSyncUnlocked
+                ? 'Sinkronkan data ke cloud'
+                : !cloudStore.isAuthenticated
+                  ? 'Memerlukan Login & Premium'
+                  : 'Memerlukan Premium'
+            "
             testid="settings-menu-sync"
-            :locked="!isPremium"
+            :locked="isSyncLocked"
             @select="handleSyncSelect"
           />
         </div>
@@ -1182,9 +1216,20 @@ async function handleRestoreFileChange(event) {
           </p>
         </div>
 
-        <BaseButton block data-testid="locked-feature-cta" @click="goToSubscription">
-          Upgrade
-        </BaseButton>
+        <div class="flex flex-col gap-2">
+          <BaseButton block data-testid="locked-feature-cta" @click="goToSubscription">
+            Upgrade
+          </BaseButton>
+          <BaseButton
+            v-if="!cloudStore.isAuthenticated"
+            variant="secondary"
+            block
+            data-testid="locked-feature-login-cta"
+            @click="goToCloud"
+          >
+            Masuk Akun Cloud
+          </BaseButton>
+        </div>
       </div>
     </BaseModal>
 

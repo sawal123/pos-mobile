@@ -1,27 +1,39 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { RouterLink, useRoute } from 'vue-router'
 
 import AppIcon from '@/components/base/AppIcon.vue'
 import BaseSheet from '@/components/base/BaseSheet.vue'
+import SyncLockedModal from '@/components/sync/SyncLockedModal.vue'
+import { useSyncAccess } from '@/composables/useSyncAccess'
 import { getBottomNavItems, getMoreMenuItems } from '@/navigation/operationalMenu'
 import { useBusinessStore } from '@/stores/businessStore'
 
 const route = useRoute()
-const router = useRouter()
 const businessStore = useBusinessStore()
+const { isSyncLocked } = useSyncAccess()
 const showMore = ref(false)
+const showSyncLockedModal = ref(false)
 
 const items = computed(() => getBottomNavItems(businessStore.normalizedType))
 const moreItems = computed(() => getMoreMenuItems(businessStore.normalizedType))
+
+function isItemLocked(item) {
+  return item.key === 'sync' && isSyncLocked.value
+}
 
 function isActive(path) {
   return route.path === path || route.path.startsWith(`${path}/`)
 }
 
-function handleMoreNavigate(to) {
+function handleMoreSelect(event, item, navigate) {
+  event.preventDefault()
   showMore.value = false
-  router.push(to)
+  if (isItemLocked(item)) {
+    showSyncLockedModal.value = true
+    return
+  }
+  navigate(event)
 }
 
 const isMoreActive = computed(() => moreItems.value.some((item) => isActive(item.to)))
@@ -73,14 +85,42 @@ const isMoreActive = computed(() => moreItems.value.some((item) => isActive(item
         v-for="item in moreItems"
         :key="item.key"
         :to="item.to"
-        class="flex min-h-14 items-center gap-3 rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm font-medium text-ink-primary shadow-soft"
-        @click.prevent="handleMoreNavigate(item.to)"
+        custom
+        v-slot="{ href, navigate }"
       >
-        <span class="flex h-9 w-9 items-center justify-center rounded-2xl bg-primary/10 text-primary">
-          <AppIcon :name="item.icon" />
-        </span>
-        <span class="min-w-0 truncate">{{ item.label }}</span>
+        <a
+          :href="href"
+          :data-testid="`more-menu-${item.key}`"
+          :aria-haspopup="isItemLocked(item) ? 'dialog' : undefined"
+          :class="[
+            'flex min-h-14 items-center gap-3 rounded-2xl border px-4 py-3 text-sm font-medium text-ink-primary shadow-soft',
+            isItemLocked(item)
+              ? 'border-amber-200/90 bg-amber-50/40 dark:border-amber-500/30 dark:bg-amber-950/20'
+              : 'border-zinc-200 bg-white dark:border-slate-700/60 dark:bg-[#1B2133]',
+          ]"
+          @click="handleMoreSelect($event, item, navigate)"
+        >
+          <span
+            :class="[
+              'flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl',
+              isItemLocked(item)
+                ? 'bg-amber-100 text-amber-600 dark:bg-amber-500/20 dark:text-amber-300'
+                : 'bg-primary/10 text-primary',
+            ]"
+          >
+            <AppIcon :name="item.icon" />
+          </span>
+          <span class="min-w-0 flex-1 truncate">{{ item.label }}</span>
+          <AppIcon
+            v-if="isItemLocked(item)"
+            name="lock"
+            data-testid="more-menu-sync-lock"
+            class="h-4 w-4 shrink-0 text-amber-500"
+          />
+        </a>
       </RouterLink>
     </div>
   </BaseSheet>
+
+  <SyncLockedModal :open="showSyncLockedModal" @close="showSyncLockedModal = false" />
 </template>
