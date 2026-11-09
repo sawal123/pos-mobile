@@ -14,6 +14,10 @@ const props = defineProps({
   open: Boolean,
   contextKey: { type: String, required: true },
   title: { type: String, default: 'Scan Produk' },
+  continuous: { type: Boolean, default: false },
+  lastScannedText: { type: String, default: '' },
+  lastScanError: { type: Boolean, default: false },
+  cartCount: { type: Number, default: 0 },
 })
 const emit = defineEmits(['close', 'scanned'])
 const route = useRoute()
@@ -22,6 +26,7 @@ const fileInput = ref(null)
 const error = ref('')
 const nativePreview = ref(false)
 const closeButton = ref(null)
+const scanCount = ref(0)
 let session = null
 let epoch = 0
 let previousFocus = null
@@ -64,8 +69,9 @@ async function handleImageSelected(event) {
   try {
     const code = await decodeProductBarcodeFromFile(file)
     if (!props.open || context !== props.contextKey || !code) return
+    scanCount.value += 1
     emit('scanned', code)
-    close()
+    if (!props.continuous) close()
   } catch (err) {
     if (props.open && context === props.contextKey) {
       error.value = err?.message || 'Tidak ditemukan barcode atau QR pada gambar.'
@@ -82,11 +88,13 @@ async function start() {
   const context = props.contextKey
   session = createProductScannerSession({
     video: video.value,
+    continuous: props.continuous,
     onNativeChange: setNativePreview,
     onResult(code) {
       if (!props.open || token !== epoch || context !== props.contextKey) return
+      scanCount.value += 1
       emit('scanned', code)
-      close()
+      if (!props.continuous) close()
     },
     onError(message) {
       if (token === epoch && props.open) error.value = message
@@ -196,17 +204,32 @@ onBeforeUnmount(() => {
         class="flex items-center justify-between gap-4 bg-zinc-950/80 px-5 pb-4 pt-[calc(var(--app-safe-area-top,0px)+1rem)]"
       >
         <div>
-          <h2 id="product-scanner-title" class="text-lg font-semibold">{{ title }}</h2>
-          <p class="mt-1 text-xs text-zinc-300">Arahkan kamera ke QR atau barcode produk.</p>
+          <div class="flex items-center gap-2">
+            <h2 id="product-scanner-title" class="text-lg font-semibold">{{ title }}</h2>
+            <span
+              v-if="continuous"
+              class="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-300 border border-emerald-400/30"
+            >
+              <span class="size-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              Beruntun Aktif
+            </span>
+          </div>
+          <p class="mt-1 text-xs text-zinc-300">
+            {{
+              continuous
+                ? 'Kamera tetap menyala otomatis. Arahkan produk satu per satu tanpa klik Scan lagi.'
+                : 'Arahkan kamera ke QR atau barcode produk.'
+            }}
+          </p>
         </div>
         <button
           ref="closeButton"
           type="button"
           aria-label="Tutup scanner"
-          class="min-h-11 rounded-xl border border-white/30 px-4 text-sm"
+          class="min-h-11 shrink-0 rounded-xl border border-white/30 bg-white/10 px-4 text-sm font-semibold"
           @click="close"
         >
-          Tutup
+          {{ continuous ? (cartCount > 0 ? `Selesai (${cartCount})` : 'Selesai') : 'Tutup' }}
         </button>
       </header>
       <div class="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden">
@@ -242,6 +265,29 @@ onBeforeUnmount(() => {
             </BaseButton>
           </div>
         </div>
+
+        <!-- Continuous Scan Live Status Banner -->
+        <div
+          v-if="continuous && !error"
+          class="pointer-events-none absolute inset-x-4 bottom-3 z-10 mx-auto max-w-md rounded-2xl border px-3.5 py-2.5 backdrop-blur-md transition-all"
+          :class="
+            lastScanError
+              ? 'border-rose-400/50 bg-rose-950/90 text-rose-100'
+              : 'border-emerald-400/50 bg-emerald-950/90 text-emerald-100'
+          "
+          data-testid="scanner-continuous-banner"
+        >
+          <div class="flex items-center justify-between gap-2 text-xs">
+            <p class="min-w-0 truncate font-semibold">
+              {{ lastScannedText || 'Siap scan beruntun — arahkan barcode/QR produk ke kotak' }}
+            </p>
+            <span
+              class="shrink-0 rounded-lg bg-white/15 px-2 py-0.5 font-mono text-[11px] font-bold text-white"
+            >
+              Keranjang: {{ cartCount }}
+            </span>
+          </div>
+        </div>
       </div>
       <div
         class="flex flex-col items-center gap-2.5 bg-zinc-950/80 px-5 pt-3 pb-[calc(var(--app-safe-area-bottom,0px)+1rem)] text-center"
@@ -264,7 +310,11 @@ onBeforeUnmount(() => {
           <span>Pilih / Scan dari Gambar</span>
         </button>
         <p class="text-xs text-zinc-300">
-          Satu scan untuk satu produk. Kamera berhenti setelah kode terbaca.
+          {{
+            continuous
+              ? 'Mode Scan Beruntun: Kamera tetap aktif setelah produk masuk keranjang. Tekan Selesai jika sudah semua.'
+              : 'Satu scan untuk satu produk. Kamera berhenti setelah kode terbaca.'
+          }}
         </p>
       </div>
     </div>

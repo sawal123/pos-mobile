@@ -16,12 +16,14 @@ export function scannerErrorMessage(error) {
   return 'Kamera belum dapat dibuka. Periksa izin kamera dan gunakan koneksi HTTPS di browser, lalu coba lagi.'
 }
 
-/** One result per session. Cancellation also covers pending permission/camera startup. */
+/** Supports single-shot (default) or continuous POS scanning (`continuous: true`). */
 export function createProductScannerSession({
   video,
   onResult,
   onError,
   onNativeChange = () => {},
+  continuous = false,
+  cooldownMs = 1300,
   native = Capacitor.isNativePlatform(),
   loadNative = () => import('@capacitor-mlkit/barcode-scanning'),
   loadWeb = async () => {
@@ -40,7 +42,24 @@ export function createProductScannerSession({
   let nativeStarted = false
   let controls = null
   let stream = null
+  let lastCode = ''
+  let lastEmitAt = 0
   const listeners = []
+
+  function emitDetection(value) {
+    if (cancelled || consumed) return
+    const normalized = typeof value === 'string' ? value.trim() : ''
+    if (!normalized) return
+    if (continuous) {
+      const now = Date.now()
+      if (normalized === lastCode && now - lastEmitAt < cooldownMs) return
+      lastCode = normalized
+      lastEmitAt = now
+      onResult?.(normalized)
+      return
+    }
+    void finish(normalized)
+  }
 
   async function cleanup() {
     controls?.stop()
@@ -94,7 +113,7 @@ export function createProductScannerSession({
           const code = barcodes?.find(
             (barcode) => typeof barcode.rawValue === 'string' && barcode.rawValue,
           )?.rawValue
-          if (code) void finish(code)
+          if (code) emitDetection(code)
         }),
       )
       if (cancelled) return
@@ -139,7 +158,7 @@ export function createProductScannerSession({
         delayBetweenScanSuccess: 500,
       })
       controls = await reader.decodeFromStream(stream, video, (result) => {
-        if (result) void finish(result.getText())
+        if (result) emitDetection(result.getText())
       })
     }
   }

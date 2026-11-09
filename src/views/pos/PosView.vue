@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRouter } from 'vue-router'
 
@@ -36,10 +36,16 @@ const showScanner = ref(false)
 const scanFeedback = ref('')
 const scanError = ref(false)
 let scanVariantContext = null
+let globalScanBuffer = ''
+let globalScanLastTime = 0
+let globalScanTimer = null
+let searchLastInputTime = 0
+let searchRapidStreak = 0
+let searchAutoScanTimer = null
 
-function handleScanned(code) {
-  if (!showScanner.value || !isRetail.value) return
-  showScanner.value = false
+function handleScanned(code, { fromCamera = true } = {}) {
+  if (!isRetail.value) return
+  if (fromCamera && !showScanner.value) return
   const result = productStore.resolveScanCode(code)
   scanError.value = !result.success
   if (!result.success) {
@@ -48,9 +54,85 @@ function handleScanned(code) {
   }
   const outcome = handleProductAdd(result.product)
   if (outcome === 'variant') {
+    showScanner.value = false
     scanVariantContext = scanContext.value
     scanFeedback.value = 'Pilih varian untuk menambahkan produk.'
-  } else scanFeedback.value = `${result.product.name} ditambahkan ke keranjang.`
+  } else {
+    scanFeedback.value = `${result.product.name} ditambahkan ke keranjang.`
+  }
+}
+
+function handleSearchUpdate(value) {
+  productStore.setSearchQuery(value)
+  if (!isRetail.value) return
+  const now = Date.now()
+  if (now - searchLastInputTime < 55) {
+    searchRapidStreak += 1
+  } else {
+    searchRapidStreak = 1
+  }
+  searchLastInputTime = now
+
+  if (searchAutoScanTimer) clearTimeout(searchAutoScanTimer)
+  const trimmed = String(value || '').trim()
+  if (trimmed.length >= 4 && searchRapidStreak >= 4) {
+    searchAutoScanTimer = setTimeout(() => {
+      const check = productStore.resolveScanCode(trimmed)
+      if (check.success) {
+        handleScanned(trimmed, { fromCamera: false })
+        productStore.setSearchQuery('')
+        searchRapidStreak = 0
+      }
+    }, 90)
+  }
+}
+
+function handleSearchScanSubmit() {
+  if (!isRetail.value) return
+  const code = String(searchQuery.value || '').trim()
+  if (!code) return
+  if (searchAutoScanTimer) clearTimeout(searchAutoScanTimer)
+  handleScanned(code, { fromCamera: false })
+  productStore.setSearchQuery('')
+  searchRapidStreak = 0
+}
+
+function handleGlobalHardwareScanKeydown(event) {
+  if (!isRetail.value || showScanner.value || showVariantSheet.value || showPromoModal.value) return
+  const activeEl = document.activeElement
+  const tag = activeEl ? activeEl.tagName.toLowerCase() : ''
+  const isEditing =
+    tag === 'input' || tag === 'textarea' || tag === 'select' || Boolean(activeEl?.isContentEditable)
+  if (isEditing || event.ctrlKey || event.altKey || event.metaKey) return
+
+  const now = Date.now()
+  if (now - globalScanLastTime > 120) {
+    globalScanBuffer = ''
+  }
+
+  if (event.key === 'Enter') {
+    const code = globalScanBuffer.trim()
+    globalScanBuffer = ''
+    if (globalScanTimer) clearTimeout(globalScanTimer)
+    if (code.length >= 3) {
+      event.preventDefault()
+      handleScanned(code, { fromCamera: false })
+    }
+    return
+  }
+
+  if (event.key && event.key.length === 1) {
+    globalScanBuffer += event.key
+    globalScanLastTime = now
+    if (globalScanTimer) clearTimeout(globalScanTimer)
+    const candidate = globalScanBuffer.trim()
+    globalScanTimer = setTimeout(() => {
+      if (candidate.length >= 4 && productStore.resolveScanCode(candidate).success) {
+        handleScanned(candidate, { fromCamera: false })
+      }
+      globalScanBuffer = ''
+    }, 130)
+  }
 }
 
 function closeVariantSheet() {
@@ -113,9 +195,16 @@ function handleVariantConfirm({ product, selectedOptions }) {
 }
 
 onMounted(async () => {
+  document.addEventListener('keydown', handleGlobalHardwareScanKeydown)
   if (cloudStore.isLinked && cloudStore.isOperationalCloudAccess) {
     await syncPullStore.ensureCatalogLoaded()
   }
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', handleGlobalHardwareScanKeydown)
+  if (globalScanTimer) clearTimeout(globalScanTimer)
+  if (searchAutoScanTimer) clearTimeout(searchAutoScanTimer)
 })
 
 function openCartSheet() {
@@ -160,15 +249,18 @@ function handleCheckout() {
             <BaseInput
               class="min-w-0 flex-1"
               :model-value="searchQuery"
-              placeholder="Cari produk..."
+              :placeholder="
+                isRetail ? 'Cari produk atau langsung scan barcode/SKU...' : 'Cari produk...'
+              "
               aria-label="Cari produk"
-              @update:model-value="productStore.setSearchQuery"
+              @update:model-value="handleSearchUpdate"
+              @keydown.enter.prevent="handleSearchScanSubmit"
             />
             <button
               v-if="isRetail"
               type="button"
               data-testid="pos-scan-button"
-              aria-label="Scan QR atau barcode produk"
+              aria-label="Scan QR atau barcode produk (Beruntun)"
               class="flex h-12 shrink-0 items-center gap-2 rounded-2xl bg-primary px-4 text-sm font-semibold text-white transition active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
               @click="showScanner = true"
             >
@@ -340,6 +432,10 @@ function handleCheckout() {
     <ProductScannerSheet
       :open="showScanner && isRetail"
       :context-key="scanContext"
+      :continuous="true"
+      :last-scanned-text="scanFeedback"
+      :last-scan-error="scanError"
+      :cart-count="Number(totalQty) || 0"
       @close="showScanner = false"
       @scanned="handleScanned"
     />
