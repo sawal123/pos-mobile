@@ -115,7 +115,15 @@ export function createProductScannerSession({
     } else {
       const { BrowserMultiFormatReader, BarcodeFormat: F, DecodeHintType } = await loadWeb()
       if (cancelled) return
-      stream = await getMedia({ audio: false, video: { facingMode: { ideal: 'environment' } } })
+      try {
+        stream = await getMedia({ audio: false, video: { facingMode: { ideal: 'environment' } } })
+      } catch (firstErr) {
+        if (['OverconstrainedError', 'ConstraintNotSatisfiedError'].includes(firstErr?.name)) {
+          stream = await getMedia({ audio: false, video: true })
+        } else {
+          throw firstErr
+        }
+      }
       if (cancelled) {
         stream.getTracks().forEach((track) => track.stop())
         return
@@ -123,7 +131,7 @@ export function createProductScannerSession({
       const hints = new Map([
         [
           DecodeHintType.POSSIBLE_FORMATS,
-          [F.QR_CODE, F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.CODE_128],
+          [F.QR_CODE, F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.CODE_128, F.CODE_39],
         ],
       ])
       const reader = new BrowserMultiFormatReader(hints, {
@@ -164,4 +172,48 @@ export function createProductScannerSession({
     },
   }
   return session
+}
+
+export async function decodeProductBarcodeFromFile(file) {
+  if (!file) throw new Error('Pilih file gambar terlebih dahulu.')
+  if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
+    try {
+      const detector = new window.BarcodeDetector({
+        formats: ['qr_code', 'ean_13', 'ean_8', 'code_128', 'code_39', 'upc_a', 'upc_e'],
+      })
+      const bitmap = await createImageBitmap(file)
+      const codes = await detector.detect(bitmap)
+      if (codes && codes.length > 0 && codes[0].rawValue) {
+        return String(codes[0].rawValue).trim()
+      }
+    } catch {
+      /* Fall back to ZXing below */
+    }
+  }
+
+  const [{ BrowserMultiFormatReader, BarcodeFormat: F, DecodeHintType }] = await Promise.all([
+    Promise.all([import('@zxing/browser'), import('@zxing/library')]).then(([b, l]) => ({
+      ...b,
+      ...l,
+    })),
+  ])
+
+  const objectUrl = URL.createObjectURL(file)
+  try {
+    const hints = new Map([
+      [
+        DecodeHintType.POSSIBLE_FORMATS,
+        [F.QR_CODE, F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.CODE_128, F.CODE_39],
+      ],
+    ])
+    const reader = new BrowserMultiFormatReader(hints)
+    const result = await reader.decodeFromImageUrl(objectUrl)
+    const text = result?.getText?.() ? String(result.getText()).trim() : ''
+    if (!text) throw new Error('Barcode atau QR tidak ditemukan pada gambar.')
+    return text
+  } catch {
+    throw new Error('Tidak ditemukan barcode atau QR Code yang jelas pada gambar tersebut.')
+  } finally {
+    URL.revokeObjectURL(objectUrl)
+  }
 }

@@ -5,7 +5,10 @@ import { App } from '@capacitor/app'
 import { Capacitor } from '@capacitor/core'
 import AppIcon from '@/components/base/AppIcon.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
-import { createProductScannerSession } from '@/services/scanner/productScannerService'
+import {
+  createProductScannerSession,
+  decodeProductBarcodeFromFile,
+} from '@/services/scanner/productScannerService'
 
 const props = defineProps({
   open: Boolean,
@@ -15,6 +18,7 @@ const props = defineProps({
 const emit = defineEmits(['close', 'scanned'])
 const route = useRoute()
 const video = ref(null)
+const fileInput = ref(null)
 const error = ref('')
 const nativePreview = ref(false)
 const closeButton = ref(null)
@@ -44,6 +48,29 @@ async function stop() {
 function close() {
   void stop()
   emit('close')
+}
+
+function triggerImagePicker() {
+  fileInput.value?.click()
+}
+
+async function handleImageSelected(event) {
+  const input = event.target
+  const file = input?.files?.[0]
+  if (input) input.value = ''
+  if (!file || !props.open) return
+  error.value = ''
+  const context = props.contextKey
+  try {
+    const code = await decodeProductBarcodeFromFile(file)
+    if (!props.open || context !== props.contextKey || !code) return
+    emit('scanned', code)
+    close()
+  } catch (err) {
+    if (props.open && context === props.contextKey) {
+      error.value = err?.message || 'Tidak ditemukan barcode atau QR pada gambar.'
+    }
+  }
 }
 
 async function start() {
@@ -204,14 +231,42 @@ onBeforeUnmount(() => {
           role="alert"
         >
           <p class="text-sm leading-relaxed" data-testid="scanner-error">{{ error }}</p>
-          <BaseButton @click="start">Coba Lagi</BaseButton>
+          <div class="flex flex-wrap items-center gap-2">
+            <BaseButton @click="start">Coba Lagi</BaseButton>
+            <BaseButton
+              variant="secondary"
+              data-testid="scanner-error-image-btn"
+              @click="triggerImagePicker"
+            >
+              Scan dari Gambar
+            </BaseButton>
+          </div>
         </div>
       </div>
-      <p
-        class="bg-zinc-950/80 px-5 pt-4 pb-[calc(var(--app-safe-area-bottom,0px)+1rem)] text-center text-sm text-zinc-200"
+      <div
+        class="flex flex-col items-center gap-2.5 bg-zinc-950/80 px-5 pt-3 pb-[calc(var(--app-safe-area-bottom,0px)+1rem)] text-center"
       >
-        Satu scan untuk satu produk. Kamera berhenti setelah kode terbaca.
-      </p>
+        <input
+          ref="fileInput"
+          type="file"
+          accept="image/*"
+          class="hidden"
+          data-testid="scanner-image-input"
+          @change="handleImageSelected"
+        />
+        <button
+          type="button"
+          data-testid="scanner-image-button"
+          class="inline-flex min-h-10 items-center gap-2 rounded-xl border border-white/25 bg-white/10 px-4 py-2 text-xs font-semibold text-white transition hover:bg-white/20"
+          @click="triggerImagePicker"
+        >
+          <AppIcon name="qr" class="size-4" />
+          <span>Pilih / Scan dari Gambar</span>
+        </button>
+        <p class="text-xs text-zinc-300">
+          Satu scan untuk satu produk. Kamera berhenti setelah kode terbaca.
+        </p>
+      </div>
     </div>
   </Teleport>
 </template>

@@ -24,9 +24,17 @@ const subscriptionStore = useSubscriptionStore()
 const syncPullStore = useSyncPullStore()
 const variantStore = useVariantStore()
 const router = useRouter()
-const { isRetail } = useRetailProductCodes()
+const { isRetail, canManageCodes } = useRetailProductCodes()
 const qrProduct = ref(null)
 const showVariantModal = ref(false)
+
+function handleOpenProductQr(product) {
+  if (!product) return
+  if (!product.barcode && canManageCodes.value) {
+    productStore.ensureProductBarcode(product.id)
+  }
+  qrProduct.value = productStore.getProductById(product.id) || product
+}
 
 const hasCloudAccess = computed(
   () =>
@@ -520,6 +528,12 @@ function resetFilters() {
                 SKU: {{ product.sku }}
               </span>
               <span
+                v-if="isRetail && product.barcode"
+                class="rounded-md bg-indigo-50 px-2 py-0.5 font-mono text-[11px] font-semibold text-primary"
+              >
+                Kode: {{ product.barcode }}
+              </span>
+              <span
                 v-if="product.kind === 'service'"
                 class="rounded-md bg-indigo-50 px-2 py-0.5 font-medium text-indigo-600"
               >
@@ -606,10 +620,16 @@ function resetFilters() {
               type="button"
               :data-testid="`product-qr-${product.id}`"
               :aria-label="`QR Produk ${product.name}`"
-              class="inline-flex min-h-10 items-center gap-1.5 rounded-xl border border-zinc-200 bg-card px-3 text-xs font-semibold text-primary dark:border-slate-700"
-              @click="qrProduct = product"
+              class="inline-flex h-8 items-center gap-1.5 rounded-xl border px-2.5 text-xs font-semibold transition active:scale-95"
+              :class="
+                product.barcode
+                  ? 'border-indigo-200 bg-indigo-50/80 text-primary hover:bg-indigo-100 dark:border-slate-700'
+                  : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:border-emerald-800'
+              "
+              @click="handleOpenProductQr(product)"
             >
-              <AppIcon name="qr" class="size-4" /> QR
+              <AppIcon name="qr" class="size-3.5" />
+              <span>{{ product.barcode ? 'QR & Cetak' : '+ Buat Kode & QR' }}</span>
             </button>
             <!-- Edit Icon Button (Pure Icon, No Text) -->
             <button

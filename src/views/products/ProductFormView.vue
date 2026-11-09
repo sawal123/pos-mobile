@@ -7,6 +7,7 @@ import ProductScannerSheet from '@/components/scanner/ProductScannerSheet.vue'
 import ProductQrModal from '@/components/products/ProductQrModal.vue'
 import VariantCloudLockModal from '@/components/products/VariantCloudLockModal.vue'
 import { useRetailProductCodes } from '@/composables/useRetailProductCodes'
+import { generateProductCode } from '@/services/products/productCodeService'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useSubscriptionStore } from '@/stores/subscriptionStore'
 import { useVariantStore } from '@/stores/variantStore'
@@ -201,6 +202,37 @@ function removeImage() {
   imageError.value = ''
 }
 
+function handleGenerateSku() {
+  if (isRetail.value && !canManageCodes.value) return
+  const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'
+  let suffix = ''
+  for (let i = 0; i < 6; i++) {
+    suffix += chars.charAt(Math.floor(Math.random() * chars.length))
+  }
+  const prefix = isLaundry.value ? 'SRV' : isRetail.value ? 'GRO' : 'SKU'
+  form.sku = `${prefix}-${suffix}`
+  if (errors.value?.sku) {
+    delete errors.value.sku
+  }
+}
+
+function handleGenerateBarcode() {
+  if (!canManageCodes.value) return
+  try {
+    form.barcode = generateProductCode(productStore.products || [])
+    if (errors.value?.barcode) {
+      delete errors.value.barcode
+    }
+  } catch {
+    const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ'
+    let suffix = ''
+    for (let i = 0; i < 8; i++) {
+      suffix += chars.charAt(Math.floor(Math.random() * chars.length))
+    }
+    form.barcode = `NXP-${suffix}`
+  }
+}
+
 async function handleSubmit() {
   formError.value = ''
 
@@ -234,7 +266,8 @@ async function handleSubmit() {
 
   errors.value = {}
   try {
-    await cloudStore.scheduler?.flush?.()
+    const scheduler = cloudStore.scheduler ?? cloudStore.getPersistenceScheduler?.()
+    await scheduler?.flush?.()
   } catch {
     formError.value = 'Produk belum tersimpan pada perangkat. Coba lagi.'
     return
@@ -440,9 +473,22 @@ watch(
 
           <!-- SKU / Barcode (Retail/FnB) -->
           <div v-if="!isLaundry" class="space-y-1">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-semibold text-ink-secondary">
+                {{ isRetail ? 'SKU' : 'SKU / Barcode' }}
+              </span>
+              <button
+                v-if="!isRetail || canManageCodes"
+                type="button"
+                data-testid="product-sku-generate"
+                class="text-[11px] font-semibold text-primary hover:underline"
+                @click="handleGenerateSku"
+              >
+                Generate SKU
+              </button>
+            </div>
             <BaseInput
               :model-value="form.sku"
-              :label="isRetail ? 'SKU' : 'SKU / Barcode'"
               :disabled="isRetail && !canManageCodes"
               placeholder="Kode unik (opsional)"
               @update:model-value="form.sku = $event"
@@ -450,9 +496,21 @@ watch(
             <p v-if="errors.sku" class="text-xs text-danger" role="alert">{{ errors.sku }}</p>
           </div>
           <div v-if="isRetail" class="space-y-2 sm:col-span-2">
-            <label for="product-barcode" class="block text-sm font-medium text-ink-secondary"
-              >Barcode / Kode Scan</label
-            >
+            <div class="flex items-center justify-between">
+              <label for="product-barcode" class="block text-sm font-medium text-ink-secondary">
+                Barcode / Kode Scan
+              </label>
+              <button
+                v-if="canManageCodes"
+                type="button"
+                data-testid="product-barcode-generate"
+                class="inline-flex items-center gap-1 rounded-lg bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 active:scale-95"
+                @click="handleGenerateBarcode"
+              >
+                <AppIcon name="qr" class="size-3.5" />
+                <span>Buat Kode Otomatis</span>
+              </button>
+            </div>
             <div class="flex items-center gap-2">
               <input
                 id="product-barcode"
@@ -463,7 +521,7 @@ watch(
                 :disabled="!canManageCodes"
                 autocomplete="off"
                 spellcheck="false"
-                placeholder="Scan atau ketik barcode kemasan"
+                placeholder="Scan kamera atau buat kode otomatis..."
                 class="h-12 min-w-0 flex-1 rounded-2xl border border-zinc-200 bg-card px-4 font-mono text-sm text-ink-primary outline-none focus:border-primary disabled:opacity-60 dark:border-slate-700"
               />
               <button
@@ -471,10 +529,11 @@ watch(
                 data-testid="product-barcode-scan"
                 aria-label="Scan barcode produk"
                 :disabled="!canManageCodes"
-                class="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary disabled:opacity-50"
+                class="inline-flex h-12 shrink-0 items-center justify-center gap-1.5 rounded-2xl bg-primary/10 px-3.5 text-xs font-bold text-primary transition hover:bg-primary/20 disabled:opacity-50"
                 @click="showScanner = true"
               >
-                <AppIcon name="scan" />
+                <AppIcon name="scan" class="size-4" />
+                <span>Scan</span>
               </button>
             </div>
             <p v-if="errors.barcode" class="text-xs text-danger" role="alert">
@@ -483,7 +542,7 @@ watch(
             <p class="text-xs leading-relaxed text-ink-secondary">
               {{
                 canManageCodes
-                  ? 'Kosongkan untuk membuat kode internal saat disimpan.'
+                  ? 'Tap Scan untuk memindai dengan kamera/gambar, tap Buat Kode Otomatis, atau kosongkan untuk dibuat otomatis saat disimpan.'
                   : 'Kode Cloud dikelola oleh pengelola katalog.'
               }}
             </p>
@@ -498,10 +557,10 @@ watch(
               v-if="savedProduct"
               type="button"
               data-testid="edit-product-qr"
-              class="inline-flex min-h-10 items-center gap-2 text-sm font-semibold text-primary"
+              class="inline-flex min-h-10 items-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50/70 px-3.5 py-2 text-xs font-bold text-primary transition hover:bg-indigo-100"
               @click="showQr = true"
             >
-              <AppIcon name="qr" /> QR Produk Tersimpan
+              <AppIcon name="qr" class="size-4" /> Lihat / Cetak QR Produk Tersimpan
             </button>
           </div>
         </div>

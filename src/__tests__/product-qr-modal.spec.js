@@ -5,11 +5,16 @@ import { useBusinessStore } from '@/stores/businessStore'
 import { useProductStore } from '@/stores/productStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import ProductQrModal from '@/components/products/ProductQrModal.vue'
-import { createProductQrDataUrl, downloadProductLabel } from '@/services/products/productQrService'
+import {
+  createProductQrDataUrl,
+  downloadProductLabel,
+  printProductLabel,
+} from '@/services/products/productQrService'
 
 vi.mock('@/services/products/productQrService', () => ({
   createProductQrDataUrl: vi.fn(async () => 'data:image/png;base64,cXI='),
   downloadProductLabel: vi.fn(async () => 'Label PNG siap.'),
+  printProductLabel: vi.fn(async () => 'Siap mencetak label stiker QR.'),
 }))
 const wrappers = []
 beforeEach(() => {
@@ -59,6 +64,13 @@ describe('product QR user flow', () => {
     await flushPromises()
     expect(downloadProductLabel).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'Beras', barcode: code }),
+    )
+    await wrapper.get('[data-testid="qr-copies-select"]').setValue('8')
+    await wrapper.get('[data-testid="print-product-qr"]').trigger('click')
+    await flushPromises()
+    expect(printProductLabel).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Beras', barcode: code }),
+      { copies: 8 },
     )
   })
 

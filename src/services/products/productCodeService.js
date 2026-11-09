@@ -72,6 +72,16 @@ export function resolveProductCode(products, value) {
 }
 
 export function canManageProductCodes(cloud) {
-  if (!cloud.isLinked) return cloud.sessionInvalid !== true
-  return cloud.canPerformCloudPush === true && cloud.pushPolicy?.pushMode === 'full'
+  if (!cloud) return true
+  if (cloud.sessionInvalid === true) return false
+  if (!cloud.isLinked) return true
+  if (
+    cloud.role === 'cashier' ||
+    cloud.isCashierContext === true ||
+    cloud.pushPolicy?.pushMode === 'cashier_safe' ||
+    cloud.capabilityState === 'revoked'
+  ) {
+    return false
+  }
+  return true
 }

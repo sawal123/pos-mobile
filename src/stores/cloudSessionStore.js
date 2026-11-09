@@ -344,6 +344,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   /** Reference to the persistence service (flush/rehydrate) */
   let _scheduler = null
 
+  /** Reactive version counter so computed adapter/scheduler update when setPersistenceAdapter runs */
+  const persistenceVersion = ref(0)
+
   // ── Computed ───────────────────────────────────────────────────────────────
 
   const isAuthenticated = computed(() => user.value !== null)
@@ -490,6 +493,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     if (scheduler) {
       _scheduler = scheduler
     }
+    persistenceVersion.value++
   }
 
   function getPersistenceAdapter() {
@@ -3175,8 +3179,14 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     setPersistenceAdapter,
     getPersistenceAdapter,
     getPersistenceScheduler,
-    adapter: computed(() => _adapter),
-    scheduler: computed(() => _scheduler),
+    adapter: computed(() => {
+      void persistenceVersion.value
+      return _adapter
+    }),
+    scheduler: computed(() => {
+      void persistenceVersion.value
+      return _scheduler
+    }),
     applyBusinessContext,
     invalidateCloudSession: handleInvalidToken,
     login,

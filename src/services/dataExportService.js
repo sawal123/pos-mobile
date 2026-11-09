@@ -292,32 +292,32 @@ export function buildExportDataset(
   const periodOpts = { period, startDate, endDate, now }
   const filteredTransactions = includeSales
     ? [...allTransactions]
-        .filter((tx) => matchesExportPeriod(tx.paidAt || tx.createdAt, periodOpts))
-        .sort(
-          (a, b) =>
-            new Date(b.paidAt || b.createdAt || 0).getTime() -
-            new Date(a.paidAt || a.createdAt || 0).getTime(),
-        )
+      .filter((tx) => matchesExportPeriod(tx.paidAt || tx.createdAt, periodOpts))
+      .sort(
+        (a, b) =>
+          new Date(b.paidAt || b.createdAt || 0).getTime() -
+          new Date(a.paidAt || a.createdAt || 0).getTime(),
+      )
     : []
 
   const filteredCashEntries = includeSales
     ? [...allCashEntries]
-        .filter((entry) => matchesExportPeriod(entry.createdAt, periodOpts))
-        .sort(
-          (a, b) =>
-            new Date(b.createdAt || 0).getTime() -
-            new Date(a.createdAt || 0).getTime(),
-        )
+      .filter((entry) => matchesExportPeriod(entry.createdAt, periodOpts))
+      .sort(
+        (a, b) =>
+          new Date(b.createdAt || 0).getTime() -
+          new Date(a.createdAt || 0).getTime(),
+      )
     : []
 
   const filteredExpenses = includeSales
     ? [...allExpenses]
-        .filter((exp) => matchesExportPeriod(exp.createdAt, periodOpts))
-        .sort(
-          (a, b) =>
-            new Date(b.createdAt || 0).getTime() -
-            new Date(a.createdAt || 0).getTime(),
-        )
+      .filter((exp) => matchesExportPeriod(exp.createdAt, periodOpts))
+      .sort(
+        (a, b) =>
+          new Date(b.createdAt || 0).getTime() -
+          new Date(a.createdAt || 0).getTime(),
+      )
     : []
 
   const soldLineItems = []
