@@ -1297,7 +1297,7 @@ export function createPdfDocumentBytes(dataset) {
       `${MARGIN_X} 28 m ${MARGIN_X + USABLE_W} 28 l S`,
       `0.45 0.47 0.53 rg`,
       `BT /F1 8 Tf ${MARGIN_X} 16 Td (${escapePdfLiteral(
-        `NexaPos Offline POS - ${dataset.business.name} (${dataset.business.outlet})`,
+        `Net Kasir Offline POS - ${dataset.business.name} (${dataset.business.outlet})`,
       )}) Tj ET`,
       `BT /F1 8 Tf ${(MARGIN_X + USABLE_W - rightW).toFixed(1)} 16 Td (${escapePdfLiteral(
         footerRight,

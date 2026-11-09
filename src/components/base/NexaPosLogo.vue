@@ -137,7 +137,7 @@ const wordmarkSizeClass = computed(() => {
         ]"
         class="font-extrabold tracking-tight transition-colors duration-200"
       >
-        Nexa<span :class="isWhiteLogo ? 'text-white/95' : 'text-[#4945D6]'">Pos</span>
+        Net<span :class="isWhiteLogo ? 'text-white/95' : 'text-[#4945D6]'">Kasir</span>
       </span>
 
       <span

@@ -80,7 +80,7 @@ function handleNavClick(event, item, navigate) {
           <NexaPosLogo size="sm" />
           <div class="min-w-0 flex-1">
             <h2 class="truncate text-base font-bold tracking-tight text-ink-primary">
-              {{ businessStore.name || 'NexaPos' }}
+              {{ businessStore.name || 'Net Kasir' }}
             </h2>
             <p class="truncate text-xs text-ink-secondary">
               {{ businessStore.outlet || 'Outlet Utama' }}
@@ -195,7 +195,7 @@ function handleNavClick(event, item, navigate) {
       </div>
 
       <div class="flex items-center justify-between px-1.5 text-[10px] font-medium text-zinc-400">
-        <span class="font-bold text-[#4945D6] dark:text-white">NexaPos</span>
+        <span class="font-bold text-[#4945D6] dark:text-white">Net Kasir</span>
         <span class="font-mono">v{{ APP_VERSION }}</span>
       </div>
     </div>

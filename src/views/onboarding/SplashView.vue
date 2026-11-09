@@ -46,7 +46,7 @@ const themeStore = useThemeStore()
         Mulai
       </BaseButton>
       <p class="text-center font-mono text-[11px] tracking-widest uppercase text-ink-secondary">
-        NexaPos v{{ APP_VERSION }}
+        Net Kasir v{{ APP_VERSION }}
       </p>
     </div>
   </div>

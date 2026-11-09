@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">NexaPos</string>
-    <string name="title_activity_main">NexaPos</string>
+    <string name="app_name">Net Kasir</string>
+    <string name="title_activity_main">Net Kasir</string>
     <string name="package_name">com.posoffline.app</string>
     <string name="custom_url_scheme">com.posoffline.app</string>
 </resources>

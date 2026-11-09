@@ -41,3 +41,7 @@ __screenshots__/
 
 # Vite
 *.timestamp-*-*.mjs
+
+# Built APKs
+*.apk
+release_apk/
