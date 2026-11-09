@@ -188,7 +188,15 @@ describe('Transaction Detail & Minimalist UI', () => {
       global: { plugins: [pinia, router] },
     })
 
-    // Initially shows both
+    // Default filter shows Hari Ini (Andi Wijaya created today)
+    expect(wrapper.text()).toContain('Andi Wijaya')
+    expect(wrapper.text()).not.toContain('Sari Dewi')
+
+    // Switch date filter to "Semua Tanggal" to show all
+    const allDateBtn = wrapper.find('[data-testid="filter-date-all"]')
+    await allDateBtn.trigger('click')
+    await flushPromises()
+
     expect(wrapper.text()).toContain('Andi Wijaya')
     expect(wrapper.text()).toContain('Sari Dewi')
 
@@ -201,10 +209,17 @@ describe('Transaction Detail & Minimalist UI', () => {
 
     // Reset search, test QRIS filter
     await searchInput.setValue('')
-    const qrisBtn = wrapper.findAll('button').find((b) => b.text().includes('QRIS'))
+    const qrisBtn = wrapper.find('[data-testid="filter-pay-qris"]')
     await qrisBtn.trigger('click')
 
     expect(wrapper.text()).toContain('Sari Dewi')
     expect(wrapper.text()).not.toContain('Andi Wijaya')
+
+    // Test Date Flicker controls
+    const prevBtn = wrapper.find('[data-testid="date-flicker-prev"]')
+    expect(prevBtn.exists()).toBe(true)
+    await prevBtn.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="date-flicker-label"]').exists()).toBe(true)
   })
 })

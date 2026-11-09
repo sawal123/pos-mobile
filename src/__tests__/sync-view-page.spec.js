@@ -313,4 +313,30 @@ describe('Sinkronisasi Menu Lock & Settings Login/Logout Centralization', () => 
 
     expect(context.router.currentRoute.value.name).toBe('sync')
   })
+
+  it('keeps Sinkronisasi unlocked across app restart when authenticated with active cloud plan even before capability refresh', async () => {
+    const context = prepareContext()
+    context.cloudStore.user = { id: 1, name: 'Budi', email: 'budi@tokokopi.id' }
+    const activeSub = { plan: 'pro', status: 'active' }
+    context.cloudStore.businesses = [{ id: 10, name: 'Toko Kopi', subscription: activeSub }]
+    context.cloudStore.selectedBusiness = { id: 10, name: 'Toko Kopi', subscription: activeSub }
+    context.cloudStore.cloudAccess = true
+    // Emulate cold start restored state
+    context.cloudStore.capabilityState = 'unverified'
+
+    await context.router.push('/home')
+    await flushPromises()
+
+    const homeWrapper = mount(HomeView, {
+      global: { plugins: [context.pinia, context.router] },
+    })
+    await flushPromises()
+
+    expect(homeWrapper.find('[data-testid="home-menu-sync-lock"]').exists()).toBe(false)
+
+    await homeWrapper.find('[data-testid="home-menu-sync"]').trigger('click')
+    await flushPromises()
+
+    expect(context.router.currentRoute.value.name).toBe('sync')
+  })
 })

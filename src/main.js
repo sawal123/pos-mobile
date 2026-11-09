@@ -283,6 +283,10 @@ export async function bootstrapApp({
       // Restore token + non-sensitive cloud context (no push/pull)
       await cloudStore.hydrateFromStorage(adapter)
 
+      if (cloudStore.isAuthenticated) {
+        void cloudStore.refreshContext().catch(() => {})
+      }
+
       if (syncFoundation?.contextGuardService) {
         const syncContextGuardStore = useSyncContextGuardStore(pinia)
         syncContextGuardStore.init({
