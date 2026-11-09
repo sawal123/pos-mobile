@@ -23,7 +23,7 @@ export function createProductScannerSession({
   onError,
   onNativeChange = () => {},
   continuous = false,
-  cooldownMs = 1300,
+  cooldownMs = 850,
   native = Capacitor.isNativePlatform(),
   loadNative = () => import('@capacitor-mlkit/barcode-scanning'),
   loadWeb = async () => {
@@ -44,6 +44,7 @@ export function createProductScannerSession({
   let stream = null
   let lastCode = ''
   let lastEmitAt = 0
+  let cooldownTimer = null
   const listeners = []
 
   function emitDetection(value) {
@@ -55,6 +56,10 @@ export function createProductScannerSession({
       if (normalized === lastCode && now - lastEmitAt < cooldownMs) return
       lastCode = normalized
       lastEmitAt = now
+      if (cooldownTimer) clearTimeout(cooldownTimer)
+      cooldownTimer = setTimeout(() => {
+        lastCode = ''
+      }, cooldownMs)
       onResult?.(normalized)
       return
     }
@@ -62,6 +67,10 @@ export function createProductScannerSession({
   }
 
   async function cleanup() {
+    if (cooldownTimer) {
+      clearTimeout(cooldownTimer)
+      cooldownTimer = null
+    }
     controls?.stop()
     controls = null
     stream?.getTracks().forEach((track) => track.stop())

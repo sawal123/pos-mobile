@@ -35,13 +35,27 @@ const { isRetail, scanContext } = useRetailProductCodes()
 const showScanner = ref(false)
 const scanFeedback = ref('')
 const scanError = ref(false)
+const lastScannedProduct = ref(null)
 let scanVariantContext = null
 let globalScanBuffer = ''
 let globalScanLastTime = 0
 let globalScanTimer = null
+let lastAutoSubmittedAt = 0
 let searchLastInputTime = 0
 let searchRapidStreak = 0
 let searchAutoScanTimer = null
+
+function getProductCartQty(productId) {
+  if (!productId) return 0
+  return items.value
+    .filter((item) => String(item.productId ?? item.id) === String(productId))
+    .reduce((sum, item) => sum + (Number(item.qty) || 0), 0)
+}
+
+const lastScannedItemQty = computed(() => {
+  if (!lastScannedProduct.value?.id) return 0
+  return getProductCartQty(lastScannedProduct.value.id)
+})
 
 function handleScanned(code, { fromCamera = true } = {}) {
   if (!isRetail.value) return
@@ -49,6 +63,7 @@ function handleScanned(code, { fromCamera = true } = {}) {
   const result = productStore.resolveScanCode(code)
   scanError.value = !result.success
   if (!result.success) {
+    lastScannedProduct.value = null
     scanFeedback.value = result.error
     return
   }
@@ -56,9 +71,34 @@ function handleScanned(code, { fromCamera = true } = {}) {
   if (outcome === 'variant') {
     showScanner.value = false
     scanVariantContext = scanContext.value
+    lastScannedProduct.value = result.product
     scanFeedback.value = 'Pilih varian untuk menambahkan produk.'
   } else {
-    scanFeedback.value = `${result.product.name} ditambahkan ke keranjang.`
+    lastScannedProduct.value = result.product
+    const currentItemQty = getProductCartQty(result.product.id)
+    scanFeedback.value = `✓ ${result.product.name} ditambahkan ke keranjang (Qty: ${currentItemQty}).`
+  }
+}
+
+function adjustLastScannedProductQty(delta) {
+  const product = lastScannedProduct.value
+  if (!product) return
+  if (delta > 0) {
+    cartStore.addItem(product)
+  } else {
+    const existing = items.value.find(
+      (item) => String(item.productId ?? item.id) === String(product.id),
+    )
+    if (existing) {
+      cartStore.decreaseQty(existing.id)
+    }
+  }
+  const updatedQty = getProductCartQty(product.id)
+  if (updatedQty <= 0) {
+    scanFeedback.value = ''
+    lastScannedProduct.value = null
+  } else {
+    scanFeedback.value = `✓ ${product.name} di keranjang (Qty: ${updatedQty}).`
   }
 }
 
@@ -66,7 +106,7 @@ function handleSearchUpdate(value) {
   productStore.setSearchQuery(value)
   if (!isRetail.value) return
   const now = Date.now()
-  if (now - searchLastInputTime < 55) {
+  if (now - searchLastInputTime < 85) {
     searchRapidStreak += 1
   } else {
     searchRapidStreak = 1
@@ -83,7 +123,7 @@ function handleSearchUpdate(value) {
         productStore.setSearchQuery('')
         searchRapidStreak = 0
       }
-    }, 90)
+    }, 180)
   }
 }
 
@@ -98,25 +138,34 @@ function handleSearchScanSubmit() {
 }
 
 function handleGlobalHardwareScanKeydown(event) {
-  if (!isRetail.value || showScanner.value || showVariantSheet.value || showPromoModal.value) return
+  if (!isRetail.value || showVariantSheet.value || showPromoModal.value) return
   const activeEl = document.activeElement
   const tag = activeEl ? activeEl.tagName.toLowerCase() : ''
+  const inputType = tag === 'input' && activeEl?.type ? activeEl.type.toLowerCase() : ''
+  const isTextInput =
+    tag === 'input' &&
+    !['range', 'checkbox', 'radio', 'button', 'submit', 'file'].includes(inputType)
   const isEditing =
-    tag === 'input' || tag === 'textarea' || tag === 'select' || Boolean(activeEl?.isContentEditable)
+    isTextInput || tag === 'textarea' || tag === 'select' || Boolean(activeEl?.isContentEditable)
   if (isEditing || event.ctrlKey || event.altKey || event.metaKey) return
 
   const now = Date.now()
-  if (now - globalScanLastTime > 120) {
+  if (now - globalScanLastTime > 480) {
     globalScanBuffer = ''
   }
 
-  if (event.key === 'Enter') {
+  if (event.key === 'Enter' || event.key === 'Tab') {
     const code = globalScanBuffer.trim()
     globalScanBuffer = ''
     if (globalScanTimer) clearTimeout(globalScanTimer)
-    if (code.length >= 3) {
+    if (code.length >= 2) {
       event.preventDefault()
+      event.stopPropagation()
+      lastAutoSubmittedAt = now
       handleScanned(code, { fromCamera: false })
+    } else if (now - lastAutoSubmittedAt < 350) {
+      event.preventDefault()
+      event.stopPropagation()
     }
     return
   }
@@ -128,10 +177,13 @@ function handleGlobalHardwareScanKeydown(event) {
     const candidate = globalScanBuffer.trim()
     globalScanTimer = setTimeout(() => {
       if (candidate.length >= 4 && productStore.resolveScanCode(candidate).success) {
+        lastAutoSubmittedAt = Date.now()
         handleScanned(candidate, { fromCamera: false })
+        globalScanBuffer = ''
+      } else if (Date.now() - globalScanLastTime >= 480) {
+        globalScanBuffer = ''
       }
-      globalScanBuffer = ''
-    }, 130)
+    }, 260)
   }
 }
 
@@ -269,20 +321,50 @@ function handleCheckout() {
           </div>
           <div
             v-if="scanFeedback"
-            class="flex flex-wrap items-center justify-between gap-2 rounded-2xl px-4 py-3 text-sm"
-            :class="scanError ? 'bg-danger/10 text-danger' : 'bg-primary/10 text-primary'"
+            class="flex flex-wrap items-center justify-between gap-2 rounded-2xl border px-3.5 py-2.5 text-xs sm:text-sm"
+            :class="
+              scanError
+                ? 'border-danger/30 bg-danger/10 text-danger'
+                : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+            "
             role="status"
             data-testid="pos-scan-feedback"
           >
-            <p class="min-w-0 break-words">{{ scanFeedback }}</p>
-            <button
-              v-if="scanError"
-              type="button"
-              class="min-h-10 font-semibold underline"
-              @click="showScanner = true"
-            >
-              Scan Lagi
-            </button>
+            <div class="flex items-center gap-2 min-w-0">
+              <p class="min-w-0 break-words font-semibold">{{ scanFeedback }}</p>
+              <span
+                v-if="!scanError && lastScannedItemQty > 0"
+                class="shrink-0 rounded-lg bg-emerald-500 px-2 py-0.5 font-mono text-xs font-extrabold text-zinc-950"
+              >
+                Qty: {{ lastScannedItemQty }}
+              </span>
+            </div>
+            <div class="flex items-center gap-1.5 ml-auto shrink-0">
+              <template v-if="!scanError && lastScannedProduct && lastScannedItemQty > 0">
+                <button
+                  type="button"
+                  class="rounded-lg border border-current/25 px-2.5 py-1 text-xs font-bold"
+                  @click="adjustLastScannedProductQty(-1)"
+                >
+                  -1
+                </button>
+                <button
+                  type="button"
+                  class="rounded-lg bg-emerald-500 px-2.5 py-1 text-xs font-extrabold text-zinc-950"
+                  @click="adjustLastScannedProductQty(1)"
+                >
+                  +1 Lagi
+                </button>
+              </template>
+              <button
+                v-if="scanError"
+                type="button"
+                class="min-h-8 font-semibold underline"
+                @click="showScanner = true"
+              >
+                Scan Lagi
+              </button>
+            </div>
           </div>
 
           <div class="flex gap-2 overflow-x-auto pb-1 sm:gap-3">
@@ -435,6 +517,7 @@ function handleCheckout() {
       :continuous="true"
       :last-scanned-text="scanFeedback"
       :last-scan-error="scanError"
+      :last-scanned-item-qty="lastScannedItemQty"
       :cart-count="Number(totalQty) || 0"
       @close="showScanner = false"
       @scanned="handleScanned"
