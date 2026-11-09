@@ -642,9 +642,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       const local = workspace.localBusiness
       const sameIdentity =
         workspace.ok &&
-        local.name === business.name &&
-        normalizeCloudBusinessType(local.type) === business.business_type &&
-        (!context.outletName || local.outlet === context.outletName)
+        (local.name === business.name || !local.name || !business.name || local.name.trim().toLowerCase() === business.name.trim().toLowerCase()) &&
+        (!local.type || !business.business_type || normalizeCloudBusinessType(local.type) === business.business_type) &&
+        (!context.outletName || !local.outlet || local.outlet === context.outletName)
 
       if (sameIdentity) {
         return { ok: true, code: 'OPERATIONAL_CONTEXT_ACTIVE' }
@@ -2693,8 +2693,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
             ) {
               await persistCloudContext()
             } else if (
-              selectedBusiness.value &&
-              operationalContext.value?.status === 'active'
+              selectedBusiness.value
             ) {
               try {
                 const bStore = useBusinessStore()

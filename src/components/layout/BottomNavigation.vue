@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { RouterLink, useRoute } from 'vue-router'
 
 import AppIcon from '@/components/base/AppIcon.vue'
 import BaseSheet from '@/components/base/BaseSheet.vue'
@@ -10,7 +10,6 @@ import { getBottomNavItems, getMoreMenuItems } from '@/navigation/operationalMen
 import { useBusinessStore } from '@/stores/businessStore'
 
 const route = useRoute()
-const router = useRouter()
 const businessStore = useBusinessStore()
 const { isSyncLocked } = useSyncAccess()
 const showMore = ref(false)
@@ -27,15 +26,14 @@ function isActive(path) {
   return route.path === path || route.path.startsWith(`${path}/`)
 }
 
-function handleMoreSelect(item) {
+function handleMoreNavClick(event, item, navigate) {
   showMore.value = false
   if (isItemLocked(item)) {
+    event.preventDefault()
     showSyncLockedModal.value = true
     return
   }
-  if (item.to) {
-    router.push(item.to)
-  }
+  navigate(event)
 }
 
 const isMoreActive = computed(() => moreItems.value.some((item) => isActive(item.to)))
@@ -83,38 +81,44 @@ const isMoreActive = computed(() => moreItems.value.some((item) => isActive(item
 
   <BaseSheet :open="showMore" title="Lainnya" @close="showMore = false">
     <div class="grid grid-cols-2 gap-3">
-      <button
+      <RouterLink
         v-for="item in moreItems"
         :key="item.key"
-        type="button"
-        :data-testid="`more-menu-${item.key}`"
-        :aria-haspopup="isItemLocked(item) ? 'dialog' : undefined"
-        :class="[
-          'flex min-h-14 items-center gap-3 rounded-2xl border px-4 py-3 text-left text-sm font-medium text-ink-primary shadow-soft transition active:scale-[0.98]',
-          isItemLocked(item)
-            ? 'border-amber-200/90 bg-amber-50/40 dark:border-amber-500/30 dark:bg-amber-950/20'
-            : 'border-zinc-200 bg-white hover:bg-zinc-50 dark:border-slate-700/60 dark:bg-[#1B2133] dark:hover:bg-slate-800/60',
-        ]"
-        @click="handleMoreSelect(item)"
+        v-slot="{ href, navigate }"
+        :to="item.to"
+        custom
       >
-        <span
+        <a
+          :href="href"
+          :data-testid="`more-menu-${item.key}`"
+          :aria-haspopup="isItemLocked(item) ? 'dialog' : undefined"
           :class="[
-            'flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl',
+            'flex min-h-14 items-center gap-3 rounded-2xl border px-4 py-3 text-left text-sm font-medium text-ink-primary shadow-soft transition active:scale-[0.98]',
             isItemLocked(item)
-              ? 'bg-amber-100 text-amber-600 dark:bg-amber-500/20 dark:text-amber-300'
-              : 'bg-primary/10 text-primary',
+              ? 'border-amber-200/90 bg-amber-50/40 dark:border-amber-500/30 dark:bg-amber-950/20'
+              : 'border-zinc-200 bg-white hover:bg-zinc-50 dark:border-slate-700/60 dark:bg-[#1B2133] dark:hover:bg-slate-800/60',
           ]"
+          @click="handleMoreNavClick($event, item, navigate)"
         >
-          <AppIcon :name="item.icon" />
-        </span>
-        <span class="min-w-0 flex-1 truncate">{{ item.label }}</span>
-        <AppIcon
-          v-if="isItemLocked(item)"
-          name="lock"
-          data-testid="more-menu-sync-lock"
-          class="h-4 w-4 shrink-0 text-amber-500"
-        />
-      </button>
+          <span
+            :class="[
+              'flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl',
+              isItemLocked(item)
+                ? 'bg-amber-100 text-amber-600 dark:bg-amber-500/20 dark:text-amber-300'
+                : 'bg-primary/10 text-primary',
+            ]"
+          >
+            <AppIcon :name="item.icon" />
+          </span>
+          <span class="min-w-0 flex-1 truncate">{{ item.label }}</span>
+          <AppIcon
+            v-if="isItemLocked(item)"
+            name="lock"
+            data-testid="more-menu-sync-lock"
+            class="h-4 w-4 shrink-0 text-amber-500"
+          />
+        </a>
+      </RouterLink>
     </div>
   </BaseSheet>
 

@@ -15,8 +15,14 @@ const displayId = computed(() => {
   if (props.transaction.invoiceNumber) {
     return props.transaction.invoiceNumber
   }
+  if (props.transaction.invoice_number) {
+    return props.transaction.invoice_number
+  }
   if (props.transaction.orderNumber) {
     return props.transaction.orderNumber
+  }
+  if (props.transaction.order_number) {
+    return props.transaction.order_number
   }
   const raw = String(props.transaction.id ?? '')
   if (raw.length > 12) {
@@ -28,6 +34,9 @@ const displayId = computed(() => {
 const itemCount = computed(() => {
   if (typeof props.transaction.itemCount === 'number') {
     return props.transaction.itemCount
+  }
+  if (typeof props.transaction.item_count === 'number') {
+    return props.transaction.item_count
   }
   if (Array.isArray(props.transaction.items)) {
     return props.transaction.items.reduce(
@@ -44,7 +53,7 @@ const itemsPreview = computed(() => {
   }
   return props.transaction.items
     .map((item) => {
-      const name = item.name || item.serviceName || 'Item'
+      const name = item.name || item.product_name || item.serviceName || 'Item'
       const qty = Number(item.qty ?? item.quantity) || 1
       return `${name} (${qty}x)`
     })
@@ -52,11 +61,12 @@ const itemsPreview = computed(() => {
 })
 
 const paymentMethodLabel = computed(() => {
-  const method = `${props.transaction.paymentMethod ?? ''}`.toLowerCase()
+  const method = `${props.transaction.paymentMethod ?? props.transaction.payment_method ?? ''}`.toLowerCase()
   if (method === 'qris') return 'QRIS'
-  if (method === 'card') return 'Card'
-  if (method === 'cash') return 'Cash'
-  return props.transaction.paymentMethod || '-'
+  if (method === 'card' || method === 'kartu') return 'Card'
+  if (method === 'cash' || method === 'tunai') return 'Cash'
+  if (method === 'transfer') return 'Transfer'
+  return props.transaction.paymentMethod || props.transaction.payment_method || '-'
 })
 
 function statusVariant(status) {
@@ -72,6 +82,10 @@ function statusLabel(status) {
   if (status === 'unpaid' || status === 'pending') return 'Belum Bayar'
   return status || '-'
 }
+
+const txDate = computed(() => {
+  return props.transaction.createdAt || props.transaction.created_at || props.transaction.date || props.transaction.timestamp
+})
 </script>
 
 <template>
@@ -93,7 +107,7 @@ function statusLabel(status) {
     <!-- Middle: Customer & Items Preview -->
     <div>
       <h3 class="text-base font-semibold text-ink-primary truncate">
-        {{ transaction.customer || 'Walk-in Customer' }}
+        {{ transaction.customer || transaction.customer_name || 'Walk-in Customer' }}
       </h3>
 
       <p v-if="itemsPreview" class="mt-0.5 text-xs text-ink-secondary truncate">
@@ -112,7 +126,7 @@ function statusLabel(status) {
           </span>
         </div>
         <p class="text-[11px] text-zinc-400">
-          {{ formatDateTime(transaction.createdAt) }}
+          {{ formatDateTime(txDate) }}
         </p>
       </div>
 

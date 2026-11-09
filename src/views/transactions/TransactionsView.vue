@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import TransactionCard from '@/components/transaction/TransactionCard.vue'
@@ -26,8 +26,18 @@ const yesterdayStr = (() => {
   return toLocalDateString(d)
 })()
 
+onMounted(async () => {
+  if (typeof transactionStore.loadTransactions === 'function' && (!transactionStore.items || transactionStore.items.length === 0)) {
+    try {
+      await transactionStore.loadTransactions()
+    } catch {
+      // non-blocking
+    }
+  }
+})
+
 function getTxDateString(t) {
-  const raw = t.createdAt || t.date || t.timestamp
+  const raw = t.createdAt || t.created_at || t.date || t.timestamp || t.paidAt || t.paid_at
   if (!raw) return ''
   try {
     return toLocalDateString(new Date(raw))
@@ -37,7 +47,7 @@ function getTxDateString(t) {
 }
 
 function getTxTimestamp(t) {
-  const raw = t.createdAt || t.date || t.timestamp
+  const raw = t.createdAt || t.created_at || t.date || t.timestamp || t.paidAt || t.paid_at
   if (!raw) return 0
   const ts = new Date(raw).getTime()
   return Number.isNaN(ts) ? 0 : ts
@@ -141,25 +151,25 @@ const filteredTransactions = computed(() => {
 
     // 2. Payment Method Filter
     if (paymentFilter.value !== 'all') {
-      const method = String(t.paymentMethod || '').toLowerCase()
+      const method = String(t.paymentMethod || t.payment_method || t.method || '').toLowerCase()
       if (paymentFilter.value === 'cash') {
-        if (method !== 'cash' && method !== 'tunai') return false
+        if (!method.includes('cash') && !method.includes('tunai')) return false
       } else if (paymentFilter.value === 'qris') {
         if (!method.includes('qris')) return false
       } else if (paymentFilter.value === 'transfer') {
-        if (!method.includes('transfer') && !method.includes('bank')) return false
+        if (!method.includes('transfer') && !method.includes('bank') && !method.includes('bca') && !method.includes('mandiri') && !method.includes('bri') && !method.includes('bni')) return false
       } else if (paymentFilter.value === 'card') {
-        if (!method.includes('card') && !method.includes('debit') && !method.includes('credit')) return false
+        if (!method.includes('card') && !method.includes('kartu') && !method.includes('debit') && !method.includes('credit')) return false
       }
     }
 
     // 3. Search Filter
     const q = searchQuery.value.trim().toLowerCase()
     if (q) {
-      const inv = String(t.invoiceNumber || t.orderNumber || t.id || '').toLowerCase()
-      const customer = String(t.customer || '').toLowerCase()
+      const inv = String(t.invoiceNumber || t.invoice_number || t.orderNumber || t.order_number || t.id || '').toLowerCase()
+      const customer = String(t.customer || t.customer_name || (typeof t.customer === 'object' ? t.customer?.name : '') || '').toLowerCase()
       const itemMatch = Array.isArray(t.items)
-        ? t.items.some((it) => String(it.name || it.serviceName || '').toLowerCase().includes(q))
+        ? t.items.some((it) => String(it.name || it.product_name || it.serviceName || '').toLowerCase().includes(q))
         : false
       if (!inv.includes(q) && !customer.includes(q) && !itemMatch) {
         return false
@@ -171,7 +181,10 @@ const filteredTransactions = computed(() => {
 })
 
 const totalRevenue = computed(() => {
-  return filteredTransactions.value.reduce((acc, t) => acc + (Number(t.total) || 0), 0)
+  return filteredTransactions.value.reduce(
+    (acc, t) => acc + (Number(t.total ?? t.grandTotal ?? t.grand_total) || 0),
+    0
+  )
 })
 
 function resetAllFilters() {

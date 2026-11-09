@@ -1,5 +1,6 @@
 import { computed } from 'vue'
 
+import { useBusinessStore } from '@/stores/businessStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useSubscriptionStore } from '@/stores/subscriptionStore'
 
@@ -11,15 +12,12 @@ export const SYNC_LOCK_REASON = Object.freeze({
 /**
  * Pure helper to resolve whether the Sinkronisasi feature/menu is unlocked.
  *
- * Sinkronisasi is ONLY unlocked when:
+ * Sinkronisasi is unlocked when:
  * 1. The user is logged into a Cloud account (`isAuthenticated === true`), AND
- * 2. Either the selected business has an active Premium/Cloud subscription
- *    (`subscriptionStore.isPremium === true`), OR the logged-in user is a
- *    Cashier operating on an active Cloud business (`isOperationalCloudAccess === true`).
- *
- * When not logged in OR still on Free, Sinkronisasi remains locked.
+ * 2. The account is linked to a cloud business / operating in cloud mode /
+ *    has active cloud access / paid subscription, and is not explicitly expired or restricted.
  */
-export function resolveSyncAccess({ cloudStore, subscriptionStore }) {
+export function resolveSyncAccess({ cloudStore, subscriptionStore, businessStore = null }) {
   const isAuthenticated = Boolean(cloudStore?.isAuthenticated)
   const isCashier = Boolean(
     cloudStore?.role === 'cashier' || cloudStore?.isCashierContext === true,
@@ -39,22 +37,45 @@ export function resolveSyncAccess({ cloudStore, subscriptionStore }) {
     statusKey === 'cancelled' ||
     statusKey === 'canceled'
 
+  // If unauthenticated or explicitly expired or on free plan, lock it
+  if (!isAuthenticated || isFreePlan || isExpired) {
+    return {
+      isAuthenticated,
+      isCashier,
+      isPaidCloudActive: false,
+      isSyncUnlocked: false,
+      isSyncLocked: true,
+      syncLockReason: !isAuthenticated
+        ? SYNC_LOCK_REASON.UNAUTHENTICATED_FREE
+        : SYNC_LOCK_REASON.AUTHENTICATED_FREE,
+    }
+  }
+
+  // Check if session has active cloud tenant status
+  const isCloudTenantActive = Boolean(
+    cloudStore?.isOperationalCloudAccess === true ||
+      cloudStore?.hasCloudAccess === true ||
+      cloudStore?.cloudAccess === true ||
+      businessStore?.mode === 'cloud' ||
+      cloudStore?.isLinked === true ||
+      Boolean(cloudStore?.selectedBusiness),
+  )
+
   // Cached plan is paid if it has an active subscription or explicit paid plan key and is not expired
   const isPaidPlanCached = Boolean(
     sub &&
       !isFreePlan &&
       !isExpired &&
-      (statusKey === 'active' || !statusKey || ['pro', 'cloud', 'premium', 'business', 'enterprise', 'plus', 'starter'].includes(planKey)),
-  )
-
-  const isCloudTenantActive = Boolean(
-    cloudStore?.isOperationalCloudAccess === true || cloudStore?.hasCloudAccess === true,
+      (statusKey === 'active' ||
+        !statusKey ||
+        ['pro', 'cloud', 'premium', 'business', 'enterprise', 'plus', 'starter'].includes(planKey)),
   )
 
   const isPaidCloudActive = Boolean(
     subscriptionStore?.isPremium === true ||
+      subscriptionStore?.hasCloudAccess === true ||
       (isCashier && isCloudTenantActive) ||
-      (isCloudTenantActive && !isFreePlan && !isExpired) ||
+      (isCloudTenantActive && !isFreePlan) ||
       isPaidPlanCached,
   )
 
@@ -64,7 +85,7 @@ export function resolveSyncAccess({ cloudStore, subscriptionStore }) {
   let syncLockReason = null
   if (!isAuthenticated) {
     syncLockReason = SYNC_LOCK_REASON.UNAUTHENTICATED_FREE
-  } else if (!isPaidCloudActive) {
+  } else if (isSyncLocked) {
     syncLockReason = SYNC_LOCK_REASON.AUTHENTICATED_FREE
   }
 
@@ -81,8 +102,9 @@ export function resolveSyncAccess({ cloudStore, subscriptionStore }) {
 export function useSyncAccess() {
   const cloudStore = useCloudSessionStore()
   const subscriptionStore = useSubscriptionStore()
+  const businessStore = useBusinessStore()
 
-  const access = computed(() => resolveSyncAccess({ cloudStore, subscriptionStore }))
+  const access = computed(() => resolveSyncAccess({ cloudStore, subscriptionStore, businessStore }))
 
   const isAuthenticated = computed(() => access.value.isAuthenticated)
   const isCashier = computed(() => access.value.isCashier)
