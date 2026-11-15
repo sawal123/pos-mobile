@@ -522,10 +522,18 @@ describe('Subscription view', () => {
 })
 
 describe('Settings compact categories', () => {
-  it('starts with five collapsed categories and reveals only the selected category', async () => {
+  it('starts with every category collapsed and reveals only the selected category', async () => {
     const wrapper = await mountSettings(prepareContext(), null)
     const headings = wrapper.findAll('[data-testid^="settings-section-"]')
-    expect(headings).toHaveLength(5)
+    expect(headings.map((heading) => heading.attributes('data-testid'))).toEqual([
+      'settings-section-appearance',
+      'settings-section-tax',
+      'settings-section-receipt',
+      'settings-section-printer',
+      'settings-section-cloud',
+      'settings-section-catalog-master',
+      'settings-section-data',
+    ])
     expect(headings.every((heading) => heading.attributes('aria-expanded') === 'false')).toBe(true)
     expect(wrapper.find('[data-testid="tax-settings-card"]').isVisible()).toBe(false)
     expect(wrapper.find('[data-testid="backup-card"]').isVisible()).toBe(false)
@@ -546,6 +554,50 @@ describe('Settings compact categories', () => {
     await wrapper.find('[data-testid="settings-section-data"]').trigger('click')
     expect(wrapper.find('[data-testid="backup-card"]').isVisible()).toBe(false)
     expect(wrapper.findAll('[aria-expanded="true"]')).toHaveLength(0)
+  })
+
+  it('expands Master Data & Katalog and opens the categories and units screens', async () => {
+    const context = prepareContext()
+    const wrapper = await mountSettings(context, null)
+
+    expect(
+      wrapper.find('[data-testid="settings-section-catalog-master"]').attributes('aria-expanded'),
+    ).toBe('false')
+    expect(wrapper.find('[data-testid="settings-menu-categories"]').isVisible()).toBe(false)
+
+    await wrapper.find('[data-testid="settings-section-catalog-master"]').trigger('click')
+
+    expect(
+      wrapper.find('[data-testid="settings-section-catalog-master"]').attributes('aria-expanded'),
+    ).toBe('true')
+    expect(wrapper.find('[data-testid="settings-menu-categories"]').isVisible()).toBe(true)
+    expect(wrapper.find('[data-testid="settings-menu-units"]').isVisible()).toBe(true)
+    expect(wrapper.findAll('[aria-expanded="true"]')).toHaveLength(1)
+
+    await wrapper.find('[data-testid="settings-menu-categories"]').trigger('click')
+    await flushPromises()
+    expect(context.router.currentRoute.value.name).toBe('categories')
+
+    await wrapper.find('[data-testid="settings-menu-units"]').trigger('click')
+    await flushPromises()
+    expect(context.router.currentRoute.value.name).toBe('units')
+  })
+
+  it('opens Master Data & Katalog from a ?section=catalog-master deep link', async () => {
+    const context = prepareContext()
+    await context.router.push('/settings?section=catalog-master')
+    await flushPromises()
+
+    const wrapper = mount(SettingsView, {
+      attachTo: document.body,
+      global: { plugins: [context.pinia, context.router] },
+    })
+    await flushPromises()
+
+    expect(
+      wrapper.find('[data-testid="settings-section-catalog-master"]').attributes('aria-expanded'),
+    ).toBe('true')
+    expect(wrapper.find('[data-testid="settings-menu-units"]').isVisible()).toBe(true)
   })
 
   it('preserves an unsaved tax draft when switching categories', async () => {

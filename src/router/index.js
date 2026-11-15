@@ -16,6 +16,7 @@ import PaymentSuccessView from '../views/payment/PaymentSuccessView.vue'
 import PaymentView from '../views/payment/PaymentView.vue'
 import PosView from '../views/pos/PosView.vue'
 import CategoriesView from '../views/categories/CategoriesView.vue'
+import UnitsView from '../views/units/UnitsView.vue'
 import CustomerFormView from '../views/customers/CustomerFormView.vue'
 import CustomersView from '../views/customers/CustomersView.vue'
 import ExpenseFormView from '../views/expenses/ExpenseFormView.vue'
@@ -45,6 +46,11 @@ import LaundryOrderDetailView from '../views/laundry/LaundryOrderDetailView.vue'
 import PromosView from '../views/promos/PromosView.vue'
 
 export function resolveStartupRoute({ businessStore, cashierStore, shiftStore, cloudStore }) {
+  const isCashier = cloudStore?.role === 'cashier' || cloudStore?.isCashierContext === true
+  if (isCashier && cloudStore?.isAuthenticated) {
+    return { name: 'home' }
+  }
+
   if (!businessStore.isSetup) {
     return { name: 'splash' }
   }
@@ -157,6 +163,11 @@ const routes = [
         path: 'categories',
         name: 'categories',
         component: CategoriesView,
+      },
+      {
+        path: 'units',
+        name: 'units',
+        component: UnitsView,
       },
       {
         path: 'promos',
@@ -297,6 +308,7 @@ const businessRequiredRoutes = new Set([
   'product-create',
   'product-edit',
   'categories',
+  'units',
   'customers',
   'customer-create',
   'customer-edit',
@@ -332,6 +344,7 @@ const pinRequiredRoutes = new Set([
   'product-create',
   'product-edit',
   'categories',
+  'units',
   'customers',
   'customer-create',
   'customer-edit',
@@ -397,6 +410,9 @@ export function createAppRouter() {
       if (['product-create', 'product-edit'].includes(to.name)) {
         return { name: 'products' }
       }
+      if (['business-setup', 'welcome'].includes(to.name)) {
+        return { name: 'home' }
+      }
     }
 
     if (to.name === 'root') {
@@ -404,6 +420,9 @@ export function createAppRouter() {
     }
 
     if (!businessStore.isSetup && businessRequiredRoutes.has(to.name)) {
+      if (isCashier) {
+        return { name: 'home' }
+      }
       return { name: 'business-setup' }
     }
 

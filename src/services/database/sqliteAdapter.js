@@ -338,7 +338,7 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
       const [{ values: categoryRows = [] }, { values: productRows = [] }] = await Promise.all([
         db.query('SELECT name FROM categories ORDER BY name ASC'),
         db.query(
-          `SELECT id, name, category, sku, cost, price, stock, unit, min_stock,
+          `SELECT id, name, category, sku, cost, price, promo_price, stock, unit, min_stock,
              kind, pricing_unit, min_quantity, estimated_duration, image_data, is_sellable, is_active, variant_group_ids, barcode
            FROM products ORDER BY rowid ASC`,
         ),
@@ -354,6 +354,7 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
           barcode: row.barcode ?? '',
           cost: Number(row.cost ?? 0),
           price: Number(row.price),
+          promoPrice: (row.promo_price !== null && row.promo_price !== undefined && row.promo_price !== '') ? Number(row.promo_price) : null,
           unitPrice: Number(row.price),
           stock: Number(row.stock),
           unit: row.unit ?? 'pcs',
@@ -386,9 +387,9 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
         for (const product of products) {
           await db.run(
             `INSERT INTO products
-              (id, name, category, sku, cost, price, stock, unit, min_stock,
+              (id, name, category, sku, cost, price, promo_price, stock, unit, min_stock,
                kind, pricing_unit, min_quantity, estimated_duration, image_data, is_sellable, is_active, variant_group_ids, barcode)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
               String(product.id),
               product.name,
@@ -396,6 +397,7 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
               product.sku ?? '',
               Number(product.cost ?? 0),
               Number(product.price),
+              (product.promoPrice !== null && product.promoPrice !== undefined && product.promoPrice !== '') ? Number(product.promoPrice) : null,
               Number(product.stock),
               product.unit ?? 'pcs',
               Number(product.minStock ?? 0),

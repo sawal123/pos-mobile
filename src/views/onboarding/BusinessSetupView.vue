@@ -1,5 +1,5 @@
 <script setup>
-import { computed, reactive } from 'vue'
+import { computed, onMounted, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -8,10 +8,22 @@ import AppIcon from '@/components/base/AppIcon.vue'
 import { BUSINESS_TYPES, normalizeBusinessType } from '@/data/businessTemplates'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useProductStore } from '@/stores/productStore'
+import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 
 const businessStore = useBusinessStore()
 const productStore = useProductStore()
+const cloudStore = useCloudSessionStore()
 const router = useRouter()
+
+const isCashier = computed(
+  () => cloudStore.role === 'cashier' || cloudStore.isCashierContext === true,
+)
+
+onMounted(() => {
+  if (isCashier.value) {
+    router.replace({ name: 'home' })
+  }
+})
 
 const form = reactive({
   name: businessStore.name,
@@ -58,6 +70,10 @@ const canContinue = computed(() => Boolean(form.name.trim()) && Boolean(form.typ
 let isSubmitting = false
 
 function saveBusinessProfile() {
+  if (isCashier.value) {
+    router.replace({ name: 'home' })
+    return
+  }
   if (!canContinue.value || isSubmitting) return
   isSubmitting = true
 

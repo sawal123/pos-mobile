@@ -11,9 +11,12 @@ import {
 } from '@/services/printer/receiptSettings'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useReceiptStore } from '@/stores/receiptStore'
+import { useCloudSessionStore } from '@/stores/cloudSessionStore'
+import { apiRequest } from '@/services/cloud/apiClient'
 
 const store = useReceiptStore()
 const business = useBusinessStore()
+const cloudStore = useCloudSessionStore()
 const draft = ref(normalizeReceiptSettings(store.$state))
 const processing = ref(false)
 const error = ref('')
@@ -69,17 +72,50 @@ async function selectLogo(event) {
   }
 }
 
-function save() {
+async function save() {
   if (processing.value) return
   store.saveSettings(draft.value)
   draft.value = normalizeReceiptSettings(store.$state)
   error.value = ''
   feedback.value = 'Pengaturan struk berhasil disimpan.'
+
+  if (cloudStore.isLinked && cloudStore.selectedBusiness?.id) {
+    try {
+      await apiRequest(`/api/mobile/businesses/${cloudStore.selectedBusiness.id}/receipt-settings`, {
+        method: 'PATCH',
+        body: {
+          logo: draft.value.logo,
+          address: draft.value.address,
+          footer: draft.value.footer,
+        },
+      })
+      feedback.value = 'Pengaturan struk berhasil disimpan dan disinkronkan ke Cloud database.'
+    } catch {
+      feedback.value = 'Pengaturan struk disimpan di penyimpanan lokal (sementara).'
+    }
+  } else {
+    feedback.value = 'Pengaturan struk berhasil disimpan di penyimpanan lokal perangkat.'
+  }
 }
 </script>
 
 <template>
   <form class="space-y-4" data-testid="receipt-settings-panel" @submit.prevent="save">
+    <!-- Storage & Sync Status Indicator -->
+    <div
+      v-if="cloudStore.isLinked"
+      class="flex items-center gap-2 rounded-xl bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800 border border-emerald-200/80"
+    >
+      <span class="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+      <span>Cloud Aktif: Logo dan pengaturan struk disinkronkan ke database Cloud ({{ cloudStore.selectedBusiness?.name || 'Bisnis' }}).</span>
+    </div>
+    <div
+      v-else
+      class="flex items-center gap-2 rounded-xl bg-zinc-50 px-3 py-2 text-xs font-medium text-ink-secondary border border-zinc-200/80"
+    >
+      <span class="h-2 w-2 rounded-full bg-amber-500" />
+      <span>Mode Free / Offline: Logo struk disimpan di penyimpanan lokal (sementara).</span>
+    </div>
     <div>
       <label for="receipt-address" class="mb-1 block text-sm font-medium text-ink-primary"
         >Alamat pada struk</label

@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest'
 // framework in this project, so the source contract is asserted here instead.
 const PLUGIN_PATH = fileURLToPath(
   new URL(
-    '../../android/app/src/main/java/com/posoffline/app/BluetoothPrinterPlugin.java',
+    '../../android/app/src/main/java/com/netkasir/app/BluetoothPrinterPlugin.java',
     import.meta.url,
   ),
 )

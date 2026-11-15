@@ -389,4 +389,36 @@ describe('P33 ESC/POS receipt builder', () => {
     expect(wrapText('', 32)).toEqual([''])
     expect(wrapText('abcdefghij', 3)).toEqual(['abc', 'def', 'ghi', 'j'])
   })
+
+  it('mencetak teks Layanan Free ketika isFree bernilai true', () => {
+    const textFree58 = buildReceiptText({
+      transaction: retailTransaction(),
+      business,
+      paperWidth: '58',
+      isFree: true,
+    })
+
+    // Pada lebar kertas 58mm (32 kolom), teks 33 karakter terbungkus ke baris berikutnya
+    expect(textFree58).toContain('Ini adalah Net Kasir Layanan\nFree')
+
+    const textFree80 = buildReceiptText({
+      transaction: retailTransaction(),
+      business,
+      paperWidth: '80',
+      isFree: true,
+    })
+
+    // Pada lebar kertas 80mm (48 kolom), teks muat dalam 1 baris
+    expect(textFree80).toContain('Ini adalah Net Kasir Layanan Free')
+
+    const textPaid = buildReceiptText({
+      transaction: retailTransaction(),
+      business,
+      paperWidth: '58',
+      isFree: false,
+    })
+
+    expect(textPaid).not.toContain('Ini adalah Net Kasir Layanan')
+    expect(textPaid).not.toContain('Free')
+  })
 })

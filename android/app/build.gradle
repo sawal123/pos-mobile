@@ -86,10 +86,10 @@ if (completeReleaseSigning && !releaseKeystoreFile.exists()) {
 }
 
 android {
-    namespace = "com.posoffline.app"
+    namespace = "com.netkasir.app"
     compileSdk = rootProject.ext.compileSdkVersion
     defaultConfig {
-        applicationId "com.posoffline.app"
+        applicationId "com.netkasir.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         // versionCode policy: major * 10000 + minor * 100 + patch (minor/patch <= 99)

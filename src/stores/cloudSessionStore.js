@@ -6,6 +6,7 @@ import { useBusinessStore } from '@/stores/businessStore'
 import { useTaxStore } from '@/stores/taxStore'
 import { useCashierStore } from '@/stores/cashierStore'
 import { useShiftStore } from '@/stores/shiftStore'
+import { useReceiptStore } from '@/stores/receiptStore'
 import {
   cloudLogin,
   cloudGoogleLogin,
@@ -33,6 +34,8 @@ import {
   removeTokenIfMatchesDetailed,
 } from '@/services/cloud/tokenRepository'
 import { resolveDeviceIdentifier } from '@/services/cloud/deviceIdentifier'
+import { pairDeviceWithCode as requestDevicePairing } from '@/services/cloud/devicePairingService'
+import { buildSyncReadiness } from '@/services/sync/syncPreconditions'
 import {
   ROLE_CASHIER,
   isPushEnabled,
@@ -382,6 +385,31 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   const hasCloudAccess = computed(() => isAuthenticated.value && cloudAccess.value === true)
 
   const isDeviceRegistered = computed(() => registeredDeviceId.value !== null)
+
+  /**
+   * Precise readiness for a Cloud sync operation.
+   *
+   * The sync screen used to report "Semua Tersinkron" while push/pull were
+   * rejected locally for a missing outlet or an unregistered device. This
+   * computed exposes exactly which requirement is still missing so the UI (and
+   * the logs) can explain it instead of failing with one opaque sentence.
+   */
+  const syncReadiness = computed(() =>
+    buildSyncReadiness({
+      authenticated: isAuthenticated.value,
+      user: user.value,
+      selectedBusiness: selectedBusiness.value,
+      selectedOutlet: selectedOutlet.value,
+      cloudAccess: isOperationalCloudAccess.value === true,
+      deviceIdentifier: deviceIdentifier.value,
+      registeredDeviceId: registeredDeviceId.value,
+      // PAIR-01: hanya role kasir yang wajib pairing. Perangkat owner/member
+      // di-bind otomatis oleh server pada sync pertama. `role` dipakai juga
+      // karena capabilityState bisa masih `unverified` tepat setelah restart.
+      requireDeviceRegistration:
+        role.value === ROLE_CASHIER || pushPolicy.value.role === ROLE_CASHIER,
+    }),
+  )
 
   const isOperationalContextActive = computed(
     () =>
@@ -2428,9 +2456,6 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       return { ok: false, error: { code: 'NOT_AUTHENTICATED' } }
     }
 
-    // INT-02: `POST /api/mobile/devices` is owner/member only. A cashier must
-    // never attempt auto-registration or QR pairing; the owner registers the
-    // device in the Dashboard and the app resolves it from device_context.
     if (pushPolicy.value.role === ROLE_CASHIER) {
       error.value =
         'Peran kasir tidak dapat mendaftarkan perangkat. Minta pemilik mendaftarkannya melalui Dashboard.'
@@ -2484,6 +2509,168 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     } finally {
       loading.value = false
     }
+  }
+
+  function resolveRuntimePlatform() {
+    try {
+      const platform = globalThis.Capacitor?.getPlatform?.()
+      if (platform === 'android' || platform === 'ios') return platform
+    } catch {
+      // browser / test environment
+    }
+    return 'web'
+  }
+
+  /**
+   * PAIR-01 — kasir memasangkan perangkat dengan kode 4 digit dari Dashboard.
+   *
+   * Server memvalidasi kode (cloud-only, 30 menit, sekali pakai) lalu mencatat
+   * nama perangkat, IP, user agent, dan versi aplikasi. Setelah berhasil, context
+   * di-refresh agar `device_context`/`registeredDeviceId` berasal dari server.
+   *
+   * @param {object} options
+   * @param {string} options.code
+   * @param {string} [options.deviceName]
+   * @returns {Promise<{ok: boolean, code?: string, message?: string, device?: object|null}>}
+   */
+  async function pairDeviceWithCode({ code, deviceName = '' } = {}) {
+    if (!isAuthenticated.value) {
+      return {
+        ok: false,
+        code: 'NOT_AUTHENTICATED',
+        message: 'Masuk akun Cloud terlebih dahulu sebelum pairing.',
+      }
+    }
+
+    if (pushPolicy.value.role !== ROLE_CASHIER) {
+      return {
+        ok: false,
+        code: 'PAIRING_CASHIER_ONLY',
+        message:
+          'Pairing hanya untuk akun kasir. Perangkat owner tidak perlu pairing — kelola dari Dashboard.',
+      }
+    }
+
+    if (!selectedBusiness.value?.id) {
+      return {
+        ok: false,
+        code: 'BUSINESS_REQUIRED',
+        message: 'Pilih bisnis Cloud terlebih dahulu.',
+      }
+    }
+
+    await ensureDeviceIdentifier()
+
+    const result = await requestDevicePairing({
+      code,
+      deviceName,
+      businessId: selectedBusiness.value.id,
+      deviceIdentifier: deviceIdentifier.value,
+    })
+
+    if (!result.ok) {
+      error.value = result.error?.message ?? ''
+      return {
+        ok: false,
+        code: result.error?.code ?? 'PAIRING_FAILED',
+        message: result.error?.message ?? 'Pairing perangkat gagal.',
+      }
+    }
+
+    const device = result.device ?? {}
+
+    if (device.outlet_id !== undefined && device.outlet_id !== null) {
+      selectedOutlet.value = {
+        id: device.outlet_id,
+        name: device.outlet?.name ?? selectedOutlet.value?.name ?? '',
+      }
+    }
+
+    if (device.id !== undefined && device.id !== null) {
+      registeredDeviceId.value = device.id
+    }
+
+    if (device.id !== undefined) {
+      deviceContext.value = {
+        id: device.id,
+        identifier: device.identifier ?? deviceIdentifier.value,
+        outlet_id: device.outlet_id ?? selectedOutlet.value?.id ?? null,
+        status: device.status ?? 'active',
+        name: device.name ?? null,
+        platform: device.platform ?? null,
+      }
+    }
+
+    error.value = null
+
+    // Authoritative refresh: capability state + device_context from the server.
+    try {
+      await refreshContext()
+    } catch {
+      // Offline: the locally bound device is still valid for the next sync.
+    }
+
+    await persistCloudContext()
+
+    return { ok: true, code: 'PAIRED', device }
+  }
+
+  /**
+   * Bind this installation's device row for the roles that do not use pairing
+   * (owner/member). The dashboard manages their devices and the server also
+   * auto-provisions an unknown device, so this is a silent compatibility step:
+   * the local binding metadata (pull/push binding + context guard) needs the
+   * server device id, but the user is never asked to register anything.
+   *
+   * @param {object} [options]
+   * @param {string|null} [options.platform]
+   * @returns {Promise<{ok: boolean, code?: string, message?: string, alreadyBound?: boolean}>}
+   */
+  async function ensureDeviceBinding({ platform = null } = {}) {
+    if (!isAuthenticated.value) {
+      return { ok: false, code: 'NOT_AUTHENTICATED', skipped: true }
+    }
+
+    if (registeredDeviceId.value !== null) {
+      return { ok: true, alreadyBound: true }
+    }
+
+    if (role.value === ROLE_CASHIER || pushPolicy.value.role === ROLE_CASHIER) {
+      return {
+        ok: false,
+        code: 'DEVICE_NOT_REGISTERED',
+        message: 'Perangkat kasir belum dipasangkan. Masukkan kode pairing dari pemilik.',
+      }
+    }
+
+    if (!cloudAccess.value || !selectedOutlet.value || !deviceIdentifier.value) {
+      return { ok: false, code: 'DEVICE_BINDING_CONTEXT_INCOMPLETE' }
+    }
+
+    if (operationalContext.value && operationalContext.value.status !== 'active') {
+      return { ok: false, code: 'OPERATIONAL_CONTEXT_NOT_ACTIVE' }
+    }
+
+    const registration = await doRegisterDevice({
+      platform: platform ?? resolveRuntimePlatform(),
+      deviceName: 'POS Mobile',
+    })
+
+    if (!registration.ok) {
+      return {
+        ok: false,
+        code: registration.error?.code ?? 'DEVICE_BINDING_FAILED',
+        message: registration.error?.message ?? '',
+      }
+    }
+
+    try {
+      await refreshContext()
+    } catch {
+      // Non-blocking: the id from the registration response is authoritative.
+    }
+
+    return { ok: true, device: registration.device }
   }
 
   /**
@@ -2748,6 +2935,16 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         })
       } catch {
         // Safe fallback if tax store not active
+      }
+    }
+
+    // Apply pengaturan struk & logo dari database Cloud
+    if (business?.receipt_settings && typeof business.receipt_settings === 'object') {
+      try {
+        const receiptStore = useReceiptStore()
+        receiptStore.saveSettings(business.receipt_settings)
+      } catch {
+        // Safe fallback if receipt store not active
       }
     }
 
@@ -3175,6 +3372,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     canPerformCloudPush,
     isCashierContext,
     syncCapabilitySummary,
+    syncReadiness,
     setPersistenceAdapter,
     getPersistenceAdapter,
     getPersistenceScheduler,
@@ -3209,6 +3407,8 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
     cancelBusinessSwitch,
     recoverInterruptedWorkspaceSwitch,
     doRegisterDevice,
+    pairDeviceWithCode,
+    ensureDeviceBinding,
     logout,
     hydrateFromStorage,
     refreshContext,

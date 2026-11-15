@@ -45,3 +45,7 @@ __screenshots__/
 # Built APKs
 *.apk
 release_apk/
+
+# Play Store bundle artifacts
+playstore_bundle/
+

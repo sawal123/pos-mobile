@@ -127,6 +127,7 @@ const VALID_SETTINGS_SECTIONS = new Set([
   'printer',
   'receipt',
   'cloud',
+  'catalog-master',
   'data',
 ])
 
@@ -1107,6 +1108,31 @@ async function handleRestoreFileChange(event) {
             testid="settings-menu-sync"
             :locked="isSyncLocked"
             @select="handleSyncSelect"
+          />
+        </div>
+      </SettingsSection>
+      <SettingsSection
+        section-id="catalog-master"
+        title="Master Data & Katalog"
+        summary="Kategori produk & satuan ukuran"
+        icon="categories"
+        :open="activeSection === 'catalog-master'"
+        @toggle="toggleSection('catalog-master')"
+      >
+        <div class="space-y-2" data-testid="catalog-master-card">
+          <SettingsMenuItem
+            icon="categories"
+            title="Kategori Produk"
+            subtitle="Kelola pengelompokan menu & kategori produk"
+            testid="settings-menu-categories"
+            @select="router.push({ name: 'categories' })"
+          />
+          <SettingsMenuItem
+            icon="package"
+            title="Satuan Produk (Units)"
+            subtitle="Kelola satuan takaran seperti ml, gr, pcs, pack, cup"
+            testid="settings-menu-units"
+            @select="router.push({ name: 'units' })"
           />
         </div>
       </SettingsSection>

@@ -3,6 +3,7 @@ import { computed } from 'vue'
 
 import { formatCurrency, formatDateTime } from '@/utils/formatters'
 import { normalizeReceiptSettings, receiptLogoDataUrl } from '@/services/printer/receiptSettings'
+import { useSubscriptionStore } from '@/stores/subscriptionStore'
 
 const props = defineProps({
   transaction: {
@@ -18,6 +19,24 @@ const props = defineProps({
       phone: '',
     }),
   },
+  isFree: {
+    type: Boolean,
+    default: null,
+  },
+})
+
+let subscriptionStore = null
+try {
+  subscriptionStore = useSubscriptionStore()
+} catch {
+  subscriptionStore = null
+}
+
+const isFreePlan = computed(() => {
+  if (props.isFree !== null && props.isFree !== undefined) {
+    return Boolean(props.isFree)
+  }
+  return subscriptionStore ? !subscriptionStore.isPremium : true
 })
 
 const settings = computed(() => normalizeReceiptSettings(props.receiptSettings))
@@ -96,30 +115,12 @@ const showCashSummary = computed(
           :src="logoUrl"
           alt="Logo usaha"
           class="receipt-logo mx-auto mb-2.5 object-contain"
-          :style="{
+          :style="settings.logo ? {
             width: `${settings.logo.width / 2}px`,
             height: `${settings.logo.height / 2}px`,
-          }"
+          } : { maxHeight: '48px', maxWidth: '120px' }"
           data-testid="receipt-logo"
         />
-        <div
-          v-else
-          class="mx-auto mb-2.5 flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10 text-primary print:hidden"
-        >
-          <svg
-            class="h-5 w-5"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-            <polyline points="9 22 9 12 15 12 15 22" />
-          </svg>
-        </div>
 
         <h1 class="text-lg font-extrabold tracking-tight text-ink-primary uppercase">
           {{ business.name || '-' }}
@@ -291,6 +292,16 @@ const showCashSummary = computed(
           {{ settings.footer }}
         </p>
       </footer>
+
+      <!-- Free Plan Notice -->
+      <div
+        v-if="isFreePlan"
+        class="receipt-free-notice text-center pt-2 text-[11px] font-medium text-ink-secondary"
+        :class="{ 'border-t border-dashed border-zinc-300 pt-4': !settings.footer }"
+        data-testid="receipt-free-notice"
+      >
+        <p>Ini adalah Net Kasir Layanan Free</p>
+      </div>
     </div>
 
     <!-- Decorative Thermal Tear-off Zigzag Bottom (Screen only) -->
@@ -307,3 +318,23 @@ const showCashSummary = computed(
     />
   </article>
 </template>
+
+<style scoped>
+@media print {
+  .receipt-logo {
+    display: block !important;
+    max-height: 48px;
+    margin-left: auto !important;
+    margin-right: auto !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .receipt-free-notice {
+    display: block !important;
+    color: #000 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
+</style>

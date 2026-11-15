@@ -33,6 +33,11 @@ function normalizeNumber(value, fallback = 0) {
 function normalizeProduct(product) {
   const kind = product.kind ?? (product.pricingUnit ? 'service' : 'product')
   const price = normalizeNumber(product.price ?? product.unitPrice)
+  const promoPriceRaw = product.promoPrice ?? product.promo_price
+  const promoPrice =
+    promoPriceRaw !== null && promoPriceRaw !== undefined && promoPriceRaw !== '' && !Number.isNaN(Number(promoPriceRaw))
+      ? Number(promoPriceRaw)
+      : null
   const isSellable =
     product.isSellable !== undefined
       ? Boolean(product.isSellable)
@@ -47,6 +52,7 @@ function normalizeProduct(product) {
     barcode: normalizeProductCode(product.barcode),
     cost: normalizeNumber(product.cost ?? product.hpp ?? product.estimatedCost),
     price,
+    promoPrice,
     unitPrice: price,
     stock: normalizeNumber(product.stock),
     unit: product.unit ?? (kind === 'service' ? (product.pricingUnit ?? 'kg') : 'pcs'),
@@ -128,6 +134,8 @@ function validateProductInput(payload, categories) {
   const price = isBlankValue(payload.price ?? payload.unitPrice)
     ? Number.NaN
     : Number(payload.price ?? payload.unitPrice)
+  const promoPriceRaw = payload.promoPrice ?? payload.promo_price
+  const promoPrice = isBlankValue(promoPriceRaw) ? null : Number(promoPriceRaw)
   const cost = isBlankValue(payload.cost ?? payload.hpp) ? 0 : Number(payload.cost ?? payload.hpp)
   const stock =
     kind === 'service' ? 0 : isBlankValue(payload.stock) ? Number.NaN : Number(payload.stock)
@@ -159,6 +167,12 @@ function validateProductInput(payload, categories) {
       kind === 'service'
         ? 'Harga per unit harus berupa angka dan minimal 0.'
         : 'Harga jual harus berupa angka dan minimal 0.'
+  }
+
+  if (promoPrice !== null && (Number.isNaN(promoPrice) || promoPrice < 0)) {
+    errors.promoPrice = 'Harga promo harus berupa angka dan minimal 0.'
+  } else if (promoPrice !== null && !Number.isNaN(price) && promoPrice >= price && price > 0) {
+    errors.promoPrice = 'Harga promo harus lebih kecil dari harga jual.'
   }
 
   if (Number.isNaN(cost) || cost < 0) {
@@ -199,6 +213,7 @@ function validateProductInput(payload, categories) {
       barcode: normalizeProductCode(payload.barcode ?? ''),
       cost: Number.isNaN(cost) ? 0 : cost,
       price: Number.isNaN(price) ? 0 : price,
+      promoPrice: promoPrice !== null && !Number.isNaN(promoPrice) ? promoPrice : null,
       unitPrice: Number.isNaN(price) ? 0 : price,
       stock: Number.isNaN(stock) ? 0 : stock,
       unit,
@@ -449,6 +464,7 @@ export const useProductStore = defineStore('product', {
       existingProduct.barcode = values.barcode
       existingProduct.cost = values.cost
       existingProduct.price = values.price
+      existingProduct.promoPrice = values.promoPrice
       existingProduct.unitPrice = values.unitPrice
       existingProduct.stock = values.stock
       existingProduct.unit = values.unit

@@ -56,6 +56,45 @@ export const useSyncPullStore = defineStore('syncPull', () => {
     loading.value = true
     lastError.value = null
 
+    // PAIR-01: perangkat owner/member tidak memakai kode pairing. Server
+    // membuat/mengenali perangkat ini pada sync pertama, dan binding lokal
+    // diselesaikan diam-diam supaya metadata pull binding tetap konsisten.
+    // Untuk kasir fungsi ini langsung gagal (tanpa network) dan pengguna
+    // diarahkan ke pairing di layar Sinkronisasi.
+    if (
+      options.context == null &&
+      cloudStore.isAuthenticated &&
+      cloudStore.registeredDeviceId == null &&
+      typeof cloudStore.ensureDeviceBinding === 'function'
+    ) {
+      try {
+        await cloudStore.ensureDeviceBinding()
+      } catch {
+        // Non-blocking: the readiness/precondition path reports the blocker.
+      }
+    }
+
+    // A restored Cloud context can be complete enough for the UI while one sync
+    // requirement (typically the selected outlet or the pre-registered device)
+    // is still missing locally. Ask the server once for the authoritative
+    // context before failing closed, so a stale local cache cannot block a pull
+    // that the backend would happily serve.
+    const readiness = cloudStore.syncReadiness
+    const isBrowserOnline = typeof navigator === 'undefined' || navigator.onLine !== false
+    if (
+      options.context == null &&
+      readiness?.ready === false &&
+      cloudStore.isAuthenticated &&
+      isBrowserOnline &&
+      typeof cloudStore.refreshContext === 'function'
+    ) {
+      try {
+        await cloudStore.refreshContext()
+      } catch {
+        // Non-blocking: the precondition check below reports what is still missing.
+      }
+    }
+
     // A restored capability cache is display-only. Reconfirm the Cloud
     // session before any pull can apply tenant data to the local workspace.
     if (options.refreshContext !== false && cloudStore.isAuthenticated) {
@@ -92,6 +131,7 @@ export const useSyncPullStore = defineStore('syncPull', () => {
       cloudAccess: cloudStore.isOperationalCloudAccess,
       deviceIdentifier: cloudStore.deviceIdentifier,
       registeredDeviceId: cloudStore.registeredDeviceId,
+      role: cloudStore.role,
     }
 
     // Auto-detect initialCloudRead if not explicitly specified:

@@ -5,7 +5,7 @@ import { useRouter } from 'vue-router'
 import AppIcon from '@/components/base/AppIcon.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
-import { useBusinessStore } from '@/stores/businessStore'
+import DevicePairingModal from '@/components/cloud/DevicePairingModal.vue'
 import { useCashStore } from '@/stores/cashStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useCustomerStore } from '@/stores/customerStore'
@@ -19,9 +19,13 @@ import { useSyncContextGuardStore } from '@/stores/syncContextGuardStore'
 import { useSyncStatusStore } from '@/stores/syncStatusStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import { clearLocalCache } from '@/services/localCacheService'
+import {
+  SYNC_REQUIREMENT_LABELS,
+  SYNC_REQUIREMENT_HINTS,
+  SYNC_REQUIREMENT_ORDER,
+} from '@/services/sync/syncPreconditions'
 
 const router = useRouter()
-const businessStore = useBusinessStore()
 const cashStore = useCashStore()
 const cloudStore = useCloudSessionStore()
 const customerStore = useCustomerStore()
@@ -79,14 +83,14 @@ const pendingCount = computed(() => {
 })
 
 const lastSyncFormatted = computed(() => {
-  const raw =
-    syncOrchestratorStore.lastSyncedAt ||
-    syncStatusStore.lastCheckedAt ||
-    cloudStore.contextCheckedAt
+  // Only a completed push/pull cycle counts as a sync. Falling back to the
+  // context check time (or the local status read time) produced a fake
+  // "Terakhir disinkronkan" timestamp even when nothing had ever been synced.
+  const raw = syncOrchestratorStore.lastSyncedAt
 
-  if (!raw) return 'Belum ada riwayat sinkronisasi'
+  if (!raw) return 'Belum pernah'
   const date = new Date(raw)
-  if (Number.isNaN(date.getTime())) return 'Belum ada riwayat'
+  if (Number.isNaN(date.getTime())) return 'Belum pernah'
 
   return date.toLocaleString('id-ID', {
     day: 'numeric',
@@ -96,6 +100,91 @@ const lastSyncFormatted = computed(() => {
     minute: '2-digit',
   })
 })
+
+/**
+ * Why a Cloud sync can or cannot run. The local precondition check inside the
+ * push/pull services fails closed, so the screen must expose the same list
+ * instead of claiming everything is synced.
+ */
+const syncReadiness = computed(() => cloudStore.syncReadiness ?? { ready: false, missing: [] })
+const isSyncReady = computed(() => syncReadiness.value.ready === true)
+const isCashier = computed(
+  () => cloudStore.isCashierContext === true || cloudStore.role === 'cashier',
+)
+// PAIR-01: kode pairing 4 digit hanya untuk role kasir. Perangkat owner/member
+// dikelola dari Dashboard dan di-bind otomatis oleh server.
+const requiresDevicePairing = computed(() => isCashier.value)
+const missingRequirements = computed(() =>
+  Array.isArray(syncReadiness.value.missing) ? syncReadiness.value.missing : [],
+)
+const readinessRows = computed(() =>
+  SYNC_REQUIREMENT_ORDER.filter(
+    (key) => key !== 'device_registration' || requiresDevicePairing.value,
+  ).map((key) => ({
+    key,
+    label: SYNC_REQUIREMENT_LABELS[key] ?? key,
+    hint: SYNC_REQUIREMENT_HINTS[key] ?? '',
+    ok: !missingRequirements.value.includes(key),
+  })),
+)
+const deviceIdentifierLabel = computed(() => cloudStore.deviceIdentifier || '-')
+const hasDeviceBinding = computed(
+  () => cloudStore.registeredDeviceId !== null && cloudStore.registeredDeviceId !== undefined,
+)
+const isDeviceMissing = computed(() => requiresDevicePairing.value && !hasDeviceBinding.value)
+
+const isPairingModalOpen = ref(false)
+
+function openPairingModal() {
+  isPairingModalOpen.value = true
+}
+
+function closePairingModal() {
+  isPairingModalOpen.value = false
+}
+
+/**
+ * PAIR-01 — setelah kasir memasukkan kode 4 digit, `device_context` sudah
+ * di-refresh oleh store. Layar hanya perlu memperbarui status + memberi tahu
+ * bahwa data Cloud siap ditarik.
+ */
+async function handleDevicePaired() {
+  isPairingModalOpen.value = false
+
+  try {
+    await syncPushStore.refreshPendingCount()
+    await syncStatusStore.refresh()
+  } catch {
+    // Non-blocking: status cards refresh on the next visit.
+  }
+
+  syncFeedback.value = {
+    type: 'success',
+    message: 'Perangkat kasir berhasil dipasangkan. Tekan Tarik untuk memuat data dari server.',
+  }
+}
+
+const syncBadgeLabel = computed(() => {
+  if (pendingCount.value > 0) return `${pendingCount.value} Data Pending`
+  return isSyncReady.value ? 'Semua Tersinkron' : 'Belum Siap'
+})
+
+const syncBadgeClass = computed(() => {
+  if (pendingCount.value > 0) return 'bg-amber-100 text-amber-800'
+  return isSyncReady.value ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-700'
+})
+
+/**
+ * A failed sync keeps the technical code, but the message must be actionable:
+ * a precondition failure is a configuration problem, not a network problem.
+ */
+function describeSyncFailure(result, fallback) {
+  const message = result?.message || fallback
+  if (result?.code === 'PRECONDITION_FAILED') {
+    return `${message} Periksa panel "Kesiapan Sinkronisasi" di atas.`
+  }
+  return message
+}
 
 async function handleSyncNow() {
   if (isSyncing.value || isPulling.value || isClearingCache.value) return
@@ -117,7 +206,10 @@ async function handleSyncNow() {
       syncFeedback.value = {
         type: 'error',
         code: result.code,
-        message: result.message || 'Sinkronisasi gagal. Pastikan koneksi internet stabil.',
+        message: describeSyncFailure(
+          result,
+          'Sinkronisasi gagal. Pastikan koneksi internet stabil.',
+        ),
       }
     } else {
       syncFeedback.value = {
@@ -166,7 +258,7 @@ async function handlePullNow(opts = {}) {
         syncFeedback.value = {
           type: 'error',
           code: result.code,
-          message: result.message || 'Gagal menarik data cloud.',
+          message: describeSyncFailure(result, 'Gagal menarik data cloud.'),
         }
       }
     } else {
@@ -375,6 +467,85 @@ function handleBack() {
       </div>
     </BaseCard>
 
+    <!-- Cloud Readiness Checklist -->
+    <BaseCard class="space-y-3" data-testid="sync-readiness-card">
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <h4 class="text-base font-bold text-ink-primary">Kesiapan Sinkronisasi</h4>
+          <p class="mt-0.5 text-xs text-ink-secondary">
+            Syarat agar tarik dan kirim data Cloud dapat berjalan
+          </p>
+        </div>
+        <span
+          class="shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider"
+          :class="
+            isSyncReady ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
+          "
+          data-testid="sync-readiness-badge"
+        >
+          {{ isSyncReady ? 'Siap' : `${missingRequirements.length} Belum Siap` }}
+        </span>
+      </div>
+
+      <ul class="space-y-2" data-testid="sync-readiness-list">
+        <li
+          v-for="row in readinessRows"
+          :key="row.key"
+          :data-testid="`sync-requirement-${row.key}`"
+          :data-satisfied="row.ok ? 'true' : 'false'"
+          class="flex items-start gap-2.5 rounded-2xl bg-surface/70 px-3 py-2"
+        >
+          <span
+            class="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[11px] font-bold"
+            :class="row.ok ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'"
+            aria-hidden="true"
+          >
+            {{ row.ok ? '✓' : '!' }}
+          </span>
+          <div class="min-w-0">
+            <p class="text-xs font-semibold text-ink-primary">{{ row.label }}</p>
+            <p v-if="!row.ok" class="mt-0.5 text-[11px] leading-relaxed text-ink-secondary">
+              {{ row.hint }}
+            </p>
+            <p
+              v-if="!row.ok && row.key === 'device_registration'"
+              class="mt-0.5 break-all font-mono text-[11px] text-ink-secondary"
+              data-testid="sync-device-identifier"
+            >
+              ID perangkat: {{ deviceIdentifierLabel }}
+            </p>
+          </div>
+        </li>
+      </ul>
+
+      <div v-if="!isSyncReady" class="flex flex-wrap items-center gap-2">
+        <BaseButton
+          v-if="isDeviceMissing"
+          size="sm"
+          data-testid="btn-sync-pair-device"
+          @click="openPairingModal"
+        >
+          Pasangkan Perangkat (Kode 4 Digit)
+        </BaseButton>
+        <BaseButton
+          size="sm"
+          variant="secondary"
+          data-testid="btn-sync-fix-readiness"
+          @click="handleOpenSettingsCloud"
+        >
+          Buka Pengaturan Cloud
+        </BaseButton>
+      </div>
+      <p
+        v-else-if="!requiresDevicePairing"
+        class="text-[11px] leading-relaxed text-ink-secondary"
+        data-testid="sync-owner-no-pairing-note"
+      >
+        Akun owner tidak memerlukan kode pairing. Perangkat owner dikelola dari Dashboard dan
+        di-bind otomatis saat sinkronisasi.
+      </p>
+    </BaseCard>
+
     <!-- Manual Sync Action Panel -->
     <BaseCard class="space-y-4" data-testid="sync-action-panel">
       <div class="flex items-start justify-between gap-3">
@@ -388,10 +559,10 @@ function handleBack() {
         <div class="text-right">
           <span
             class="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold"
-            :class="pendingCount > 0 ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'"
+            :class="syncBadgeClass"
             data-testid="pending-data-badge"
           >
-            {{ pendingCount > 0 ? `${pendingCount} Data Pending` : 'Semua Tersinkron' }}
+            {{ syncBadgeLabel }}
           </span>
         </div>
       </div>
@@ -546,5 +717,12 @@ function handleBack() {
         </div>
       </div>
     </BaseCard>
+
+    <DevicePairingModal
+      :open="isPairingModalOpen"
+      :business-name="cloudStore.selectedBusiness?.name || ''"
+      @close="closePairingModal"
+      @paired="handleDevicePaired"
+    />
   </div>
 </template>

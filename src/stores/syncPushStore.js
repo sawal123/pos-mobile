@@ -67,6 +67,21 @@ export const useSyncPushStore = defineStore('syncPush', () => {
     lastError.value = null
 
     try {
+      // PAIR-01: owner/member devices are bound silently; a cashier without a
+      // pairing code gets the pairing instruction from the precondition error.
+      if (
+        options.context == null &&
+        cloudStore.isAuthenticated &&
+        cloudStore.registeredDeviceId == null &&
+        typeof cloudStore.ensureDeviceBinding === 'function'
+      ) {
+        try {
+          await cloudStore.ensureDeviceBinding()
+        } catch {
+          // Non-blocking: preconditions below report the blocker.
+        }
+      }
+
       // INT-02: a cached capability contract is never permanent authorization.
       // Re-confirm it online before an authorization-sensitive push. A failed
       // re-confirmation fails closed for mutation without deleting any data.

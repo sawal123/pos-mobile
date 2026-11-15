@@ -319,6 +319,15 @@ export async function mapOutboxEntries(
       }
       // Empty/legacy fields never imply an explicit barcode clear.
 
+      const promoPriceVal = payload.promoPrice ?? payload.promo_price
+      if (promoPriceVal !== undefined) {
+        if (promoPriceVal === null || promoPriceVal === '') {
+          productChange.promo_price = null
+        } else if (typeof promoPriceVal === 'number' && Number.isFinite(promoPriceVal) && promoPriceVal >= 0) {
+          productChange.promo_price = Math.round(promoPriceVal)
+        }
+      }
+
       if (typeof payload.cost === 'number' && Number.isFinite(payload.cost) && payload.cost >= 0) {
         productChange.cost = payload.cost
       }

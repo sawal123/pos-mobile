@@ -48,12 +48,15 @@ export function normalizeReceiptSettings(settings) {
         : receiptText(settings.footer, MAX_FOOTER_LENGTH),
     logo: decodeReceiptLogo(settings?.logo)
       ? { width: settings.logo.width, height: settings.logo.height, data: settings.logo.data }
-      : null,
+      : (typeof settings?.logo?.url === 'string' && settings.logo.url ? { url: settings.logo.url } : null),
   }
 }
 
 // A single canonical black/white raster drives both the screen image and ESC/POS.
 export function receiptLogoDataUrl(logo) {
+  if (typeof logo?.url === 'string' && logo.url) {
+    return logo.url
+  }
   const data = decodeReceiptLogo(logo)
   if (!data) return ''
   let path = ''

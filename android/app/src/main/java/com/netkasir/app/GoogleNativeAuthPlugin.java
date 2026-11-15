@@ -1,4 +1,4 @@
-package com.posoffline.app;
+package com.netkasir.app;
 
 import android.app.Activity;
 import android.os.CancellationSignal;

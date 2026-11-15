@@ -175,9 +175,12 @@ export const useCartStore = defineStore('cart', {
         ingredient_quantity: Number(opt.ingredientQuantity ?? opt.ingredient_quantity ?? 0),
       }))
 
+      const promoPriceVal = Number(product.promoPrice ?? product.promo_price)
+      const hasPromo = Number.isFinite(promoPriceVal) && promoPriceVal > 0 && promoPriceVal < (Number(product.price ?? product.unitPrice) || 0)
+      const effectiveBasePrice = hasPromo ? promoPriceVal : (Number(product.price ?? product.unitPrice) || 0)
       const basePrice = Number(product.price ?? product.unitPrice) || 0
       const baseCost = Number(product.cost) || 0
-      const finalPrice = Math.max(0, basePrice + variantPriceAdj)
+      const finalPrice = Math.max(0, effectiveBasePrice + variantPriceAdj)
       const finalCost = Math.max(0, baseCost + variantCostAdj)
 
       this.items.push({

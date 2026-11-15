@@ -340,3 +340,151 @@ describe('Sinkronisasi Menu Lock & Settings Login/Logout Centralization', () => 
     expect(context.router.currentRoute.value.name).toBe('sync')
   })
 })
+
+describe('SyncView — Cloud readiness diagnostics', () => {
+  const DEVICE_IDENTIFIER = '123e4567-e89b-12d3-a456-426614174000'
+
+  function setReadyCloudContext(context, overrides = {}) {
+    context.cloudStore.user = { id: 1, name: 'Budi', email: 'budi@tokokopi.id' }
+    context.cloudStore.selectedBusiness = { id: 10, name: 'Toko Kopi' }
+    context.cloudStore.selectedOutlet = { id: 101, name: 'Outlet Pusat' }
+    context.cloudStore.cloudAccess = true
+    context.cloudStore.deviceIdentifier = DEVICE_IDENTIFIER
+    context.cloudStore.registeredDeviceId = 55
+    Object.assign(context.cloudStore, overrides)
+  }
+
+  it('reports "Belum Siap" and names the missing outlet instead of "Semua Tersinkron"', async () => {
+    const context = prepareContext()
+    setReadyCloudContext(context, { selectedOutlet: null })
+
+    const wrapper = mount(SyncView, {
+      global: { plugins: [context.pinia, context.router] },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="pending-data-badge"]').text()).toBe('Belum Siap')
+    expect(wrapper.find('[data-testid="sync-readiness-card"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="sync-readiness-badge"]').text()).toContain('Belum Siap')
+    expect(wrapper.find('[data-testid="sync-requirement-outlet"]').attributes('data-satisfied')).toBe(
+      'false',
+    )
+    expect(wrapper.find('[data-testid="sync-requirement-outlet"]').text()).toContain(
+      'Outlet Cloud dipilih',
+    )
+    expect(
+      wrapper.find('[data-testid="sync-requirement-authentication"]').attributes('data-satisfied'),
+    ).toBe('true')
+  })
+
+  function setCashierContext(context, overrides = {}) {
+    context.cloudStore.role = 'cashier'
+    context.cloudStore.capabilityState = 'verified'
+    context.cloudStore.syncCapabilities = { sync_push: 'cashier_safe', sync_pull: true }
+    Object.assign(context.cloudStore, overrides)
+  }
+
+  it('asks a cashier for the 4-digit pairing code when the device is not paired', async () => {
+    const context = prepareContext()
+    setReadyCloudContext(context, { registeredDeviceId: null })
+    setCashierContext(context)
+
+    const wrapper = mount(SyncView, {
+      global: { plugins: [context.pinia, context.router] },
+    })
+    await flushPromises()
+
+    const row = wrapper.find('[data-testid="sync-requirement-device_registration"]')
+    expect(row.attributes('data-satisfied')).toBe('false')
+    expect(row.text()).toContain('kode pairing 4 digit')
+    expect(wrapper.find('[data-testid="sync-device-identifier"]').text()).toContain(
+      DEVICE_IDENTIFIER,
+    )
+    expect(wrapper.find('[data-testid="btn-sync-pair-device"]').exists()).toBe(true)
+  })
+
+  it('never asks an owner/member for a pairing code', async () => {
+    const context = prepareContext()
+    setReadyCloudContext(context, { registeredDeviceId: null })
+
+    const wrapper = mount(SyncView, {
+      global: { plugins: [context.pinia, context.router] },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="sync-requirement-device_registration"]').exists()).toBe(
+      false,
+    )
+    expect(wrapper.find('[data-testid="btn-sync-pair-device"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="sync-owner-no-pairing-note"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="sync-readiness-badge"]').text()).toBe('Siap')
+  })
+
+  it('reports "Semua Tersinkron" only when every Cloud requirement is met', async () => {
+    const context = prepareContext()
+    setReadyCloudContext(context)
+
+    const wrapper = mount(SyncView, {
+      global: { plugins: [context.pinia, context.router] },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="pending-data-badge"]').text()).toBe('Semua Tersinkron')
+    expect(wrapper.find('[data-testid="sync-readiness-badge"]').text()).toBe('Siap')
+    expect(wrapper.findAll('[data-satisfied="false"]')).toHaveLength(0)
+    expect(wrapper.find('[data-testid="btn-sync-fix-readiness"]').exists()).toBe(false)
+  })
+
+  it('never claims a sync time that was only a context check', async () => {
+    const context = prepareContext()
+    setReadyCloudContext(context)
+    context.cloudStore.contextCheckedAt = '2026-11-15T13:11:00.000Z'
+    context.syncStatusStore.lastCheckedAt = '2026-11-15T13:11:00.000Z'
+
+    const wrapper = mount(SyncView, {
+      global: { plugins: [context.pinia, context.router] },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="last-sync-time"]').text()).toBe('Belum pernah')
+  })
+
+  it('pairs a cashier device with a 4-digit code and becomes ready', async () => {
+    const context = prepareContext()
+    setReadyCloudContext(context, { registeredDeviceId: null })
+    setCashierContext(context)
+
+    const pairingSpy = vi.fn().mockImplementation(async () => {
+      context.cloudStore.registeredDeviceId = 77
+      return { ok: true, code: 'PAIRED', device: { id: 77, outlet_id: 101 } }
+    })
+    context.cloudStore.pairDeviceWithCode = pairingSpy
+
+    const wrapper = mount(SyncView, {
+      global: { plugins: [context.pinia, context.router] },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    await wrapper.find('[data-testid="btn-sync-pair-device"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="device-pairing-modal"]').exists()).toBe(true)
+
+    const codeInput = wrapper.find('[data-testid="pairing-code-input"]')
+    await codeInput.setValue('4721')
+
+    await wrapper.find('[data-testid="device-pairing-form"]').trigger('submit')
+    await flushPromises()
+
+    expect(pairingSpy).toHaveBeenCalledWith({
+      code: '4721',
+      deviceName: expect.any(String),
+    })
+    expect(wrapper.find('[data-testid="sync-feedback-banner"]').text()).toContain(
+      'berhasil dipasangkan',
+    )
+    expect(wrapper.find('[data-testid="sync-readiness-badge"]').text()).toBe('Siap')
+    expect(wrapper.find('[data-testid="pending-data-badge"]').text()).toBe('Semua Tersinkron')
+  })
+})

@@ -473,3 +473,38 @@ the client calls this endpoint and either:
 Until the endpoint ships, a `reconciliationRequired` envelope is **kept with all
 local data** and reported as `SYNC_RECONCILIATION_REQUIRED`; the client neither
 re-plans nor repeats the identical request.
+
+---
+
+## 4b. PAIR-01 — pairing kasir dengan kode 4 digit (pengganti pre-registrasi manual)
+
+Pendaftaran perangkat kasir tidak lagi memakai input identifier manual di
+Dashboard. Alurnya sekarang:
+
+1. Owner membuat **kode 4 digit** di Dashboard → Perangkat → **Kode Kasir**
+   (berlaku 30 menit, sekali pakai, cloud-only).
+2. Kasir membuka **Sinkronisasi → Pasangkan Perangkat (Kode 4 Digit)**.
+   Semua perangkat kasir yang belum terpasang melaporkan
+   `device_registration` sebagai syarat yang belum lengkap.
+3. Aplikasi memanggil `POST /api/mobile/devices/pair` dengan:
+   `business_id`, `code`, `device_identifier`, `name`, `platform`,
+   `app_version`, `device_model`. Server mencatat `ip`, `user_agent`,
+   `paired_user_id`, dan `paired_at`.
+4. Store lalu mengisi `registeredDeviceId` + `deviceContext` dari response dan
+   me-refresh `GET /api/mobile/context` agar binding berasal dari server.
+
+Catatan role:
+
+- **Kasir**: wajib pairing. `POST /api/mobile/devices` tetap dilarang; sync
+  push/pull ditolak server dengan `DEVICE_NOT_REGISTERED` sampai pairing selesai.
+- **Owner/member**: tidak pernah diminta pairing (tidak ada tombol/panel). Bila
+  `registeredDeviceId` belum ada, store melakukan **binding senyap** lewat
+  `ensureDeviceBinding()` supaya metadata binding sync (pull/push binding +
+  context guard) tetap konsisten; kegagalannya tidak memblokir login.
+- Kesalahan pairing dipetakan ke pesan aksi: `PAIRING_CODE_INVALID`,
+  `PAIRING_CODE_EXPIRED`, `PAIRING_CODE_ALREADY_USED`, `PAIRING_CODE_REVOKED`,
+  `PAIRING_RATE_LIMITED`, `PAIRING_CASHIER_ONLY`, `CLOUD_SUBSCRIPTION_REQUIRED`.
+
+Kode: `src/services/cloud/devicePairingService.js`,
+`src/components/cloud/DevicePairingModal.vue`,
+`cloudSessionStore.pairDeviceWithCode()` / `ensureDeviceBinding()`.

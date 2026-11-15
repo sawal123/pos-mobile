@@ -4,6 +4,7 @@ import { createSyncIdentityRegistry, generateUuid } from './syncIdentityRegistry
 import { mapOutboxEntries } from './contractMapper'
 import { applyCommittedAcknowledgment } from './syncCommittedAck'
 import { SYNC_ENTITY_TYPES, SYNC_RESERVED_CATEGORY } from './syncConstants'
+import { describeSyncPreconditions } from './syncPreconditions'
 import { getToken } from '@/services/cloud/tokenRepository'
 import {
   OUTBOX_ACTION_ALLOW,
@@ -535,38 +536,27 @@ export function createSyncPushService({
 
       const token = options.token ?? (await tokenFetcher())
 
-      const hasValidUser = user !== null && user !== undefined
-      const hasToken = typeof token === 'string' && token.trim().length > 0
-      const hasBusiness =
-        selectedBusiness !== null &&
-        selectedBusiness !== undefined &&
-        selectedBusiness.id !== undefined
-      const hasCloudAccess = cloudAccess === true
-      const hasOutlet =
-        selectedOutlet !== null && selectedOutlet !== undefined && selectedOutlet.id !== undefined
-      const hasDeviceIdentifier =
-        typeof deviceIdentifier === 'string' && deviceIdentifier.trim().length > 0
-      const hasRegisteredDeviceId = registeredDeviceId !== null && registeredDeviceId !== undefined
+      const preconditions = describeSyncPreconditions({
+        token,
+        user,
+        selectedBusiness,
+        selectedOutlet,
+        cloudAccess,
+        deviceIdentifier,
+        registeredDeviceId,
+      })
 
-      if (
-        !hasValidUser ||
-        !hasToken ||
-        !hasBusiness ||
-        !hasCloudAccess ||
-        !hasOutlet ||
-        !hasDeviceIdentifier ||
-        !hasRegisteredDeviceId
-      ) {
+      if (!preconditions.ok) {
         const remaining = await activeQueueService.countPending()
         return {
           ok: false,
           code: 'PRECONDITION_FAILED',
-          message:
-            'Cloud authentication, business, outlet, and registered device are required for sync push.',
+          missing: preconditions.missing,
+          message: preconditions.message,
           error: {
             code: 'PRECONDITION_FAILED',
-            message:
-              'Cloud authentication, business, outlet, and registered device are required for sync push.',
+            missing: preconditions.missing,
+            message: preconditions.message,
           },
           remaining,
           sentQueueIds: [],

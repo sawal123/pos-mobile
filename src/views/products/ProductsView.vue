@@ -152,6 +152,10 @@ function goToCategories() {
   router.push({ name: 'categories' })
 }
 
+function goToUnits() {
+  router.push({ name: 'units' })
+}
+
 function resetFilters() {
   searchQuery.value = ''
   selectedCategory.value = 'Semua'
@@ -222,6 +226,17 @@ function resetFilters() {
         >
           <AppIcon name="categories" class="h-3.5 w-3.5 text-ink-secondary" />
           <span class="hidden sm:inline">Kategori</span>
+        </button>
+
+        <!-- Kelola Satuan Button -->
+        <button
+          type="button"
+          data-testid="go-to-units-button"
+          class="inline-flex h-9 items-center gap-1.5 rounded-xl border border-zinc-200/90 bg-white px-3 text-xs font-semibold text-ink-primary shadow-xs transition hover:bg-zinc-50 active:scale-95"
+          @click="goToUnits"
+        >
+          <AppIcon name="package" class="h-3.5 w-3.5 text-ink-secondary" />
+          <span class="hidden sm:inline">Satuan</span>
         </button>
 
         <!-- Tambah Produk Button -->
@@ -550,7 +565,18 @@ function resetFilters() {
 
           <!-- Price Highlight -->
           <div class="text-right shrink-0">
-            <p class="text-base font-black tracking-tight text-primary">
+            <div v-if="product.promoPrice && product.promoPrice > 0 && product.promoPrice < product.price" class="flex flex-col items-end">
+              <span class="rounded-md bg-rose-50 px-1.5 py-0.5 text-[10px] font-extrabold text-rose-600 border border-rose-200">
+                -{{ Math.round(((product.price - product.promoPrice) / product.price) * 100) }}%
+              </span>
+              <p class="text-base font-black tracking-tight text-rose-600">
+                {{ formatCurrency(product.promoPrice) }}
+              </p>
+              <p class="text-[11px] text-ink-secondary line-through">
+                {{ formatCurrency(product.price) }}
+              </p>
+            </div>
+            <p v-else class="text-base font-black tracking-tight text-primary">
               {{ formatCurrency(product.price) }}
             </p>
             <p v-if="product.cost" class="text-[11px] text-ink-secondary">

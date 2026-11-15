@@ -6,7 +6,6 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseSheet from '@/components/base/BaseSheet.vue'
 import ReceiptContent from '@/components/receipt/ReceiptContent.vue'
-import { useReceiptStore } from '@/stores/receiptStore'
 import {
   isNativePrinterPlatform,
   listPairedPrinters,
@@ -15,6 +14,8 @@ import {
 import { SUPPORTED_PAPER_WIDTHS } from '@/services/printer/escposReceiptBuilder'
 import { useBusinessStore } from '@/stores/businessStore'
 import { usePrinterStore } from '@/stores/printerStore'
+import { useReceiptStore } from '@/stores/receiptStore'
+import { useSubscriptionStore } from '@/stores/subscriptionStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 
 const route = useRoute()
@@ -22,7 +23,10 @@ const router = useRouter()
 const businessStore = useBusinessStore()
 const printerStore = usePrinterStore()
 const receiptStore = useReceiptStore()
+const subscriptionStore = useSubscriptionStore()
 const transactionStore = useTransactionStore()
+
+const isFree = computed(() => !subscriptionStore.isPremium)
 
 const isPrinting = ref(false)
 const printFeedback = ref('')
@@ -119,6 +123,7 @@ async function handlePrint() {
       printer: printerStore.selectedPrinter,
       paperWidth: printerStore.paperWidth,
       receiptSettings: receiptStore.$state,
+      isFree: isFree.value,
     })
 
     if (!result.success) {
@@ -345,7 +350,13 @@ async function handlePrint() {
     </div>
 
     <!-- Thermal Paper Receipt Preview -->
-    <ReceiptContent v-if="transaction" :transaction="transaction" :business="business" :receipt-settings="receiptStore.$state" />
+    <ReceiptContent
+      v-if="transaction"
+      :transaction="transaction"
+      :business="business"
+      :receipt-settings="receiptStore.$state"
+      :is-free="isFree"
+    />
 
     <BaseCard v-else>
       <p class="text-sm text-ink-secondary">Transaksi tidak ditemukan.</p>

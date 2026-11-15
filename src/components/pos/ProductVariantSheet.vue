@@ -117,9 +117,17 @@ const variantPriceAdjustment = computed(() => {
   )
 })
 
+const promoPriceVal = computed(() => {
+  const val = Number(props.product?.promoPrice ?? props.product?.promo_price)
+  return Number.isFinite(val) && val > 0 && val < Number(props.product?.price) ? val : null
+})
+
+const effectiveBasePrice = computed(() => {
+  return promoPriceVal.value ?? (Number(props.product?.price ?? props.product?.unitPrice) || 0)
+})
+
 const totalPrice = computed(() => {
-  const base = Number(props.product?.price ?? props.product?.unitPrice) || 0
-  return Math.max(0, base + variantPriceAdjustment.value)
+  return Math.max(0, effectiveBasePrice.value + variantPriceAdjustment.value)
 })
 
 const validationError = computed(() => {
@@ -160,7 +168,11 @@ function handleConfirm() {
       <div class="flex items-center justify-between border-b border-zinc-100 dark:border-slate-800 pb-3">
         <div>
           <h4 class="text-base font-bold text-ink-primary">{{ product.name }}</h4>
-          <p class="text-xs text-ink-secondary">Harga Dasar: {{ formatCurrency(product.price) }}</p>
+          <p v-if="promoPriceVal" class="text-xs text-ink-secondary">
+            Harga Promo: <span class="font-bold text-rose-600">{{ formatCurrency(effectiveBasePrice) }}</span>
+            <span class="line-through text-[11px] ml-1">{{ formatCurrency(product.price) }}</span>
+          </p>
+          <p v-else class="text-xs text-ink-secondary">Harga Dasar: {{ formatCurrency(product.price) }}</p>
         </div>
         <span class="text-sm font-semibold text-primary dark:text-indigo-400">
           {{ formatCurrency(totalPrice) }}

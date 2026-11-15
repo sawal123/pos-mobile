@@ -1,5 +1,5 @@
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -11,6 +11,7 @@ import { generateProductCode } from '@/services/products/productCodeService'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useSubscriptionStore } from '@/stores/subscriptionStore'
 import { useVariantStore } from '@/stores/variantStore'
+import { useUnitStore } from '@/stores/unitStore'
 
 import AppIcon from '@/components/base/AppIcon.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -62,6 +63,7 @@ const form = reactive({
   barcode: '',
   cost: 0,
   price: 0,
+  promoPrice: '',
   stock: 0,
   unit: 'pcs',
   minStock: 0,
@@ -75,6 +77,53 @@ const form = reactive({
 const errors = ref({})
 const formError = ref('')
 const imageError = ref('')
+
+const unitStore = useUnitStore()
+const isCustomUnit = ref(false)
+const customUnitInput = ref('')
+const quickUnits = ['pcs', 'ml', 'gr', 'gram', 'botol', 'kg', 'liter', 'cup', 'box', 'porsi']
+
+const promoDiscountPercent = computed(() => {
+  const price = Number(form.price)
+  const promo = Number(form.promoPrice)
+  if (Number.isFinite(price) && Number.isFinite(promo) && price > 0 && promo > 0 && promo < price) {
+    return Math.round(((price - promo) / price) * 100)
+  }
+  return 0
+})
+
+function selectQuickUnit(val) {
+  form.unit = val
+  isCustomUnit.value = false
+  unitStore.addUnit(val)
+}
+
+function onUnitSelectChange(val) {
+  if (val === '__custom__') {
+    isCustomUnit.value = true
+    customUnitInput.value = ''
+  } else {
+    isCustomUnit.value = false
+    form.unit = val
+  }
+}
+
+function onCustomUnitInput(val) {
+  customUnitInput.value = val
+  form.unit = val.trim().toLowerCase()
+  if (val.trim()) {
+    unitStore.addUnit(val.trim().toLowerCase())
+  }
+}
+
+onMounted(() => {
+  if (cloudStore.selectedBusiness?.id) {
+    void unitStore.fetchRemoteUnits(cloudStore.selectedBusiness.id)
+  }
+  if (cloudStore.selectedBusiness?.units) {
+    unitStore.mergeUnits(cloudStore.selectedBusiness.units)
+  }
+})
 
 const isEditMode = computed(() => Boolean(route.params.id))
 const isLaundry = computed(() => businessStore.normalizedType === 'Laundry')
@@ -91,6 +140,7 @@ function resetForm() {
   form.barcode = ''
   form.cost = 0
   form.price = 0
+  form.promoPrice = ''
   form.stock = 0
   form.unit = isLaundry.value ? 'kg' : 'pcs'
   form.minStock = 0
@@ -124,8 +174,12 @@ function loadProduct() {
   form.barcode = product.barcode ?? ''
   form.cost = product.cost ?? 0
   form.price = product.price
+  form.promoPrice = (product.promoPrice !== null && product.promoPrice !== undefined && product.promoPrice !== '') ? product.promoPrice : ''
   form.stock = product.stock
   form.unit = product.unit ?? 'pcs'
+  if (form.unit) {
+    unitStore.addUnit(form.unit)
+  }
   form.minStock = product.minStock ?? 0
   form.pricingUnit = product.pricingUnit ?? 'kg'
   form.minQuantity = product.minQuantity || ''
@@ -244,6 +298,7 @@ async function handleSubmit() {
     ...(isRetail.value ? { barcode: form.barcode } : {}),
     cost: form.cost,
     price: form.price,
+    promoPrice: (form.promoPrice !== '' && form.promoPrice !== null && form.promoPrice !== undefined) ? Number(form.promoPrice) : null,
     stock: form.stock,
     unit: form.unit,
     minStock: form.minStock,
@@ -594,6 +649,26 @@ watch(
             />
             <p v-if="errors.cost" class="text-xs text-red-600">{{ errors.cost }}</p>
           </div>
+
+          <!-- Harga Promo -->
+          <div class="space-y-1 sm:col-span-2">
+            <div class="flex items-center justify-between">
+              <label class="text-xs font-semibold text-ink-primary">Harga Promo (Rp) <span class="font-normal text-ink-secondary">(Opsional)</span></label>
+              <span v-if="promoDiscountPercent > 0" class="rounded-full bg-rose-50 px-2.5 py-0.5 text-[11px] font-extrabold text-rose-600 border border-rose-200 dark:bg-rose-950/60 dark:text-rose-400 dark:border-rose-900">
+                Diskon -{{ promoDiscountPercent }}% (Hemat {{ formatCurrency(Number(form.price) - Number(form.promoPrice)) }})
+              </span>
+            </div>
+            <BaseInput
+              :model-value="form.promoPrice"
+              type="number"
+              placeholder="Contoh: 16000 (kosongkan jika tidak ada promo)"
+              @update:model-value="form.promoPrice = $event"
+            />
+            <p v-if="errors.promoPrice" class="text-xs text-red-600">{{ errors.promoPrice }}</p>
+            <p v-else class="text-[11px] text-ink-secondary">
+              Jika diisi, card menu kasir akan menampilkan label diskon (misal: -{{ promoDiscountPercent || 20 }}%).
+            </p>
+          </div>
         </div>
       </section>
 
@@ -735,13 +810,55 @@ watch(
           </div>
 
           <!-- Satuan -->
-          <div class="space-y-1">
-            <BaseInput
-              :model-value="form.unit"
-              label="Satuan"
-              placeholder="pcs, cup, botol"
-              @update:model-value="form.unit = $event"
-            />
+          <div class="space-y-1.5">
+            <div class="flex items-center justify-between">
+              <label class="block text-sm font-medium text-ink-primary">Satuan</label>
+              <button
+                type="button"
+                class="text-[11px] font-semibold text-primary hover:underline"
+                @click="router.push({ name: 'units' })"
+              >
+                + Kelola Master
+              </button>
+            </div>
+            <div class="relative">
+              <select
+                :value="isCustomUnit ? '__custom__' : form.unit"
+                class="w-full appearance-none rounded-xl border border-zinc-200 bg-white py-2.5 pl-3.5 pr-10 text-sm text-ink-primary transition focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 dark:border-slate-700 dark:bg-card"
+                @change="onUnitSelectChange($event.target.value)"
+              >
+                <option v-for="u in unitStore.sortedUnits" :key="u" :value="u">
+                  {{ u }}
+                </option>
+                <option value="__custom__">+ Satuan Baru / Lainnya...</option>
+              </select>
+              <span class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3 text-ink-secondary">
+                <AppIcon name="chevron-down" class="size-4" />
+              </span>
+            </div>
+
+            <!-- Custom unit input if selected -->
+            <div v-if="isCustomUnit" class="mt-2">
+              <BaseInput
+                :model-value="customUnitInput"
+                placeholder="Ketik nama satuan baru..."
+                @update:model-value="onCustomUnitInput"
+              />
+            </div>
+
+            <!-- Quick picks -->
+            <div class="flex flex-wrap gap-1.5 pt-1">
+              <button
+                v-for="quick in quickUnits"
+                :key="quick"
+                type="button"
+                class="rounded-lg px-2.5 py-1 text-xs font-medium transition cursor-pointer"
+                :class="form.unit === quick ? 'bg-primary text-white shadow-xs' : 'border border-zinc-200 bg-zinc-50 text-ink-secondary hover:bg-zinc-100 dark:border-slate-700 dark:bg-slate-800'"
+                @click="selectQuickUnit(quick)"
+              >
+                {{ quick }}
+              </button>
+            </div>
             <p v-if="errors.unit" class="text-xs text-red-600">{{ errors.unit }}</p>
           </div>
 

@@ -238,5 +238,14 @@ it('uses saved receipt settings in both the preview and print request', async ()
   await wrapper.get('[data-testid="btn-print-receipt"]').trigger('click')
   await flushPromises()
   expect(printReceiptMock.mock.calls[0][0].receiptSettings).toEqual(settings)
+  expect(printReceiptMock.mock.calls[0][0].isFree).toBe(true)
   wrapper.unmount()
+})
+
+it('menampilkan notice Net Kasir Layanan Free jika pengguna masih paket free', async () => {
+  const { wrapper } = await mountReceiptView()
+  expect(wrapper.find('[data-testid="receipt-free-notice"]').exists()).toBe(true)
+  expect(wrapper.find('[data-testid="receipt-free-notice"]').text()).toContain(
+    'Ini adalah Net Kasir Layanan Free',
+  )
 })

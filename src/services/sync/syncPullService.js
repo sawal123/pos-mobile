@@ -3,6 +3,7 @@ import { pullSyncChanges } from './syncPullTransport'
 import { isUuid } from './syncIdentityRegistry'
 import { createSyncIdentityRegistry } from './syncIdentityRegistry'
 import { createSyncQueueService } from './syncQueueService'
+import { describeSyncPreconditions } from './syncPreconditions'
 import { getToken } from '@/services/cloud/tokenRepository'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useProductStore } from '@/stores/productStore'
@@ -274,24 +275,26 @@ export function createSyncPullService({
       overrideContext.registeredDeviceId ?? activeCloudStore?.registeredDeviceId
 
     // ── 1. Preconditions check ────────────────────────────────────────────────
-    if (
-      !token ||
-      !user ||
-      !selectedBusiness ||
-      cloudAccess !== true ||
-      !selectedOutlet ||
-      !deviceIdentifier ||
-      !registeredDeviceId
-    ) {
+    const preconditions = describeSyncPreconditions({
+      token,
+      user,
+      selectedBusiness,
+      selectedOutlet,
+      cloudAccess,
+      deviceIdentifier,
+      registeredDeviceId,
+    })
+
+    if (!preconditions.ok) {
       return {
         ok: false,
         code: 'PRECONDITION_FAILED',
-        message:
-          'Sync pull preconditions failed: missing authentication, cloud context, or device registration.',
+        missing: preconditions.missing,
+        message: preconditions.message,
         error: {
           code: 'PRECONDITION_FAILED',
-          message:
-            'Sync pull preconditions failed: missing authentication, cloud context, or device registration.',
+          missing: preconditions.missing,
+          message: preconditions.message,
         },
       }
     }
@@ -1516,6 +1519,9 @@ export function createSyncPullService({
           if (hasRemoteBarcode) existingProd.barcode = remoteBarcode
           existingProd.price = Number(price)
           existingProd.unitPrice = Number(price)
+          if (data.promo_price !== undefined) {
+            existingProd.promoPrice = (data.promo_price !== null && data.promo_price !== '') ? Number(data.promo_price) : null
+          }
           existingProd.kind = remoteKind
           if (Number.isFinite(remoteCost) && remoteCost >= 0) {
             existingProd.cost = remoteCost
@@ -1550,6 +1556,7 @@ export function createSyncPullService({
             sku: remoteSku,
             barcode: remoteBarcode,
             price: Number(price),
+            promoPrice: (data.promo_price !== null && data.promo_price !== undefined && data.promo_price !== '') ? Number(data.promo_price) : null,
             unitPrice: Number(price),
             kind: remoteKind,
             cost: Number.isFinite(remoteCost) && remoteCost >= 0 ? remoteCost : 0,
@@ -2012,18 +2019,7 @@ export function createSyncPullService({
           }
         }
 
-        if (!existingTrx && saleItemRecords.length === 0) {
-          return {
-            ok: false,
-            code: 'INCOMPLETE_REMOTE_SALE',
-            message: `New remote sale ${syncId} has no sale_items in snapshot.`,
-            error: {
-              code: 'INCOMPLETE_REMOTE_SALE',
-              message: `New remote sale ${syncId} has no sale_items in snapshot.`,
-            },
-          }
-        }
-
+        // If no sale_items exist in snapshot, we fallback gracefully below instead of failing closed
         let customerName = 'Walk-in Customer'
         let resolvedCustomerId = null
         let customerSnapshot = null
@@ -2117,8 +2113,23 @@ export function createSyncPullService({
               }
             }),
           )
-        } else if (existingTrx) {
+        } else if (existingTrx && Array.isArray(existingTrx.items) && existingTrx.items.length > 0) {
           mappedItems = existingTrx.items
+        } else {
+          mappedItems = [
+            {
+              id: `item-${syncId}`,
+              name: note ? `Penjualan (${note})` : 'Transaksi Penjualan',
+              price: Number(total_amount ?? subtotal ?? 0),
+              qty: 1,
+              hppSnapshot: 0,
+              costSnapshot: 0,
+              unit: 'pcs',
+              kind: 'product',
+              pricingUnit: 'pcs',
+              lineCost: 0,
+            },
+          ]
         }
 
         const itemCount = mappedItems.reduce((acc, it) => acc + (Number(it.qty) || 0), 0)

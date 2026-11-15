@@ -279,7 +279,7 @@ function buildItemLines(items, width) {
   return lines
 }
 
-export function createReceiptCommands({ transaction, business, paperWidth, receiptSettings } = {}) {
+export function createReceiptCommands({ transaction, business, paperWidth, receiptSettings, isFree = false } = {}) {
   const settings = normalizeReceiptSettings(receiptSettings)
   const width = resolveCharsPerLine(paperWidth)
   const separator = createSeparator(width)
@@ -365,6 +365,18 @@ export function createReceiptCommands({ transaction, business, paperWidth, recei
     }
     commands.push({ type: 'align', value: 'left' })
   }
+
+  if (isFree) {
+    if (!settings.footer) {
+      commands.push({ type: 'text', value: separator })
+    }
+    commands.push({ type: 'align', value: 'center' })
+    for (const line of wrapText('Ini adalah Net Kasir Layanan Free', width)) {
+      commands.push({ type: 'text', value: line })
+    }
+    commands.push({ type: 'align', value: 'left' })
+  }
+
   commands.push({ type: 'feed', lines: FOOTER_FEED_LINES })
 
   return commands

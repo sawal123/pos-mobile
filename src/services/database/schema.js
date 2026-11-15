@@ -1,5 +1,5 @@
 export const DB_NAME = 'pos_mobile'
-export const DB_VERSION = 7
+export const DB_VERSION = 8
 
 export const APP_META_KEYS = {
   initialized: 'data_initialized',
@@ -164,4 +164,14 @@ export const MIGRATIONS = {
   CREATE INDEX IF NOT EXISTS idx_variant_groups_status ON variant_groups(status);
   `,
   7: `ALTER TABLE products ADD COLUMN barcode TEXT NOT NULL DEFAULT '';`,
+  8: `
+  ALTER TABLE products ADD COLUMN promo_price REAL NULL DEFAULT NULL;
+  CREATE TABLE IF NOT EXISTS units (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    symbol TEXT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_units_name ON units(name);
+  `,
 }

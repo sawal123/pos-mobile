@@ -22,7 +22,7 @@ const keystoreExample = read('../../android/keystore.properties.example')
 
 const RELEASE_VERSION_NAME = '1.0.1'
 const RELEASE_VERSION_CODE = 10001
-const APPLICATION_ID = 'com.posoffline.app'
+const APPLICATION_ID = 'com.netkasir.app'
 
 // Source selection lives between the header comment and the android block.
 const signingSection = appBuildGradle.slice(

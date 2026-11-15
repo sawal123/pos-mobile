@@ -23,6 +23,22 @@ const hasVariants = computed(
   () =>
     Boolean(props.product.variantGroupIds?.length || props.product.variant_group_ids?.length || props.product.hasVariants),
 )
+
+const promoPriceVal = computed(() => {
+  const val = Number(props.product.promoPrice ?? props.product.promo_price)
+  return Number.isFinite(val) && val > 0 && val < Number(props.product.price) ? val : null
+})
+
+const discountPercent = computed(() => {
+  if (!promoPriceVal.value) return 0
+  const regularPrice = Number(props.product.price)
+  if (!regularPrice || regularPrice <= 0) return 0
+  return Math.round(((regularPrice - promoPriceVal.value) / regularPrice) * 100)
+})
+
+const effectivePrice = computed(() => {
+  return promoPriceVal.value ?? props.product.price
+})
 </script>
 
 <template>
@@ -62,6 +78,13 @@ const hasVariants = computed(
         >
           Varian
         </span>
+        <span
+          v-if="discountPercent > 0"
+          data-testid="promo-discount-badge"
+          class="absolute left-2.5 bottom-2.5 rounded-full border border-rose-500/30 bg-rose-600 px-2.5 py-0.5 text-[11px] font-extrabold text-white shadow-md backdrop-blur-xs flex items-center gap-0.5"
+        >
+          -{{ discountPercent }}%
+        </span>
       </div>
 
       <div class="flex flex-1 flex-col gap-2 p-3.5">
@@ -73,8 +96,19 @@ const hasVariants = computed(
 
         <div class="mt-auto flex items-end justify-between gap-2 pt-0.5">
           <div class="min-w-0">
-            <p class="break-words font-mono text-base font-bold text-ink-primary sm:text-lg">
-              {{ formatCurrency(product.price) }}
+            <div v-if="discountPercent > 0" class="flex items-center gap-1.5 flex-wrap">
+              <span class="text-xs text-ink-secondary line-through">
+                {{ formatCurrency(product.price) }}
+              </span>
+              <span class="rounded-md bg-rose-500/10 px-1 py-0.5 text-[10px] font-bold text-rose-600 dark:bg-rose-500/20 dark:text-rose-400">
+                -{{ discountPercent }}%
+              </span>
+            </div>
+            <p
+              class="break-words font-mono text-base font-bold sm:text-lg"
+              :class="discountPercent > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-ink-primary'"
+            >
+              {{ formatCurrency(effectivePrice) }}
             </p>
             <p
               class="mt-0.5 truncate text-xs"
