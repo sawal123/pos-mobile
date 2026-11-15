@@ -5,6 +5,7 @@ import { useRouter } from 'vue-router'
 import AppIcon from '@/components/base/AppIcon.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
+import BaseModal from '@/components/base/BaseModal.vue'
 import DevicePairingModal from '@/components/cloud/DevicePairingModal.vue'
 import { useCashStore } from '@/stores/cashStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
@@ -19,6 +20,11 @@ import { useSyncContextGuardStore } from '@/stores/syncContextGuardStore'
 import { useSyncStatusStore } from '@/stores/syncStatusStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import { clearLocalCache } from '@/services/localCacheService'
+import {
+  captureLocalSafetyBackup,
+  clearLocalSafetyBackup,
+  restoreLocalSafetyBackup,
+} from '@/services/localSafetyBackup'
 import {
   SYNC_REQUIREMENT_LABELS,
   SYNC_REQUIREMENT_HINTS,
@@ -48,6 +54,7 @@ const autoSyncDraft = ref(syncAutoSyncStore.enabled)
 onMounted(async () => {
   await syncStatusStore.refresh()
   await syncPushStore.refreshPendingCount()
+  await loadWorkspaceFootprint()
   try {
     await syncAutoSyncStore.loadPreference()
     autoSyncDraft.value = syncAutoSyncStore.enabled
@@ -81,6 +88,15 @@ const isCloudLinked = computed(() => cloudStore.isLinked)
 const pendingCount = computed(() => {
   return Math.max(syncStatusStore.pendingCount || 0, syncPushStore.pendingCount || 0)
 })
+
+/**
+ * Tarik data hanya relevan untuk akun dengan akses Cloud (paket berbayar).
+ * Paket Free menyimpan data lokal saja, jadi tombolnya tidak ditampilkan.
+ */
+const canPullFromCloud = computed(() => cloudStore.cloudAccess === true)
+const isAnyBusy = computed(
+  () => isSyncing.value || isPulling.value || isClearingCache.value,
+)
 
 const lastSyncFormatted = computed(() => {
   // Only a completed push/pull cycle counts as a sync. Falling back to the
@@ -134,6 +150,67 @@ const hasDeviceBinding = computed(
 const isDeviceMissing = computed(() => requiresDevicePairing.value && !hasDeviceBinding.value)
 
 const isPairingModalOpen = ref(false)
+
+/**
+ * Diagnostik ruang kerja.
+ *
+ * Kalau pengguna melihat "data hilang" padahal sebelumnya ada, penyebab paling
+ * sering bukan penghapusan: saat berpindah bisnis Cloud, aplikasi menyimpan
+ * data ruang kerja lama sebagai snapshot dan menampilkan ruang kerja baru yang
+ * mungkin masih kosong. Footprint ini menunjukkan bahwa data tersebut masih ada
+ * beserta jumlahnya, supaya tidak dikira hilang.
+ */
+const workspaceFootprint = ref(null)
+
+async function loadWorkspaceFootprint() {
+  const adapter = cloudStore.adapter
+  if (!adapter || typeof adapter.loadWorkspaceRegistry !== 'function') return
+
+  try {
+    const registry = await adapter.loadWorkspaceRegistry()
+    const active =
+      registry?.activeWorkspaceId ??
+      cloudStore.activeWorkspaceId ??
+      null
+
+    const others = []
+    const workspaces = registry?.workspaces ?? {}
+
+    for (const [workspaceId, meta] of Object.entries(workspaces)) {
+      if (workspaceId === active) continue
+
+      let snapshot = null
+      try {
+        snapshot =
+          typeof adapter.loadWorkspaceSnapshot === 'function'
+            ? await adapter.loadWorkspaceSnapshot(workspaceId)
+            : null
+      } catch {
+        snapshot = null
+      }
+
+      const products = Array.isArray(snapshot?.products) ? snapshot.products.length : 0
+      const transactions = Array.isArray(snapshot?.transactions)
+        ? snapshot.transactions.length
+        : 0
+      const customers = Array.isArray(snapshot?.customers) ? snapshot.customers.length : 0
+
+      if (products > 0 || transactions > 0 || customers > 0) {
+        others.push({
+          id: workspaceId,
+          name: meta?.name || snapshot?.business?.name || workspaceId,
+          products,
+          transactions,
+          customers,
+        })
+      }
+    }
+
+    workspaceFootprint.value = { active, others }
+  } catch {
+    workspaceFootprint.value = null
+  }
+}
 
 function openPairingModal() {
   isPairingModalOpen.value = true
@@ -199,18 +276,31 @@ async function handleSyncNow() {
       result = await syncPushStore.pushNow()
     }
 
+    // Perangkat yang belum pernah memuat data Cloud tidak bisa push/pull
+    // reguler. Jangan menyuruh pengguna menekan tombol: langsung muat datanya
+    // sekali (initial read) supaya data Cloud tampil setelah login.
+    if (result?.ok === false && result.code === 'SYNC_BUSINESS_NOT_BOUND' && canPullFromCloud.value) {
+      const initial = await syncPullStore.pullNow({ initialCloudRead: true })
+      await syncPushStore.refreshPendingCount()
+      await syncStatusStore.refresh()
+
+      if (initial?.ok) {
+        syncFeedback.value = {
+          type: 'success',
+          message:
+            'Data Cloud berhasil dimuat ke perangkat dan disimpan di SQLite. Sinkronisasi selesai.',
+        }
+        return
+      }
+
+      result = initial
+    }
+
     await syncPushStore.refreshPendingCount()
     await syncStatusStore.refresh()
 
     if (result && result.ok === false) {
-      syncFeedback.value = {
-        type: 'error',
-        code: result.code,
-        message: describeSyncFailure(
-          result,
-          'Sinkronisasi gagal. Pastikan koneksi internet stabil.',
-        ),
-      }
+      syncFeedback.value = buildFailureFeedback(result)
     } else {
       syncFeedback.value = {
         type: 'success',
@@ -247,24 +337,13 @@ async function handlePullNow(opts = {}) {
     await syncStatusStore.refresh()
 
     if (result && !result.ok) {
-      if (result.code === 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY') {
-        syncFeedback.value = {
-          type: 'error',
-          code: result.code,
-          message:
-            'Terdapat data lokal belum tersinkron (misal: shift/kas yang sedang berjalan). Bersihkan cache jika ingin memuat ulang dari Cloud.',
-        }
-      } else {
-        syncFeedback.value = {
-          type: 'error',
-          code: result.code,
-          message: describeSyncFailure(result, 'Gagal menarik data cloud.'),
-        }
-      }
+      syncFeedback.value = buildFailureFeedback(result, 'Gagal menarik data cloud.')
     } else {
       syncFeedback.value = {
         type: 'success',
-        message: 'Data Cloud berhasil dimuat ke perangkat!',
+        message:
+          'Data Cloud berhasil dimuat ke perangkat dan disimpan di SQLite. Jumlah data: ' +
+          `${result?.applied ?? 0}.`,
       }
     }
   } catch (err) {
@@ -277,15 +356,44 @@ async function handlePullNow(opts = {}) {
   }
 }
 
+/**
+ * Muat ulang data lokal dari Cloud = operasi DESTRUKTIF.
+ *
+ * Data lokal dihapus lebih dulu, jadi:
+ *  1. wajib konfirmasi eksplisit,
+ *  2. snapshot data lama disimpan sebelum dihapus,
+ *  3. bila pemuatan Cloud gagal, snapshot dikembalikan apa adanya.
+ *
+ * Sebelumnya tombol ini langsung menghapus data tanpa konfirmasi, sehingga satu
+ * kegagalan tarik data membuat seluruh riwayat pengguna hilang.
+ */
+const showClearConfirm = ref(false)
+
+function requestClearAndPull() {
+  if (isAnyBusy.value || !canPullFromCloud.value) return
+  showClearConfirm.value = true
+}
+
+function cancelClearAndPull() {
+  showClearConfirm.value = false
+}
+
 async function handleClearAndPull() {
-  if (isSyncing.value || isClearingCache.value) return
+  showClearConfirm.value = false
+  if (isSyncing.value || isPulling.value || isClearingCache.value) return
+
   isClearingCache.value = true
   syncFeedback.value = null
 
+  const adapter = cloudStore.adapter
+  let backup = null
+
   try {
+    backup = await captureLocalSafetyBackup({ adapter })
+
     await clearLocalCache({
       pinia: null,
-      adapter: cloudStore.adapter,
+      adapter,
       scheduler: cloudStore.scheduler,
       resetBusiness: false,
     })
@@ -295,24 +403,74 @@ async function handleClearAndPull() {
     await syncStatusStore.refresh()
 
     if (pullRes.ok) {
+      clearLocalSafetyBackup()
       syncFeedback.value = {
         type: 'success',
-        message: 'Cache dibersihkan dan menu produk Cloud berhasil dimuat ulang!',
+        message: 'Data Cloud berhasil dimuat ulang dan disimpan di SQLite.',
       }
-    } else {
-      syncFeedback.value = {
-        type: 'error',
-        message: pullRes.message || 'Gagal memuat data dari Cloud setelah membersihkan cache.',
-      }
+      return
     }
-  } catch (err) {
+
+    // Pemuatan gagal → kembalikan data yang tadi dihapus.
+    const restore = await restoreLocalSafetyBackup(backup, { adapter })
     syncFeedback.value = {
       type: 'error',
-      message: 'Gagal membersihkan cache: ' + (err?.message || err),
+      code: pullRes.code,
+      message: restore.restored
+        ? `${pullRes.message || 'Gagal memuat data dari Cloud.'} Data lokal Anda dikembalikan, tidak ada yang hilang.`
+        : `${pullRes.message || 'Gagal memuat data dari Cloud.'} ${
+            restore.reason === 'EMPTY_SNAPSHOT'
+              ? ''
+              : 'Namun pemulihan otomatis gagal — gunakan Restore Backup dari Pengaturan.'
+          }`,
+    }
+  } catch (err) {
+    const restore = await restoreLocalSafetyBackup(backup, { adapter })
+    syncFeedback.value = {
+      type: 'error',
+      message: `Gagal memuat ulang data: ${err?.message || err}.${
+        restore.restored ? ' Data lokal Anda dikembalikan.' : ''
+      }`,
     }
   } finally {
     isClearingCache.value = false
   }
+}
+
+/**
+ * Ubah hasil gagal dari service menjadi banner yang bisa ditindaklanjuti.
+ * Pesan teknis berbahasa Inggris tidak pernah ditampilkan ke kasir.
+ */
+function buildFailureFeedback(result, fallback = 'Sinkronisasi gagal. Pastikan koneksi internet stabil.') {
+  const code = result?.code
+
+  if (code === 'INITIAL_PULL_ALREADY_IN_PROGRESS') {
+    return {
+      type: 'info',
+      code,
+      message: 'Data Cloud sedang dimuat. Tunggu sampai selesai — data akan tampil otomatis.',
+    }
+  }
+
+  if (code === 'SYNC_BUSINESS_NOT_BOUND') {
+    return {
+      type: 'error',
+      code,
+      message:
+        'Perangkat ini belum memuat data Cloud. Tekan "Muat Data Cloud" untuk mengunduh dan menyimpannya ke SQLite.',
+    }
+  }
+
+  if (code === 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY') {
+    return {
+      type: 'error',
+      code,
+      message:
+        'Data lokal masih ada, jadi data Cloud tidak dimuat agar tidak menimpa. Data Anda aman — gunakan "Muat ulang dari Cloud" hanya jika Anda yakin ingin menggantinya.',
+    }
+  }
+
+  return { type: 'error', code, message: describeSyncFailure(result, fallback) }
 }
 
 function handleOpenSettingsCloud() {
@@ -586,23 +744,33 @@ function handleBack() {
       <div
         v-if="syncFeedback"
         class="rounded-2xl p-3 text-xs flex flex-col gap-2"
-        :class="syncFeedback.type === 'error' ? 'bg-danger/10 text-danger' : 'bg-emerald-50 text-emerald-800 border border-emerald-200/60'"
+        :class="
+          syncFeedback.type === 'error'
+            ? 'bg-danger/10 text-danger'
+            : syncFeedback.type === 'info'
+              ? 'bg-amber-50 text-amber-800 border border-amber-200/70'
+              : 'bg-emerald-50 text-emerald-800 border border-emerald-200/60'
+        "
         data-testid="sync-feedback-banner"
       >
         <div class="flex items-center gap-2">
-          <span class="text-sm font-bold">{{ syncFeedback.type === 'error' ? '!' : '✓' }}</span>
+          <span class="text-sm font-bold">{{
+            syncFeedback.type === 'error' ? '!' : syncFeedback.type === 'info' ? 'i' : '✓'
+          }}</span>
           <span class="flex-1">{{ syncFeedback.message }}</span>
         </div>
-        <div v-if="syncFeedback.type === 'error' && (syncFeedback.code === 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY' || syncFeedback.message?.includes('Bersihkan cache'))" class="mt-1">
+        <div
+          v-if="syncFeedback.code === 'SYNC_BUSINESS_NOT_BOUND' && canPullFromCloud"
+          class="mt-1"
+        >
           <BaseButton
             size="sm"
-            variant="danger"
-            data-testid="btn-clear-and-pull"
-            :disabled="isClearingCache || isSyncing"
-            @click="handleClearAndPull"
+            data-testid="btn-load-cloud-data"
+            :disabled="isAnyBusy"
+            @click="handlePullNow({ initialCloudRead: true })"
           >
-            <span v-if="isClearingCache">Memuat...</span>
-            <span v-else>Bersihkan</span>
+            <span v-if="isPulling">Memuat data Cloud...</span>
+            <span v-else>Muat Data Cloud</span>
           </BaseButton>
         </div>
       </div>
@@ -625,7 +793,7 @@ function handleBack() {
           </span>
         </BaseButton>
 
-        <div class="mt-2.5 flex flex-col gap-2">
+        <div v-if="canPullFromCloud" class="mt-2.5 flex flex-col gap-2">
           <BaseButton
             variant="secondary"
             block
@@ -649,13 +817,22 @@ function handleBack() {
             block
             class="text-xs text-danger hover:bg-danger/10"
             data-testid="btn-manual-clear-cache"
-            :disabled="isPulling || isSyncing || isClearingCache"
-            @click="handleClearAndPull"
+            :disabled="isAnyBusy"
+            @click="requestClearAndPull"
           >
-            <span v-if="isClearingCache">Reset...</span>
-            <span v-else>Bersihkan</span>
+            <span v-if="isClearingCache">Memuat ulang...</span>
+            <span v-else>Muat ulang dari Cloud</span>
           </BaseButton>
         </div>
+
+        <p
+          v-else
+          class="mt-3 rounded-2xl bg-surface px-3 py-2 text-center text-[11px] leading-relaxed text-ink-secondary"
+          data-testid="sync-free-plan-note"
+        >
+          Paket Free: data hanya tersimpan di perangkat ini. Tarik data Cloud tidak tersedia —
+          aktifkan paket Cloud untuk menyinkronkan antar perangkat.
+        </p>
 
         <p v-if="!isOnline" class="text-center text-[11px] text-zinc-400 mt-2">
           Perangkat sedang offline. Sambungkan WiFi atau data seluler untuk sinkronisasi.
@@ -716,6 +893,40 @@ function handleBack() {
           </p>
         </div>
       </div>
+
+      <!-- Diagnostik ruang kerja: menjelaskan "data hilang" yang sebenarnya
+           hanya berada di ruang kerja lain. -->
+      <div
+        v-if="workspaceFootprint"
+        class="space-y-2 border-t border-zinc-200/60 pt-3 text-[11px] text-ink-secondary dark:border-slate-700/50"
+        data-testid="workspace-footprint"
+      >
+        <p>
+          Ruang kerja aktif:
+          <span class="font-mono font-semibold text-ink-primary">{{
+            workspaceFootprint.active || '—'
+          }}</span>
+        </p>
+
+        <div
+          v-if="workspaceFootprint.others.length > 0"
+          class="rounded-xl border border-amber-200 bg-amber-50 p-2.5 leading-relaxed text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200"
+          data-testid="workspace-other-data"
+        >
+          <p class="font-semibold">Data dari ruang kerja lain masih tersimpan</p>
+          <ul class="mt-1 list-disc pl-4">
+            <li v-for="other in workspaceFootprint.others" :key="other.id">
+              <span class="font-mono">{{ other.id }}</span> — {{ other.name }}:
+              {{ other.products }} produk, {{ other.transactions }} transaksi,
+              {{ other.customers }} pelanggan
+            </li>
+          </ul>
+          <p class="mt-1">
+            Data tersebut tidak hilang, hanya tidak sedang aktif. Simpan ID ruang kerja di atas
+            sebelum melakukan perubahan apa pun.
+          </p>
+        </div>
+      </div>
     </BaseCard>
 
     <DevicePairingModal
@@ -724,5 +935,43 @@ function handleBack() {
       @close="closePairingModal"
       @paired="handleDevicePaired"
     />
+
+    <BaseModal
+      :open="showClearConfirm"
+      title="Muat ulang data dari Cloud?"
+      data-testid="clear-cloud-confirm"
+      @close="cancelClearAndPull"
+    >
+      <div class="space-y-4">
+        <p class="text-sm leading-relaxed text-ink-secondary">
+          Data lokal di perangkat ini (<span class="font-semibold text-ink-primary"
+            >produk, transaksi, pelanggan, kas, dan shift</span
+          >) akan dihapus lebih dulu, lalu diunduh ulang dari Cloud.
+        </p>
+        <p class="text-xs leading-relaxed text-ink-secondary">
+          Gunakan hanya jika Anda yakin data di Cloud sudah lengkap. Sebelum menghapus, aplikasi
+          menyimpan snapshot lokal dan akan mengembalikannya otomatis bila pengunduhan gagal.
+        </p>
+        <div class="flex items-center justify-end gap-2">
+          <BaseButton
+            variant="ghost"
+            size="sm"
+            data-testid="btn-cancel-clear-and-pull"
+            @click="cancelClearAndPull"
+          >
+            Batal
+          </BaseButton>
+          <BaseButton
+            variant="danger"
+            size="sm"
+            data-testid="btn-confirm-clear-and-pull"
+            :disabled="isAnyBusy"
+            @click="handleClearAndPull"
+          >
+            Hapus &amp; Muat Ulang
+          </BaseButton>
+        </div>
+      </div>
+    </BaseModal>
   </div>
 </template>

@@ -162,6 +162,17 @@ export const useSyncPullStore = defineStore('syncPull', () => {
         lastError.value = result.error?.message ?? result.message ?? 'Sync pull failed'
       } else {
         lastError.value = null
+
+        // Data Cloud yang baru diterapkan harus langsung tersimpan di SQLite,
+        // bukan menunggu flush berikutnya. Tanpa ini data bisa "hilang" lagi
+        // saat aplikasi ditutup sebelum scheduler menulis.
+        if (_scheduler && typeof _scheduler.flush === 'function') {
+          try {
+            await _scheduler.flush()
+          } catch {
+            // Persistensi tetap dicoba ulang oleh scheduler; tarikan dianggap sukses.
+          }
+        }
       }
       return result
     } catch (err) {

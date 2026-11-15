@@ -16,6 +16,11 @@ import ReceiptSettingsPanel from '@/components/settings/ReceiptSettingsPanel.vue
 import CloudBackupPanel from '@/components/settings/CloudBackupPanel.vue'
 import LocalDataExportPanel from '@/components/settings/LocalDataExportPanel.vue'
 import { clearLocalCache } from '@/services/localCacheService'
+import {
+  captureLocalSafetyBackup,
+  clearLocalSafetyBackup,
+  restoreLocalSafetyBackup,
+} from '@/services/localSafetyBackup'
 import { saveOrShareJsonBackup } from '@/services/dataExportService'
 import { apiRequest } from '@/services/cloud/apiClient'
 import {
@@ -319,9 +324,16 @@ async function confirmDisconnect() {
 
 async function handleClearCache() {
   isClearingCache.value = true
+  const adapter = cloudStore.adapter
+  let backup = null
+
   try {
+    // Snapshot dulu: pembersihan ini menghapus data lokal, dan bila pemuatan
+    // ulang dari Cloud gagal, data harus bisa dikembalikan.
+    backup = await captureLocalSafetyBackup({ adapter })
+
     await clearLocalCache({
-      adapter: cloudStore.adapter,
+      adapter,
       scheduler: cloudStore.scheduler,
       resetBusiness: false,
     })
@@ -333,17 +345,38 @@ async function handleClearCache() {
         await syncContextGuardStore.check()
         const pullRes = await syncPullStore.pullNow({ initialCloudRead: true })
         if (pullRes.ok) {
+          clearLocalSafetyBackup()
           setFeedback(
             'success',
-            'Data cache dibersihkan dan menu produk Cloud berhasil dimuat ulang!',
+            'Data cache dibersihkan dan data Cloud berhasil dimuat ulang!',
+          )
+        } else {
+          const restore = await restoreLocalSafetyBackup(backup, { adapter })
+          setFeedback(
+            'error',
+            `${pullRes.message || 'Gagal memuat ulang data Cloud.'} ${
+              restore.restored ? 'Data lokal Anda dikembalikan.' : ''
+            }`.trim(),
           )
         }
       } catch (pullErr) {
-        console.warn('Auto-pull after clear cache error:', pullErr)
+        const restore = await restoreLocalSafetyBackup(backup, { adapter })
+        setFeedback(
+          'error',
+          `Gagal memuat ulang data Cloud: ${pullErr?.message || pullErr}. ${
+            restore.restored ? 'Data lokal Anda dikembalikan.' : ''
+          }`.trim(),
+        )
       }
     }
   } catch (err) {
-    setFeedback('error', 'Gagal menghapus data cache: ' + (err?.message || err))
+    const restore = await restoreLocalSafetyBackup(backup, { adapter })
+    setFeedback(
+      'error',
+      `Gagal menghapus data cache: ${err?.message || err}. ${
+        restore.restored ? 'Data lokal Anda dikembalikan.' : ''
+      }`.trim(),
+    )
   } finally {
     isClearingCache.value = false
   }

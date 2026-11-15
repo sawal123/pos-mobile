@@ -254,8 +254,11 @@ export function createSyncPullService({
         return {
           ok: false,
           code: 'INITIAL_PULL_ALREADY_IN_PROGRESS',
-          message: 'Initial Cloud pull is already in progress.',
-          error: { code: 'INITIAL_PULL_ALREADY_IN_PROGRESS' },
+          message: 'Data Cloud sedang dimuat. Tunggu prosesnya selesai lalu coba lagi.',
+          error: {
+            code: 'INITIAL_PULL_ALREADY_IN_PROGRESS',
+            message: 'Data Cloud sedang dimuat. Tunggu prosesnya selesai lalu coba lagi.',
+          },
         }
       }
       isInitialPulling = true
@@ -380,8 +383,8 @@ export function createSyncPullService({
               ? 'CLOUD_INITIALIZATION_SAFETY_CHECK_FAILED'
               : 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
             message: !workspace.ok
-              ? 'Local workspace safety check failed. Complete recovery before loading Cloud data.'
-              : 'Cloud data can only be loaded into a new empty workspace. Existing local data remains unchanged.',
+              ? 'Pemeriksaan keamanan ruang kerja lokal gagal. Selesaikan pemulihan sebelum memuat data Cloud.'
+              : 'Data Cloud hanya dapat dimuat ke ruang kerja kosong. Data lokal Anda tidak diubah dan tetap aman.',
             error: {
               code: !workspace.ok
                 ? (workspace.code || 'CLOUD_INITIALIZATION_SAFETY_CHECK_FAILED')
@@ -517,10 +520,12 @@ export function createSyncPullService({
           return {
             ok: false,
             code: 'SYNC_BUSINESS_NOT_BOUND',
-            message: 'This device has not initialized Cloud data. Choose Muat Data Cloud to begin.',
+            message:
+              'Perangkat ini belum pernah memuat data Cloud. Tekan "Muat Data Cloud" untuk mengunduh dan menyimpannya ke SQLite.',
             error: {
               code: 'SYNC_BUSINESS_NOT_BOUND',
-              message: 'This device has not initialized Cloud data. Choose Muat Data Cloud to begin.',
+              message:
+                'Perangkat ini belum pernah memuat data Cloud. Tekan "Muat Data Cloud" untuk mengunduh dan menyimpannya ke SQLite.',
             },
           }
         }
@@ -793,8 +798,8 @@ export function createSyncPullService({
               ? 'CLOUD_INITIALIZATION_SAFETY_CHECK_FAILED'
               : 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
             message: !workspace.ok
-              ? 'Local workspace safety check failed. Complete recovery before loading Cloud data.'
-              : 'Cloud data can only be loaded into a new empty workspace. Existing local data remains unchanged.',
+              ? 'Pemeriksaan keamanan ruang kerja lokal gagal. Selesaikan pemulihan sebelum memuat data Cloud.'
+              : 'Data Cloud hanya dapat dimuat ke ruang kerja kosong. Data lokal Anda tidak diubah dan tetap aman.',
             error: {
               code: !workspace.ok
                 ? (workspace.code || 'CLOUD_INITIALIZATION_SAFETY_CHECK_FAILED')
