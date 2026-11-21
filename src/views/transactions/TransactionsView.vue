@@ -48,6 +48,14 @@ const paymentFilter = computed({
   },
 })
 
+// Filter urutan: 'newest' (Terbaru), 'oldest' (Terlama), 'highest' (Nominal Tertinggi), 'lowest' (Nominal Terendah)
+const sortOrder = computed({
+  get: () => transactionStore.uiFilters.sortOrder || 'newest',
+  set: (v) => {
+    transactionStore.uiFilters.sortOrder = v
+  },
+})
+
 // State tanggal flicker / flipper navigator (YYYY-MM-DD)
 const flickerDate = computed({
   get: () => transactionStore.uiFilters.flickerDate || todayStr,
@@ -225,7 +233,7 @@ const filteredTransactions = computed(() => {
   const list = transactionStore.items || transactionStore.transactions || []
   const now = Date.now()
 
-  return list.filter((t) => {
+  const result = list.filter((t) => {
     // 1. Date Filter
     const txDateStr = getTxDateString(t)
     const txTs = getTxTimestamp(t)
@@ -283,6 +291,25 @@ const filteredTransactions = computed(() => {
     }
 
     return true
+  })
+
+  // Sort based on sortOrder: default 'newest' (Data terbaru tampil paling atas)
+  return result.sort((a, b) => {
+    if (sortOrder.value === 'oldest') {
+      return getTxTimestamp(a) - getTxTimestamp(b)
+    }
+    if (sortOrder.value === 'highest') {
+      const totalA = Number(a.total ?? a.grandTotal ?? 0) || 0
+      const totalB = Number(b.total ?? b.grandTotal ?? 0) || 0
+      return totalB - totalA
+    }
+    if (sortOrder.value === 'lowest') {
+      const totalA = Number(a.total ?? a.grandTotal ?? 0) || 0
+      const totalB = Number(b.total ?? b.grandTotal ?? 0) || 0
+      return totalA - totalB
+    }
+    // Default: 'newest' (Terbaru di paling atas)
+    return getTxTimestamp(b) - getTxTimestamp(a)
   })
 })
 
@@ -586,6 +613,67 @@ function resetAllFilters() {
           @click="paymentFilter = 'card'"
         >
           Kartu / Debit
+        </button>
+      </div>
+    </div>
+
+    <!-- Sort Order Filter Row -->
+    <div class="space-y-1">
+      <div class="flex items-center justify-between">
+        <span class="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">Urutan:</span>
+      </div>
+      <div class="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs no-scrollbar">
+        <button
+          type="button"
+          data-testid="filter-sort-newest"
+          class="rounded-xl px-3 py-1.5 font-medium whitespace-nowrap transition active:scale-95 cursor-pointer"
+          :class="
+            sortOrder === 'newest'
+              ? 'bg-primary text-white shadow-xs'
+              : 'bg-white text-zinc-600 border border-zinc-200/70 hover:bg-zinc-50 dark:border-slate-700/60 dark:bg-[#171C2B] dark:text-zinc-300'
+          "
+          @click="sortOrder = 'newest'"
+        >
+          Terbaru
+        </button>
+        <button
+          type="button"
+          data-testid="filter-sort-oldest"
+          class="rounded-xl px-3 py-1.5 font-medium whitespace-nowrap transition active:scale-95 cursor-pointer"
+          :class="
+            sortOrder === 'oldest'
+              ? 'bg-primary text-white shadow-xs'
+              : 'bg-white text-zinc-600 border border-zinc-200/70 hover:bg-zinc-50 dark:border-slate-700/60 dark:bg-[#171C2B] dark:text-zinc-300'
+          "
+          @click="sortOrder = 'oldest'"
+        >
+          Terlama
+        </button>
+        <button
+          type="button"
+          data-testid="filter-sort-highest"
+          class="rounded-xl px-3 py-1.5 font-medium whitespace-nowrap transition active:scale-95 cursor-pointer"
+          :class="
+            sortOrder === 'highest'
+              ? 'bg-primary text-white shadow-xs'
+              : 'bg-white text-zinc-600 border border-zinc-200/70 hover:bg-zinc-50 dark:border-slate-700/60 dark:bg-[#171C2B] dark:text-zinc-300'
+          "
+          @click="sortOrder = 'highest'"
+        >
+          Nominal Tertinggi
+        </button>
+        <button
+          type="button"
+          data-testid="filter-sort-lowest"
+          class="rounded-xl px-3 py-1.5 font-medium whitespace-nowrap transition active:scale-95 cursor-pointer"
+          :class="
+            sortOrder === 'lowest'
+              ? 'bg-primary text-white shadow-xs'
+              : 'bg-white text-zinc-600 border border-zinc-200/70 hover:bg-zinc-50 dark:border-slate-700/60 dark:bg-[#171C2B] dark:text-zinc-300'
+          "
+          @click="sortOrder = 'lowest'"
+        >
+          Nominal Terendah
         </button>
       </div>
     </div>

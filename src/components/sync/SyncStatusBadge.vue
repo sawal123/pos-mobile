@@ -1,6 +1,7 @@
 <script setup>
-import { computed, watch, hasInjectionContext } from 'vue'
+import { computed, ref, watch, hasInjectionContext } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import SyncPendingDetailsModal from '@/components/sync/SyncPendingDetailsModal.vue'
 import { useSyncStatusStore } from '@/stores/syncStatusStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useSyncPushStore } from '@/stores/syncPushStore'
@@ -147,7 +148,13 @@ const badgeStyles = computed(() => {
   }
 })
 
+const showPendingModal = ref(false)
+
 function handleClick() {
+  if (statusStore.pendingCount > 0 || uiStatus.value.status === SYNC_UI_PENDING) {
+    showPendingModal.value = true
+    return
+  }
   if (router && typeof router.push === 'function') {
     router.push({ name: 'settings' })
   }
@@ -193,4 +200,6 @@ watch(
     />
     <span class="truncate max-w-[130px]">{{ uiStatus.label }}</span>
   </button>
+
+  <SyncPendingDetailsModal v-model="showPendingModal" />
 </template>

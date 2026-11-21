@@ -12,10 +12,15 @@ const props = defineProps({
   },
 })
 
-defineEmits(['add'])
+const emit = defineEmits(['add'])
 
 function isOutOfStock(product) {
   return (product.kind ?? 'product') !== 'service' && Number(product.stock ?? 0) <= 0
+}
+
+function handleAdd() {
+  if (isOutOfStock(props.product)) return
+  emit('add', props.product)
 }
 
 const imageLoadError = ref(false)
@@ -51,7 +56,13 @@ const effectivePrice = computed(() => {
 
 <template>
   <article
-    class="group flex h-full overflow-hidden rounded-3xl border border-zinc-200/80 bg-card shadow-soft transition hover:-translate-y-0.5 hover:border-primary/35 hover:shadow-[0_18px_32px_rgba(24,24,27,0.08)] dark:border-slate-700/60 dark:bg-[#171C2B] dark:hover:border-indigo-400/45"
+    class="group flex h-full overflow-hidden rounded-3xl border border-zinc-200/80 bg-card shadow-soft transition hover:-translate-y-0.5 hover:border-primary/35 hover:shadow-[0_18px_32px_rgba(24,24,27,0.08)] active:scale-[0.98] cursor-pointer dark:border-slate-700/60 dark:bg-[#171C2B] dark:hover:border-indigo-400/45 select-none"
+    :class="{ 'opacity-60 cursor-not-allowed': isOutOfStock(product) }"
+    role="button"
+    tabindex="0"
+    data-testid="pos-product-card"
+    @click="handleAdd"
+    @keydown.enter="handleAdd"
   >
     <div class="flex min-w-0 flex-1 flex-col">
       <div
@@ -139,7 +150,7 @@ const effectivePrice = computed(() => {
             class="h-10 min-w-10 rounded-2xl px-0 text-lg font-bold shadow-sm shadow-primary/25 cursor-pointer"
             :disabled="isOutOfStock(product)"
             aria-label="Tambah item"
-            @click="$emit('add', product)"
+            @click.stop="handleAdd"
           >
             +
           </BaseButton>

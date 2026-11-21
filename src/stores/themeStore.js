@@ -19,6 +19,23 @@ function readStoredTheme() {
   return 'light'
 }
 
+export async function syncNativeStatusBar(isDark) {
+  try {
+    const { Capacitor } = await import('@capacitor/core')
+    if (!Capacitor.isNativePlatform()) {
+      return
+    }
+
+    const { StatusBar, Style } = await import('@capacitor/status-bar')
+    // Style.Dark: light text/icons for dark status bar background
+    // Style.Light: dark text/icons for light status bar background
+    await StatusBar.setStyle({ style: isDark ? Style.Dark : Style.Light })
+    await StatusBar.setBackgroundColor({ color: isDark ? '#111625' : '#FFFFFF' })
+  } catch {
+    // Non-blocking in environments without native status-bar support
+  }
+}
+
 export function applyThemeClass(mode, doc = typeof document !== 'undefined' ? document : null) {
   if (!doc?.documentElement) {
     return
@@ -33,6 +50,8 @@ export function applyThemeClass(mode, doc = typeof document !== 'undefined' ? do
   if (metaThemeColor) {
     metaThemeColor.setAttribute('content', isDark ? '#0F131F' : '#4945D6')
   }
+
+  void syncNativeStatusBar(isDark)
 }
 
 export const useThemeStore = defineStore('theme', {

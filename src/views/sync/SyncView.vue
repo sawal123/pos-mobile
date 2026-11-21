@@ -7,6 +7,7 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import DevicePairingModal from '@/components/cloud/DevicePairingModal.vue'
+import SyncPendingDetailsModal from '@/components/sync/SyncPendingDetailsModal.vue'
 import { useCashStore } from '@/stores/cashStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useCustomerStore } from '@/stores/customerStore'
@@ -235,6 +236,8 @@ async function handleDevicePaired() {
     message: 'Perangkat kasir berhasil dipasangkan. Tekan Tarik untuk memuat data dari server.',
   }
 }
+
+const showPendingDetailsModal = ref(false)
 
 const syncBadgeLabel = computed(() => {
   if (pendingCount.value > 0) return `${pendingCount.value} Data Pending`
@@ -781,12 +784,23 @@ function handleBack() {
       <div class="rounded-2xl border border-zinc-200/80 bg-surface/70 p-4 space-y-2">
         <div class="flex items-center justify-between text-xs">
           <span class="text-ink-secondary">Data lokal belum terkirim:</span>
-          <span
-            class="font-mono font-bold text-ink-primary text-sm"
-            data-testid="pending-count-value"
-          >
-            {{ pendingCount }}
-          </span>
+          <div class="flex items-center gap-2">
+            <span
+              class="font-mono font-bold text-ink-primary text-sm"
+              data-testid="pending-count-value"
+            >
+              {{ pendingCount }}
+            </span>
+            <button
+              v-if="pendingCount > 0"
+              type="button"
+              class="rounded-lg bg-sky-50 px-2 py-0.5 text-[11px] font-bold text-sky-700 border border-sky-200/70 hover:bg-sky-100 transition cursor-pointer dark:bg-sky-950/60 dark:text-sky-300 dark:border-sky-800"
+              data-testid="btn-view-pending-details"
+              @click="showPendingDetailsModal = true"
+            >
+              Lihat Rincian →
+            </button>
+          </div>
         </div>
         <div class="flex items-center justify-between text-xs border-t border-zinc-200/50 pt-2">
           <span class="text-ink-secondary">Terakhir disinkronkan:</span>
@@ -1055,5 +1069,8 @@ function handleBack() {
         </div>
       </div>
     </BaseModal>
+
+    <!-- Modal Rincian Data Pending -->
+    <SyncPendingDetailsModal v-model="showPendingDetailsModal" />
   </div>
 </template>

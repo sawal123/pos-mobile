@@ -193,6 +193,56 @@ export const useSyncPushStore = defineStore('syncPush', () => {
     })
   }
 
+  async function listPendingItems(options = {}) {
+    if (_pushService?.queueService?.listPending) {
+      try {
+        return await _pushService.queueService.listPending(options)
+      } catch (err) {
+        console.error('Failed to list pending items from queueService', err)
+      }
+    }
+    if (_adapter?.listSyncQueueItems) {
+      try {
+        return await _adapter.listSyncQueueItems(options)
+      } catch (err) {
+        console.error('Failed to list pending items from adapter', err)
+      }
+    }
+    try {
+      const { resolvePersistenceAdapter } = await import('@/services/database')
+      const adapter = await resolvePersistenceAdapter()
+      if (adapter?.listSyncQueueItems) {
+        return await adapter.listSyncQueueItems(options)
+      }
+    } catch {
+      // non-blocking
+    }
+    return []
+  }
+
+  async function removePendingItem(queueId) {
+    if (!queueId) return { ok: false }
+    try {
+      if (_pushService?.queueService?.remove) {
+        const res = await _pushService.queueService.remove(queueId)
+        await refreshPendingCount()
+        const { useSyncStatusStore } = await import('@/stores/syncStatusStore')
+        await useSyncStatusStore().refresh()
+        return res
+      }
+      if (_adapter?.deleteSyncQueueItem) {
+        await _adapter.deleteSyncQueueItem(queueId)
+        await refreshPendingCount()
+        const { useSyncStatusStore } = await import('@/stores/syncStatusStore')
+        await useSyncStatusStore().refresh()
+        return { ok: true }
+      }
+    } catch (err) {
+      return { ok: false, error: err }
+    }
+    return { ok: false }
+  }
+
   return {
     loading,
     pendingCount,
@@ -202,6 +252,8 @@ export const useSyncPushStore = defineStore('syncPush', () => {
     refreshPendingCount,
     pushNow,
     pushIfOnline,
+    listPendingItems,
+    removePendingItem,
     getPushService: () => _pushService,
   }
 })

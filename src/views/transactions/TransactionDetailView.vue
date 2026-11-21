@@ -810,22 +810,38 @@ async function copyInvoiceNumber() {
         </div>
       </div>
 
-      <!-- Action Button at bottom -->
-      <BaseButton
-        block
-        variant="primary"
-        class="gap-2 shadow-soft"
-        @click="router.push(`/transactions/${transaction.id}/receipt`)"
-      >
-        <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"
-          />
-        </svg>
-        <span><span class="sr-only">Lihat </span>Struk</span>
-      </BaseButton>
+      <!-- Action Buttons at bottom -->
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        <button
+          v-if="canEditItems"
+          type="button"
+          data-testid="btn-bottom-add-in-pos"
+          class="inline-flex h-12 items-center justify-center gap-2 rounded-2xl bg-sky-50 border border-sky-300 px-4 text-sm font-bold text-sky-700 hover:bg-sky-100 active:scale-95 transition cursor-pointer dark:bg-sky-950/60 dark:text-sky-300 dark:border-sky-800"
+          @click="router.push({ path: '/pos', query: { add_to_order: transaction.id } })"
+        >
+          <svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+          <span>Tambah Pesanan di Kasir</span>
+        </button>
+
+        <BaseButton
+          block
+          variant="primary"
+          class="gap-2 shadow-soft h-12"
+          @click="router.push(`/transactions/${transaction.id}/receipt`)"
+        >
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"
+            />
+          </svg>
+          <span><span class="sr-only">Lihat </span>Struk</span>
+        </BaseButton>
+      </div>
     </div>
 
     <!-- Settlement Modal -->

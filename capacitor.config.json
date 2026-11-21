@@ -9,10 +9,8 @@
     "CapacitorSQLite": {
       "androidIsEncryption": false
     },
-    "SystemBars": {
-      "insetsHandling": "css",
-      "style": "LIGHT",
-      "hidden": false
+    "StatusBar": {
+      "overlaysWebView": false
     }
   }
 }

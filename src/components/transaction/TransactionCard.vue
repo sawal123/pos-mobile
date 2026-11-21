@@ -1,8 +1,11 @@
 <script setup>
 import { computed } from 'vue'
+import { useRouter } from 'vue-router'
 
 import BaseBadge from '@/components/base/BaseBadge.vue'
 import { formatCurrency, formatDateTime } from '@/utils/formatters'
+
+const router = useRouter()
 
 const props = defineProps({
   transaction: {
@@ -10,6 +13,18 @@ const props = defineProps({
     required: true,
   },
 })
+
+const canAddOrder = computed(() => {
+  const os = String(props.transaction.orderStatus ?? props.transaction.order_status ?? '').toLowerCase()
+  const ps = String(props.transaction.paymentStatus ?? props.transaction.payment_status ?? props.transaction.status ?? '').toLowerCase()
+  return os === 'proses' || os === 'diproses' || ps === 'unpaid' || ps === 'pending' || ps === 'tempo' || ps === 'belum lunas'
+})
+
+function goToAddInPos() {
+  if (router) {
+    router.push({ path: '/pos', query: { add_to_order: props.transaction.id } })
+  }
+}
 
 const displayId = computed(() => {
   if (props.transaction.invoiceNumber) {
@@ -184,10 +199,27 @@ const txDate = computed(() => {
         </p>
       </div>
 
-      <div class="text-right">
-        <span class="text-base font-bold text-ink-primary">
-          {{ formatCurrency(transaction.total) }}
-        </span>
+      <div class="flex items-center gap-2">
+        <button
+          v-if="canAddOrder"
+          type="button"
+          data-testid="btn-card-add-items"
+          title="Tambah pesanan langsung di kasir"
+          class="inline-flex items-center gap-1 rounded-xl bg-sky-50 border border-sky-200/80 px-2.5 py-1 text-xs font-bold text-sky-700 hover:bg-sky-100 active:scale-95 transition cursor-pointer whitespace-nowrap dark:bg-sky-950/60 dark:text-sky-300 dark:border-sky-800"
+          @click.stop.prevent="goToAddInPos"
+        >
+          <svg class="h-3 w-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+          <span>Tambah Pesanan</span>
+        </button>
+
+        <div class="text-right">
+          <span class="text-base font-bold text-ink-primary dark:text-white">
+            {{ formatCurrency(transaction.total) }}
+          </span>
+        </div>
       </div>
     </div>
   </div>

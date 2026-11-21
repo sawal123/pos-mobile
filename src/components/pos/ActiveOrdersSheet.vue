@@ -178,8 +178,8 @@ function viewAllTransactions() {
               </p>
             </div>
 
-            <!-- Status Badges -->
-            <div class="flex shrink-0 flex-wrap items-center gap-1.5">
+            <!-- Status Badges & Quick Action Button -->
+            <div class="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
               <!-- Order Status Badge -->
               <span
                 v-if="order.orderStatus === 'Proses'"
@@ -202,11 +202,27 @@ function viewAllTransactions() {
               >
                 <span>Belum Lunas</span>
               </span>
+
+              <!-- Tombol Tambah Pesanan Langsung di Header (Selalu Terlihat Tanpa Scroll) -->
+              <button
+                v-if="order.orderStatus === 'Proses' || order.paymentStatus === 'unpaid' || order.status === 'unpaid'"
+                type="button"
+                data-testid="btn-add-items-to-order-header"
+                title="Tambah pesanan untuk antrean ini di kasir"
+                class="inline-flex h-7 items-center gap-1 rounded-lg bg-primary/10 border border-primary/25 px-2 text-[11px] font-bold text-primary hover:bg-primary/20 active:scale-95 transition cursor-pointer whitespace-nowrap shrink-0 dark:border-primary/40 dark:bg-primary/20 dark:text-primary-light"
+                @click="addToOrder(order)"
+              >
+                <svg class="h-3 w-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <line x1="12" y1="5" x2="12" y2="19" />
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+                <span>Tambah Pesanan</span>
+              </button>
             </div>
           </div>
 
-          <!-- Items Summary -->
-          <div class="py-2.5 space-y-1">
+          <!-- Items Summary (dibatasi max-height agar tidak menutupi layar saat banyak pesanan) -->
+          <div class="py-2.5 space-y-1 max-h-36 overflow-y-auto no-scrollbar">
             <div
               v-for="(line, idx) in (order.items || [])"
               :key="idx"

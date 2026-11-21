@@ -11,6 +11,7 @@ function createDefaultUiFilters() {
     searchQuery: '',
     dateFilter: 'today',
     paymentFilter: 'all',
+    sortOrder: 'newest',
     flickerDate: today,
     rangeStart: today,
     rangeEnd: today,
