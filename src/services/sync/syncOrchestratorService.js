@@ -93,14 +93,19 @@ export function createSyncOrchestratorService({
       // ── Step 2: Evaluate Push Result ─────────────────────────────────────
       if (!pushResult || !pushResult.ok) {
         // Push produced error or conflict -> STOP, DO NOT PULL
+        const isOutletDenied =
+          pushResult?.code === 'OUTLET_ACCESS_DENIED' ||
+          pushResult?.error?.code === 'OUTLET_ACCESS_DENIED'
+        const message = isOutletDenied
+          ? 'Akun kasir ini hanya memiliki akses untuk cabang yang ditugaskan. Perangkat ini terdaftar di cabang berbeda.'
+          : (pushResult?.message ??
+            pushResult?.error?.message ??
+            'Sinkronisasi push data lokal gagal.')
         return {
           ok: false,
           code: pushResult?.code ?? 'SYNC_PUSH_FAILED',
           stage: 'push',
-          message:
-            pushResult?.message ??
-            pushResult?.error?.message ??
-            'Sinkronisasi push data lokal gagal.',
+          message,
           push: pushResult ?? null,
           pull: null,
           error: pushResult?.error ?? null,
@@ -218,11 +223,17 @@ export function createSyncOrchestratorService({
       }
 
       if (!pullResult || !pullResult.ok) {
+        const isOutletDenied =
+          pullResult?.code === 'OUTLET_ACCESS_DENIED' ||
+          pullResult?.error?.code === 'OUTLET_ACCESS_DENIED'
+        const message = isOutletDenied
+          ? 'Akun kasir ini hanya memiliki akses untuk cabang yang ditugaskan. Perangkat ini terdaftar di cabang berbeda.'
+          : (pullResult?.message ?? pullResult?.error?.message ?? 'Gagal menarik data cloud.')
         return {
           ok: false,
           code: pullResult?.code ?? 'SYNC_PULL_FAILED',
           stage: 'pull',
-          message: pullResult?.message ?? pullResult?.error?.message ?? 'Gagal menarik data cloud.',
+          message,
           push: pushResult,
           pull: pullResult ?? null,
           error: pullResult?.error ?? null,

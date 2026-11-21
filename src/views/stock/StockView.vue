@@ -7,11 +7,13 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
+import { useNotificationStore } from '@/stores/notificationStore'
 import { useProductStore } from '@/stores/productStore'
 import { useSyncPullStore } from '@/stores/syncPullStore'
 import { formatDateTime } from '@/utils/formatters'
 
 const cloudStore = useCloudSessionStore()
+const notificationStore = useNotificationStore()
 const productStore = useProductStore()
 const syncPullStore = useSyncPullStore()
 const router = useRouter()
@@ -169,7 +171,12 @@ function handleStockAdjustment() {
     return
   }
 
+  const productName = adjustingProduct.value.name
   closeAdjustment()
+  notificationStore.notifySuccessAndSync({
+    title: 'Stok Diperbarui',
+    message: `Penyesuaian stok "${productName}" berhasil disimpan.`,
+  })
 }
 </script>
 

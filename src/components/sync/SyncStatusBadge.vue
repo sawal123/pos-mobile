@@ -47,7 +47,7 @@ const cloudAvailable = computed(
         cloudStore.hasCloudAccess &&
         cloudStore.selectedBusiness &&
         cloudStore.selectedOutlet &&
-        cloudStore.isDeviceRegistered,
+        (cloudStore.isDeviceRegistered || cloudStore.role !== 'cashier'),
     ),
 )
 

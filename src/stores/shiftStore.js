@@ -11,9 +11,10 @@ export const useShiftStore = defineStore('shift', {
     closingBalance: null,
     closedAt: null,
     notes: '',
+    isCloudAutoShift: false,
   }),
   actions: {
-    openShift(balance) {
+    openShift(balance, options = {}) {
       if (this.isOpen) {
         return false
       }
@@ -32,12 +33,14 @@ export const useShiftStore = defineStore('shift', {
       this.closingBalance = null
       this.closedAt = null
       this.notes = ''
+      this.isCloudAutoShift = Boolean(options?.fromCloud)
 
       return this.id
     },
     closeShift(closingBalance = null, notes = null) {
       this.isOpen = false
       this.status = 'closed'
+      this.isCloudAutoShift = false
       if (closingBalance !== null && !Number.isNaN(Number(closingBalance))) {
         this.closingBalance = Number(closingBalance)
       }
@@ -60,6 +63,7 @@ export const useShiftStore = defineStore('shift', {
       if (snapshot.closedAt !== undefined) this.closedAt = snapshot.closedAt
       if (snapshot.notes !== undefined) this.notes = snapshot.notes
       if (snapshot.isOpen !== undefined) this.isOpen = snapshot.isOpen
+      this.isCloudAutoShift = Boolean(snapshot.isCloudAutoShift ?? false)
     },
   },
 })

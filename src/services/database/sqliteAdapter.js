@@ -576,6 +576,57 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
         }
       })
     },
+    async loadDiningTables() {
+      const db = await ensureConnection()
+      try {
+        const { values: rows = [] } = await db.query(
+          `SELECT id, outlet_id, name, capacity, status, sort_order, updated_at
+           FROM dining_tables ORDER BY sort_order ASC, rowid ASC`,
+        )
+
+        return rows.map((row) => ({
+          id: row.id,
+          outletId: row.outlet_id,
+          outlet_id: row.outlet_id,
+          name: row.name,
+          capacity: Number(row.capacity ?? 4),
+          status: row.status ?? 'available',
+          sortOrder: Number(row.sort_order ?? 0),
+          sort_order: Number(row.sort_order ?? 0),
+          updatedAt: row.updated_at ?? new Date().toISOString(),
+          updated_at: row.updated_at ?? new Date().toISOString(),
+        }))
+      } catch {
+        return []
+      }
+    },
+    async saveDiningTables(tables = []) {
+      await withTransaction(async (db) => {
+        try {
+          await db.run('DELETE FROM dining_tables', [], false)
+
+          for (const table of tables) {
+            await db.run(
+              `INSERT OR REPLACE INTO dining_tables
+                (id, outlet_id, name, capacity, status, sort_order, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)`,
+              [
+                String(table.id),
+                table.outlet_id ?? table.outletId ?? null,
+                table.name,
+                Number(table.capacity ?? 4),
+                table.status ?? 'available',
+                Number(table.sort_order ?? table.sortOrder ?? 0),
+                table.updated_at ?? table.updatedAt ?? new Date().toISOString(),
+              ],
+              false,
+            )
+          }
+        } catch (e) {
+          console.error('Failed to save dining tables', e)
+        }
+      })
+    },
     async loadExpenses() {
       const db = await ensureConnection()
       const { values = [] } = await db.query(

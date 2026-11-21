@@ -8,15 +8,20 @@ import BaseModal from '@/components/base/BaseModal.vue'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useExpenseStore } from '@/stores/expenseStore'
 import { isPaidTransaction, useTransactionStore } from '@/stores/transactionStore'
-import { formatCurrency, formatDateTime } from '@/utils/formatters'
+import { formatCurrency, formatDateTime, toLocalDateString } from '@/utils/formatters'
 
 const router = useRouter()
 const businessStore = useBusinessStore()
 const expenseStore = useExpenseStore()
 const transactionStore = useTransactionStore()
 
-// Period filter: 'all' | 'today' | '7days' | 'month'
+const todayStr = toLocalDateString(new Date())
+
+// Period filter: 'all' | 'today' | '7days' | 'month' | 'custom' | 'range'
 const selectedPeriod = ref('all')
+const flickerDate = ref(todayStr)
+const rangeStart = ref(todayStr)
+const rangeEnd = ref(todayStr)
 const showReceiptModal = ref(false)
 const copiedNotice = ref(false)
 
@@ -25,14 +30,72 @@ const periods = [
   { id: 'today', label: 'Hari Ini' },
   { id: '7days', label: '7 Hari' },
   { id: 'month', label: 'Bulan Ini' },
+  { id: 'range', label: 'Rentang Tanggal' },
 ]
 
-function isSameDay(d1, d2) {
-  return (
-    d1.getFullYear() === d2.getFullYear() &&
-    d1.getMonth() === d2.getMonth() &&
-    d1.getDate() === d2.getDate()
-  )
+function parseLocalDate(dateStr) {
+  if (typeof dateStr === 'string') {
+    const parts = dateStr.split('-')
+    if (parts.length === 3) {
+      return new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]))
+    }
+  }
+  return new Date()
+}
+
+function formatDateDisplay(dateStr, includeWeekday = true) {
+  if (!dateStr) return '-'
+  try {
+    const d = dateStr.includes('-') && dateStr.length === 10 ? parseLocalDate(dateStr) : new Date(dateStr)
+    const options = includeWeekday
+      ? { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }
+      : { day: 'numeric', month: 'short', year: 'numeric' }
+    return new Intl.DateTimeFormat('id-ID', options).format(d)
+  } catch {
+    return dateStr
+  }
+}
+
+function selectPeriod(periodId) {
+  selectedPeriod.value = periodId
+  if (periodId === 'today') {
+    flickerDate.value = todayStr
+  } else if (periodId === 'range') {
+    if (!rangeStart.value) rangeStart.value = todayStr
+    if (!rangeEnd.value) rangeEnd.value = todayStr
+  }
+}
+
+function shiftFlickerDate(days) {
+  const base = parseLocalDate(flickerDate.value)
+  base.setDate(base.getDate() + days)
+  flickerDate.value = toLocalDateString(base)
+  selectedPeriod.value = flickerDate.value === todayStr ? 'today' : 'custom'
+}
+
+function onCustomDateChange(e) {
+  if (e.target?.value) {
+    flickerDate.value = e.target.value
+    selectedPeriod.value = flickerDate.value === todayStr ? 'today' : 'custom'
+  }
+}
+
+function onRangeStartChange(e) {
+  const val = e.target?.value
+  if (!val) return
+  rangeStart.value = val
+  if (rangeEnd.value && val > rangeEnd.value) {
+    rangeEnd.value = val
+  }
+}
+
+function onRangeEndChange(e) {
+  const val = e.target?.value
+  if (!val) return
+  rangeEnd.value = val
+  if (rangeStart.value && val < rangeStart.value) {
+    rangeStart.value = val
+  }
 }
 
 function matchesPeriod(dateString, period) {
@@ -42,9 +105,20 @@ function matchesPeriod(dateString, period) {
   if (Number.isNaN(date.getTime())) return false
 
   const now = new Date()
+  const txDateStr = toLocalDateString(date)
 
   if (period === 'today') {
-    return isSameDay(date, now)
+    return txDateStr === todayStr
+  }
+
+  if (period === 'custom') {
+    return txDateStr === flickerDate.value
+  }
+
+  if (period === 'range') {
+    const start = rangeStart.value <= rangeEnd.value ? rangeStart.value : rangeEnd.value
+    const end = rangeStart.value <= rangeEnd.value ? rangeEnd.value : rangeStart.value
+    return txDateStr >= start && txDateStr <= end
   }
 
   if (period === '7days') {
@@ -66,7 +140,15 @@ function matchesPeriod(dateString, period) {
 const periodLabel = computed(() => {
   switch (selectedPeriod.value) {
     case 'today':
-      return 'Hari Ini'
+      return `Hari Ini • ${formatDateDisplay(todayStr)}`
+    case 'custom':
+      return formatDateDisplay(flickerDate.value)
+    case 'range': {
+      const start = rangeStart.value <= rangeEnd.value ? rangeStart.value : rangeEnd.value
+      const end = rangeStart.value <= rangeEnd.value ? rangeEnd.value : rangeStart.value
+      if (start === end) return formatDateDisplay(start, false)
+      return `${formatDateDisplay(start, false)} - ${formatDateDisplay(end, false)}`
+    }
     case '7days':
       return '7 Hari Terakhir'
     case 'month':
@@ -273,22 +355,101 @@ function copyReportReceipt() {
         <svg class="h-3.5 w-3.5 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
         </svg>
-        <span class="whitespace-nowrap">Struk</span>
+        <span class="whitespace-nowrap"><span class="sr-only">Ringkasan </span>Struk</span>
       </button>
     </header>
 
-    <!-- Period Segmented Control (Minimal & Simple) -->
-    <section class="flex rounded-2xl bg-zinc-100 p-1 text-[11px]">
-      <button
-        v-for="p in periods"
-        :key="p.id"
-        type="button"
-        class="flex-1 py-1.5 px-1 text-center font-medium rounded-xl transition-all whitespace-nowrap"
-        :class="selectedPeriod === p.id ? 'bg-white font-bold text-ink-primary shadow-xs' : 'text-zinc-500 hover:text-ink-primary'"
-        @click="selectedPeriod = p.id"
+    <!-- Period Segmented Control + Date Flicker & Date Range -->
+    <section class="space-y-2">
+      <div class="flex items-center gap-1 overflow-x-auto no-scrollbar rounded-2xl bg-zinc-100 p-1 text-[11px]">
+        <button
+          v-for="p in periods"
+          :key="p.id"
+          type="button"
+          :data-testid="`reports-period-${p.id}`"
+          class="flex-1 py-1.5 px-2.5 text-center font-medium rounded-xl transition-all whitespace-nowrap cursor-pointer"
+          :class="selectedPeriod === p.id ? 'bg-white font-bold text-ink-primary shadow-xs' : 'text-zinc-500 hover:text-ink-primary'"
+          @click="selectPeriod(p.id)"
+        >
+          {{ p.label }}
+        </button>
+      </div>
+
+      <!-- Date Flicker Navigator Bar -->
+      <div class="flex items-center justify-between rounded-2xl border border-zinc-200/80 bg-white p-1.5 shadow-xs">
+        <button
+          type="button"
+          data-testid="reports-date-flicker-prev"
+          class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-zinc-600 hover:bg-zinc-100 hover:text-ink-primary active:scale-95 transition cursor-pointer"
+          title="Hari Sebelumnya"
+          @click="shiftFlickerDate(-1)"
+        >
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+          </svg>
+        </button>
+
+        <div class="relative flex flex-1 items-center justify-center gap-2 px-2 text-center">
+          <svg class="h-4 w-4 text-primary shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5" />
+          </svg>
+          <span data-testid="reports-date-flicker-label" class="text-xs sm:text-sm font-semibold text-ink-primary truncate">
+            {{ periodLabel }}
+          </span>
+          <input
+            type="date"
+            data-testid="reports-date-flicker-input"
+            class="absolute inset-0 cursor-pointer opacity-0"
+            :value="flickerDate"
+            title="Klik untuk memilih tanggal"
+            @change="onCustomDateChange"
+          />
+        </div>
+
+        <button
+          type="button"
+          data-testid="reports-date-flicker-next"
+          class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-zinc-600 hover:bg-zinc-100 hover:text-ink-primary active:scale-95 transition cursor-pointer"
+          title="Hari Berikutnya"
+          @click="shiftFlickerDate(1)"
+        >
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- Date Range Picker Bar -->
+      <div
+        v-if="selectedPeriod === 'range'"
+        data-testid="reports-date-range-picker"
+        class="grid grid-cols-2 gap-2 rounded-2xl border border-zinc-200/80 bg-white p-3 shadow-xs"
       >
-        {{ p.label }}
-      </button>
+        <label class="space-y-1">
+          <span class="block text-[10px] font-semibold uppercase tracking-wider text-ink-secondary">
+            Dari Tanggal
+          </span>
+          <input
+            type="date"
+            data-testid="reports-date-range-start"
+            :value="rangeStart"
+            class="h-9 w-full rounded-xl border border-zinc-200 bg-surface px-2.5 text-xs font-medium text-ink-primary focus:border-primary focus:outline-none"
+            @change="onRangeStartChange"
+          />
+        </label>
+        <label class="space-y-1">
+          <span class="block text-[10px] font-semibold uppercase tracking-wider text-ink-secondary">
+            Sampai Tanggal
+          </span>
+          <input
+            type="date"
+            data-testid="reports-date-range-end"
+            :value="rangeEnd"
+            class="h-9 w-full rounded-xl border border-zinc-200 bg-surface px-2.5 text-xs font-medium text-ink-primary focus:border-primary focus:outline-none"
+            @change="onRangeEndChange"
+          />
+        </label>
+      </div>
     </section>
 
     <!-- Unified Minimalist Financial Card -->
@@ -517,7 +678,7 @@ function copyReportReceipt() {
             <svg class="mr-1.5 h-4 w-4 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
             </svg>
-            Salin
+            Salin<span class="sr-only"> Teks Laporan</span>
           </BaseButton>
           <BaseButton block variant="primary" @click="showReceiptModal = false">
             Selesai
@@ -527,3 +688,13 @@ function copyReportReceipt() {
     </BaseModal>
   </div>
 </template>
+
+<style scoped>
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+</style>

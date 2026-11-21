@@ -71,6 +71,13 @@ export const useSyncOrchestratorStore = defineStore('syncOrchestrator', () => {
         cloudAccess: cloudStore.isOperationalCloudAccess === true,
         deviceIdentifier: cloudStore.deviceIdentifier,
         registeredDeviceId: cloudStore.registeredDeviceId,
+        ...(cloudStore.role != null ? { role: cloudStore.role } : {}),
+        ...(cloudStore.syncCapabilities != null
+          ? { syncCapabilities: cloudStore.syncCapabilities }
+          : {}),
+        ...(cloudStore.role != null || cloudStore.syncCapabilities != null
+          ? { capabilityState: cloudStore.capabilityState }
+          : {}),
       }
 
       const result = await _orchestratorService.syncAll({
@@ -83,8 +90,14 @@ export const useSyncOrchestratorStore = defineStore('syncOrchestrator', () => {
         lastSyncedAt.value = new Date().toISOString()
         lastError.value = null
       } else {
-        lastError.value =
-          result.error?.message ?? result.message ?? 'Sinkronisasi gagal.'
+        const isOutletDenied =
+          result.code === 'OUTLET_ACCESS_DENIED' ||
+          result.error?.code === 'OUTLET_ACCESS_DENIED' ||
+          result.pull?.code === 'OUTLET_ACCESS_DENIED' ||
+          result.push?.code === 'OUTLET_ACCESS_DENIED'
+        lastError.value = isOutletDenied
+          ? 'Akun kasir ini hanya memiliki akses untuk cabang yang ditugaskan. Perangkat ini terdaftar di cabang berbeda.'
+          : (result.error?.message ?? result.message ?? 'Sinkronisasi gagal.')
       }
 
       return result

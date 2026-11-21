@@ -421,4 +421,28 @@ describe('P33 ESC/POS receipt builder', () => {
     expect(textPaid).not.toContain('Ini adalah Net Kasir Layanan')
     expect(textPaid).not.toContain('Free')
   })
+
+  it('mengirimkan perintah buka laci kasir (drawer kick) pada struk secara otomatis', () => {
+    const commands = createReceiptCommands({
+      transaction: retailTransaction(),
+      business,
+      paperWidth: '58',
+    })
+
+    const drawerCommand = commands.find((cmd) => cmd.type === 'open_drawer')
+    expect(drawerCommand).toBeDefined()
+
+    const bytes = Array.from(buildReceiptBytes({
+      transaction: retailTransaction(),
+      business,
+      paperWidth: '58',
+    }))
+
+    // Cek keberadaan sequence ESC p 0 (0x1b, 0x70, 0x00) dan ESC p 1 (0x1b, 0x70, 0x01)
+    const pin2Idx = bytes.findIndex((b, i) => b === 0x1b && bytes[i + 1] === 0x70 && bytes[i + 2] === 0x00)
+    const pin5Idx = bytes.findIndex((b, i) => b === 0x1b && bytes[i + 1] === 0x70 && bytes[i + 2] === 0x01)
+
+    expect(pin2Idx).toBeGreaterThanOrEqual(0)
+    expect(pin5Idx).toBeGreaterThanOrEqual(0)
+  })
 })

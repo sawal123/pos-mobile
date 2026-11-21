@@ -47,6 +47,14 @@ const offline = ref(typeof navigator !== 'undefined' ? navigator.onLine === fals
 const actionNotice = ref('')
 
 const activeBusinessId = computed(() => cloudStore.selectedBusiness?.id ?? null)
+const businessOutlets = computed(() => {
+  const biz = cloudStore.businesses.find((b) => b.id === activeBusinessId.value)
+  return (biz?.outlets ?? []).filter((o) => o.status !== 'inactive')
+})
+const isOwnerRole = computed(() => {
+  const biz = cloudStore.businesses.find((b) => b.id === activeBusinessId.value)
+  return (biz?.role ?? cloudStore.role) === 'owner'
+})
 const rawSubscription = computed(() => subscriptionStore.selectedSubscription ?? null)
 
 const hasRawActiveSubscription = computed(() => {
@@ -204,6 +212,38 @@ function goToPlanSelection() {
 
   planStore.disableRenewalMode()
   router.push({ name: 'subscription' })
+}
+
+function payOrRenewOutlet(outlet) {
+  actionNotice.value = ''
+  if (!canStartOnlineFlow.value) {
+    actionNotice.value = 'Koneksi internet dan akun Cloud tertaut diperlukan untuk checkout.'
+    return
+  }
+
+  checkoutStore.setTargetOutlet(outlet)
+  if (
+    checkoutStore.attempt &&
+    String(checkoutStore.attempt.outletId ?? '') !== String(outlet?.id ?? '')
+  ) {
+    checkoutStore.resetAttempt()
+  }
+
+  planStore.reset()
+  const isOutletActive = outlet?.status === 'active' && outlet?.cloud_access !== false
+  if (isOutletActive) {
+    planStore.enableRenewalMode()
+  } else {
+    planStore.disableRenewalMode()
+  }
+
+  router.push({
+    name: 'subscription',
+    query: {
+      outlet_id: String(outlet.id),
+      ...(isOutletActive ? { renew: '1' } : {}),
+    },
+  })
 }
 
 async function continuePendingPayment() {
@@ -489,6 +529,88 @@ defineExpose({
         >
           <span>Perbarui<span class="sr-only"> Status</span></span>
         </BaseButton>
+      </div>
+    </BaseCard>
+
+    <!-- Branch / Outlet Subscription Status (Multi-Outlet) -->
+    <BaseCard
+      v-if="businessOutlets.length > 0"
+      class="space-y-3"
+      data-testid="my-subscription-outlets"
+    >
+      <div class="flex items-center justify-between">
+        <div>
+          <p class="text-base font-semibold text-ink-primary">Status Langganan Cabang</p>
+          <p class="text-xs text-ink-secondary">1 paket langganan Cloud berlaku untuk 1 cabang.</p>
+        </div>
+      </div>
+
+      <div class="space-y-2.5">
+        <div
+          v-for="outlet in businessOutlets"
+          :key="outlet.id"
+          class="flex flex-col gap-2 rounded-2xl border border-zinc-200/80 bg-surface p-3.5 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <div class="min-w-0 space-y-1">
+            <div class="flex flex-wrap items-center gap-1.5">
+              <span class="text-sm font-semibold text-ink-primary">{{ outlet.name }}</span>
+              <span
+                v-if="outlet.is_primary"
+                class="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-bold uppercase text-primary"
+              >
+                Utama
+              </span>
+              <span
+                v-if="outlet.code"
+                class="rounded bg-white px-1.5 py-0.5 font-mono text-[10px] font-semibold text-ink-secondary border border-zinc-200/70"
+              >
+                {{ outlet.code }}
+              </span>
+              <span
+                class="rounded-full px-2 py-0.5 text-[10px] font-bold uppercase"
+                :class="
+                  outlet.status === 'active' && outlet.cloud_access !== false
+                    ? 'bg-emerald-100 text-emerald-700'
+                    : 'bg-amber-100 text-amber-700'
+                "
+              >
+                {{
+                  outlet.status === 'pending_payment'
+                    ? 'Menunggu Pembayaran'
+                    : outlet.status === 'active' && outlet.cloud_access !== false
+                      ? 'Aktif'
+                      : 'Tidak Aktif'
+                }}
+              </span>
+            </div>
+            <p class="text-xs text-ink-secondary">
+              <template v-if="outlet.subscription?.expires_at">
+                Berlaku hingga {{ formatServerDate(outlet.subscription.expires_at) }}
+              </template>
+              <template v-else-if="outlet.status === 'pending_payment'">
+                Cabang baru belum memiliki langganan Cloud aktif.
+              </template>
+              <template v-else>
+                {{ outlet.cloud_access !== false ? 'Langganan Cloud aktif' : 'Perlu pembayaran atau perpanjangan' }}
+              </template>
+            </p>
+          </div>
+
+          <BaseButton
+            v-if="isOwnerRole || businessOutlets.length > 0"
+            size="sm"
+            :variant="outlet.status === 'active' && outlet.cloud_access !== false ? 'secondary' : 'primary'"
+            :data-testid="`my-subscription-pay-outlet-${outlet.id}`"
+            class="shrink-0"
+            @click="payOrRenewOutlet(outlet)"
+          >
+            {{
+              outlet.status === 'pending_payment' || outlet.cloud_access === false
+                ? 'Bayar Cabang'
+                : 'Perpanjang'
+            }}
+          </BaseButton>
+        </div>
       </div>
     </BaseCard>
 

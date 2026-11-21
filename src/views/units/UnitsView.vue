@@ -159,17 +159,6 @@ function goBack() {
           </p>
         </div>
       </div>
-
-      <BaseButton
-        v-if="!isCashier"
-        data-testid="add-unit-button"
-        size="sm"
-        class="gap-1.5 shadow-sm shadow-primary/20"
-        @click="openAddModal"
-      >
-        <span class="text-base font-bold leading-none">+</span>
-        <span>Tambah Satuan</span>
-      </BaseButton>
     </header>
 
     <!-- Cashier Readonly Alert -->
@@ -263,17 +252,21 @@ function goBack() {
             type="button"
             class="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-200 text-ink-secondary hover:border-primary hover:text-primary dark:border-slate-700 dark:text-slate-400"
             title="Edit satuan"
+            aria-label="Edit satuan"
             @click="openEditModal(unit)"
           >
             <AppIcon name="edit" class="h-3.5 w-3.5" />
+            <span class="sr-only">Edit</span>
           </button>
           <button
             type="button"
             class="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-200 text-ink-secondary hover:border-red-500 hover:text-red-600 dark:border-slate-700 dark:text-slate-400"
             title="Hapus satuan"
+            aria-label="Hapus satuan"
             @click="openDeleteModal(unit)"
           >
             <AppIcon name="delete" class="h-3.5 w-3.5" />
+            <span class="sr-only">Hapus</span>
           </button>
         </div>
       </article>
@@ -427,5 +420,21 @@ function goBack() {
         </div>
       </div>
     </BaseModal>
+
+    <!-- Floating Action Button (FAB) -->
+    <button
+      v-if="!isCashier"
+      type="button"
+      data-testid="add-unit-button"
+      class="fixed right-5 bottom-[calc(env(safe-area-inset-bottom)+6.75rem)] md:bottom-8 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-primary text-white shadow-[0_10px_25px_rgba(73,69,214,0.45)] transition hover:bg-primary-light active:scale-95 cursor-pointer"
+      title="Tambah Satuan"
+      aria-label="Tambah Satuan"
+      @click="openAddModal"
+    >
+      <svg class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+      </svg>
+      <span class="sr-only">Tambah Satuan</span>
+    </button>
   </div>
 </template>

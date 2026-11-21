@@ -528,4 +528,76 @@ describe('Payment success modal', () => {
     expect(stored.subtotal).toBe(22000)
     expect(stored.total).toBe(24420)
   })
+
+  it('20. variant product (e.g. Americano with options) passes stock validation, deducts stock, and completes payment', async () => {
+    const context = createPosContext()
+    context.productStore.createCategory('Black Coffee')
+    const created = context.productStore.createProduct({
+      name: 'Americano',
+      category: 'Black Coffee',
+      price: 18000,
+      stock: 10,
+      isActive: true,
+    })
+
+    context.cartStore.addItem(created.product, [
+      { id: 'opt-ice', syncId: 'opt-ice-uuid', name: 'Less Ice', priceAdjustment: 0 },
+    ])
+    expect(context.cartStore.items[0].id).toContain('::')
+    expect(context.cartStore.items[0].productId).toBe(created.product.id)
+
+    await context.router.push('/payment')
+    await flushPromises()
+
+    const wrapper = mount(PaymentView, {
+      global: { plugins: [context.pinia, context.router] },
+    })
+
+    await getButtonByText(wrapper, 'Uang Pas').trigger('click')
+    await flushPromises()
+    await pay(wrapper)
+
+    expect(wrapper.text()).not.toContain('tidak ditemukan')
+    expect(wrapper.find('[data-testid="payment-success-modal"]').exists()).toBe(true)
+    expect(context.productStore.getProductById(created.product.id).stock).toBe(9)
+    expect(context.transactionStore.lastTransaction.items[0].productId).toBe(created.product.id)
+  })
+
+  it('21. displays payment processing overlay while commit is in flight before showing success modal', async () => {
+    const { wrapper, transactionStore } = await mountPayment()
+    const service = resolveLocalOperationService()
+    let resolveCommit
+    vi.spyOn(service, 'commitRetailSale').mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveCommit = resolve
+        }),
+    )
+
+    await getButtonByText(wrapper, 'Uang Pas').trigger('click')
+    await flushPromises()
+
+    await wrapper.find('[data-testid="mobile-submit-payment"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="payment-processing-overlay"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Memproses Pembayaran...')
+    expect(wrapper.find('[data-testid="payment-success-modal"]').exists()).toBe(false)
+
+    resolveCommit({
+      id: 'trx-async-1',
+      invoiceNumber: 'INV-ASYNC-1',
+      total: 24420,
+      paymentMethod: 'cash',
+      cashReceived: 24420,
+      changeAmount: 0,
+      itemCount: 1,
+      createdAt: new Date().toISOString(),
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="payment-processing-overlay"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="payment-success-modal"]').exists()).toBe(true)
+    expect(transactionStore).toBeDefined()
+  })
 })

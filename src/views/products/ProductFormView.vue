@@ -17,9 +17,11 @@ import AppIcon from '@/components/base/AppIcon.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import { useBusinessStore } from '@/stores/businessStore'
+import { useNotificationStore } from '@/stores/notificationStore'
 import { useProductStore } from '@/stores/productStore'
 
 const businessStore = useBusinessStore()
+const notificationStore = useNotificationStore()
 const productStore = useProductStore()
 const route = useRoute()
 const router = useRouter()
@@ -327,6 +329,12 @@ async function handleSubmit() {
     formError.value = 'Produk belum tersimpan pada perangkat. Coba lagi.'
     return
   }
+  notificationStore.notifySuccessAndSync({
+    title: isEditMode.value ? 'Produk Diperbarui' : 'Produk Ditambahkan',
+    message: isEditMode.value
+      ? `Data "${payload.name}" berhasil diperbarui.`
+      : `Produk "${payload.name}" berhasil ditambahkan.`,
+  })
   await router.push({ name: 'products' })
 }
 

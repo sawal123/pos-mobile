@@ -51,12 +51,25 @@ export function buildProductSyncSku(syncId) {
  */
 export function createSyncIdentityRegistry({ adapter = null, scheduler = null } = {}) {
   let map = {}
+  const reverseMap = new Map()
   let isLoaded = false
   const isDurable = Boolean(
     adapter &&
       typeof adapter.loadSyncIdentityMap === 'function' &&
       typeof adapter.saveSyncIdentityMap === 'function',
   )
+
+  function rebuildReverseMap() {
+    reverseMap.clear()
+    for (const [k, v] of Object.entries(map)) {
+      const colonIdx = k.indexOf(':')
+      if (colonIdx > 0 && typeof v === 'string') {
+        const entityType = k.slice(0, colonIdx)
+        const localKey = k.slice(colonIdx + 1)
+        reverseMap.set(`${entityType}:${v.toLowerCase()}`, localKey)
+      }
+    }
+  }
 
   async function ensureLoaded() {
     if (isLoaded) return
@@ -65,6 +78,7 @@ export function createSyncIdentityRegistry({ adapter = null, scheduler = null } 
         const stored = await adapter.loadSyncIdentityMap()
         if (stored && typeof stored === 'object') {
           map = { ...stored }
+          rebuildReverseMap()
         }
         isLoaded = true
       } catch (err) {
@@ -122,11 +136,13 @@ export function createSyncIdentityRegistry({ adapter = null, scheduler = null } 
 
     const newUuid = generateUuid()
     map[registryKey] = newUuid
+    reverseMap.set(`${entityType}:${newUuid}`, keyStr)
 
     try {
       await persistMap()
     } catch (err) {
       delete map[registryKey]
+      reverseMap.delete(`${entityType}:${newUuid}`)
       throw err
     }
 
@@ -164,15 +180,69 @@ export function createSyncIdentityRegistry({ adapter = null, scheduler = null } 
     await ensureLoaded()
 
     const normalizedSyncId = String(syncId).trim().toLowerCase()
-    const prefix = `${entityType}:`
+    return reverseMap.get(`${entityType}:${normalizedSyncId}`) ?? null
+  }
 
-    for (const [key, val] of Object.entries(map)) {
-      if (key.startsWith(prefix) && typeof val === 'string' && val.toLowerCase() === normalizedSyncId) {
-        return key.slice(prefix.length)
-      }
+  function applyBindInMemory(entityType, localKey, syncId) {
+    if (!syncId || !isUuid(syncId)) {
+      throw new Error(`Invalid sync_id UUID: ${syncId}`)
+    }
+    if (localKey === null || localKey === undefined || localKey === '') {
+      throw new Error(`Invalid localKey: ${localKey}`)
     }
 
-    return null
+    const normalizedSyncId = String(syncId).trim().toLowerCase()
+    const keyStr = String(localKey).trim()
+    const registryKey = `${entityType}:${keyStr}`
+
+    if (map[registryKey]) {
+      if (map[registryKey].toLowerCase() === normalizedSyncId) {
+        reverseMap.set(`${entityType}:${normalizedSyncId}`, keyStr)
+        return { syncId: normalizedSyncId, changed: false }
+      }
+      throw new Error(
+        `IDENTITY_COLLISION: localKey "${keyStr}" already bound to "${map[registryKey]}", cannot rebind to "${normalizedSyncId}"`,
+      )
+    }
+
+    const existingKeyForSync = reverseMap.get(`${entityType}:${normalizedSyncId}`)
+    if (existingKeyForSync !== undefined && existingKeyForSync !== keyStr) {
+      throw new Error(
+        `IDENTITY_COLLISION: syncId "${normalizedSyncId}" already bound to "${existingKeyForSync}", cannot bind to "${keyStr}"`,
+      )
+    }
+
+    map[registryKey] = normalizedSyncId
+    reverseMap.set(`${entityType}:${normalizedSyncId}`, keyStr)
+    return { syncId: normalizedSyncId, changed: true, registryKey, reverseKey: `${entityType}:${normalizedSyncId}` }
+  }
+
+  function applyRebindInMemory(entityType, oldLocalKey, newLocalKey, syncId) {
+    if (!syncId || !isUuid(syncId)) {
+      throw new Error(`Invalid sync_id UUID: ${syncId}`)
+    }
+
+    const normalizedSyncId = String(syncId).trim().toLowerCase()
+    const oldKeyStr = String(oldLocalKey).trim()
+    const newKeyStr = String(newLocalKey).trim()
+
+    if (oldKeyStr === newKeyStr) {
+      return applyBindInMemory(entityType, newKeyStr, normalizedSyncId)
+    }
+
+    const oldRegistryKey = `${entityType}:${oldKeyStr}`
+    const newRegistryKey = `${entityType}:${newKeyStr}`
+
+    if (map[newRegistryKey] && map[newRegistryKey].toLowerCase() !== normalizedSyncId) {
+      throw new Error(
+        `IDENTITY_COLLISION: target localKey "${newKeyStr}" already bound to "${map[newRegistryKey]}"`,
+      )
+    }
+
+    delete map[oldRegistryKey]
+    map[newRegistryKey] = normalizedSyncId
+    reverseMap.set(`${entityType}:${normalizedSyncId}`, newKeyStr)
+    return { syncId: normalizedSyncId, changed: true }
   }
 
   /**
@@ -194,42 +264,20 @@ export function createSyncIdentityRegistry({ adapter = null, scheduler = null } 
 
     await ensureLoaded()
 
-    const normalizedSyncId = String(syncId).trim().toLowerCase()
-    const keyStr = String(localKey).trim()
-    const registryKey = `${entityType}:${keyStr}`
-
-    // Check if this localKey is already bound to a different syncId
-    if (map[registryKey]) {
-      if (map[registryKey].toLowerCase() === normalizedSyncId) {
-        return normalizedSyncId
-      }
-      throw new Error(
-        `IDENTITY_COLLISION: localKey "${keyStr}" already bound to "${map[registryKey]}", cannot rebind to "${normalizedSyncId}"`,
-      )
+    const applied = applyBindInMemory(entityType, localKey, syncId)
+    if (!applied.changed) {
+      return applied.syncId
     }
-
-    // Check if this syncId is already bound to a different localKey of same entityType
-    const prefix = `${entityType}:`
-    for (const [k, v] of Object.entries(map)) {
-      if (k.startsWith(prefix) && typeof v === 'string' && v.toLowerCase() === normalizedSyncId) {
-        if (k !== registryKey) {
-          throw new Error(
-            `IDENTITY_COLLISION: syncId "${normalizedSyncId}" already bound to "${k.slice(prefix.length)}", cannot bind to "${keyStr}"`,
-          )
-        }
-      }
-    }
-
-    map[registryKey] = normalizedSyncId
 
     try {
       await persistMap()
     } catch (err) {
-      delete map[registryKey]
+      delete map[applied.registryKey]
+      reverseMap.delete(applied.reverseKey)
       throw err
     }
 
-    return normalizedSyncId
+    return applied.syncId
   }
 
   /**
@@ -248,29 +296,17 @@ export function createSyncIdentityRegistry({ adapter = null, scheduler = null } 
 
     await ensureLoaded()
 
-    const normalizedSyncId = String(syncId).trim().toLowerCase()
     const oldKeyStr = String(oldLocalKey).trim()
     const newKeyStr = String(newLocalKey).trim()
-
-    if (oldKeyStr === newKeyStr) {
-      return bindSyncId(entityType, newKeyStr, normalizedSyncId)
-    }
-
     const oldRegistryKey = `${entityType}:${oldKeyStr}`
     const newRegistryKey = `${entityType}:${newKeyStr}`
-
-    // Check if newKey is already bound to a DIFFERENT syncId
-    if (map[newRegistryKey] && map[newRegistryKey].toLowerCase() !== normalizedSyncId) {
-      throw new Error(
-        `IDENTITY_COLLISION: target localKey "${newKeyStr}" already bound to "${map[newRegistryKey]}"`,
-      )
-    }
-
     const prevOld = map[oldRegistryKey]
     const prevNew = map[newRegistryKey]
 
-    delete map[oldRegistryKey]
-    map[newRegistryKey] = normalizedSyncId
+    const applied = applyRebindInMemory(entityType, oldLocalKey, newLocalKey, syncId)
+    if (!applied.changed) {
+      return applied.syncId
+    }
 
     try {
       await persistMap()
@@ -281,10 +317,48 @@ export function createSyncIdentityRegistry({ adapter = null, scheduler = null } 
       if (prevNew !== undefined) map[newRegistryKey] = prevNew
       else delete map[newRegistryKey]
 
+      rebuildReverseMap()
       throw err
     }
 
-    return normalizedSyncId
+    return applied.syncId
+  }
+
+  /**
+   * Batch-applies an ordered list of bind / rebind plans in memory and persists once.
+   *
+   * @param {Array<{type: 'bind'|'rebind', entityType: string, key?: string|number, oldKey?: string|number, newKey?: string|number, syncId: string}>} plans
+   */
+  async function bindMany(plans) {
+    if (!Array.isArray(plans) || plans.length === 0) {
+      return
+    }
+
+    await ensureLoaded()
+
+    const prevMap = { ...map }
+    let hasChanges = false
+
+    try {
+      for (const plan of plans) {
+        if (!plan) continue
+        if (plan.type === 'bind') {
+          const res = applyBindInMemory(plan.entityType, plan.key, plan.syncId)
+          if (res.changed) hasChanges = true
+        } else if (plan.type === 'rebind') {
+          const res = applyRebindInMemory(plan.entityType, plan.oldKey, plan.newKey, plan.syncId)
+          if (res.changed) hasChanges = true
+        }
+      }
+
+      if (hasChanges) {
+        await persistMap()
+      }
+    } catch (err) {
+      map = prevMap
+      rebuildReverseMap()
+      throw err
+    }
   }
 
   return {
@@ -293,6 +367,7 @@ export function createSyncIdentityRegistry({ adapter = null, scheduler = null } 
     findLocalKeyBySyncId,
     bindSyncId,
     rebindSyncId,
+    bindMany,
     ensureLoaded,
     getMap: () => ({ ...map }),
     isDurable,

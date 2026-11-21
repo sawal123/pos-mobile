@@ -1,7 +1,9 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { nextTick } from 'vue'
 
+import BaseSheet from '@/components/base/BaseSheet.vue'
 import HomeSalesChart from '@/components/home/HomeSalesChart.vue'
 import { createAppRouter } from '@/router'
 import { useBusinessStore } from '@/stores/businessStore'
@@ -257,5 +259,67 @@ describe('HomeView Minimalist Layout Integration', () => {
     expect(wrapper.find('[data-testid="laundry-summary-Diproses"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="laundry-summary-Siap Diambil"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="laundry-summary-Selesai"]').exists()).toBe(true)
+  })
+})
+
+describe('Responsive Tablet Chart & Dynamic Swipe BaseSheet', () => {
+  it('updates HomeSalesChart viewBox 1:1 on tablet resize without preserveAspectRatio="none"', async () => {
+    const ctx = setupTestContext()
+    const wrapper = mount(HomeSalesChart, {
+      global: { plugins: [ctx.pinia] },
+    })
+
+    const svgEl = wrapper.find('svg').element
+    expect(svgEl.getAttribute('preserveAspectRatio')).toBeNull()
+
+    svgEl.getBoundingClientRect = () => ({ width: 820, height: 192, left: 0, top: 0 })
+    window.dispatchEvent(new Event('resize'))
+    await nextTick()
+
+    expect(svgEl.getAttribute('viewBox')).toBe('0 0 820 192')
+  })
+
+  it('BaseSheet follows finger vertically on swipe-down and emits close after passing threshold', async () => {
+    vi.useFakeTimers()
+    try {
+      const wrapper = mount(BaseSheet, {
+        props: { open: true, title: 'Lainnya' },
+        slots: { default: '<div class="h-40">Menu Content</div>' },
+      })
+
+      const panel = wrapper.get('[data-testid="base-sheet-panel"]')
+      Object.defineProperty(panel.element, 'offsetHeight', { value: 320, configurable: true })
+
+      function makeTouchEvent(type, y) {
+        const event = new Event(type, { bubbles: true, cancelable: true })
+        Object.defineProperty(event, 'touches', { value: [{ clientX: 0, clientY: y }] })
+        return event
+      }
+
+      // Small drag below threshold snaps back to 0 and does not close
+      panel.element.dispatchEvent(makeTouchEvent('touchstart', 100))
+      panel.element.dispatchEvent(makeTouchEvent('touchmove', 130))
+      await nextTick()
+      expect(panel.element.style.transform).toContain('translate3d(0, 30px, 0)')
+
+      panel.element.dispatchEvent(new Event('touchend', { bubbles: true }))
+      vi.advanceTimersByTime(250)
+      await nextTick()
+      expect(wrapper.emitted('close')).toBeFalsy()
+      expect(panel.element.style.transform).toBe('')
+
+      // Large drag beyond threshold glides to bottom and emits close
+      panel.element.dispatchEvent(makeTouchEvent('touchstart', 100))
+      panel.element.dispatchEvent(makeTouchEvent('touchmove', 240))
+      await nextTick()
+      expect(panel.element.style.transform).toContain('translate3d(0, 140px, 0)')
+
+      panel.element.dispatchEvent(new Event('touchend', { bubbles: true }))
+      vi.advanceTimersByTime(210)
+      await nextTick()
+      expect(wrapper.emitted('close')).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

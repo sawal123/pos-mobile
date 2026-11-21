@@ -18,6 +18,7 @@ import { useSyncPushStore } from '@/stores/syncPushStore'
 import { useSyncPullStore } from '@/stores/syncPullStore'
 import { useSyncContextGuardStore } from '@/stores/syncContextGuardStore'
 import { useSyncStatusStore } from '@/stores/syncStatusStore'
+import { useSyncProgressStore } from '@/stores/syncProgressStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import { clearLocalCache } from '@/services/localCacheService'
 import {
@@ -43,6 +44,7 @@ const syncPushStore = useSyncPushStore()
 const syncPullStore = useSyncPullStore()
 const syncContextGuardStore = useSyncContextGuardStore()
 const syncStatusStore = useSyncStatusStore()
+const syncProgressStore = useSyncProgressStore()
 const transactionStore = useTransactionStore()
 
 const isSyncing = ref(false)
@@ -94,9 +96,7 @@ const pendingCount = computed(() => {
  * Paket Free menyimpan data lokal saja, jadi tombolnya tidak ditampilkan.
  */
 const canPullFromCloud = computed(() => cloudStore.cloudAccess === true)
-const isAnyBusy = computed(
-  () => isSyncing.value || isPulling.value || isClearingCache.value,
-)
+const isAnyBusy = computed(() => isSyncing.value || isPulling.value || isClearingCache.value)
 
 const lastSyncFormatted = computed(() => {
   // Only a completed push/pull cycle counts as a sync. Falling back to the
@@ -168,10 +168,7 @@ async function loadWorkspaceFootprint() {
 
   try {
     const registry = await adapter.loadWorkspaceRegistry()
-    const active =
-      registry?.activeWorkspaceId ??
-      cloudStore.activeWorkspaceId ??
-      null
+    const active = registry?.activeWorkspaceId ?? cloudStore.activeWorkspaceId ?? null
 
     const others = []
     const workspaces = registry?.workspaces ?? {}
@@ -190,9 +187,7 @@ async function loadWorkspaceFootprint() {
       }
 
       const products = Array.isArray(snapshot?.products) ? snapshot.products.length : 0
-      const transactions = Array.isArray(snapshot?.transactions)
-        ? snapshot.transactions.length
-        : 0
+      const transactions = Array.isArray(snapshot?.transactions) ? snapshot.transactions.length : 0
       const customers = Array.isArray(snapshot?.customers) ? snapshot.customers.length : 0
 
       if (products > 0 || transactions > 0 || customers > 0) {
@@ -269,44 +264,64 @@ async function handleSyncNow() {
   syncFeedback.value = null
 
   try {
-    let result = null
-    if (syncOrchestratorStore && typeof syncOrchestratorStore.syncAll === 'function') {
-      result = await syncOrchestratorStore.syncAll()
-    } else {
-      result = await syncPushStore.pushNow()
-    }
+    await syncProgressStore.runWithProgress(
+      {
+        type: 'sync',
+        title: 'Sinkronisasi Data',
+        description: 'Sedang mengirim antrean data lokal dan menyinkronkan dengan server...',
+      },
+      async (setProgress) => {
+        setProgress(20, 'Menghubungkan ke server cloud...')
+        let result = null
+        if (syncOrchestratorStore && typeof syncOrchestratorStore.syncAll === 'function') {
+          result = await syncOrchestratorStore.syncAll()
+        } else {
+          result = await syncPushStore.pushNow()
+        }
 
-    // Perangkat yang belum pernah memuat data Cloud tidak bisa push/pull
-    // reguler. Jangan menyuruh pengguna menekan tombol: langsung muat datanya
-    // sekali (initial read) supaya data Cloud tampil setelah login.
-    if (result?.ok === false && result.code === 'SYNC_BUSINESS_NOT_BOUND' && canPullFromCloud.value) {
-      const initial = await syncPullStore.pullNow({ initialCloudRead: true })
-      await syncPushStore.refreshPendingCount()
-      await syncStatusStore.refresh()
+        setProgress(60, 'Memverifikasi status antrean data...')
+        // Perangkat yang belum pernah memuat data Cloud tidak bisa push/pull
+        // reguler. Jangan menyuruh pengguna menekan tombol: langsung muat datanya
+        // sekali (initial read) supaya data Cloud tampil setelah login.
+        if (
+          result?.ok === false &&
+          result.code === 'SYNC_BUSINESS_NOT_BOUND' &&
+          canPullFromCloud.value
+        ) {
+          setProgress(75, 'Memuat data Cloud pertama kali...')
+          const initial = await syncPullStore.pullNow({ initialCloudRead: true })
+          await syncPushStore.refreshPendingCount()
+          await syncStatusStore.refresh()
 
-      if (initial?.ok) {
+          if (initial?.ok) {
+            setProgress(100, 'Data Cloud berhasil dimuat ke SQLite.')
+            syncFeedback.value = {
+              type: 'success',
+              message:
+                'Data Cloud berhasil dimuat ke perangkat dan disimpan di SQLite. Sinkronisasi selesai.',
+            }
+            return { ok: true }
+          }
+
+          result = initial
+        }
+
+        await syncPushStore.refreshPendingCount()
+        await syncStatusStore.refresh()
+
+        if (result && result.ok === false) {
+          syncFeedback.value = buildFailureFeedback(result)
+          return result
+        }
+
+        setProgress(100, 'Sinkronisasi selesai!')
         syncFeedback.value = {
           type: 'success',
-          message:
-            'Data Cloud berhasil dimuat ke perangkat dan disimpan di SQLite. Sinkronisasi selesai.',
+          message: 'Sinkronisasi berhasil! Semua data offline telah terkirim ke server.',
         }
-        return
-      }
-
-      result = initial
-    }
-
-    await syncPushStore.refreshPendingCount()
-    await syncStatusStore.refresh()
-
-    if (result && result.ok === false) {
-      syncFeedback.value = buildFailureFeedback(result)
-    } else {
-      syncFeedback.value = {
-        type: 'success',
-        message: 'Sinkronisasi berhasil! Semua data offline telah terkirim ke server.',
-      }
-    }
+        return { ok: true }
+      },
+    )
   } catch (err) {
     syncFeedback.value = {
       type: 'error',
@@ -323,29 +338,45 @@ async function handlePullNow(opts = {}) {
   syncFeedback.value = null
 
   try {
-    await syncContextGuardStore.check()
-    const sources = Array.isArray(syncContextGuardStore.sources)
-      ? syncContextGuardStore.sources
-      : []
-    const hasCatalogBinding = sources.includes('push_binding') || sources.includes('pull_binding')
-    const isInitial = Boolean(
-      (typeof opts === 'object' && opts && opts.initialCloudRead === true) ||
-      !hasCatalogBinding,
-    )
-    const result = await syncPullStore.pullNow({ initialCloudRead: isInitial })
-    await syncPushStore.refreshPendingCount()
-    await syncStatusStore.refresh()
+    await syncProgressStore.runWithProgress(
+      {
+        type: 'pull',
+        title: 'Tarik Data Cloud',
+        description: 'Sedang mengunduh dan menyelaraskan katalog data dari cloud...',
+      },
+      async (setProgress) => {
+        setProgress(25, 'Memeriksa otorisasi ruang kerja cloud...')
+        await syncContextGuardStore.check()
+        const sources = Array.isArray(syncContextGuardStore.sources)
+          ? syncContextGuardStore.sources
+          : []
+        const hasCatalogBinding =
+          sources.includes('push_binding') || sources.includes('pull_binding')
+        const isInitial = Boolean(
+          (typeof opts === 'object' && opts && opts.initialCloudRead === true) ||
+          !hasCatalogBinding,
+        )
 
-    if (result && !result.ok) {
-      syncFeedback.value = buildFailureFeedback(result, 'Gagal menarik data cloud.')
-    } else {
-      syncFeedback.value = {
-        type: 'success',
-        message:
-          'Data Cloud berhasil dimuat ke perangkat dan disimpan di SQLite. Jumlah data: ' +
-          `${result?.applied ?? 0}.`,
-      }
-    }
+        setProgress(55, 'Mengunduh data dan menyimpan ke SQLite...')
+        const result = await syncPullStore.pullNow({ initialCloudRead: isInitial })
+        await syncPushStore.refreshPendingCount()
+        await syncStatusStore.refresh()
+
+        if (result && !result.ok) {
+          syncFeedback.value = buildFailureFeedback(result, 'Gagal menarik data cloud.')
+          return result
+        }
+
+        setProgress(100, 'Data Cloud berhasil disimpan!')
+        syncFeedback.value = {
+          type: 'success',
+          message:
+            'Data Cloud berhasil dimuat ke perangkat dan disimpan di SQLite. Jumlah data: ' +
+            `${result?.applied ?? 0}.`,
+        }
+        return { ok: true }
+      },
+    )
   } catch (err) {
     syncFeedback.value = {
       type: 'error',
@@ -389,41 +420,57 @@ async function handleClearAndPull() {
   let backup = null
 
   try {
-    backup = await captureLocalSafetyBackup({ adapter })
+    await syncProgressStore.runWithProgress(
+      {
+        type: 'reload',
+        title: 'Memuat Ulang Data Cloud',
+        description: 'Sedang menyiapkan cadangan lokal dan memuat ulang data dari cloud...',
+      },
+      async (setProgress) => {
+        setProgress(15, 'Membuat cadangan pengaman data lokal...')
+        backup = await captureLocalSafetyBackup({ adapter })
 
-    await clearLocalCache({
-      pinia: null,
-      adapter,
-      scheduler: cloudStore.scheduler,
-      resetBusiness: false,
-    })
-    await syncContextGuardStore.check()
-    const pullRes = await syncPullStore.pullNow({ initialCloudRead: true })
-    await syncPushStore.refreshPendingCount()
-    await syncStatusStore.refresh()
+        setProgress(35, 'Menyiapkan ruang penyimpanan lokal...')
+        await clearLocalCache({
+          pinia: null,
+          adapter,
+          scheduler: cloudStore.scheduler,
+          resetBusiness: false,
+        })
+        await syncContextGuardStore.check()
 
-    if (pullRes.ok) {
-      clearLocalSafetyBackup()
-      syncFeedback.value = {
-        type: 'success',
-        message: 'Data Cloud berhasil dimuat ulang dan disimpan di SQLite.',
-      }
-      return
-    }
+        setProgress(65, 'Mengunduh seluruh data dari Cloud...')
+        const pullRes = await syncPullStore.pullNow({ initialCloudRead: true })
+        await syncPushStore.refreshPendingCount()
+        await syncStatusStore.refresh()
 
-    // Pemuatan gagal → kembalikan data yang tadi dihapus.
-    const restore = await restoreLocalSafetyBackup(backup, { adapter })
-    syncFeedback.value = {
-      type: 'error',
-      code: pullRes.code,
-      message: restore.restored
-        ? `${pullRes.message || 'Gagal memuat data dari Cloud.'} Data lokal Anda dikembalikan, tidak ada yang hilang.`
-        : `${pullRes.message || 'Gagal memuat data dari Cloud.'} ${
-            restore.reason === 'EMPTY_SNAPSHOT'
-              ? ''
-              : 'Namun pemulihan otomatis gagal — gunakan Restore Backup dari Pengaturan.'
-          }`,
-    }
+        if (pullRes.ok) {
+          clearLocalSafetyBackup()
+          setProgress(100, 'Data Cloud berhasil dimuat ulang!')
+          syncFeedback.value = {
+            type: 'success',
+            message: 'Data Cloud berhasil dimuat ulang dan disimpan di SQLite.',
+          }
+          return { ok: true }
+        }
+
+        // Pemuatan gagal → kembalikan data yang tadi dihapus.
+        setProgress(80, 'Pemuatan gagal, memulihkan data lokal...')
+        const restore = await restoreLocalSafetyBackup(backup, { adapter })
+        syncFeedback.value = {
+          type: 'error',
+          code: pullRes.code,
+          message: restore.restored
+            ? `${pullRes.message || 'Gagal memuat data dari Cloud.'} Data lokal Anda dikembalikan, tidak ada yang hilang.`
+            : `${pullRes.message || 'Gagal memuat data dari Cloud.'} ${
+                restore.reason === 'EMPTY_SNAPSHOT'
+                  ? ''
+                  : 'Namun pemulihan otomatis gagal — gunakan Restore Backup dari Pengaturan.'
+              }`,
+        }
+        return pullRes
+      },
+    )
   } catch (err) {
     const restore = await restoreLocalSafetyBackup(backup, { adapter })
     syncFeedback.value = {
@@ -441,7 +488,10 @@ async function handleClearAndPull() {
  * Ubah hasil gagal dari service menjadi banner yang bisa ditindaklanjuti.
  * Pesan teknis berbahasa Inggris tidak pernah ditampilkan ke kasir.
  */
-function buildFailureFeedback(result, fallback = 'Sinkronisasi gagal. Pastikan koneksi internet stabil.') {
+function buildFailureFeedback(
+  result,
+  fallback = 'Sinkronisasi gagal. Pastikan koneksi internet stabil.',
+) {
   const code = result?.code
 
   if (code === 'INITIAL_PULL_ALREADY_IN_PROGRESS') {
@@ -519,7 +569,10 @@ function handleBack() {
                 class="inline-block h-2.5 w-2.5 rounded-full"
                 :class="isOnline ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-400'"
               />
-              <h3 class="text-base font-bold text-ink-primary" data-testid="connection-status-title">
+              <h3
+                class="text-base font-bold text-ink-primary"
+                data-testid="connection-status-title"
+              >
                 {{ isOnline ? 'Online (Terhubung)' : 'Offline (Mode Lokal)' }}
               </h3>
             </div>
@@ -549,7 +602,9 @@ function handleBack() {
     <BaseCard class="space-y-4" data-testid="sync-cloud-account-card">
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-3">
-          <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+          <span
+            class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary"
+          >
             <AppIcon name="cloud" class="h-5 w-5" />
           </span>
           <div>
@@ -636,9 +691,7 @@ function handleBack() {
         </div>
         <span
           class="shrink-0 rounded-full px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider"
-          :class="
-            isSyncReady ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
-          "
+          :class="isSyncReady ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'"
           data-testid="sync-readiness-badge"
         >
           {{ isSyncReady ? 'Siap' : `${missingRequirements.length} Belum Siap` }}
@@ -728,7 +781,10 @@ function handleBack() {
       <div class="rounded-2xl border border-zinc-200/80 bg-surface/70 p-4 space-y-2">
         <div class="flex items-center justify-between text-xs">
           <span class="text-ink-secondary">Data lokal belum terkirim:</span>
-          <span class="font-mono font-bold text-ink-primary text-sm" data-testid="pending-count-value">
+          <span
+            class="font-mono font-bold text-ink-primary text-sm"
+            data-testid="pending-count-value"
+          >
             {{ pendingCount }}
           </span>
         </div>
@@ -784,7 +840,9 @@ function handleBack() {
           @click="handleSyncNow"
         >
           <span v-if="isSyncing" class="flex items-center justify-center gap-2">
-            <span class="h-4 w-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+            <span
+              class="h-4 w-4 rounded-full border-2 border-white/30 border-t-white animate-spin"
+            />
             <span>Sinkronisasi...</span>
           </span>
           <span v-else class="flex items-center justify-center gap-2">
@@ -798,11 +856,15 @@ function handleBack() {
             variant="secondary"
             block
             data-testid="btn-pull-cloud"
-            :disabled="isPulling || isSyncing || isClearingCache || (!isOnline && !cloudStore.isLinked)"
+            :disabled="
+              isPulling || isSyncing || isClearingCache || (!isOnline && !cloudStore.isLinked)
+            "
             @click="handlePullNow"
           >
             <span v-if="isPulling" class="flex items-center justify-center gap-2">
-              <span class="h-4 w-4 rounded-full border-2 border-primary/30 border-t-primary animate-spin" />
+              <span
+                class="h-4 w-4 rounded-full border-2 border-primary/30 border-t-primary animate-spin"
+              />
               <span>Mengunduh...</span>
             </span>
             <span v-else class="flex items-center justify-center gap-2">
@@ -869,26 +931,46 @@ function handleBack() {
 
       <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
         <div class="rounded-2xl bg-surface p-3 text-center">
-          <p class="text-[10px] font-medium uppercase tracking-wider text-ink-secondary">Transaksi</p>
-          <p class="mt-1 font-mono text-base font-bold text-ink-primary" data-testid="local-tx-count">
+          <p class="text-[10px] font-medium uppercase tracking-wider text-ink-secondary">
+            Transaksi
+          </p>
+          <p
+            class="mt-1 font-mono text-base font-bold text-ink-primary"
+            data-testid="local-tx-count"
+          >
             {{ transactionStore.items.length }}
           </p>
         </div>
         <div class="rounded-2xl bg-surface p-3 text-center">
-          <p class="text-[10px] font-medium uppercase tracking-wider text-ink-secondary">Entri Kas</p>
-          <p class="mt-1 font-mono text-base font-bold text-ink-primary" data-testid="local-cash-count">
+          <p class="text-[10px] font-medium uppercase tracking-wider text-ink-secondary">
+            Entri Kas
+          </p>
+          <p
+            class="mt-1 font-mono text-base font-bold text-ink-primary"
+            data-testid="local-cash-count"
+          >
             {{ cashStore.entries.length }}
           </p>
         </div>
         <div class="rounded-2xl bg-surface p-3 text-center">
-          <p class="text-[10px] font-medium uppercase tracking-wider text-ink-secondary">Produk/Layanan</p>
-          <p class="mt-1 font-mono text-base font-bold text-ink-primary" data-testid="local-product-count">
+          <p class="text-[10px] font-medium uppercase tracking-wider text-ink-secondary">
+            Produk/Layanan
+          </p>
+          <p
+            class="mt-1 font-mono text-base font-bold text-ink-primary"
+            data-testid="local-product-count"
+          >
             {{ productStore.products.length }}
           </p>
         </div>
         <div class="rounded-2xl bg-surface p-3 text-center">
-          <p class="text-[10px] font-medium uppercase tracking-wider text-ink-secondary">Pelanggan</p>
-          <p class="mt-1 font-mono text-base font-bold text-ink-primary" data-testid="local-customer-count">
+          <p class="text-[10px] font-medium uppercase tracking-wider text-ink-secondary">
+            Pelanggan
+          </p>
+          <p
+            class="mt-1 font-mono text-base font-bold text-ink-primary"
+            data-testid="local-customer-count"
+          >
             {{ customerStore.customers.length }}
           </p>
         </div>

@@ -6,7 +6,7 @@ import { createAppRouter } from '@/router'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useExpenseStore } from '@/stores/expenseStore'
 import { useTransactionStore } from '@/stores/transactionStore'
-import { formatCurrency } from '@/utils/formatters'
+import { formatCurrency, toLocalDateString } from '@/utils/formatters'
 import ReportsView from '@/views/reports/ReportsView.vue'
 
 function createContext() {
@@ -200,5 +200,75 @@ describe('ReportsView UI/UX Enhancement', () => {
     expect(wrapper.text()).toContain('Ringkasan Struk Keuangan')
     expect(wrapper.text()).toContain('Kopi Kenangan Senja')
     expect(wrapper.text()).toContain('Salin Teks Laporan')
+  })
+
+  it('mendukung date flicker dan filter rentang tanggal di laporan', async () => {
+    const context = createContext()
+    const today = new Date()
+    const todayStr = toLocalDateString(today)
+
+    const yesterday = new Date()
+    yesterday.setDate(yesterday.getDate() - 1)
+    const yesterdayStr = toLocalDateString(yesterday)
+
+    const threeDaysAgo = new Date()
+    threeDaysAgo.setDate(threeDaysAgo.getDate() - 3)
+    const threeDaysAgoStr = toLocalDateString(threeDaysAgo)
+
+    context.transactionStore.items = [
+      {
+        id: 'trx-today',
+        total: 40000,
+        grossProfit: 20000,
+        status: 'paid',
+        paymentMethod: 'cash',
+        createdAt: `${todayStr}T10:00:00`,
+      },
+      {
+        id: 'trx-yesterday',
+        total: 60000,
+        grossProfit: 30000,
+        status: 'paid',
+        paymentMethod: 'qris',
+        createdAt: `${yesterdayStr}T12:00:00`,
+      },
+      {
+        id: 'trx-old',
+        total: 100000,
+        grossProfit: 50000,
+        status: 'paid',
+        paymentMethod: 'cash',
+        createdAt: `${threeDaysAgoStr}T15:00:00`,
+      },
+    ]
+
+    await context.router.push('/reports')
+    await flushPromises()
+
+    const wrapper = mount(ReportsView, {
+      global: { plugins: [context.pinia, context.router] },
+    })
+
+    // Default all-time: 40k + 60k + 100k = 200k
+    expect(wrapper.find('[data-testid="reports-revenue"]').text()).toBe(formatCurrency(200000))
+
+    // Use date flicker prev -> yesterday (flicker starts from todayStr - 1 day)
+    await wrapper.find('[data-testid="reports-date-flicker-prev"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="reports-revenue"]').text()).toBe(formatCurrency(60000))
+
+    // Switch to Rentang Tanggal (yesterday .. today)
+    await wrapper.find('[data-testid="reports-period-range"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="reports-date-range-picker"]').exists()).toBe(true)
+
+    await wrapper.find('[data-testid="reports-date-range-start"]').setValue(yesterdayStr)
+    await wrapper.find('[data-testid="reports-date-range-end"]').setValue(todayStr)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="reports-revenue"]').text()).toBe(formatCurrency(100000))
+    expect(wrapper.find('[data-testid="reports-transactions-count"]').text()).toBe('2')
   })
 })

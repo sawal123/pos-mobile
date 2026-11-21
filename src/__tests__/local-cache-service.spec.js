@@ -4,7 +4,13 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createWebHistory } from 'vue-router'
 
 import { createMemoryAdapter } from '@/services/database/memoryAdapter'
-import { clearLocalCache } from '@/services/localCacheService'
+import { clearLocalCache, ensureCleanInstallState } from '@/services/localCacheService'
+import {
+  _resetTokenStore,
+  getInstallMarker,
+  saveInstallMarker,
+  saveToken,
+} from '@/services/cloud/tokenRepository'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCartStore } from '@/stores/cartStore'
 import { useCashStore } from '@/stores/cashStore'
@@ -595,6 +601,94 @@ describe('Auto Pull on Fresh Workspace & POS Catalog Preload', () => {
     await flushPromises()
 
     expect(spyEnsure).toHaveBeenCalled()
+  })
+})
+
+describe('ensureCleanInstallState (Uninstall / Reinstall Auto-Backup Guard)', () => {
+  let pinia
+  let adapter
+
+  beforeEach(async () => {
+    _resetTokenStore()
+    pinia = createPinia()
+    setActivePinia(pinia)
+    adapter = createMemoryAdapter()
+    await adapter.initialize()
+  })
+
+  it('wipes residual SQLite & Pinia data on reinstall when both installMarker and token are absent', async () => {
+    const businessStore = useBusinessStore(pinia)
+    businessStore.setBusiness({
+      name: 'Temuan Space',
+      type: 'Cafe / UMKM',
+      owner: 'Owner',
+      outlet: 'Temuan Space Laksana',
+      mode: 'cloud',
+    })
+    const productStore = useProductStore(pinia)
+    productStore.products = [{ id: 'p-1', name: 'Kopi Susu', price: 20000, stock: 999 }]
+    const transactionStore = useTransactionStore(pinia)
+    transactionStore.items = [{ id: 'tx-1', total: 20000 }]
+
+    await adapter.saveBusiness({
+      name: 'Temuan Space',
+      type: 'Cafe / UMKM',
+      owner: 'Owner',
+      phone: '',
+      outlet: 'Temuan Space Laksana',
+      mode: 'cloud',
+    })
+    await adapter.saveProducts(productStore.products, ['Espresso'], [])
+    await adapter.saveTransactions(transactionStore.items)
+    await adapter.saveSyncPullBinding({ businessId: 10, outletId: 101, status: 'completed' })
+    await adapter.saveDeviceIdentifier('old-device-id')
+
+    const res = await ensureCleanInstallState({ pinia, adapter, isNative: true })
+
+    expect(res).toEqual({ ok: true, cleared: true, reason: 'fresh_install_cleanup' })
+    expect(businessStore.isSetup).toBe(false)
+    expect(businessStore.mode).toBe('free')
+    expect(productStore.products).toEqual([])
+    expect(transactionStore.items).toEqual([])
+    expect((await adapter.loadBusiness()).name).toBe('')
+    expect((await adapter.loadProducts()).products).toEqual([])
+    expect(await adapter.loadTransactions()).toEqual([])
+    expect(await adapter.loadSyncPullBinding()).toBeNull()
+    expect(await adapter.loadDeviceIdentifier()).toBeNull()
+    expect(await getInstallMarker()).toBeTruthy()
+  })
+
+  it('preserves local data on normal restart when installMarker is present', async () => {
+    await saveInstallMarker('existing-marker-123')
+    const businessStore = useBusinessStore(pinia)
+    businessStore.setBusiness({ name: 'Temuan Space', type: 'Cafe / UMKM', mode: 'free' })
+    const productStore = useProductStore(pinia)
+    productStore.products = [{ id: 'p-1', name: 'Kopi Susu', price: 20000, stock: 10 }]
+    await adapter.saveProducts(productStore.products, ['Minuman'], [])
+
+    const res = await ensureCleanInstallState({ pinia, adapter, isNative: true })
+
+    expect(res).toEqual({ ok: true, cleared: false, reason: 'already_marked' })
+    expect(businessStore.isSetup).toBe(true)
+    expect(productStore.products).toHaveLength(1)
+    expect((await adapter.loadProducts()).products).toHaveLength(1)
+  })
+
+  it('preserves local data on in-place update when token exists without installMarker yet', async () => {
+    await saveToken('valid-cloud-token')
+    const businessStore = useBusinessStore(pinia)
+    businessStore.setBusiness({ name: 'Temuan Space', type: 'Cafe / UMKM', mode: 'cloud' })
+    const productStore = useProductStore(pinia)
+    productStore.products = [{ id: 'p-1', name: 'Americano', price: 18000, stock: 999 }]
+    await adapter.saveProducts(productStore.products, ['Black Coffee'], [])
+
+    const res = await ensureCleanInstallState({ pinia, adapter, isNative: true })
+
+    expect(res).toEqual({ ok: true, cleared: false, reason: 'existing_session_marked' })
+    expect(businessStore.isSetup).toBe(true)
+    expect(productStore.products).toHaveLength(1)
+    expect((await adapter.loadProducts()).products).toHaveLength(1)
+    expect(await getInstallMarker()).toBeTruthy()
   })
 })
 

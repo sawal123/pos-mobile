@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 import ProductScannerSheet from '@/components/scanner/ProductScannerSheet.vue'
 import { useRetailProductCodes } from '@/composables/useRetailProductCodes'
@@ -9,6 +9,7 @@ import { useRetailProductCodes } from '@/composables/useRetailProductCodes'
 import AppIcon from '@/components/base/AppIcon.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
+import ActiveOrdersSheet from '@/components/pos/ActiveOrdersSheet.vue'
 import CartItem from '@/components/pos/CartItem.vue'
 import CartCustomerInput from '@/components/pos/CartCustomerInput.vue'
 import CartSummary from '@/components/pos/CartSummary.vue'
@@ -22,6 +23,8 @@ import { useProductStore } from '@/stores/productStore'
 import { useTaxStore } from '@/stores/taxStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useSyncPullStore } from '@/stores/syncPullStore'
+import { useSyncPushStore } from '@/stores/syncPushStore'
+import { useTransactionStore } from '@/stores/transactionStore'
 import { useVariantStore } from '@/stores/variantStore'
 
 const productStore = useProductStore()
@@ -29,10 +32,14 @@ const cartStore = useCartStore()
 const taxStore = useTaxStore()
 const cloudStore = useCloudSessionStore()
 const syncPullStore = useSyncPullStore()
+const syncPushStore = useSyncPushStore()
+const transactionStore = useTransactionStore()
 const variantStore = useVariantStore()
+const route = useRoute()
 const router = useRouter()
 const { isRetail, scanContext } = useRetailProductCodes()
 const showScanner = ref(false)
+const showActiveOrdersSheet = ref(false)
 const scanFeedback = ref('')
 const scanError = ref(false)
 const lastScannedProduct = ref(null)
@@ -44,6 +51,29 @@ let lastAutoSubmittedAt = 0
 let searchLastInputTime = 0
 let searchRapidStreak = 0
 let searchAutoScanTimer = null
+
+function isSameDay(date1, date2) {
+  const d1 = new Date(date1)
+  const d2 = new Date(date2)
+  return (
+    d1.getFullYear() === d2.getFullYear() &&
+    d1.getMonth() === d2.getMonth() &&
+    d1.getDate() === d2.getDate()
+  )
+}
+
+const activeOrdersCount = computed(() => {
+  const today = new Date()
+  return transactionStore.items.filter((item) => {
+    if (item.orderStatus === 'Batal') return false
+    const isToday = item.createdAt ? isSameDay(item.createdAt, today) : true
+    const isPending =
+      item.orderStatus === 'Proses' ||
+      item.paymentStatus === 'unpaid' ||
+      item.status === 'unpaid'
+    return isToday && isPending
+  }).length
+})
 
 function getProductCartQty(productId) {
   if (!productId) return 0
@@ -246,12 +276,97 @@ function handleVariantConfirm({ product, selectedOptions }) {
   selectedVariantProduct.value = null
 }
 
+const orderFeedbackMsg = ref('')
+
+function handleLoadOrderForAdding(order) {
+  if (!order) return
+  cartStore.loadOrderForEditing(order)
+  showActiveOrdersSheet.value = false
+  orderFeedbackMsg.value = `✓ Memuat pesanan ${order.invoiceNumber || order.id}. Silakan tambah item baru dari katalog!`
+  setTimeout(() => {
+    orderFeedbackMsg.value = ''
+  }, 3000)
+}
+
+function handleCancelEditOrder() {
+  cartStore.cancelEditingOrder()
+}
+
+async function handleSaveOrderAddition() {
+  const transactionId = cartStore.editingTransactionId
+  if (!transactionId) return
+
+  const result = transactionStore.updateTransactionItems({
+    transactionId,
+    items: cartStore.items,
+    productStore,
+    discount: cartStore.discount,
+    appliedPromo: cartStore.appliedPromo,
+    tax: cartStore.tax,
+    total: cartStore.total,
+    tableNumber: cartStore.tableNumber,
+    customerName: cartStore.customerName,
+  })
+
+  if (result.success) {
+    const invoice = cartStore.editingTransactionInvoice
+    cartStore.clearCart()
+    showCartSheet.value = false
+    orderFeedbackMsg.value = `✓ Berhasil menambahkan item ke pesanan ${invoice}!`
+
+    if (syncPushStore?.pushIfOnline) {
+      try {
+        await syncPushStore.pushIfOnline()
+      } catch {
+        // Safe offline fallback
+      }
+    }
+
+    setTimeout(() => {
+      orderFeedbackMsg.value = ''
+    }, 3500)
+  } else {
+    orderFeedbackMsg.value = result.error || 'Gagal memperbarui pesanan.'
+  }
+}
+
 onMounted(async () => {
   document.addEventListener('keydown', handleGlobalHardwareScanKeydown)
   if (cloudStore.isLinked && cloudStore.isOperationalCloudAccess) {
     await syncPullStore.ensureCatalogLoaded()
   }
+  if (route?.query?.open_queue === '1' || route?.query?.open_queue === 'true') {
+    showActiveOrdersSheet.value = true
+  }
+  if (route?.query?.add_to_order || route?.query?.order_id) {
+    const targetId = route.query.add_to_order || route.query.order_id
+    const targetOrder = transactionStore.items.find((it) => String(it.id) === String(targetId))
+    if (targetOrder) {
+      handleLoadOrderForAdding(targetOrder)
+    }
+  }
 })
+
+watch(
+  () => route?.query?.open_queue,
+  (val) => {
+    if (val === '1' || val === 'true') {
+      showActiveOrdersSheet.value = true
+    }
+  },
+)
+
+watch(
+  () => route?.query?.add_to_order,
+  (val) => {
+    if (val) {
+      const targetOrder = transactionStore.items.find((it) => String(it.id) === String(val))
+      if (targetOrder) {
+        handleLoadOrderForAdding(targetOrder)
+      }
+    }
+  },
+)
 
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', handleGlobalHardwareScanKeydown)
@@ -279,18 +394,94 @@ function closePromoModal() {
   showPromoModal.value = false
 }
 
-function handleCheckout() {
+async function handleCheckout(options = {}) {
   if (!items.value.length) {
     return
   }
 
+  if (cartStore.isEditingOrder) {
+    await handleSaveOrderAddition()
+    return
+  }
+
   showCartSheet.value = false
-  router.push('/payment')
+  if (options.payLater || options.method === 'unpaid') {
+    router.push({ path: '/payment', query: { method: 'unpaid' } })
+  } else {
+    router.push('/payment')
+  }
 }
 </script>
 
 <template>
   <div class="w-full min-w-0 space-y-4 md:space-y-5" :class="items.length ? 'pb-20 md:pb-0' : ''">
+    <!-- Active Editing Order Banner -->
+    <div
+      v-if="cartStore.isEditingOrder"
+      data-testid="editing-order-banner"
+      class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-2xl border-2 border-sky-400 bg-sky-50/90 p-3.5 shadow-sm dark:border-sky-700 dark:bg-sky-950/70"
+    >
+      <div class="flex items-center gap-3 min-w-0">
+        <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-sky-500 text-white shadow-2xs">
+          <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+        </div>
+        <div class="min-w-0">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-xs font-bold uppercase tracking-wider text-sky-800 dark:text-sky-300">
+              Mode Tambah Pesanan
+            </span>
+            <span class="rounded-md bg-white px-2 py-0.5 font-mono text-xs font-extrabold text-sky-900 border border-sky-200 dark:bg-slate-900 dark:text-sky-200 dark:border-sky-800">
+              {{ cartStore.editingTransactionInvoice }}
+            </span>
+            <span
+              v-if="cartStore.tableNumber"
+              class="rounded-md bg-amber-100 px-2 py-0.5 text-xs font-bold text-amber-900 border border-amber-200 dark:bg-amber-950 dark:text-amber-200 dark:border-amber-800"
+            >
+              Meja {{ cartStore.tableNumber }}
+            </span>
+            <span
+              v-if="cartStore.customerName"
+              class="text-xs text-sky-900 dark:text-sky-200 font-medium"
+            >
+              ({{ cartStore.customerName }})
+            </span>
+          </div>
+          <p class="text-xs text-sky-700 dark:text-sky-300 mt-0.5">
+            Pilih menu baru dari katalog di bawah. Klik tombol "Simpan Tambahan Pesanan" untuk menyelesaikan.
+          </p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+        <button
+          type="button"
+          data-testid="btn-cancel-edit-order"
+          class="rounded-xl border border-zinc-300 bg-white px-3 py-1.5 text-xs font-bold text-ink-primary shadow-2xs hover:bg-zinc-50 active:scale-95 transition cursor-pointer dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+          @click="handleCancelEditOrder"
+        >
+          Batal Tambah
+        </button>
+        <button
+          type="button"
+          data-testid="btn-save-order-addition"
+          class="rounded-xl bg-primary px-3.5 py-1.5 text-xs font-bold text-white shadow-2xs hover:bg-primary-light active:scale-95 transition cursor-pointer"
+          @click="handleSaveOrderAddition"
+        >
+          Simpan Tambahan
+        </button>
+      </div>
+    </div>
+
+    <!-- Feedback Message Notification -->
+    <div
+      v-if="orderFeedbackMsg"
+      class="flex items-center gap-2 rounded-2xl bg-emerald-50 border border-emerald-200 px-4 py-2.5 text-xs font-bold text-emerald-800 transition dark:bg-emerald-950/60 dark:text-emerald-200 dark:border-emerald-800"
+      data-testid="pos-order-feedback"
+    >
+      <span>{{ orderFeedbackMsg }}</span>
+    </div>
     <div
       class="grid gap-5 md:grid-cols-[1fr_340px] lg:grid-cols-[1fr_380px] xl:grid-cols-[1fr_420px] items-start"
     >
@@ -308,6 +499,23 @@ function handleCheckout() {
               @update:model-value="handleSearchUpdate"
               @keydown.enter.prevent="handleSearchScanSubmit"
             />
+
+            <!-- Active Orders Quick Access Pill Button -->
+            <button
+              v-if="activeOrdersCount > 0"
+              type="button"
+              data-testid="pos-active-orders-button"
+              title="Lihat antrean pesanan aktif"
+              class="relative flex h-12 shrink-0 items-center gap-2 rounded-2xl border border-amber-300 bg-amber-50 px-3.5 text-xs font-bold text-amber-900 shadow-2xs transition hover:bg-amber-100 active:scale-95 cursor-pointer dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-200"
+              @click="showActiveOrdersSheet = true"
+            >
+              <span class="relative flex h-2 w-2">
+                <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-400 opacity-75"></span>
+                <span class="relative inline-flex h-2 w-2 rounded-full bg-amber-500"></span>
+              </span>
+              <span>{{ activeOrdersCount }} Antrean</span>
+            </button>
+
             <button
               v-if="isRetail"
               type="button"
@@ -470,6 +678,7 @@ function handleCheckout() {
           :tax-rate="taxStore.rate"
           :total="total"
           :disabled="!items.length"
+          :action-label="cartStore.isEditingOrder ? 'Simpan Tambahan Pesanan' : 'Bayar'"
           @checkout="handleCheckout"
           @select-promo="openPromoModal"
           @remove-promo="cartStore.removePromo"
@@ -480,7 +689,7 @@ function handleCheckout() {
     <!-- Floating Circular Cart Button with Total Qty Badge (Mobile) -->
     <div
       v-if="items.length"
-      class="fixed right-4 bottom-[calc(env(safe-area-inset-bottom)+5.6rem)] z-20 md:hidden"
+      class="fixed right-5 bottom-[calc(env(safe-area-inset-bottom)+6.75rem)] z-30 md:hidden"
     >
       <button
         type="button"
@@ -505,6 +714,7 @@ function handleCheckout() {
       :open="showCartSheet"
       @close="closeCartSheet"
       @checkout="handleCheckout"
+      @pay-later="handleCheckout({ payLater: true })"
       @select-promo="openPromoModal"
     />
 
@@ -530,6 +740,13 @@ function handleCheckout() {
       :variant-groups="activeVariantGroupsForProduct"
       @close="closeVariantSheet"
       @confirm="handleVariantConfirm"
+    />
+
+    <!-- Active Orders (Antrean Berjalan) Quick Sheet -->
+    <ActiveOrdersSheet
+      :open="showActiveOrdersSheet"
+      @close="showActiveOrdersSheet = false"
+      @add-to-order="handleLoadOrderForAdding"
     />
   </div>
 </template>

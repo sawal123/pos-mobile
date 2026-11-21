@@ -7,11 +7,13 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import PromoCreateModal from '@/components/promos/PromoCreateModal.vue'
 import { usePromoStore } from '@/stores/promoStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
+import { useNotificationStore } from '@/stores/notificationStore'
 import { formatCurrency } from '@/utils/formatters'
 
 const router = useRouter()
 const promoStore = usePromoStore()
 const cloudStore = useCloudSessionStore()
+const notificationStore = useNotificationStore()
 
 const isCashier = computed(
   () => cloudStore.role === 'cashier' || cloudStore.isCashierContext === true,
@@ -78,6 +80,10 @@ function handleDeletePromo(promo) {
 function handlePromoCreated(newPromo) {
   if (isCashier.value) return
   showToast(`Promo "${newPromo.name}" berhasil dibuat!`)
+  notificationStore.notifySuccessAndSync({
+    title: 'Promo Berhasil Dibuat',
+    message: `Promo "${newPromo.name}" siap digunakan.`,
+  })
 }
 
 function formatValidity(promo) {
@@ -114,7 +120,7 @@ function formatValidity(promo) {
 </script>
 
 <template>
-  <div class="min-h-full space-y-4 pb-12">
+  <div class="min-h-full space-y-4 pb-24">
     <!-- Top Header -->
     <div class="flex items-center justify-between gap-3">
       <div class="flex items-center gap-3">
@@ -140,27 +146,6 @@ function formatValidity(promo) {
           <p class="text-xs text-ink-secondary">Kelola voucher & diskon kasir</p>
         </div>
       </div>
-
-      <BaseButton
-        v-if="!isCashier"
-        variant="primary"
-        class="gap-1.5 shadow-sm"
-        @click="showCreateModal = true"
-      >
-        <svg
-          class="h-4 w-4"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <line x1="12" y1="5" x2="12" y2="19" />
-          <line x1="5" y1="12" x2="19" y2="12" />
-        </svg>
-        <span>Buat Promo</span>
-      </BaseButton>
     </div>
 
     <!-- Toast Notification -->
@@ -434,27 +419,53 @@ function formatValidity(promo) {
       </p>
 
       <div v-if="!isCashier" class="mt-4">
-        <BaseButton
-          variant="primary"
-          class="gap-1.5"
+        <button
+          type="button"
+          class="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-primary text-white shadow-soft transition hover:bg-primary-light active:scale-95 cursor-pointer"
+          title="Buat Promo Baru"
+          aria-label="Buat Promo Baru"
           @click="showCreateModal = true"
         >
           <svg
-            class="h-4 w-4"
+            class="h-5 w-5"
             viewBox="0 0 24 24"
             fill="none"
             stroke="currentColor"
-            stroke-width="2"
+            stroke-width="2.5"
             stroke-linecap="round"
             stroke-linejoin="round"
           >
             <line x1="12" y1="5" x2="12" y2="19" />
             <line x1="5" y1="12" x2="19" y2="12" />
           </svg>
-          <span>Buat Promo Baru</span>
-        </BaseButton>
+          <span class="sr-only">Buat Promo Baru</span>
+        </button>
       </div>
     </div>
+
+    <!-- Floating Action Button (FAB) -->
+    <button
+      v-if="!isCashier"
+      type="button"
+      class="fixed right-5 bottom-[calc(env(safe-area-inset-bottom)+6.75rem)] md:bottom-8 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-primary text-white shadow-[0_10px_25px_rgba(73,69,214,0.45)] transition hover:bg-primary-light active:scale-95 cursor-pointer"
+      title="Buat Promo"
+      aria-label="Buat Promo"
+      @click="showCreateModal = true"
+    >
+      <svg
+        class="h-6 w-6"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2.5"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <line x1="12" y1="5" x2="12" y2="19" />
+        <line x1="5" y1="12" x2="19" y2="12" />
+      </svg>
+      <span class="sr-only">Buat Promo</span>
+    </button>
 
     <!-- Promo Create Modal -->
     <PromoCreateModal

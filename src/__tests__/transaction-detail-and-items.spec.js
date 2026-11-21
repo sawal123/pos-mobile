@@ -222,4 +222,118 @@ describe('Transaction Detail & Minimalist UI', () => {
     await flushPromises()
     expect(wrapper.find('[data-testid="date-flicker-label"]').exists()).toBe(true)
   })
+
+  it('menyembunyikan Status Order Laundry saat bisnis bertipe Cafe / UMKM meski orderStatus terisi', async () => {
+    const { pinia, router, businessStore, transactionStore } = setupContext()
+    businessStore.setBusiness({
+      name: 'Temuan Space',
+      type: 'Cafe / UMKM',
+      owner: 'Owner',
+      phone: '08123456789',
+      outlet: 'Temuan Space Laksana',
+      mode: 'cloud',
+    })
+
+    const migratedTx = transactionStore.addTransaction({
+      id: 'trx-cafe-migrated-1',
+      invoiceNumber: 'CJYFOHUM1711',
+      customer: 'Walk-in',
+      status: 'completed',
+      orderStatus: 'Masuk',
+      items: [{ id: 'p1', name: 'Americano', qty: 1, price: 18000, subtotal: 18000 }],
+      total: 18000,
+      paymentMethod: 'cash',
+      createdAt: '2026-11-17T10:00:00+07:00',
+    })
+
+    await router.push(`/transactions/${migratedTx.id}`)
+    await flushPromises()
+
+    const wrapper = mount(TransactionDetailView, {
+      global: { plugins: [pinia, router] },
+    })
+
+    expect(wrapper.find('[data-testid="laundry-order-status-section"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('Status Order Laundry')
+    expect(wrapper.text()).toContain('Lunas')
+  })
+
+  it('menampilkan Status Order Laundry saat bisnis bertipe Laundry', async () => {
+    const { pinia, router, businessStore, transactionStore } = setupContext()
+    businessStore.setBusiness({
+      name: 'Clean Laundry',
+      type: 'Laundry',
+      owner: 'Owner',
+      phone: '08123456789',
+      outlet: 'Cabang 1',
+      mode: 'free',
+    })
+
+    const laundryTx = transactionStore.addTransaction({
+      id: 'trx-laundry-1',
+      invoiceNumber: 'LDR-20261118-0001',
+      customer: 'Budi',
+      status: 'paid',
+      orderStatus: 'Masuk',
+      items: [{ id: 's1', name: 'Cuci Setrika', qty: 3, price: 8000, subtotal: 24000, unit: 'kg' }],
+      total: 24000,
+      paymentMethod: 'cash',
+      createdAt: '2026-11-18T10:00:00+07:00',
+    })
+
+    await router.push(`/transactions/${laundryTx.id}`)
+    await flushPromises()
+
+    const wrapper = mount(TransactionDetailView, {
+      global: { plugins: [pinia, router] },
+    })
+
+    expect(wrapper.find('[data-testid="laundry-order-status-section"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Status Order Laundry')
+  })
+
+  it('mendukung pelunasan transaksi Belum Lunas (Bayar Nanti / Tempo) menjadi Siap & Lunas', async () => {
+    const { pinia, router, transactionStore } = setupContext()
+
+    const unpaidTx = transactionStore.createTransaction({
+      customer: 'Pak Ahmad',
+      subtotal: 50000,
+      total: 50000,
+      paymentMethod: 'unpaid',
+      paymentStatus: 'unpaid',
+      status: 'unpaid',
+      orderStatus: 'Proses',
+      items: [{ id: 'p1', name: 'Kopi Susu Literan', qty: 1, price: 50000, subtotal: 50000 }],
+    })
+
+    expect(unpaidTx.paymentStatus).toBe('unpaid')
+    expect(unpaidTx.orderStatus).toBe('Proses')
+
+    await router.push(`/transactions/${unpaidTx.id}`)
+    await flushPromises()
+
+    const wrapper = mount(TransactionDetailView, {
+      global: { plugins: [pinia, router] },
+    })
+
+    expect(wrapper.text()).toContain('Belum Lunas')
+    expect(wrapper.find('[data-testid="unpaid-settlement-section"]').exists()).toBe(true)
+
+    // Buka modal pelunasan
+    await wrapper.find('[data-testid="btn-open-settle-modal"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="settlement-modal"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Pelunasan Pembayaran')
+    expect(wrapper.text()).toContain('Transfer')
+    expect(wrapper.text()).toContain('QRIS')
+
+    // Konfirmasi pelunasan dengan tunai
+    await wrapper.find('[data-testid="btn-confirm-settlement"]').trigger('click')
+    await flushPromises()
+
+    const updated = transactionStore.items.find((t) => t.id === unpaidTx.id)
+    expect(updated.paymentStatus).toBe('paid')
+    expect(updated.orderStatus).toBe('Siap')
+  })
 })

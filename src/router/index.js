@@ -64,7 +64,10 @@ export function resolveStartupRoute({ businessStore, cashierStore, shiftStore, c
       cashierStore?.setPinConfigured?.(true)
     }
     if (!shiftStore?.isOpen && (cloudStore?.selectedBusiness?.shift_settings?.auto_open ?? true)) {
-      shiftStore?.openShift?.(cloudStore?.selectedBusiness?.shift_settings?.default_opening_cash || 0)
+      shiftStore?.openShift?.(
+        cloudStore?.selectedBusiness?.shift_settings?.default_opening_cash || 0,
+        { fromCloud: true },
+      )
     }
     return { name: 'home' }
   }
@@ -435,7 +438,10 @@ export function createAppRouter() {
         cashierStore.setPinConfigured(true)
       }
       if (!shiftStore.isOpen && (cloudStore?.selectedBusiness?.shift_settings?.auto_open ?? true)) {
-        shiftStore.openShift(cloudStore?.selectedBusiness?.shift_settings?.default_opening_cash || 0)
+        shiftStore.openShift(
+          cloudStore?.selectedBusiness?.shift_settings?.default_opening_cash || 0,
+          { fromCloud: true },
+        )
       }
     }
 

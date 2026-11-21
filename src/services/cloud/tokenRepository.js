@@ -15,8 +15,10 @@
 import { Capacitor } from '@capacitor/core'
 
 const TOKEN_KEY = 'cloud_bearer_token'
+const INSTALL_MARKER_KEY = 'pos_install_marker'
 
 let _inMemoryToken = null
+let _inMemoryInstallMarker = null
 let tokenMutationTail = Promise.resolve()
 
 function enqueueTokenOperation(operation) {
@@ -30,13 +32,24 @@ function enqueueTokenOperation(operation) {
  * Never touches localStorage/sessionStorage.
  */
 const inMemoryStore = {
-  async save(token) {
+  async save(token, key = TOKEN_KEY) {
+    if (key === INSTALL_MARKER_KEY) {
+      _inMemoryInstallMarker = token
+      return
+    }
     _inMemoryToken = token
   },
-  async get() {
+  async get(key = TOKEN_KEY) {
+    if (key === INSTALL_MARKER_KEY) {
+      return _inMemoryInstallMarker
+    }
     return _inMemoryToken
   },
-  async remove() {
+  async remove(key = TOKEN_KEY) {
+    if (key === INSTALL_MARKER_KEY) {
+      _inMemoryInstallMarker = null
+      return
+    }
     _inMemoryToken = null
   },
 }
@@ -46,18 +59,18 @@ const inMemoryStore = {
  * Uses Android Keystore and iOS Keychain.
  */
 const nativeStore = {
-  async save(token) {
+  async save(token, key = TOKEN_KEY) {
     const { SecureStorage } = await import('@aparajita/capacitor-secure-storage')
-    await SecureStorage.set(TOKEN_KEY, token)
+    await SecureStorage.set(key, token)
   },
-  async get() {
+  async get(key = TOKEN_KEY) {
     const { SecureStorage } = await import('@aparajita/capacitor-secure-storage')
-    const value = await SecureStorage.get(TOKEN_KEY)
+    const value = await SecureStorage.get(key)
     return value ? String(value) : null
   },
-  async remove() {
+  async remove(key = TOKEN_KEY) {
     const { SecureStorage } = await import('@aparajita/capacitor-secure-storage')
-    await SecureStorage.remove(TOKEN_KEY)
+    await SecureStorage.remove(key)
   },
 }
 
@@ -131,8 +144,33 @@ export async function removeTokenIfMatchesDetailed(expectedToken) {
   })
 }
 
+/**
+ * Get the Keystore-backed install marker (auto-deleted by OS on uninstall).
+ * @returns {Promise<string|null>}
+ */
+export async function getInstallMarker() {
+  return enqueueTokenOperation(() => resolveStore().get(INSTALL_MARKER_KEY))
+}
+
+/**
+ * Persist an install marker into secure Keystore storage.
+ * @param {string} marker
+ */
+export async function saveInstallMarker(marker) {
+  if (!marker) return
+  await enqueueTokenOperation(() => resolveStore().save(marker, INSTALL_MARKER_KEY))
+}
+
+/**
+ * Remove the install marker from secure storage.
+ */
+export async function removeInstallMarker() {
+  await enqueueTokenOperation(() => resolveStore().remove(INSTALL_MARKER_KEY))
+}
+
 /** Reset for tests */
 export function _resetTokenStore() {
   _inMemoryToken = null
+  _inMemoryInstallMarker = null
   tokenMutationTail = Promise.resolve()
 }

@@ -40,7 +40,7 @@ const isMoreActive = computed(() => moreItems.value.some((item) => isActive(item
 </script>
 
 <template>
-  <nav class="fixed inset-x-0 bottom-0 z-30 px-3 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] md:hidden">
+  <nav class="fixed inset-x-0 bottom-0 z-20 px-3 pb-[calc(env(safe-area-inset-bottom)+0.5rem)] md:hidden">
     <div class="mx-auto grid max-w-xl grid-cols-5 gap-1 rounded-[1.5rem] border border-white/70 bg-white/85 p-1.5 shadow-[0_18px_45px_rgba(24,24,27,0.16)] backdrop-blur-xl dark:border-slate-700/60 dark:bg-[#171C2B]/90 dark:shadow-[0_18px_45px_rgba(0,0,0,0.5)]">
       <RouterLink
         v-for="item in items.filter((navItem) => navItem.to)"

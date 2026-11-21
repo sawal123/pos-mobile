@@ -6,9 +6,11 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import { EXPENSE_CATEGORIES, useExpenseStore } from '@/stores/expenseStore'
+import { useNotificationStore } from '@/stores/notificationStore'
 import { formatCurrency, formatDateTime } from '@/utils/formatters'
 
 const expenseStore = useExpenseStore()
+const notificationStore = useNotificationStore()
 const route = useRoute()
 const router = useRouter()
 
@@ -170,6 +172,12 @@ async function handleSubmit() {
   }
 
   errors.value = {}
+  notificationStore.notifySuccessAndSync({
+    title: isEditMode.value ? 'Pengeluaran Diperbarui' : 'Pengeluaran Ditambahkan',
+    message: isEditMode.value
+      ? `Data pengeluaran "${payload.title}" berhasil diperbarui.`
+      : `Pengeluaran "${payload.title}" berhasil disimpan.`,
+  })
   await router.push({ name: 'expenses' })
 }
 

@@ -53,7 +53,23 @@ export function applySaleStockIdempotently(productStore, transaction) {
   const expected = new Map()
 
   for (const item of transaction?.items ?? []) {
-    const product = productStore.getProductById(item.id)
+    const rawProdId = item.productId ?? item.product_id ?? item.id
+    const prodId =
+      typeof rawProdId === 'string' && rawProdId.includes('::')
+        ? rawProdId.split('::')[0]
+        : rawProdId
+    let product = productStore.getProductById(prodId)
+    if (!product && (item.sync_id || item.syncId)) {
+      const syncId = item.sync_id || item.syncId
+      product = productStore.products?.find(
+        (p) => String(p.sync_id) === String(syncId) || String(p.syncId) === String(syncId),
+      )
+    }
+    if (!product && item.name) {
+      product = productStore.products?.find(
+        (p) => p.name && p.name.trim().toLowerCase() === String(item.name).trim().toLowerCase(),
+      )
+    }
     if (!product || (product.kind ?? 'product') === 'service') {
       continue
     }

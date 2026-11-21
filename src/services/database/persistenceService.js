@@ -14,6 +14,7 @@ import { useShiftStore } from '@/stores/shiftStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import { useTaxStore } from '@/stores/taxStore'
 import { useVariantStore } from '@/stores/variantStore'
+import { useTableStore } from '@/stores/tableStore'
 
 import { DB_VERSION } from './schema'
 
@@ -39,6 +40,7 @@ function createPersistenceContexts(pinia) {
   const taxStore = useTaxStore(pinia)
   const promoStore = usePromoStore(pinia)
   const variantStore = useVariantStore(pinia)
+  const tableStore = useTableStore(pinia)
 
   return [
     {
@@ -216,6 +218,7 @@ function createPersistenceContexts(pinia) {
           closingBalance: shiftStore.closingBalance,
           closedAt: shiftStore.closedAt,
           notes: shiftStore.notes,
+          isCloudAutoShift: Boolean(shiftStore.isCloudAutoShift),
         }
       },
       async load(adapter) {
@@ -285,6 +288,28 @@ function createPersistenceContexts(pinia) {
       async save(adapter, snapshot) {
         if (typeof adapter.saveVariantGroups === 'function') {
           await adapter.saveVariantGroups(snapshot.groups)
+        }
+      },
+    },
+    {
+      key: 'diningTables',
+      store: tableStore,
+      initialState: cloneValue(tableStore.$state),
+      read() {
+        return {
+          tables: cloneValue(tableStore.tables),
+        }
+      },
+      async load(adapter) {
+        if (typeof adapter.loadDiningTables === 'function') {
+          const tables = await adapter.loadDiningTables()
+          return { tables }
+        }
+        return { tables: [] }
+      },
+      async save(adapter, snapshot) {
+        if (typeof adapter.saveDiningTables === 'function') {
+          await adapter.saveDiningTables(snapshot.tables)
         }
       },
     },

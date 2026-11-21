@@ -59,6 +59,8 @@ function validateCurrentContext(context) {
     selectedOutlet = null,
     deviceIdentifier = null,
     registeredDeviceId = null,
+    role = null,
+    requireDeviceRegistration = null,
   } = context
 
   const hasValidUser =
@@ -72,7 +74,11 @@ function validateCurrentContext(context) {
   const hasValidOutlet =
     isPlainObject(selectedOutlet) && isValidStrictId(selectedOutlet.id)
   const hasValidDevId = isValidDeviceIdentifier(deviceIdentifier)
-  const hasValidRegDevId = isValidStrictId(registeredDeviceId)
+
+  const isCashierStrict = role === 'cashier' || requireDeviceRegistration === true
+  const hasValidRegDevId = isCashierStrict
+    ? isValidStrictId(registeredDeviceId)
+    : (registeredDeviceId === null || registeredDeviceId === undefined || isValidStrictId(registeredDeviceId))
 
   if (
     !hasValidUser ||
@@ -89,7 +95,7 @@ function validateCurrentContext(context) {
     businessId: selectedBusiness.id,
     outletId: selectedOutlet.id,
     deviceIdentifier: deviceIdentifier.trim(),
-    registeredDeviceId,
+    registeredDeviceId: registeredDeviceId ?? null,
   }
 }
 
@@ -244,7 +250,7 @@ export function createSyncContextGuardService({ adapter } = {}) {
         isValidStrictId(pullBinding.businessId) &&
         isValidStrictId(pullBinding.outletId) &&
         isValidDeviceIdentifier(pullBinding.deviceIdentifier) &&
-        isValidStrictId(pullBinding.registeredDeviceId) &&
+        (isValidStrictId(pullBinding.registeredDeviceId) || pullBinding.registeredDeviceId === null) &&
         isValidNonEmptyString(pullBinding.boundAt)
 
       if (!isValidPullBinding) {
@@ -576,7 +582,11 @@ export function createSyncContextGuardService({ adapter } = {}) {
         }
       }
 
-      if (currentContext.registeredDeviceId !== canonicalContext.registeredDeviceId) {
+      if (
+        currentContext.registeredDeviceId !== null &&
+        canonicalContext.registeredDeviceId !== null &&
+        currentContext.registeredDeviceId !== canonicalContext.registeredDeviceId
+      ) {
         return {
           ok: false,
           code: 'SYNC_CONTEXT_MISMATCH',

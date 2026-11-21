@@ -37,6 +37,11 @@ defineProps({
         <rect x="14" y="14" width="3" height="3" />
         <path d="M21 14v.01M18 18v3M21 21v.01M14 21v.01" />
       </svg>
+      <!-- Unpaid / Bayar Nanti Icon -->
+      <svg v-else-if="method.id === 'unpaid'" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10" />
+        <polyline points="12 6 12 12 16 14" />
+      </svg>
       <!-- Card Icon -->
       <svg v-else class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <rect x="2" y="5" width="20" height="14" rx="2" />

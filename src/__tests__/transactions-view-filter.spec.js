@@ -124,5 +124,58 @@ describe('TransactionsView Component Filters', () => {
     expect(wrapper.text()).toContain('2 Transaksi')
     expect(wrapper.text()).toContain('INV-001')
   })
+
+  it('filters by custom date range and keeps filter state locked across unmount/remount', async () => {
+    const { pinia, router, transactionStore, todayStr, yesterdayStr } = prepare()
+
+    const twoDaysAgo = new Date()
+    twoDaysAgo.setDate(twoDaysAgo.getDate() - 2)
+    const twoDaysAgoStr = toLocalDateString(twoDaysAgo)
+
+    transactionStore.items.push({
+      id: 'trx-two-days-ago',
+      invoiceNumber: 'INV-004',
+      customer: 'Customer D',
+      createdAt: `${twoDaysAgoStr}T09:00:00.000Z`,
+      paymentMethod: 'cash',
+      total: 45000,
+      status: 'paid',
+      items: [{ name: 'Americano', qty: 1 }],
+    })
+
+    const wrapper = mount(TransactionsView, {
+      global: { plugins: [pinia, router] },
+    })
+    await flushPromises()
+
+    // Activate Rentang Tanggal filter
+    await wrapper.find('[data-testid="filter-date-range"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="date-range-picker"]').exists()).toBe(true)
+
+    await wrapper.find('[data-testid="date-range-start"]').setValue(yesterdayStr)
+    await wrapper.find('[data-testid="date-range-end"]').setValue(todayStr)
+    await flushPromises()
+
+    // Should include today + yesterday (3 items), exclude two days ago
+    expect(wrapper.text()).toContain('INV-001')
+    expect(wrapper.text()).toContain('INV-002')
+    expect(wrapper.text()).toContain('INV-003')
+    expect(wrapper.text()).not.toContain('INV-004')
+
+    // Simulate navigating to detail and back (unmount & remount)
+    wrapper.unmount()
+
+    const remounted = mount(TransactionsView, {
+      global: { plugins: [pinia, router] },
+    })
+    await flushPromises()
+
+    expect(remounted.find('[data-testid="date-range-picker"]').exists()).toBe(true)
+    expect(remounted.find('[data-testid="filter-date-range"]').classes()).toContain('bg-ink-primary')
+    expect(remounted.text()).toContain('INV-003')
+    expect(remounted.text()).not.toContain('INV-004')
+  })
 })
 

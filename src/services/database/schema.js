@@ -75,6 +75,20 @@ export const CREATE_TABLE_STATEMENTS = `
     key TEXT PRIMARY KEY NOT NULL,
     value TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS sales (
+    id TEXT PRIMARY KEY NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS dining_tables (
+    id TEXT PRIMARY KEY NOT NULL,
+    outlet_id TEXT NULL,
+    name TEXT NOT NULL,
+    capacity INTEGER DEFAULT 4,
+    status TEXT DEFAULT 'available',
+    sort_order INTEGER DEFAULT 0,
+    updated_at TEXT
+  );
 `
 
 export const SYNC_QUEUE_TABLE_STATEMENT = `
@@ -162,6 +176,8 @@ export const MIGRATIONS = {
     updated_at TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_variant_groups_status ON variant_groups(status);
+  CREATE TABLE IF NOT EXISTS dining_tables (id TEXT PRIMARY KEY, outlet_id TEXT NULL, name TEXT NOT NULL, capacity INTEGER DEFAULT 4, status TEXT DEFAULT 'available', sort_order INTEGER DEFAULT 0, updated_at TEXT);
+  ALTER TABLE sales ADD COLUMN table_number TEXT NULL;
   `,
   7: `ALTER TABLE products ADD COLUMN barcode TEXT NOT NULL DEFAULT '';`,
   8: `

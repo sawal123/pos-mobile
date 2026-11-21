@@ -60,6 +60,9 @@ export const useSyncContextGuardStore = defineStore('syncContextGuard', () => {
           : null,
         deviceIdentifier: cloudStore.deviceIdentifier,
         registeredDeviceId: cloudStore.registeredDeviceId,
+        role: cloudStore.role || cloudStore.pushPolicy?.role || null,
+        requireDeviceRegistration:
+          cloudStore.role === 'cashier' || cloudStore.pushPolicy?.role === 'cashier',
       }
     } catch {
       return null

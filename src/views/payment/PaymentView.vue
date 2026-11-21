@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
@@ -33,9 +33,20 @@ const promoStore = usePromoStore()
 const taxStore = useTaxStore()
 const productStore = useProductStore()
 const localOperations = resolveLocalOperationService()
+const route = useRoute()
 const router = useRouter()
 
-const selectedMethod = ref('cash')
+const selectedMethod = ref(route?.query?.method === 'unpaid' ? 'unpaid' : 'cash')
+
+watch(
+  () => route?.query?.method,
+  (method) => {
+    if (method && ['cash', 'qris', 'card', 'unpaid'].includes(method)) {
+      selectedMethod.value = method
+    }
+  },
+  { immediate: true },
+)
 const customerQuery = ref(cartStore.selectedCustomer?.name ?? cartStore.customerPhone)
 const cashReceived = ref('')
 const isProcessing = ref(false)
@@ -116,9 +127,11 @@ const paymentMethods = [
   { id: 'cash', label: 'Cash', description: 'Pembayaran tunai di kasir' },
   { id: 'qris', label: 'QRIS', description: 'Scan QR untuk pelanggan' },
   { id: 'card', label: 'Card', description: 'Debit atau kartu kredit' },
+  { id: 'unpaid', label: 'Bayar Nanti', description: 'Tempo / bayar belakangan' },
 ]
 
 const isCashMethod = computed(() => selectedMethod.value === 'cash')
+const isUnpaidMethod = computed(() => selectedMethod.value === 'unpaid')
 const selectedCustomer = computed(() => cartStore.selectedCustomer)
 
 function onSelectCustomer(customer) {
@@ -304,16 +317,21 @@ async function completePayment() {
     return
   }
 
+  const stockValidation = productStore.canFulfillSale(cartStore.items)
+  if (!stockValidation.success) {
+    paymentError.value = stockValidation.error
+    return
+  }
+
   isProcessing.value = true
 
   try {
-    const stockValidation = productStore.canFulfillSale(cartStore.items)
-
-    if (!stockValidation.success) {
-      paymentError.value = stockValidation.error
-      return
+    // Allow 1 frame for the processing overlay/spinner to paint before sync SQLite writes
+    if (!import.meta.env?.VITEST) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
     }
 
+    const isUnpaid = selectedMethod.value === 'unpaid'
     const transaction = await localOperations.commitRetailSale({
       checkout: {
         items: cartStore.items,
@@ -326,18 +344,33 @@ async function completePayment() {
         taxEnabled: taxStore.enabled,
         taxRate: taxStore.enabled ? taxStore.rate : 0,
         total: cartStore.total,
+        tableNumber: cartStore.tableNumber || null,
         businessSnapshot: {
           name: businessStore.name,
           outlet: businessStore.outlet,
           phone: businessStore.phone,
         },
-        customer: selectedCustomer.value?.name ?? 'Walk-in Customer',
+        customer: selectedCustomer.value?.name ?? (cartStore.customerName || 'Walk-in Customer'),
         customerId: selectedCustomer.value?.id ?? null,
-        customerSnapshot: selectedCustomer.value ? { ...selectedCustomer.value } : null,
+        customerSnapshot: selectedCustomer.value
+          ? {
+              id: selectedCustomer.value.id,
+              name: selectedCustomer.value.name,
+              phone: selectedCustomer.value.phone || '',
+              email: selectedCustomer.value.email || '',
+            }
+          : (cartStore.customerName
+              ? { id: null, name: cartStore.customerName, phone: '', email: '' }
+              : null),
         paymentMethod: selectedMethod.value,
-        cashReceived: isCashMethod.value ? parsedCashReceived.value : null,
-        changeAmount: isCashMethod.value ? changeAmount.value : null,
-        orderStatus: businessStore.normalizedType === 'Laundry' ? 'Masuk' : null,
+        paymentStatus: isUnpaid ? 'unpaid' : 'paid',
+        status: isUnpaid ? 'unpaid' : 'paid',
+        cashReceived: isCashMethod.value ? parsedCashReceived.value : (isUnpaid ? 0 : null),
+        changeAmount: isCashMethod.value ? changeAmount.value : (isUnpaid ? 0 : null),
+        paidAt: isUnpaid ? null : new Date().toISOString(),
+        orderStatus: businessStore.normalizedType === 'Laundry'
+          ? 'Masuk'
+          : 'Proses',
       },
     })
 
@@ -393,6 +426,22 @@ function goToNewTransaction() {
   router.replace('/pos')
 }
 
+function handleCompleteReady() {
+  const id = successSummary.value?.id
+  if (id) {
+    transactionStore.updateOrderStatus(id, 'Siap')
+    if (businessStore.isCloudMode) {
+      try {
+        const syncPushStore = useSyncPushStore()
+        syncPushStore.pushIfOnline?.()
+      } catch {
+        // Safe fallback
+      }
+    }
+  }
+  router.replace('/pos')
+}
+
 function goToReceipt() {
   const id = successSummary.value?.id
 
@@ -405,7 +454,7 @@ function goToReceipt() {
 }
 
 function goToTransactions() {
-  router.replace('/transactions')
+  router.replace({ path: '/pos', query: { open_queue: '1' } })
 }
 </script>
 
@@ -418,8 +467,8 @@ function goToTransactions() {
         <h2 class="mt-1 text-xl font-bold text-ink-primary">Pilih Metode Pembayaran</h2>
       </div>
 
-      <!-- Minimalist Payment Methods in a 3-Column Grid -->
-      <div class="grid grid-cols-3 gap-2.5 sm:gap-3">
+      <!-- Minimalist Payment Methods in a 4-Column Grid -->
+      <div class="grid grid-cols-2 gap-2.5 sm:grid-cols-4 sm:gap-3">
         <button
           v-for="method in paymentMethods"
           :key="method.id"
@@ -650,6 +699,30 @@ function goToTransactions() {
           </div>
         </div>
       </BaseCard>
+
+      <!-- Unpaid (Bayar Nanti) Section: Info Alert -->
+      <BaseCard
+        v-else-if="selectedMethod === 'unpaid'"
+        class="space-y-3 border border-amber-200/80 bg-amber-50/60 p-4 dark:border-amber-500/30 dark:bg-amber-500/10"
+        data-testid="unpaid-info-card"
+      >
+        <div class="flex items-start gap-3">
+          <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300">
+            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
+            </svg>
+          </div>
+          <div class="min-w-0 space-y-1">
+            <h3 class="text-sm font-bold text-amber-900 dark:text-amber-200">
+              Transaksi Tempo / Bayar Nanti
+            </h3>
+            <p class="text-xs text-amber-800/80 dark:text-amber-300/80 leading-relaxed">
+              Pesanan dicatat dengan status <strong>Belum Lunas (Tempo)</strong>. Stok produk akan langsung terpotong otomatis, dan transaksi <strong>tidak menambah</strong> uang tunai di laci kasir.
+            </p>
+          </div>
+        </div>
+      </BaseCard>
     </section>
 
     <!-- Right Column: Order Summary & Checkout -->
@@ -679,11 +752,12 @@ function goToTransactions() {
         <BaseButton
           block
           size="lg"
+          :loading="isProcessing"
           :disabled="isSubmitDisabled"
           data-testid="desktop-submit-payment"
           @click="completePayment"
         >
-          <span>Bayar<span class="sr-only"> (Selesaikan Pembayaran)</span></span>
+          <span>{{ isProcessing ? 'Memproses...' : (selectedMethod === 'unpaid' ? 'Simpan Transaksi' : 'Bayar') }}<span class="sr-only"> (Selesaikan Pembayaran)</span></span>
         </BaseButton>
       </div>
 
@@ -708,11 +782,12 @@ function goToTransactions() {
         </div>
         <BaseButton
           size="lg"
+          :loading="isProcessing"
           :disabled="isSubmitDisabled"
           data-testid="mobile-submit-payment"
           @click="completePayment"
         >
-          <span>Bayar<span class="sr-only"> (Selesaikan Pembayaran)</span></span>
+          <span>{{ isProcessing ? 'Memproses...' : (selectedMethod === 'unpaid' ? 'Simpan Transaksi' : 'Bayar') }}<span class="sr-only"> (Selesaikan Pembayaran)</span></span>
         </BaseButton>
       </div>
     </div>
@@ -724,11 +799,30 @@ function goToTransactions() {
       @close="showPromoModal = false"
     />
 
+    <!-- Payment processing overlay (bridges 1s save latency before success modal) -->
+    <div
+      v-if="isProcessing && !isPaymentCompleted"
+      data-testid="payment-processing-overlay"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs"
+    >
+      <div class="w-full max-w-xs rounded-3xl border border-zinc-200/80 bg-white p-6 text-center shadow-2xl dark:border-slate-700/70 dark:bg-[#171C2B]">
+        <div class="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary">
+          <svg class="h-7 w-7 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" />
+            <path class="opacity-85" fill="currentColor" d="M4 12a8 8 0 018-8v3a5 5 0 00-5 5H4z" />
+          </svg>
+        </div>
+        <h3 class="mt-3.5 text-base font-bold text-ink-primary">Memproses Pembayaran...</h3>
+        <p class="mt-1 text-xs text-ink-secondary">Menyimpan transaksi, harap tunggu sebentar.</p>
+      </div>
+    </div>
+
     <!-- Payment success modal (shown only after a committed transaction) -->
     <PaymentSuccessModal
       :open="isPaymentCompleted"
       :summary="successSummary"
       @new-transaction="goToNewTransaction"
+      @complete-ready="handleCompleteReady"
       @view-receipt="goToReceipt"
       @view-transactions="goToTransactions"
     />

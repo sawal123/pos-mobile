@@ -19,6 +19,17 @@ function isInteractiveTarget(target) {
   )
 }
 
+function hasScrolledAncestor(target, boundary) {
+  let current = target
+  while (current && current !== boundary && current !== document.body) {
+    if (current.scrollTop > 0) {
+      return true
+    }
+    current = current.parentElement
+  }
+  return false
+}
+
 /**
  * Adds a touch-only pull-to-refresh gesture to a scrollable view.
  * The callback is deliberately supplied by the view so this composable never
@@ -98,7 +109,13 @@ export function usePullToRefresh({ root, onRefresh, threshold = PULL_TO_REFRESH_
 
   function onTouchStart(event) {
     const touch = event.touches[0]
-    if (!touch || isRefreshing.value || !isAtScrollTop() || isInteractiveTarget(event.target)) {
+    if (
+      !touch ||
+      isRefreshing.value ||
+      !isAtScrollTop() ||
+      isInteractiveTarget(event.target) ||
+      hasScrolledAncestor(event.target, listenerTarget)
+    ) {
       return
     }
 
@@ -175,5 +192,6 @@ export function usePullToRefresh({ root, onRefresh, threshold = PULL_TO_REFRESH_
     message,
     pullDistance,
     status,
+    resetGesture,
   }
 }

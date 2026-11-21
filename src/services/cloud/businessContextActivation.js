@@ -60,13 +60,15 @@ function hasRows(value) {
 }
 
 function hasMeaningfulShift(value) {
+  if (!value || value.isCloudAutoShift === true) {
+    return false
+  }
   return Boolean(
-    value &&
-      (value.isOpen === true ||
-        value.id ||
-        (value.shiftNumber && value.openedAt) ||
-        value.status === 'open' ||
-        value.closedAt),
+    value.isOpen === true ||
+      value.id ||
+      (value.shiftNumber && value.openedAt) ||
+      value.status === 'open' ||
+      value.closedAt,
   )
 }
 
@@ -295,6 +297,21 @@ export function normalizeBusinessSnapshot(value) {
  * protected/unknown). The result is read-only classification only — callers
  * must never use it to reject a valid Cloud login or business selection.
  */
+const DEFAULT_TEMPLATE_CATEGORY_NAMES = new Set([
+  'minuman', 'makanan', 'snack', 'dessert', 'lainnya',
+  'kiloan', 'satuan', 'express', 'sprei & bed cover',
+  'produk', 'kebutuhan harian',
+])
+
+function hasMeaningfulCatalogOrStock(products, categories, stockMovements) {
+  if (hasRows(products) || hasRows(stockMovements)) return true
+  if (!hasRows(categories)) return false
+  return categories.some((c) => {
+    const norm = String(c ?? '').trim().toLowerCase()
+    return norm.length > 0 && !DEFAULT_TEMPLATE_CATEGORY_NAMES.has(norm)
+  })
+}
+
 export async function inspectLocalBusinessWorkspace({ adapter, runtime = null } = {}) {
   if (!adapter || REQUIRED_READERS.some((key) => typeof adapter[key] !== 'function')) {
     return {
@@ -353,7 +370,7 @@ export async function inspectLocalBusinessWorkspace({ adapter, runtime = null } 
     const products = storedProducts?.products ?? []
     const categories = storedProducts?.categories ?? []
     const stockMovements = storedProducts?.stockMovements ?? []
-    if (hasRows(products) || hasRows(categories) || hasRows(stockMovements)) reasons.push('catalog_or_stock')
+    if (hasMeaningfulCatalogOrStock(products, categories, stockMovements)) reasons.push('catalog_or_stock')
     if (hasRows(storedCustomers)) reasons.push('customers')
     if (hasRows(storedExpenses)) reasons.push('expenses')
     if (hasRows(storedTransactions)) reasons.push('transactions')
@@ -418,15 +435,16 @@ function extractContextIdentity(ctx) {
 
   const parsedBusinessId = Number(businessId)
   const parsedOutletId = Number(outletId)
-  const parsedDeviceId = Number(registeredDeviceId)
+  const isCashierStrict = ctx.role === 'cashier' || ctx.requireDeviceRegistration === true
+  const parsedDeviceId = registeredDeviceId !== null && registeredDeviceId !== undefined ? Number(registeredDeviceId) : null
 
   if (
     !Number.isInteger(parsedBusinessId) ||
     parsedBusinessId <= 0 ||
     !Number.isInteger(parsedOutletId) ||
     parsedOutletId <= 0 ||
-    !Number.isInteger(parsedDeviceId) ||
-    parsedDeviceId <= 0 ||
+    (isCashierStrict && (!Number.isInteger(parsedDeviceId) || parsedDeviceId <= 0)) ||
+    (!isCashierStrict && parsedDeviceId !== null && (!Number.isInteger(parsedDeviceId) || parsedDeviceId <= 0)) ||
     !deviceIdentifier
   ) {
     return null
@@ -509,10 +527,15 @@ function evaluateAutoSyncPreferenceSafety(autoSettings, targetContext) {
       return { safe: false, reason: 'auto_sync_context_mismatch' }
     }
 
+    const regMatches =
+      parsedDeviceId === null ||
+      expected.registeredDeviceId === null ||
+      parsedDeviceId === expected.registeredDeviceId
+
     const isMatch =
       parsedBusinessId === expected.businessId &&
       parsedOutletId === expected.outletId &&
-      parsedDeviceId === expected.registeredDeviceId &&
+      regMatches &&
       deviceIdentifier.trim() === expected.deviceIdentifier
 
     if (!isMatch) {
@@ -597,7 +620,7 @@ export async function inspectCloudFirstWorkspace({
       adapter.loadTransactions(),
       adapter.loadCashState(),
       adapter.loadShiftState(),
-      adapter.listSyncQueueItems({ limit: 1 }),
+      adapter.listSyncQueueItems({ limit: 50 }),
       adapter.loadSyncPushBinding(),
       adapter.loadSyncPullBinding(),
       adapter.loadSyncPushInflight(),
@@ -625,19 +648,47 @@ export async function inspectCloudFirstWorkspace({
       (pullBinding && pullBinding.mode === 'cloud_first_read' && pullBinding.status === 'initializing')
     )
 
-    const meaningfulQueue = (syncQueue ?? []).filter(
-      (item) => item && item.entityType !== 'business' && item.entity_type !== 'business',
+    const isWorkspaceEmptyOfUserData =
+      !hasRows(storedTransactions) &&
+      !hasRows(storedCash?.entries) &&
+      !hasMeaningfulCatalogOrStock(products, categories, stockMovements)
+
+    const isAutoOpenShift = Boolean(
+      storedShift &&
+      (storedShift.isCloudAutoShift === true ||
+        (isWorkspaceEmptyOfUserData && storedShift.shiftNumber === null)),
     )
+    const effectiveShift = isAutoOpenShift ? null : storedShift
+
+    const meaningfulQueue = (syncQueue ?? []).filter((item) => {
+      if (!item || item.entityType === 'business' || item.entity_type === 'business') {
+        return false
+      }
+      const entityType = item.entityType ?? item.entity_type
+      if (
+        isWorkspaceEmptyOfUserData &&
+        entityType === 'shift' &&
+        (!item.payload?.shiftNumber || item.payload?.shiftNumber === item.payload?.id)
+      ) {
+        return false
+      }
+      return true
+    })
 
     if (isInterruptedInitialization) {
       const interruptedContext = pullBinding?.businessId != null ? pullBinding : initJournal
       const expected = extractContextIdentity(targetContext)
+      const regMatches =
+        interruptedContext.registeredDeviceId === null ||
+        expected.registeredDeviceId === null ||
+        Number(interruptedContext.registeredDeviceId) === expected.registeredDeviceId
+
       const contextMatches = Boolean(
         interruptedContext &&
         expected &&
         Number(interruptedContext.businessId) === expected.businessId &&
         Number(interruptedContext.outletId) === expected.outletId &&
-        Number(interruptedContext.registeredDeviceId) === expected.registeredDeviceId &&
+        regMatches &&
         String(interruptedContext.deviceIdentifier).trim() === expected.deviceIdentifier,
       )
 
@@ -648,18 +699,18 @@ export async function inspectCloudFirstWorkspace({
       // Operational data: Distinguish previously applied remote rows from newly created local operational data
       if (hasLocalOperationalTransactions(storedTransactions, meaningfulQueue, identityMap, serverVersions)) reasons.push('transactions')
       if (hasLocalOperationalCash(storedCash, meaningfulQueue, identityMap, serverVersions)) reasons.push('cash')
-      if (hasLocalOperationalShift(storedShift, meaningfulQueue, identityMap, serverVersions)) reasons.push('shift')
+      if (hasLocalOperationalShift(effectiveShift, meaningfulQueue, identityMap, serverVersions)) reasons.push('shift')
       if (hasRows(meaningfulQueue)) reasons.push('sync_queue')
       if (pushBinding || inflight || bootstrap || (pullBinding && pullBinding.status === 'completed')) {
         reasons.push('sync_metadata')
       }
     } else {
-      if (hasRows(products) || hasRows(categories) || hasRows(stockMovements)) reasons.push('catalog_or_stock')
+      if (hasMeaningfulCatalogOrStock(products, categories, stockMovements)) reasons.push('catalog_or_stock')
       if (hasRows(storedCustomers)) reasons.push('customers')
       if (hasRows(storedExpenses)) reasons.push('expenses')
       if (hasRows(storedTransactions)) reasons.push('transactions')
       if (hasRows(storedCash?.entries)) reasons.push('cash')
-      if (hasMeaningfulShift(storedShift)) reasons.push('shift')
+      if (hasMeaningfulShift(effectiveShift)) reasons.push('shift')
       if (hasRows(meaningfulQueue)) reasons.push('sync_queue')
       if (pushBinding || pullBinding || inflight || bootstrap || identityMap || serverVersions) {
         reasons.push('sync_metadata')
@@ -715,17 +766,37 @@ export function formatBusinessTypeForMismatch(type) {
  * business differs from the active local workspace. This is a confirmation —
  * never an error banner.
  */
-export function buildBusinessSwitchConfirmation({ localBusiness, cloudBusiness } = {}) {
+export function buildBusinessSwitchConfirmation({
+  localBusiness,
+  cloudBusiness,
+  cloudOutlet = null,
+} = {}) {
   const localName = localBusiness?.name || 'Bisnis lokal'
   const localType = formatBusinessTypeForMismatch(localBusiness?.type)
+  const localOutlet = localBusiness?.outlet || ''
   const cloudName = cloudBusiness?.name || 'Bisnis Cloud'
   const cloudType = formatBusinessTypeForMismatch(cloudBusiness?.business_type)
+  const targetOutletName = cloudOutlet?.name || ''
+  const isSameBusiness =
+    Boolean(cloudBusiness?.name) &&
+    Boolean(localBusiness?.name) &&
+    cloudBusiness.name.trim().toLowerCase() === localBusiness.name.trim().toLowerCase() &&
+    Boolean(targetOutletName)
+
+  const fromLabel = isSameBusiness && localOutlet
+    ? `${localName} (${localType}) — ${localOutlet}`
+    : `${localName} (${localType})`
+  const toLabel = isSameBusiness
+    ? `${cloudName} (${cloudType}) — ${targetOutletName}`
+    : `${cloudName} (${cloudType})`
 
   return {
-    title: 'Beralih Bisnis?',
+    title: isSameBusiness ? 'Beralih Cabang?' : 'Beralih Bisnis?',
     message:
-      `Anda sedang menggunakan ${localName} (${localType}) dan akan beralih ke ${cloudName} (${cloudType}).\n\n` +
-      'Data lokal bisnis sebelumnya akan disimpan secara terpisah dan tidak digabungkan dengan bisnis baru.\n\n' +
+      `Anda sedang menggunakan ${fromLabel} dan akan beralih ke ${toLabel}.\n\n` +
+      (isSameBusiness
+        ? 'Data transaksi & shift lokal cabang sebelumnya akan disimpan terpisah per cabang.\n\n'
+        : 'Data lokal bisnis sebelumnya akan disimpan secara terpisah dan tidak digabungkan dengan bisnis baru.\n\n') +
       'Apakah Anda ingin melanjutkan?',
     confirmLabel: 'Simpan & Beralih',
     cancelLabel: 'Batal',
@@ -733,6 +804,7 @@ export function buildBusinessSwitchConfirmation({ localBusiness, cloudBusiness }
     localType,
     cloudName,
     cloudType,
+    cloudOutletName: targetOutletName,
   }
 }
 

@@ -71,8 +71,8 @@ describe('P35 Android release configuration', () => {
     expect(capacitorConfig.appId).toBe(APPLICATION_ID)
   })
 
-  it('DB_VERSION 7 mencakup migrasi barcode produk', () => {
-    expect(DB_VERSION).toBe(7)
+  it('DB_VERSION 8 mencakup migrasi barcode produk dan units/promo_price', () => {
+    expect(DB_VERSION).toBe(8)
   })
 
   it('kredensial signing hanya dibaca dari env var atau keystore.properties', () => {

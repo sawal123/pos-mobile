@@ -19,6 +19,11 @@ import { Capacitor } from '@capacitor/core'
 
 import { apiRequest } from '../services/cloud/apiClient'
 import { cloudLogin, fetchMobileContext, registerDevice, cloudLogout } from '../services/cloud/authService'
+import { createRouter, createMemoryHistory } from 'vue-router'
+import { useBusinessStore } from '../stores/businessStore'
+import { useTransactionStore } from '../stores/transactionStore'
+import { useShiftStore } from '../stores/shiftStore'
+import { createPersistenceService } from '../services/database/persistenceService'
 import {
   saveToken,
   getToken,
@@ -630,6 +635,39 @@ describe('Outlet selection & cloud access rules', () => {
     expect(store.selectedOutlet?.id).toBe(201)
   })
 
+  it('rejects branches waiting for subscription payment and shows outlet picker for owner', async () => {
+    const store = useCloudSessionStore()
+    apiRequest.mockResolvedValueOnce(
+      makeOkResponse({ token_type: 'Bearer', token: MOCK_TOKEN, user: MOCK_USER }),
+    )
+    apiRequest.mockResolvedValueOnce(
+      makeOkResponse({
+        user: MOCK_USER,
+        businesses: [
+          {
+            ...MOCK_BUSINESS_CLOUD,
+            role: 'owner',
+            outlets: [
+              { id: 301, name: 'Outlet Utama', is_primary: true, status: 'active', cloud_access: true },
+              { id: 302, name: 'Cabang Baru', is_primary: false, status: 'pending_payment', cloud_access: false },
+            ],
+          },
+        ],
+      }),
+    )
+
+    await store.login('test@example.com', 'secret')
+    await store.selectBusiness(MOCK_BUSINESS_CLOUD.id)
+
+    const unpaid = await store.selectOutlet(302)
+    expect(unpaid.ok).toBe(false)
+    expect(store.error).toContain('Langganan Cloud untuk cabang ini belum aktif')
+
+    const paid = await store.selectOutlet(301)
+    expect(paid.ok).toBe(true)
+    expect(store.selectedOutlet?.id).toBe(301)
+  })
+
   it('cloud_access = false stops device registration and leaves local POS functional', async () => {
     const store = useCloudSessionStore()
     apiRequest.mockResolvedValueOnce(
@@ -650,6 +688,193 @@ describe('Outlet selection & cloud access rules', () => {
     // Verify /api/mobile/devices was never called
     const devCalls = apiRequest.mock.calls.filter((c) => c[0] === '/api/mobile/devices')
     expect(devCalls).toHaveLength(0)
+  })
+
+  it('always enters select-outlet for owner, shows badges & code, and routes unpaid branch CTA to subscription checkout', async () => {
+    const router = createRouter({
+      history: createMemoryHistory(),
+      routes: [
+        { path: '/home', name: 'home', component: { template: '<div>Home</div>' } },
+        { path: '/settings/cloud', name: 'cloud', component: CloudLoginView },
+        { path: '/subscription', name: 'subscription', component: { template: '<div>Sub</div>' } },
+        { path: '/setup/pin', name: 'pin-setup', component: { template: '<div>Pin</div>' } },
+      ],
+    })
+    await router.push('/settings/cloud')
+
+    apiRequest
+      .mockResolvedValueOnce(makeOkResponse({ token_type: 'Bearer', token: MOCK_TOKEN, user: MOCK_USER }))
+      .mockResolvedValueOnce(
+        makeOkResponse({
+          user: MOCK_USER,
+          businesses: [
+            {
+              ...MOCK_BUSINESS_CLOUD,
+              business_type: 'cafe',
+              role: 'owner',
+              outlets: [
+                {
+                  id: 301,
+                  name: 'Outlet Pusat',
+                  code: 'MAIN',
+                  is_primary: true,
+                  status: 'active',
+                  cloud_access: true,
+                  subscription: { plan: 'cloud', status: 'active', expires_at: '2026-12-31T00:00:00Z' },
+                },
+                {
+                  id: 302,
+                  name: 'Cabang Kemang',
+                  code: 'CBG-KMG',
+                  is_primary: false,
+                  status: 'pending_payment',
+                  cloud_access: false,
+                  subscription: null,
+                },
+              ],
+            },
+          ],
+        }),
+      )
+
+    const wrapper = mount(CloudLoginView, {
+      global: { plugins: [router] },
+    })
+
+    await wrapper.find('#cloud-email input').setValue(MOCK_USER.email)
+    await wrapper.find('#cloud-password input').setValue('secret')
+    await wrapper.find('#cloud-login-btn').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('#cloud-confirm-link').exists()).toBe(true)
+    await wrapper.find('#cloud-confirm-link-btn').trigger('click')
+    await flushPromises()
+
+    // Owner ALWAYS lands on select-outlet
+    expect(wrapper.find('#cloud-select-outlet').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Outlet Pusat')
+    expect(wrapper.text()).toContain('MAIN')
+    expect(wrapper.text()).toContain('Utama')
+    expect(wrapper.text()).toContain('Cabang Kemang')
+    expect(wrapper.text()).toContain('CBG-KMG')
+
+    // Unpaid branch selection button is disabled, and pay button routes to subscription with outlet_id
+    const unpaidOutletBtn = wrapper.find('#cloud-outlet-302')
+    expect(unpaidOutletBtn.attributes('disabled')).toBeDefined()
+
+    const payOutletBtn = wrapper.find('[data-testid="cloud-pay-outlet-302"]')
+    expect(payOutletBtn.exists()).toBe(true)
+    await payOutletBtn.trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.name).toBe('subscription')
+    expect(router.currentRoute.value.query.outlet_id).toBe('302')
+  })
+
+  it('switches operational workspace between outlets on the same device and isolates data per outlet_id', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const adapter = createMemoryAdapter()
+    const persistence = createPersistenceService({ adapter, pinia })
+    await persistence.initialize()
+
+    const store = useCloudSessionStore(pinia)
+    store.setPersistenceAdapter(adapter, persistence)
+    store.deviceIdentifier = 'dev-multi-outlet-01'
+    await adapter.saveDeviceIdentifier('dev-multi-outlet-01')
+
+    const multiOutletBiz = {
+      ...MOCK_BUSINESS_CLOUD,
+      business_type: 'cafe',
+      role: 'owner',
+      outlets: [
+        { id: 301, name: 'Outlet Pusat', code: 'MAIN', is_primary: true, status: 'active', cloud_access: true },
+        { id: 302, name: 'Cabang Kemang', code: 'CBG-KMG', is_primary: false, status: 'active', cloud_access: true },
+      ],
+    }
+
+    apiRequest
+      .mockResolvedValueOnce(makeOkResponse({ token_type: 'Bearer', token: MOCK_TOKEN, user: MOCK_USER }))
+      .mockResolvedValueOnce(makeOkResponse({ user: MOCK_USER, businesses: [multiOutletBiz] }))
+      .mockResolvedValueOnce(makeOkResponse({ id: 701, outlet_id: 301 }))
+      .mockResolvedValueOnce(
+        makeOkResponse({
+          user: MOCK_USER,
+          businesses: [
+            {
+              ...multiOutletBiz,
+              device_context: {
+                id: 701,
+                outlet_id: 301,
+                identifier: 'dev-multi-outlet-01',
+                status: 'active',
+              },
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(makeOkResponse({ id: 702, outlet_id: 302 }))
+      .mockResolvedValueOnce(
+        makeOkResponse({
+          user: MOCK_USER,
+          businesses: [
+            {
+              ...multiOutletBiz,
+              device_context: {
+                id: 702,
+                outlet_id: 302,
+                identifier: 'dev-multi-outlet-01',
+                status: 'active',
+              },
+            },
+          ],
+        }),
+      )
+
+    await store.login(MOCK_USER.email, 'secret')
+    await store.selectBusiness(10)
+    await store.selectOutlet(301)
+
+    const act1 = await store.activateOperationalContext()
+    expect(act1.ok).toBe(true)
+    expect(store.activeWorkspaceId).toBe('cloud:10:301')
+    await store.ensureDeviceBinding({ platform: 'android' })
+    expect(store.registeredDeviceId).toBe(701)
+
+    // Record transaction in Outlet 301
+    const trxStore = useTransactionStore()
+    trxStore.items = []
+    trxStore.createTransaction({
+      id: 'trx-branch-a',
+      items: [{ id: 'p1', name: 'Latte', qty: 1, price: 25000 }],
+      subtotal: 25000,
+      tax: 0,
+      total: 25000,
+      paymentMethod: 'cash',
+    })
+    await adapter.saveTransactions(trxStore.items)
+
+    // Switch to Outlet 302 -> requires confirmation because Outlet 301 has data
+    const sel2 = await store.selectOutlet(302)
+    expect(sel2.ok).toBe(true)
+    expect(store.registeredDeviceId).toBeNull()
+
+    const act2 = await store.activateOperationalContext()
+    expect(act2.ok).toBe(false)
+    expect(act2.code).toBe('BUSINESS_SWITCH_CONFIRMATION_REQUIRED')
+    expect(act2.pendingSwitch.confirmation.message).toContain('Outlet Pusat')
+    expect(act2.pendingSwitch.confirmation.message).toContain('Cabang Kemang')
+
+    const confirm2 = await store.confirmBusinessSwitch()
+    expect(confirm2.ok).toBe(true)
+    expect(store.activeWorkspaceId).toBe('cloud:10:302')
+    expect(useBusinessStore().outlet).toBe('Cabang Kemang')
+    expect(useShiftStore()).toBeTruthy()
+    expect(trxStore.items).toHaveLength(0)
+
+    await store.ensureDeviceBinding({ platform: 'android' })
+    expect(store.registeredDeviceId).toBe(702)
+    expect(apiRequest.mock.calls.some((c) => c[0] === '/api/mobile/devices' && c[1]?.body?.outlet_id === 302)).toBe(true)
   })
 })
 

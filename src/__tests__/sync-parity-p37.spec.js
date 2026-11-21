@@ -799,7 +799,10 @@ describe('P37: pull applies extended records', () => {
 
 describe('P37: production API configuration guard', () => {
   it('rejects localhost and empty base URLs as production API config', () => {
-    expect(isProductionApiConfigured()).toBe(false)
+    expect(isProductionApiConfigured('http://localhost:8000')).toBe(false)
+    expect(isProductionApiConfigured('http://localhost:3000')).toBe(false)
+    expect(isProductionApiConfigured('')).toBe(false)
+    expect(isProductionApiConfigured(null)).toBe(false)
   })
 })
 

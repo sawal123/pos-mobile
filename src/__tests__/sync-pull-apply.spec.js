@@ -2093,13 +2093,12 @@ describe('P13: Shared Registry & Production Wiring', () => {
     const pinia = createPinia()
     setActivePinia(pinia)
     const productStore = useProductStore(pinia)
-    // Initially productStore has the 4 dummy cafe products
-    expect(productStore.products.map((p) => p.name)).toEqual([
-      'Es Kopi Susu',
-      'Americano',
-      'Croissant Butter',
-      'Chicken Sandwich',
-    ])
+    productStore.$patch({
+      products: [
+        { id: 1, name: 'Unmapped Item 1', category: 'Lainnya', price: 10000, stock: 1, isActive: true },
+      ],
+    })
+    expect(productStore.products.length).toBe(1)
 
     const adapter = createMemoryAdapter()
     await adapter.initialize()
@@ -2142,7 +2141,12 @@ describe('P13: Shared Registry & Production Wiring', () => {
     const pinia = createPinia()
     setActivePinia(pinia)
     const productStore = useProductStore(pinia)
-    expect(productStore.products.length).toBe(4)
+    productStore.$patch({
+      products: [
+        { id: 1, name: 'Unmapped Item 1', category: 'Lainnya', price: 10000, stock: 1, isActive: true },
+      ],
+    })
+    expect(productStore.products.length).toBe(1)
 
     const adapter = createMemoryAdapter()
     await adapter.initialize()

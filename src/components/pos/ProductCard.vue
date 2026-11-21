@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 import AppIcon from '@/components/base/AppIcon.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -18,7 +18,15 @@ function isOutOfStock(product) {
   return (product.kind ?? 'product') !== 'service' && Number(product.stock ?? 0) <= 0
 }
 
-const hasImage = computed(() => Boolean(props.product.imageData))
+const imageLoadError = ref(false)
+watch(
+  () => props.product.imageData,
+  () => {
+    imageLoadError.value = false
+  },
+)
+
+const hasImage = computed(() => Boolean(props.product.imageData && !imageLoadError.value))
 const hasVariants = computed(
   () =>
     Boolean(props.product.variantGroupIds?.length || props.product.variant_group_ids?.length || props.product.hasVariants),
@@ -53,8 +61,10 @@ const effectivePrice = computed(() => {
           v-if="hasImage"
           :src="product.imageData"
           :alt="product.name"
+          loading="lazy"
           class="h-full w-full object-cover"
           data-testid="product-card-image"
+          @error="imageLoadError = true"
         />
         <div
           v-else

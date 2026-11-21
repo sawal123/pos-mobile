@@ -24,6 +24,7 @@ import { clearLocalCache } from '@/services/localCacheService'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCashierStore } from '@/stores/cashierStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
+import { usePremiumCheckoutStore } from '@/stores/premiumCheckoutStore'
 import { useSubscriptionStore } from '@/stores/subscriptionStore'
 import { useSyncPushStore } from '@/stores/syncPushStore'
 import { useSyncPullStore } from '@/stores/syncPullStore'
@@ -36,16 +37,15 @@ import { useSyncActivityLogStore } from '@/stores/syncActivityLogStore'
 import { useSyncAutoSyncStore } from '@/stores/syncAutoSyncStore'
 import { useSyncContextGuardStore } from '@/stores/syncContextGuardStore'
 import { useSyncStatusStore } from '@/stores/syncStatusStore'
+import { useSyncProgressStore } from '@/stores/syncProgressStore'
 import { useSyncReconciliationStore } from '@/stores/syncReconciliationStore'
 import { useProductStore } from '@/stores/productStore'
 import CloudAuthCard from '@/components/cloud/auth/CloudAuthCard.vue'
 import CloudEmailChangeCard from '@/components/cloud/auth/CloudEmailChangeCard.vue'
 import CloudEmailOtpView from '@/components/cloud/auth/CloudEmailOtpView.vue'
 import CloudGoogleLinkCard from '@/components/cloud/auth/CloudGoogleLinkCard.vue'
-import {
-  cancelGoogleSignIn,
-  signInWithGoogle,
-} from '@/services/cloud/googleNativeAuthService'
+import DevicePairingModal from '@/components/cloud/DevicePairingModal.vue'
+import { cancelGoogleSignIn, signInWithGoogle } from '@/services/cloud/googleNativeAuthService'
 
 let route = null
 try {
@@ -63,6 +63,7 @@ try {
 const businessStore = useBusinessStore()
 const cashierStore = useCashierStore()
 const cloudStore = useCloudSessionStore()
+const checkoutStore = usePremiumCheckoutStore()
 const subscriptionStore = useSubscriptionStore()
 const productStore = useProductStore()
 const isOnboarding = computed(
@@ -79,6 +80,7 @@ const syncActivityLogStore = useSyncActivityLogStore()
 const syncAutoSyncStore = useSyncAutoSyncStore()
 const syncContextGuardStore = useSyncContextGuardStore()
 const syncStatusStore = useSyncStatusStore()
+const syncProgressStore = useSyncProgressStore()
 const syncReconciliationStore = useSyncReconciliationStore()
 
 // ── Form state ──────────────────────────────────────────────────────────────
@@ -193,7 +195,7 @@ const canSync = computed(
     cloudStore.isOperationalCloudAccess &&
     Boolean(cloudStore.selectedBusiness) &&
     Boolean(cloudStore.selectedOutlet) &&
-    cloudStore.isDeviceRegistered,
+    (cloudStore.isDeviceRegistered || cloudStore.role !== 'cashier'),
 )
 
 const isContextGuardBlocked = computed(
@@ -247,9 +249,7 @@ const isFreshWorkspace = computed(() => {
 
 const canInitializeCloudData = computed(
   () =>
-    isFreshWorkspace.value &&
-    !hasMeaningfulStagedBootstrap.value &&
-    !isInitialPullRunning.value,
+    isFreshWorkspace.value && !hasMeaningfulStagedBootstrap.value && !isInitialPullRunning.value,
 )
 
 const isAnySyncOperationBusy = computed(
@@ -306,8 +306,25 @@ const contextCheckedLabel = computed(() => {
 
 const activeBusinessOutlets = computed(() => {
   const biz = cloudStore.businesses.find((b) => b.id === cloudStore.selectedBusiness?.id)
-  return (biz?.outlets ?? []).filter((o) => o.status === 'active')
+  return (biz?.outlets ?? []).filter((o) => o.status === 'active' && o.cloud_access !== false)
 })
+
+const allBusinessOutlets = computed(() => {
+  const biz = cloudStore.businesses.find((b) => b.id === cloudStore.selectedBusiness?.id)
+  return (biz?.outlets ?? []).filter((o) => o.status !== 'inactive')
+})
+
+const isOwnerRole = computed(() => {
+  const biz = cloudStore.businesses.find((b) => b.id === cloudStore.selectedBusiness?.id)
+  return (biz?.role ?? cloudStore.role) === 'owner'
+})
+
+const isCashierRole = computed(() => {
+  const biz = cloudStore.businesses.find((b) => b.id === cloudStore.selectedBusiness?.id)
+  return (biz?.role ?? cloudStore.role) === 'cashier'
+})
+
+const showCashierPairingModal = ref(false)
 
 const zeroActiveOutlets = computed(
   () => step.value === 'select-outlet' && activeBusinessOutlets.value.length === 0,
@@ -859,8 +876,14 @@ async function handleSyncAll() {
   const ctx = snapshotCloudContext()
   let result
   try {
+    syncProgressStore.start({
+      type: 'sync',
+      title: 'Sinkronkan Semua Data',
+      description: 'Sedang menyinkronkan data lokal dan cloud secara menyeluruh...',
+    })
     result = await syncOrchestratorStore.syncAll()
   } catch (err) {
+    syncProgressStore.finishError(err.message || 'Sinkronisasi gagal.')
     const finishedAt = new Date().toISOString()
     void syncActivityLogStore.record({
       type: 'full_sync',
@@ -907,6 +930,7 @@ async function handleSyncAll() {
     } else {
       syncAllMessage.value = `Sinkronisasi selesai. ${sent} data dikirim, ${applied} perubahan diterapkan.`
     }
+    await syncProgressStore.finishSuccess(syncAllMessage.value)
   } else {
     syncAllSuccess.value = false
     if (result.code === 'SYNC_MORE_PUSH_PENDING') {
@@ -919,6 +943,7 @@ async function handleSyncAll() {
     } else {
       syncAllMessage.value = result.error?.message ?? result.message ?? 'Sinkronisasi gagal.'
     }
+    syncProgressStore.finishError(syncAllMessage.value)
   }
 }
 
@@ -931,8 +956,14 @@ async function handleSyncNow() {
   const ctx = snapshotCloudContext()
   let result
   try {
+    syncProgressStore.start({
+      type: 'sync',
+      title: 'Sync Sekarang',
+      description: 'Sedang mengirim antrean transaksi lokal ke server...',
+    })
     result = await syncPushStore.pushNow()
   } catch (err) {
+    syncProgressStore.finishError(err.message || 'Sinkronisasi gagal.')
     const finishedAt = new Date().toISOString()
     void syncActivityLogStore.record({
       type: 'push',
@@ -977,9 +1008,11 @@ async function handleSyncNow() {
     } else {
       syncMessage.value = `${sent} data berhasil dikirim, ${rem} masih menunggu.`
     }
+    await syncProgressStore.finishSuccess(syncMessage.value)
   } else {
     syncSuccess.value = false
     syncMessage.value = result.error?.message ?? result.message ?? 'Sinkronisasi gagal.'
+    syncProgressStore.finishError(syncMessage.value)
   }
 }
 
@@ -991,7 +1024,10 @@ async function autoPullAfterActivation() {
       await syncContextGuardStore.check()
     }
     if (!canSync.value || isContextGuardMutationBlocked.value) return
-    await handlePullNow({ initialCloudRead: isFreshWorkspace.value })
+    const sources = syncContextGuardStore.sources ?? []
+    const hasCatalogBinding = sources.includes('pull_binding') || sources.includes('push_binding')
+    const isInitial = Boolean(!hasCatalogBinding || isFreshWorkspace.value)
+    return await handlePullNow({ initialCloudRead: isInitial })
   } catch (err) {
     console.warn('Auto-pull after activation error:', err)
   }
@@ -1036,8 +1072,14 @@ async function handlePullNow({ initialCloudRead = false } = {}) {
     const wasPushOnly = isPushOnlyWorkspace.value
     let result
     try {
+      syncProgressStore.start({
+        type: 'pull',
+        title: isInitial ? 'Memuat Data Cloud' : 'Tarik Data Cloud',
+        description: 'Sedang mengunduh dan menyelaraskan katalog data dari cloud...',
+      })
       result = await syncPullStore.pullNow({ initialCloudRead: isInitial })
     } catch (err) {
+      syncProgressStore.finishError(err.message || 'Gagal menarik data cloud.')
       const finishedAt = new Date().toISOString()
       void syncActivityLogStore.record({
         type: 'pull',
@@ -1118,6 +1160,7 @@ async function handlePullNow({ initialCloudRead = false } = {}) {
         }
       }
 
+      await syncPushStore.refreshPendingCount().catch(() => null)
       pullSuccess.value = true
       const applied = result.applied ?? 0
       if (applied === 0) {
@@ -1127,6 +1170,8 @@ async function handlePullNow({ initialCloudRead = false } = {}) {
       } else {
         pullMessage.value = `${applied} perubahan cloud diterapkan.`
       }
+      await syncProgressStore.finishSuccess(pullMessage.value)
+      return result
     } else {
       pullSuccess.value = false
       if (result.code === 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY') {
@@ -1135,6 +1180,8 @@ async function handlePullNow({ initialCloudRead = false } = {}) {
       } else {
         pullMessage.value = result.error?.message ?? result.message ?? 'Gagal menarik data cloud.'
       }
+      syncProgressStore.finishError(pullMessage.value)
+      return result
     }
   } finally {
     if (isInitial) {
@@ -1321,7 +1368,8 @@ async function handleLogin() {
 
   if (!result.ok) {
     if (result.state === 'two_factor_required') {
-      loginErrorMessage.value = 'Akun memerlukan verifikasi 2FA tambahan. Penyelesaian interaktif akan tersedia pada AUTH-M08.'
+      loginErrorMessage.value =
+        'Akun memerlukan verifikasi 2FA tambahan. Penyelesaian interaktif akan tersedia pada AUTH-M08.'
       return
     }
     loginErrorMessage.value = describeLoginError(result.error).message
@@ -1447,7 +1495,8 @@ function handleOtpBack() {
 function handleOtpOffline() {
   pendingRegistration.value = null
   authMode.value = 'login'
-  otpErrorMessage.value = 'Registrasi belum selesai. POS offline tetap dapat digunakan tanpa Cloud Login.'
+  otpErrorMessage.value =
+    'Registrasi belum selesai. POS offline tetap dapat digunakan tanpa Cloud Login.'
   if (router?.push) void router.push({ name: 'pos' })
 }
 
@@ -1623,8 +1672,7 @@ function handleRecoveryOffline() {
 }
 
 function handleEmailChangeSessionRevoked(payload = {}) {
-  const isAuthoritativeSuccess =
-    payload?.outcome === 'verified' && payload?.state === 'verified'
+  const isAuthoritativeSuccess = payload?.outcome === 'verified' && payload?.state === 'verified'
   emailChangeCompleted.value = isAuthoritativeSuccess
   step.value = 'login'
   authMode.value = 'login'
@@ -1707,14 +1755,32 @@ async function advanceAfterBusiness(biz) {
     return
   }
 
-  const actOutlets = (biz.outlets ?? []).filter((o) => o.status === 'active')
+  const actOutlets = (biz.outlets ?? []).filter(
+    (o) => o.status === 'active' && o.cloud_access !== false,
+  )
+  const visibleOutlets = (biz.outlets ?? []).filter((o) => o.status !== 'inactive')
+  const ownerRole = (biz.role ?? cloudStore.role) === 'owner'
 
   if (actOutlets.length === 0) {
     step.value = 'select-outlet' // zero-outlet error shown
     return
   }
 
-  if (actOutlets.length === 1) {
+  // MULTI-CABANG CASHIER: Kasir terkunci pada 1 cabang spesifik yang ditugaskan
+  if (!ownerRole && (biz.role === 'cashier' || cloudStore.role === 'cashier')) {
+    const cashierOutlet = actOutlets[0] || visibleOutlets[0]
+    if (cashierOutlet) {
+      const outletResult = await cloudStore.selectOutlet(cashierOutlet.id)
+      if (!outletResult.ok) return
+      await finishDeviceStep()
+      return
+    }
+  }
+
+  // MULTI-OUTLET: owners always see the outlet/branch chooser when selecting a
+  // business (or when there is more than one branch, including pending-payment
+  // branches) so they can explicitly pick which branch this POS device operates.
+  if (actOutlets.length === 1 && !ownerRole && visibleOutlets.length <= 1) {
     const outletResult = await cloudStore.selectOutlet(actOutlets[0].id)
     if (!outletResult.ok) return
     await finishDeviceStep()
@@ -1722,6 +1788,59 @@ async function advanceAfterBusiness(biz) {
   }
 
   step.value = 'select-outlet'
+}
+
+function openSwitchOutlet() {
+  if (isAnySyncOperationBusy.value || isCashierRole.value) return
+  cloudStore.error = null
+  step.value = 'select-outlet'
+}
+
+function handleCancelSelectOutlet() {
+  cloudStore.error = null
+  if (cloudStore.isLinked && cloudStore.selectedOutlet) {
+    step.value = 'done'
+    return
+  }
+  step.value = cloudStore.businesses.length > 1 ? 'select-business' : 'login'
+}
+
+async function refreshOutletList() {
+  if (isAnySyncOperationBusy.value) return
+  await cloudStore.refreshContext()
+}
+
+function formatOutletSubscriptionLabel(outlet) {
+  if (!outlet) return ''
+  if (outlet.status === 'pending_payment') {
+    return 'Menunggu pembayaran langganan cabang'
+  }
+  if (outlet.cloud_access === false || outlet.status !== 'active') {
+    return 'Langganan Cloud cabang tidak aktif'
+  }
+  const expiresAt = outlet.subscription?.expires_at
+  if (expiresAt) {
+    const d = new Date(expiresAt)
+    if (!Number.isNaN(d.getTime())) {
+      return `Cloud Aktif s/d ${d.toLocaleDateString('id-ID', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+      })}`
+    }
+  }
+  return 'Cloud Aktif'
+}
+
+function handlePayOutletSubscription(outlet) {
+  if (!outlet) return
+  checkoutStore.setTargetOutlet(outlet)
+  if (router?.push) {
+    void router.push({
+      name: cloudStore.isLinked ? 'subscription' : 'subscription',
+      query: { outlet_id: String(outlet.id) },
+    })
+  }
 }
 
 async function handleSelectOutlet(outletId) {
@@ -1747,8 +1866,8 @@ function applyActivationResult(activation) {
     }
     if (cloudStore.pushPolicy.role === 'cashier' || cloudStore.role === 'cashier') {
       if (router?.push) {
-      void router.push({ name: 'home' })
-    }
+        void router.push({ name: 'home' })
+      }
     }
     return true
   }
@@ -1769,10 +1888,14 @@ async function handleConfirmBusinessSwitch() {
   })
   if (result.ok) {
     showSwitchModal.value = false
+    await cloudStore.ensureDeviceBinding({ platform: getPlatform() }).catch(() => null)
     step.value = 'done'
     businessStore.mode = 'cloud'
     if (canSync.value) {
-      void autoPullAfterActivation()
+      await autoPullAfterActivation()
+    }
+    if (router?.push) {
+      void router.push({ name: 'home' })
     }
     return
   }
@@ -1799,15 +1922,20 @@ async function finishDeviceStep() {
     if (cloudStore.selectedBusiness?.business_type_status !== 'legacy') {
       const activation = await cloudStore.activateOperationalContext()
       if (!applyActivationResult(activation)) return
+      if (!cloudStore.registeredDeviceId) {
+        showCashierPairingModal.value = true
+      }
       return
     }
 
     step.value = 'done'
     businessStore.mode = 'cloud'
-    if (canSync.value) {
+    if (!cloudStore.registeredDeviceId) {
+      showCashierPairingModal.value = true
+    } else if (canSync.value) {
       void autoPullAfterActivation()
     }
-    if (router?.push) {
+    if (router?.push && cloudStore.registeredDeviceId) {
       void router.push({ name: 'home' })
     }
     return
@@ -1816,20 +1944,44 @@ async function finishDeviceStep() {
   // Owner/member: never register a device from the app. The dashboard owns
   // device management; the binding is resolved silently so sync metadata stays
   // consistent, and a failure never blocks the login itself.
-  const binding = await cloudStore.ensureDeviceBinding({ platform: getPlatform() })
-  if (!binding.ok) {
-    console.warn('Device binding notice:', binding.code ?? binding.error)
-  }
-
   if (cloudStore.selectedBusiness?.business_type_status !== 'legacy') {
     const activation = await cloudStore.activateOperationalContext()
-    if (!applyActivationResult(activation)) return
+    if (!activation.ok) {
+      applyActivationResult(activation)
+      return
+    }
+    await cloudStore.ensureDeviceBinding({ platform: getPlatform() }).catch(() => null)
+    step.value = 'done'
+    businessStore.mode = 'cloud'
+    if (canSync.value) {
+      await autoPullAfterActivation()
+    }
+    if (router?.push) {
+      void router.push({ name: 'home' })
+    }
     return
   }
 
   step.value = 'done'
+  businessStore.mode = 'cloud'
+  await cloudStore.ensureDeviceBinding({ platform: getPlatform() }).catch(() => null)
   if (canSync.value) {
-    void autoPullAfterActivation()
+    await autoPullAfterActivation()
+  }
+  if (router?.push) {
+    void router.push({ name: 'home' })
+  }
+}
+
+async function handleCashierPaired() {
+  showCashierPairingModal.value = false
+  step.value = 'done'
+  businessStore.mode = 'cloud'
+  if (canSync.value) {
+    await autoPullAfterActivation()
+  }
+  if (router?.push) {
+    void router.push({ name: 'home' })
   }
 }
 
@@ -1906,7 +2058,6 @@ onMounted(async () => {
     void autoPullAfterActivation()
   }
 })
-
 </script>
 
 <template>
@@ -1928,12 +2079,18 @@ onMounted(async () => {
 
       <header class="space-y-4" data-testid="cloud-page-header">
         <div class="flex items-center gap-3">
-          <span class="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+          <span
+            class="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary"
+          >
             <AppIcon name="cloud" class="size-6" />
           </span>
           <div class="min-w-0">
-            <h1 class="text-2xl font-semibold tracking-tight text-ink-primary">{{ cloudPageTitle }}</h1>
-            <p class="mt-1 text-sm leading-relaxed text-ink-secondary">{{ cloudPageDescription }}</p>
+            <h1 class="text-2xl font-semibold tracking-tight text-ink-primary">
+              {{ cloudPageTitle }}
+            </h1>
+            <p class="mt-1 text-sm leading-relaxed text-ink-secondary">
+              {{ cloudPageDescription }}
+            </p>
           </div>
         </div>
         <div
@@ -1941,14 +2098,23 @@ onMounted(async () => {
           class="flex items-center gap-3 rounded-2xl border border-zinc-200/70 bg-white px-4 py-3"
           data-testid="cloud-signed-in-account"
         >
-          <span class="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-semibold text-primary" aria-hidden="true">
+          <span
+            class="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-semibold text-primary"
+            aria-hidden="true"
+          >
             {{ (cloudStore.user?.name || cloudStore.user?.email || 'A').slice(0, 1).toUpperCase() }}
           </span>
           <div class="min-w-0 flex-1">
-            <p class="truncate text-sm font-medium text-ink-primary">{{ cloudStore.user?.name || 'Akun Cloud' }}</p>
-            <p class="truncate text-xs text-ink-secondary" data-testid="link-cloud-account">{{ cloudAccountEmail }}</p>
+            <p class="truncate text-sm font-medium text-ink-primary">
+              {{ cloudStore.user?.name || 'Akun Cloud' }}
+            </p>
+            <p class="truncate text-xs text-ink-secondary" data-testid="link-cloud-account">
+              {{ cloudAccountEmail }}
+            </p>
           </div>
-          <span class="flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700">
+          <span
+            class="flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700"
+          >
             <span class="size-1.5 rounded-full bg-emerald-500" aria-hidden="true"></span> Masuk
           </span>
         </div>
@@ -1980,13 +2146,13 @@ onMounted(async () => {
           class="rounded-2xl border border-primary/20 bg-primary/5 p-4 sm:p-5"
         >
           <div class="flex items-start gap-3.5">
-            <span class="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary text-white">
+            <span
+              class="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary text-white"
+            >
               <AppIcon name="store" class="size-5" />
             </span>
             <div class="min-w-0 flex-1">
-              <h3 class="text-base font-bold text-ink-primary">
-                Siap mulai berjualan
-              </h3>
+              <h3 class="text-base font-bold text-ink-primary">Siap mulai berjualan</h3>
               <p class="mt-1 text-sm leading-relaxed text-ink-secondary">
                 {{
                   cashierStore.activeCashier?.pinConfigured
@@ -2017,57 +2183,1255 @@ onMounted(async () => {
             </div>
           </div>
         </div>
-      <!-- PREM-M03: link status summary -->
-      <div
-        id="cloud-link-summary"
-        class="rounded-2xl border border-zinc-200/80 bg-white px-4 py-4"
-      >
-        <div class="flex items-center justify-between">
-          <span class="text-sm font-semibold text-ink-primary">Bisnis aktif</span>
-          <span
-            class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-emerald-700"
+        <!-- PREM-M03: link status summary -->
+        <div
+          id="cloud-link-summary"
+          class="rounded-2xl border border-zinc-200/80 bg-white px-4 py-4"
+        >
+          <div class="flex items-center justify-between">
+            <span class="text-sm font-semibold text-ink-primary">Bisnis aktif</span>
+            <span
+              class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-emerald-700"
+            >
+              Terhubung
+            </span>
+          </div>
+          <dl class="mt-4 space-y-3 text-sm text-ink-secondary">
+            <div class="flex items-center justify-between">
+              <dt>Akun</dt>
+              <dd
+                class="min-w-0 break-all pl-4 text-right font-medium text-ink-primary"
+                data-testid="cloud-link-email"
+              >
+                {{ cloudAccountEmail }}
+              </dd>
+            </div>
+            <div class="flex items-center justify-between">
+              <dt>Bisnis</dt>
+              <dd
+                class="min-w-0 break-words pl-4 text-right font-medium text-ink-primary"
+                data-testid="cloud-link-business"
+              >
+                {{ cloudStore.selectedBusiness?.name ?? '-' }}
+              </dd>
+            </div>
+            <div class="flex items-center justify-between">
+              <dt>Outlet</dt>
+              <dd
+                class="min-w-0 break-words pl-4 text-right font-medium text-ink-primary"
+                data-testid="cloud-link-outlet"
+              >
+                <span>{{ cloudStore.selectedOutlet?.name ?? '-' }}</span>
+                <span
+                  v-if="cloudStore.selectedOutlet?.code"
+                  class="ml-1.5 rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-ink-secondary"
+                >
+                  {{ cloudStore.selectedOutlet.code }}
+                </span>
+                <span
+                  v-if="cloudStore.selectedOutlet?.is_primary"
+                  class="ml-1 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-bold uppercase text-primary"
+                >
+                  Utama
+                </span>
+              </dd>
+            </div>
+            <div class="flex items-center justify-between">
+              <dt>Paket</dt>
+              <dd class="font-medium text-ink-primary" data-testid="cloud-link-subscription">
+                {{ cloudSubscriptionLabel }}
+              </dd>
+            </div>
+          </dl>
+
+          <!-- Cashier Unpaired Warning Card -->
+          <div
+            v-if="isCashierRole && !cloudStore.registeredDeviceId"
+            id="cloud-cashier-unpaired-card"
+            class="mt-3 rounded-2xl border border-amber-200 bg-amber-50 p-3.5 text-xs text-amber-900 shadow-2xs space-y-2"
+            data-testid="cloud-cashier-unpaired-card"
           >
-            Terhubung
-          </span>
+            <div class="flex items-center gap-2">
+              <span class="text-base">📱</span>
+              <span class="font-bold">Perangkat Kasir Belum Dipasangkan</span>
+            </div>
+            <p class="text-amber-700 leading-relaxed text-[11px]">
+              Perangkat ini belum dipasangkan dengan Dashboard Toko. Minta kode pairing 4 digit dari pemilik toko untuk menghubungkan perangkat kasir ini.
+            </p>
+          </div>
+
+          <div class="mt-3 flex flex-wrap gap-2">
+            <BaseButton
+              v-if="!isCashierRole && (isOwnerRole || allBusinessOutlets.length > 1)"
+              id="cloud-switch-outlet-btn"
+              size="sm"
+              variant="secondary"
+              :disabled="isAnySyncOperationBusy || cloudStore.loading"
+              @click="openSwitchOutlet"
+            >
+              Pilih Cabang
+            </BaseButton>
+            <BaseButton
+              v-if="isCashierRole && !cloudStore.registeredDeviceId"
+              id="cloud-cashier-pair-btn"
+              data-testid="cloud-cashier-pair-btn"
+              size="sm"
+              variant="primary"
+              :disabled="isAnySyncOperationBusy || cloudStore.loading"
+              @click="showCashierPairingModal = true"
+            >
+              Pasangkan Perangkat (4 Digit)
+            </BaseButton>
+            <BaseButton
+              id="cloud-manage-subscription"
+              size="sm"
+              variant="secondary"
+              @click="goToSubscription"
+            >
+              Langganan
+            </BaseButton>
+            <BaseButton
+              id="cloud-disconnect-btn"
+              size="sm"
+              variant="danger"
+              :disabled="isAnySyncOperationBusy"
+              @click="requestDisconnect"
+            >
+              Putuskan
+            </BaseButton>
+          </div>
         </div>
-        <dl class="mt-4 space-y-3 text-sm text-ink-secondary">
-          <div class="flex items-center justify-between">
-            <dt>Akun</dt>
-            <dd class="min-w-0 break-all pl-4 text-right font-medium text-ink-primary" data-testid="cloud-link-email">
-              {{ cloudAccountEmail }}
-            </dd>
+
+        <!-- P23: Context Guard Warning Banner -->
+        <div
+          v-if="isContextGuardBlocked"
+          id="sync-context-guard-warning"
+          class="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900 shadow-sm"
+        >
+          <div class="flex items-start gap-3">
+            <span class="text-lg">⚠️</span>
+            <div>
+              <p class="font-semibold">Konteks sinkronisasi tidak cocok dengan data lokal.</p>
+              <p class="mt-1 text-xs text-rose-700">
+                {{
+                  syncContextGuardStore.code === 'SYNC_CONTEXT_MISMATCH'
+                    ? 'Data sinkronisasi lokal terikat pada outlet/perangkat berbeda.'
+                    : syncContextGuardStore.code === 'SYNC_CONTEXT_BUSINESS_MISMATCH'
+                      ? 'Data sinkronisasi lokal terikat pada bisnis berbeda.'
+                      : syncContextGuardStore.code === 'SYNC_CONTEXT_METADATA_CONFLICT'
+                        ? 'Metadata sinkronisasi lokal tidak konsisten.'
+                        : syncContextGuardStore.code === 'SYNC_CONTEXT_METADATA_INVALID'
+                          ? 'Metadata sinkronisasi lokal tidak valid.'
+                          : 'Operasi sinkronisasi diblokir untuk mencegah ketidakkonsistenan data.'
+                }}
+              </p>
+            </div>
           </div>
-          <div class="flex items-center justify-between">
-            <dt>Bisnis</dt>
-            <dd class="min-w-0 break-words pl-4 text-right font-medium text-ink-primary" data-testid="cloud-link-business">
-              {{ cloudStore.selectedBusiness?.name ?? '-' }}
-            </dd>
+        </div>
+
+        <!-- Workspace recovery required -->
+        <div
+          v-if="cloudStore.workspaceRecoveryRequired"
+          id="workspace-recovery-warning"
+          class="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900 shadow-sm"
+        >
+          <p class="font-semibold">Pemulihan ruang kerja diperlukan.</p>
+          <p class="mt-1 text-xs text-rose-700">
+            Perpindahan bisnis sebelumnya terhenti dan pemulihan otomatis tidak selesai.
+            Sinkronisasi dan akses data tenant diblokir sampai data ruang kerja dipastikan
+            konsisten.
+          </p>
+        </div>
+
+        <!-- P13: Manual Pull Section -->
+        <div
+          v-if="canSync"
+          id="cloud-pull-section"
+          class="space-y-3 rounded-2xl border border-zinc-200/80 bg-white p-4"
+        >
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div class="min-w-0">
+              <p class="text-sm font-semibold text-ink-primary">Katalog Cloud</p>
+              <p class="text-xs text-ink-secondary">Produk dan kategori dari bisnis Anda.</p>
+            </div>
+            <BaseButton
+              id="pull-now-btn"
+              v-show="!canInitializeCloudData"
+              variant="secondary"
+              size="md"
+              :disabled="
+                isAnySyncOperationBusy || isContextGuardMutationBlocked || isFreshWorkspace
+              "
+              :loading="syncPullStore.loading"
+              aria-label="Tarik Data Cloud"
+              title="Tarik Data Cloud"
+              class="w-full shrink-0 sm:w-auto"
+              @click="handlePullNow"
+            >
+              <AppIcon name="download" class="h-4 w-4" />
+              <span class="ml-1.5">Muat ulang</span>
+            </BaseButton>
           </div>
-          <div class="flex items-center justify-between">
-            <dt>Outlet</dt>
-            <dd class="min-w-0 break-words pl-4 text-right font-medium text-ink-primary" data-testid="cloud-link-outlet">
-              {{ cloudStore.selectedOutlet?.name ?? '-' }}
-            </dd>
-          </div>
-          <div class="flex items-center justify-between">
-            <dt>Paket</dt>
-            <dd class="font-medium text-ink-primary" data-testid="cloud-link-subscription">
-              {{ cloudSubscriptionLabel }}
-            </dd>
-          </div>
-        </dl>
-        <div class="mt-3 flex flex-wrap gap-2">
-          <BaseButton
-            id="cloud-manage-subscription"
-            size="sm"
-            variant="secondary"
-            @click="goToSubscription"
+
+          <p
+            v-if="isPushOnlyWorkspace"
+            id="cloud-push-only-notice"
+            class="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800"
           >
-            Langganan
+            Perangkat ini sudah terhubung untuk mengirim data. Gunakan Tarik untuk mengambil data
+            Cloud pertama kali tanpa menghapus data lokal.
+          </p>
+
+          <div v-if="canInitializeCloudData" id="cloud-initialization-notice" class="space-y-3">
+            <p class="text-xs text-ink-secondary">Katalog belum dimuat di perangkat ini.</p>
+            <BaseButton
+              id="cloud-initialize-btn"
+              variant="primary"
+              size="md"
+              :disabled="
+                isAnySyncOperationBusy || isContextGuardMutationBlocked || isInitialPullRunning
+              "
+              :loading="syncPullStore.loading || isInitialPullRunning"
+              aria-label="Muat Data Cloud"
+              title="Muat Data Cloud"
+              class="mt-3 w-full sm:w-auto"
+              @click="handlePullNow({ initialCloudRead: true })"
+            >
+              <AppIcon name="download" class="h-4 w-4" />
+              <span class="ml-1.5">Muat Data Cloud</span>
+            </BaseButton>
+          </div>
+
+          <p
+            v-if="pullMessage"
+            id="pull-result-message"
+            class="rounded-xl px-3 py-2 text-xs font-medium"
+            :class="pullSuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'"
+          >
+            {{ pullMessage }}
+          </p>
+
+          <div
+            v-if="syncPullStore.lastResult?.code === 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY'"
+            id="clear-and-pull-section"
+            class="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3.5 space-y-2"
+          >
+            <p class="text-xs text-amber-800">
+              Ada data lokal yang belum tersinkron (seperti kas/shift). Jika Anda ingin menggunakan
+              data Cloud sepenuhnya di perangkat ini, bersihkan cache lokal lalu muat ulang dari
+              Cloud.
+            </p>
+            <BaseButton
+              id="clear-and-pull-btn"
+              variant="secondary"
+              size="sm"
+              class="w-full sm:w-auto text-amber-800 border-amber-300 hover:bg-amber-100"
+              :disabled="isAnySyncOperationBusy || isInitialPullRunning"
+              :loading="isInitialPullRunning"
+              @click="handleClearAndPull"
+            >
+              <AppIcon name="trash" class="h-4 w-4 text-amber-700" />
+              <span class="ml-1.5 font-medium">Bersihkan</span>
+            </BaseButton>
+          </div>
+        </div>
+
+        <details
+          v-if="canSync"
+          id="cloud-sync-details"
+          class="group rounded-2xl border border-zinc-200/80"
+          :open="
+            syncConflictStore.openConflictCount > 0 ||
+            syncStatusStore.reconciliationRequired ||
+            syncBootstrapStore.hasContextMismatch
+          "
+        >
+          <summary
+            class="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium text-ink-primary [&::-webkit-details-marker]:hidden"
+          >
+            <span>Sinkronisasi &amp; riwayat</span>
+            <AppIcon
+              name="chevron-right"
+              class="size-4 text-ink-secondary transition-transform group-open:rotate-90"
+            />
+          </summary>
+          <div class="space-y-4 border-t border-zinc-100 p-4">
+            <p class="text-xs text-ink-secondary" data-testid="cloud-link-checked">
+              Diperiksa: {{ contextCheckedLabel }}
+            </p>
+
+            <!-- P14: Initial Bootstrap Section (Free to Cloud) -->
+            <div
+              v-if="canSync && !syncBootstrapStore.isStaged"
+              id="cloud-bootstrap-section"
+              class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
+            >
+              <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div class="min-w-0">
+                  <p class="text-sm font-semibold text-ink-primary">Siapkan Data Lokal ke Cloud</p>
+                  <p class="text-xs text-ink-secondary">
+                    Upload data offline/FREE yang sudah ada ke server cloud untuk pertama kali
+                  </p>
+                </div>
+                <BaseButton
+                  id="bootstrap-btn"
+                  variant="primary"
+                  size="md"
+                  :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
+                  :loading="syncBootstrapStore.loading"
+                  aria-label="Siapkan Data Lokal ke Cloud"
+                  title="Siapkan Data Lokal ke Cloud"
+                  class="w-full shrink-0 sm:w-auto"
+                  @click="handleBootstrapNow"
+                >
+                  <AppIcon name="upload" class="h-4 w-4" />
+                  <span class="ml-1.5">Siapkan</span>
+                </BaseButton>
+              </div>
+
+              <div class="grid grid-cols-2 gap-2 text-xs text-ink-secondary sm:grid-cols-3">
+                <div id="preview-products">
+                  Produk: {{ syncBootstrapStore.previewCounts.products }}
+                </div>
+                <div id="preview-categories">
+                  Kategori: {{ syncBootstrapStore.previewCounts.categories }}
+                </div>
+                <div id="preview-customers">
+                  Pelanggan: {{ syncBootstrapStore.previewCounts.customers }}
+                </div>
+                <div id="preview-expenses">
+                  Pengeluaran: {{ syncBootstrapStore.previewCounts.expenses }}
+                </div>
+                <div id="preview-transactions">
+                  Transaksi: {{ syncBootstrapStore.previewCounts.transactions }}
+                </div>
+              </div>
+
+              <p
+                v-if="bootstrapMessage && !syncBootstrapStore.isStaged"
+                id="bootstrap-result-message"
+                class="rounded-xl px-3 py-2 text-xs font-medium"
+                :class="
+                  bootstrapSuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'
+                "
+              >
+                {{ bootstrapMessage }}
+              </p>
+            </div>
+
+            <!-- P14: Bootstrap Context Mismatch Notice -->
+            <div
+              v-if="canSync && syncBootstrapStore.hasContextMismatch"
+              id="cloud-bootstrap-mismatch-notice"
+              class="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-800"
+            >
+              Data lokal sudah disiapkan untuk Business/Outlet lain.
+            </div>
+
+            <!-- P14: Bootstrap Staged Notice -->
+            <div
+              v-else-if="canSync && syncBootstrapStore.isStagedForCurrentContext"
+              id="cloud-bootstrap-staged-notice"
+              class="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-medium text-emerald-800"
+            >
+              Data lokal siap disinkronkan. Gunakan Sync Sekarang.
+            </div>
+
+            <!-- P17: Sync Health & Diagnostics Section -->
+            <div
+              v-if="canSync"
+              id="cloud-health-section"
+              class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
+            >
+              <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div class="min-w-0">
+                  <p class="text-sm font-semibold text-ink-primary">Status Sinkronisasi</p>
+                  <p class="text-xs text-ink-secondary">
+                    Periksa kondisi outbox, konflik, envelope, dan binding lokal
+                  </p>
+                </div>
+                <BaseButton
+                  id="sync-health-btn"
+                  variant="secondary"
+                  size="md"
+                  :disabled="isAnySyncOperationBusy"
+                  :loading="syncHealthStore.loading"
+                  aria-label="Periksa Status Sync"
+                  title="Periksa Status Sync"
+                  class="w-full shrink-0 sm:w-auto"
+                  @click="handleCheckSyncHealth"
+                >
+                  <AppIcon name="shield" class="h-4 w-4" />
+                  <span class="ml-1.5">Periksa</span>
+                </BaseButton>
+              </div>
+
+              <div
+                v-if="syncHealthStore.summary"
+                class="grid grid-cols-2 gap-2 text-xs text-ink-secondary sm:grid-cols-3"
+              >
+                <div id="health-pending-count">
+                  Pending: {{ syncHealthStore.summary.pendingCount }}
+                </div>
+                <div id="health-conflict-count">
+                  Konflik: {{ syncHealthStore.summary.openConflictCount }}
+                </div>
+                <div id="health-inflight-status">
+                  In-flight: {{ syncHealthStore.summary.hasInflight ? 'Ya' : 'Tidak' }}
+                </div>
+                <div id="health-pull-cursor">
+                  Pull Cursor: {{ syncHealthStore.summary.pullCursor }}
+                </div>
+                <div id="health-bootstrap-status">
+                  Bootstrap:
+                  {{
+                    syncHealthStore.summary.bootstrapStatus === 'completed'
+                      ? 'Completed'
+                      : syncHealthStore.summary.bootstrapStatus === 'staged'
+                        ? 'Staged'
+                        : syncHealthStore.summary.bootstrapStatus === 'invalid'
+                          ? 'Invalid'
+                          : 'Belum'
+                  }}
+                </div>
+              </div>
+
+              <div v-if="syncHealthStore.status">
+                <p
+                  id="sync-health-status-message"
+                  class="rounded-xl px-3 py-2 text-xs font-medium"
+                  :class="{
+                    'bg-emerald-50 text-emerald-700': syncHealthStore.status === 'ready',
+                    'bg-amber-50 text-amber-700': syncHealthStore.status === 'attention',
+                    'bg-danger/10 text-danger': syncHealthStore.status === 'blocked',
+                  }"
+                >
+                  {{
+                    syncHealthStore.status === 'ready'
+                      ? 'Status sinkronisasi lokal sehat.'
+                      : syncHealthStore.status === 'attention'
+                        ? 'Sinkronisasi memerlukan perhatian.'
+                        : 'Sinkronisasi memerlukan tindakan sebelum dapat dilanjutkan.'
+                  }}
+                </p>
+
+                <div
+                  v-if="syncHealthStore.issues && syncHealthStore.issues.length > 0"
+                  class="mt-2 space-y-1"
+                >
+                  <div
+                    v-for="(issue, index) in syncHealthStore.issues"
+                    :key="`${issue.code}-${index}`"
+                    :id="`health-issue-${issue.code}-${index}`"
+                    class="flex items-center justify-between rounded-lg px-3 py-1.5 text-xs"
+                    :class="
+                      issue.severity === 'blocked'
+                        ? 'bg-danger/5 text-danger'
+                        : 'bg-amber-500/10 text-amber-800'
+                    "
+                  >
+                    <span>{{ issue.message }}</span>
+                    <span class="font-mono uppercase font-semibold text-[10px]">{{
+                      issue.severity
+                    }}</span>
+                  </div>
+                </div>
+
+                <p
+                  v-if="syncHealthStore.lastCheckedAt"
+                  id="health-last-checked-at"
+                  class="mt-2 text-[10px] text-ink-secondary"
+                >
+                  Terakhir diperiksa: {{ syncHealthStore.lastCheckedAt }}
+                </p>
+              </div>
+            </div>
+
+            <!-- P18: Manual Sync Recovery Center -->
+            <div
+              v-if="
+                canSync &&
+                (syncHealthStore.lastResult ||
+                  syncRecoveryStore.loading ||
+                  recoveryMessage ||
+                  syncRecoveryStore.lastResult)
+              "
+              id="cloud-recovery-section"
+              class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
+            >
+              <div>
+                <p class="text-sm font-semibold text-ink-primary">Pemulihan Sinkronisasi</p>
+                <p id="recovery-plan-message" class="text-xs text-ink-secondary">
+                  {{
+                    recoveryPlan?.message ||
+                    'Pilih tindakan pemulihan yang sesuai berdasarkan status diagnostik.'
+                  }}
+                </p>
+              </div>
+
+              <div
+                v-if="recoveryPlan?.availableActions && recoveryPlan.availableActions.length > 0"
+                class="flex flex-wrap gap-2"
+              >
+                <BaseButton
+                  v-if="recoveryActions.includes('RETRY_INFLIGHT')"
+                  id="recovery-retry-inflight-btn"
+                  variant="primary"
+                  size="sm"
+                  :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
+                  :loading="
+                    syncRecoveryStore.loading && syncRecoveryStore.lastAction === 'RETRY_INFLIGHT'
+                  "
+                  @click="handleRecovery('RETRY_INFLIGHT')"
+                >
+                  Coba Ulang Push
+                </BaseButton>
+
+                <BaseButton
+                  v-if="recoveryPlan.availableActions.includes('CONTINUE_PENDING')"
+                  id="recovery-continue-pending-btn"
+                  variant="primary"
+                  size="sm"
+                  :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
+                  :loading="
+                    syncRecoveryStore.loading && syncRecoveryStore.lastAction === 'CONTINUE_PENDING'
+                  "
+                  @click="handleRecovery('CONTINUE_PENDING')"
+                >
+                  Lanjutkan Sinkronisasi
+                </BaseButton>
+
+                <BaseButton
+                  v-if="recoveryPlan.availableActions.includes('PREPARE_BOOTSTRAP')"
+                  id="recovery-prepare-bootstrap-btn"
+                  variant="primary"
+                  size="sm"
+                  :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
+                  :loading="
+                    syncRecoveryStore.loading &&
+                    syncRecoveryStore.lastAction === 'PREPARE_BOOTSTRAP'
+                  "
+                  @click="handleRecovery('PREPARE_BOOTSTRAP')"
+                >
+                  Siapkan Data Lokal
+                </BaseButton>
+
+                <BaseButton
+                  v-if="recoveryPlan.availableActions.includes('CONTINUE_BOOTSTRAP')"
+                  id="recovery-continue-bootstrap-btn"
+                  variant="primary"
+                  size="sm"
+                  :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
+                  :loading="
+                    syncRecoveryStore.loading &&
+                    syncRecoveryStore.lastAction === 'CONTINUE_BOOTSTRAP'
+                  "
+                  @click="handleRecovery('CONTINUE_BOOTSTRAP')"
+                >
+                  Lanjutkan Data Bootstrap
+                </BaseButton>
+              </div>
+
+              <p
+                v-if="recoveryMessage"
+                id="recovery-result-message"
+                class="rounded-xl px-3 py-2 text-xs font-medium"
+                :class="
+                  recoverySuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'
+                "
+              >
+                {{ recoveryMessage }}
+              </p>
+            </div>
+
+            <!-- INT-04: Sync Request Reconciliation -->
+            <div
+              v-if="reconciliationPresentation"
+              id="cloud-reconciliation-section"
+              class="space-y-3 rounded-2xl border p-4"
+              :class="
+                reconciliationPresentation.tone === 'danger'
+                  ? 'border-danger/30 bg-danger/5'
+                  : 'border-amber-500/30 bg-amber-500/5'
+              "
+            >
+              <div>
+                <p class="text-sm font-semibold text-ink-primary">Rekonsiliasi Pengiriman</p>
+                <p id="reconciliation-message" class="text-xs text-ink-secondary">
+                  {{ reconciliationPresentation.message }}
+                </p>
+              </div>
+
+              <BaseButton
+                id="reconciliation-recheck-btn"
+                variant="secondary"
+                size="sm"
+                :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
+                :loading="syncReconciliationStore.loading"
+                @click="handleReconcileRequests"
+              >
+                Periksa
+              </BaseButton>
+
+              <p
+                v-if="reconciliationMessage"
+                id="reconciliation-result-message"
+                class="rounded-xl px-3 py-2 text-xs font-medium"
+                :class="
+                  reconciliationSuccess
+                    ? 'bg-emerald-50 text-emerald-700'
+                    : 'bg-danger/10 text-danger'
+                "
+              >
+                {{ reconciliationMessage }}
+              </p>
+            </div>
+
+            <!-- P16: Manual Full Sync Section -->
+            <div
+              v-if="canSync"
+              id="cloud-sync-all-section"
+              class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
+            >
+              <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div class="min-w-0">
+                  <p class="text-sm font-semibold text-ink-primary">Sinkronkan Semua</p>
+                  <p class="text-xs text-ink-secondary">
+                    Kirim data lokal tertunda lalu ambil pembaruan dari cloud
+                  </p>
+                </div>
+                <BaseButton
+                  id="sync-all-btn"
+                  variant="primary"
+                  size="md"
+                  :disabled="
+                    syncBootstrapStore.hasContextMismatch ||
+                    isAnySyncOperationBusy ||
+                    isContextGuardMutationBlocked ||
+                    isFreshWorkspace
+                  "
+                  :loading="syncOrchestratorStore.loading"
+                  aria-label="Sinkronkan Semua"
+                  title="Sinkronkan Semua"
+                  class="w-full shrink-0 sm:w-auto"
+                  @click="handleSyncAll"
+                >
+                  <AppIcon name="sync" class="h-4 w-4" />
+                  <span class="ml-1.5">Sync Semua</span>
+                </BaseButton>
+              </div>
+
+              <p
+                v-if="syncAllMessage"
+                id="sync-all-result-message"
+                class="rounded-xl px-3 py-2 text-xs font-medium"
+                :class="
+                  syncAllSuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'
+                "
+              >
+                {{ syncAllMessage }}
+              </p>
+            </div>
+
+            <!-- P12: Manual Sync Section -->
+            <div
+              v-if="canSync"
+              id="cloud-sync-section"
+              class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
+            >
+              <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div class="min-w-0">
+                  <p class="text-sm font-semibold text-ink-primary">Sinkronisasi Cloud</p>
+                  <p id="sync-pending-label" class="text-xs text-ink-secondary">
+                    {{ syncPushStore.pendingCount }} data menunggu sinkronisasi
+                  </p>
+                </div>
+                <BaseButton
+                  id="sync-now-btn"
+                  variant="primary"
+                  size="md"
+                  :disabled="
+                    syncBootstrapStore.hasContextMismatch ||
+                    isAnySyncOperationBusy ||
+                    isContextGuardMutationBlocked
+                  "
+                  :loading="syncPushStore.loading"
+                  aria-label="Sync Sekarang"
+                  title="Sync Sekarang"
+                  class="w-full shrink-0 sm:w-auto"
+                  @click="handleSyncNow"
+                >
+                  <AppIcon name="upload" class="h-4 w-4" />
+                  <span class="ml-1.5">Kirim</span>
+                </BaseButton>
+              </div>
+
+              <p
+                v-if="syncMessage"
+                id="sync-result-message"
+                class="rounded-xl px-3 py-2 text-xs font-medium"
+                :class="syncSuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'"
+              >
+                {{ syncMessage }}
+              </p>
+            </div>
+
+            <!-- P15: Manual Conflict Resolution Section -->
+            <div
+              v-if="canSync && syncConflictStore.openConflictCount > 0"
+              id="cloud-conflict-section"
+              class="space-y-3 rounded-2xl border border-danger/20 bg-danger/5 p-4"
+            >
+              <div>
+                <p class="text-sm font-semibold text-danger">Konflik Sinkronisasi</p>
+                <p class="text-xs text-ink-secondary">
+                  Ada {{ syncConflictStore.openConflictCount }} data konflik yang memerlukan
+                  keputusan manual Anda
+                </p>
+              </div>
+
+              <div class="space-y-2">
+                <div
+                  v-for="conflict in syncConflictStore.openConflicts"
+                  :key="conflict.id"
+                  :id="`conflict-item-${conflict.id}`"
+                  class="flex flex-col gap-2 rounded-xl bg-surface p-3 sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div class="text-xs">
+                    <span class="font-semibold text-ink-primary uppercase">{{
+                      conflict.serverEntity || conflict.entityType
+                    }}</span>
+                    <span class="text-ink-secondary"> • ID: {{ conflict.entityId }}</span>
+                    <span class="text-ink-secondary">
+                      • Server Version: {{ conflict.serverSyncVersion }}</span
+                    >
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <BaseButton
+                      :id="`use-server-btn-${conflict.id}`"
+                      variant="secondary"
+                      size="sm"
+                      :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
+                      :loading="syncConflictStore.loading"
+                      @click="handleUseServer(conflict.id)"
+                    >
+                      Cloud
+                    </BaseButton>
+                    <BaseButton
+                      :id="`keep-local-btn-${conflict.id}`"
+                      variant="primary"
+                      size="sm"
+                      :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
+                      :loading="syncConflictStore.loading"
+                      @click="handleKeepLocal(conflict.id)"
+                    >
+                      Lokal
+                    </BaseButton>
+                  </div>
+                </div>
+              </div>
+
+              <p
+                v-if="conflictMessage"
+                id="conflict-result-message"
+                class="rounded-xl px-3 py-2 text-xs font-medium"
+                :class="
+                  conflictSuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'
+                "
+              >
+                {{ conflictMessage }}
+              </p>
+            </div>
+
+            <!-- P20: Safe Foreground Auto Sync Section -->
+            <div
+              v-if="canSync"
+              id="auto-sync-section"
+              class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
+            >
+              <div class="flex items-center justify-between">
+                <div class="space-y-0.5">
+                  <p class="text-sm font-semibold text-ink-primary">Sinkronisasi Otomatis</p>
+                  <p class="text-xs text-ink-secondary">
+                    Berjalan hanya saat aplikasi aktif ketika koneksi kembali online atau aplikasi
+                    dibuka kembali.
+                  </p>
+                </div>
+                <label class="relative inline-flex cursor-pointer items-center">
+                  <input
+                    id="auto-sync-toggle"
+                    type="checkbox"
+                    class="peer sr-only"
+                    :checked="syncAutoSyncStore.enabled"
+                    :disabled="
+                      isAnySyncOperationBusy ||
+                      syncAutoSyncStore.loadingPreference ||
+                      isContextGuardMutationBlocked ||
+                      (!syncAutoSyncStore.enabled && syncContextGuardStore.status !== 'safe')
+                    "
+                    @change="handleToggleAutoSync"
+                  />
+                  <div
+                    class="peer h-6 w-11 rounded-full bg-surface-muted transition-colors after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:bg-white after:shadow-sm after:transition-all after:content-[''] peer-checked:bg-primary peer-checked:after:translate-x-full peer-disabled:cursor-not-allowed peer-disabled:opacity-50"
+                  ></div>
+                </label>
+              </div>
+
+              <p
+                v-if="autoSyncMessage"
+                id="auto-sync-status-message"
+                class="rounded-xl px-3 py-2 text-xs font-medium"
+                :class="
+                  autoSyncSuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'
+                "
+              >
+                {{ autoSyncMessage }}
+              </p>
+
+              <p
+                v-else-if="syncAutoSyncStore.lastTriggeredAt"
+                id="auto-sync-last-status"
+                class="text-[11px] text-ink-secondary"
+              >
+                Auto Sync terakhir: {{ formatActivityTime(syncAutoSyncStore.lastTriggeredAt) }}
+                <span v-if="syncAutoSyncStore.lastResult?.code" class="font-mono text-[10px]">
+                  ({{ syncAutoSyncStore.lastResult.code }})
+                </span>
+              </p>
+            </div>
+
+            <!-- P19: Sync Activity Log Section -->
+            <div
+              v-if="canSync"
+              id="sync-activity-section"
+              class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
+            >
+              <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div class="min-w-0">
+                  <p class="text-sm font-semibold text-ink-primary">Riwayat Sinkronisasi</p>
+                  <p class="text-xs text-ink-secondary">
+                    Aktivitas dan audit trail sinkronisasi lokal (10 operasi terbaru)
+                  </p>
+                </div>
+                <div class="flex w-full flex-wrap gap-2 sm:w-auto sm:flex-nowrap">
+                  <BaseButton
+                    id="sync-activity-refresh-btn"
+                    variant="secondary"
+                    size="md"
+                    :disabled="isAnySyncOperationBusy"
+                    :loading="syncActivityLogStore.loading"
+                    aria-label="Muat Ulang Riwayat"
+                    title="Muat Ulang Riwayat"
+                    class="min-w-0 flex-1 sm:flex-none"
+                    @click="handleRefreshActivityLog"
+                  >
+                    <AppIcon name="refresh" class="h-4 w-4" />
+                    <span class="ml-1.5">Refresh</span>
+                  </BaseButton>
+                  <BaseButton
+                    v-if="syncActivityLogStore.entries.length > 0"
+                    id="sync-activity-clear-btn"
+                    variant="danger"
+                    size="md"
+                    :disabled="isAnySyncOperationBusy"
+                    :loading="syncActivityLogStore.loading"
+                    aria-label="Hapus Riwayat"
+                    title="Hapus Riwayat"
+                    class="min-w-0 flex-1 sm:flex-none"
+                    @click="showClearConfirm = true"
+                  >
+                    <AppIcon name="trash" class="h-4 w-4" />
+                    <span class="ml-1.5">Hapus</span>
+                  </BaseButton>
+                </div>
+              </div>
+
+              <!-- Inline clear confirmation -->
+              <div
+                v-if="showClearConfirm"
+                id="sync-activity-clear-confirm"
+                class="rounded-xl border border-danger/20 bg-danger/5 p-3 space-y-2 text-xs"
+              >
+                <p class="font-medium text-danger">
+                  Hanya riwayat aktivitas sinkronisasi yang dihapus. Data POS dan antrean
+                  sinkronisasi tidak terpengaruh.
+                </p>
+                <div class="flex items-center gap-2">
+                  <BaseButton
+                    id="sync-activity-confirm-clear-btn"
+                    variant="danger"
+                    size="sm"
+                    :disabled="isAnySyncOperationBusy"
+                    @click="handleConfirmClearActivityLog"
+                  >
+                    Hapus
+                  </BaseButton>
+                  <BaseButton
+                    id="sync-activity-cancel-clear-btn"
+                    variant="secondary"
+                    size="sm"
+                    @click="showClearConfirm = false"
+                  >
+                    Batal
+                  </BaseButton>
+                </div>
+              </div>
+
+              <!-- Activity list error or empty -->
+              <p
+                v-if="syncActivityLogStore.error"
+                id="sync-activity-error"
+                class="rounded-xl bg-danger/10 px-3 py-2 text-xs font-medium text-danger"
+              >
+                Gagal memuat riwayat sinkronisasi.
+              </p>
+
+              <div
+                v-else-if="visibleActivityEntries.length === 0"
+                class="text-xs text-ink-secondary italic py-2"
+              >
+                Belum ada riwayat aktivitas sinkronisasi.
+              </div>
+
+              <div v-else class="space-y-2">
+                <div
+                  v-for="entry in visibleActivityEntries"
+                  :key="entry.id"
+                  :id="`activity-entry-${entry.id}`"
+                  class="flex flex-col gap-1 rounded-xl bg-surface p-3 text-xs sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <div class="space-y-0.5">
+                    <div class="flex items-center gap-2">
+                      <span class="font-semibold text-ink-primary">{{
+                        formatActivityAction(entry.action)
+                      }}</span>
+                      <span
+                        class="rounded px-1.5 py-0.5 font-mono text-[10px] uppercase font-semibold"
+                        :class="{
+                          'bg-emerald-50 text-emerald-700': entry.status === 'success',
+                          'bg-amber-50 text-amber-700': entry.status === 'attention',
+                          'bg-danger/10 text-danger':
+                            entry.status === 'blocked' || entry.status === 'failed',
+                        }"
+                      >
+                        {{ entry.status }}
+                      </span>
+                      <span v-if="entry.code" class="text-[10px] text-ink-secondary font-mono">{{
+                        entry.code
+                      }}</span>
+                    </div>
+                    <p class="text-[11px] text-ink-secondary">
+                      {{ formatActivitySummary(entry) }}
+                    </p>
+                  </div>
+                  <div class="text-[10px] text-ink-secondary whitespace-nowrap">
+                    {{ formatActivityTime(entry.finishedAt || entry.startedAt) }}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </details>
+
+        <!-- Cloud access warning -->
+        <p
+          v-if="!cloudStore.cloudAccess"
+          id="cloud-no-access-notice"
+          class="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-700"
+        >
+          Subscription Anda tidak memiliki akses Cloud Sync. POS lokal tetap dapat digunakan.
+        </p>
+
+        <!-- Device registration error -->
+        <p
+          v-if="cloudStore.error && step === 'done'"
+          id="cloud-device-error"
+          class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger"
+        >
+          {{ cloudStore.error }}
+        </p>
+
+        <BaseButton
+          id="cloud-logout-btn"
+          variant="danger"
+          :disabled="isAnySyncOperationBusy"
+          :loading="cloudStore.loading"
+          @click="requestDisconnect"
+        >
+          Putuskan
+        </BaseButton>
+      </BaseCard>
+
+      <!-- SELECT BUSINESS -->
+      <BaseCard v-else-if="step === 'select-business'" id="cloud-select-business" class="space-y-4">
+        <div class="flex items-center justify-between gap-3">
+          <h2 class="text-base font-semibold text-ink-primary">Bisnis Anda</h2>
+          <span class="text-xs text-ink-secondary">{{ cloudStore.businesses.length }} bisnis</span>
+        </div>
+        <button
+          v-for="biz in cloudStore.businesses"
+          :key="biz.id"
+          type="button"
+          class="flex min-h-20 w-full items-center gap-3 rounded-2xl border border-zinc-200/80 bg-white p-4 text-left transition hover:border-primary/40 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-50"
+          :id="`cloud-business-${biz.id}`"
+          :disabled="cloudStore.loading"
+          @click="handleSelectBusiness(biz.id)"
+        >
+          <span
+            class="flex size-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary"
+            ><AppIcon name="store"
+          /></span>
+          <span class="min-w-0 flex-1">
+            <span class="block break-words text-sm font-semibold text-ink-primary">{{
+              biz.name
+            }}</span>
+            <span class="mt-1 block text-xs text-ink-secondary"
+              >{{
+                (biz.outlets ?? []).filter((outlet) => outlet.status === 'active').length
+              }}
+              outlet aktif</span
+            >
+          </span>
+          <AppIcon name="chevron-right" class="size-4 text-ink-secondary" />
+        </button>
+
+        <p v-if="cloudStore.error" class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger">
+          {{ cloudStore.error }}
+        </p>
+
+        <div class="pt-1">
+          <BaseButton
+            id="cloud-cancel-select-business-btn"
+            variant="ghost"
+            size="sm"
+            @click="confirmDisconnect"
+          >
+            Kembali
+          </BaseButton>
+        </div>
+      </BaseCard>
+
+      <!-- SELECT OUTLET -->
+      <BaseCard v-else-if="step === 'select-outlet'" id="cloud-select-outlet" class="space-y-3">
+        <div class="flex items-center justify-between gap-2">
+          <h2 class="text-base font-semibold text-ink-primary">
+            {{ cloudStore.selectedBusiness?.name || 'Outlet Anda' }}
+          </h2>
+          <button
+            type="button"
+            class="inline-flex items-center gap-1 rounded-xl border border-zinc-200 px-2.5 py-1 text-xs font-medium text-ink-secondary hover:bg-zinc-50 active:scale-95 disabled:opacity-50"
+            :disabled="cloudStore.loading"
+            @click="refreshOutletList"
+          >
+            <AppIcon name="refresh" class="h-3.5 w-3.5" />
+            <span>Muat Ulang</span>
+          </button>
+        </div>
+
+        <p
+          v-if="zeroActiveOutlets"
+          id="cloud-no-active-outlet"
+          class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger"
+        >
+          Tidak ada outlet aktif untuk business ini. Aktifkan outlet terlebih dahulu di dashboard
+          web atau selesaikan pembayaran cabang.
+        </p>
+
+        <div
+          v-if="(isOwnerRole ? allBusinessOutlets : activeBusinessOutlets).length > 0"
+          class="space-y-2.5"
+        >
+          <div
+            v-for="outlet in isOwnerRole ? allBusinessOutlets : activeBusinessOutlets"
+            :key="outlet.id"
+            class="rounded-2xl border border-zinc-200/80 bg-white overflow-hidden transition"
+            :class="
+              cloudStore.selectedOutlet?.id === outlet.id
+                ? 'border-primary/50 ring-1 ring-primary/20'
+                : ''
+            "
+          >
+            <button
+              type="button"
+              class="flex min-h-16 w-full items-center gap-3 p-4 text-left transition hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:cursor-not-allowed disabled:opacity-60"
+              :id="`cloud-outlet-${outlet.id}`"
+              :disabled="
+                cloudStore.loading || outlet.status !== 'active' || outlet.cloud_access === false
+              "
+              @click="handleSelectOutlet(outlet.id)"
+            >
+              <AppIcon name="store" class="shrink-0 text-primary" />
+              <span class="min-w-0 flex-1 space-y-1">
+                <span class="flex flex-wrap items-center gap-1.5 text-sm font-medium text-ink-primary">
+                  <span class="break-words font-semibold">{{ outlet.name }}</span>
+                  <span
+                    v-if="outlet.is_primary"
+                    class="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-bold uppercase text-primary"
+                  >
+                    Utama
+                  </span>
+                  <span
+                    v-if="outlet.code"
+                    class="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-ink-secondary"
+                  >
+                    {{ outlet.code }}
+                  </span>
+                  <span
+                    v-if="cloudStore.selectedOutlet?.id === outlet.id"
+                    class="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-emerald-700"
+                  >
+                    Aktif Dipakai
+                  </span>
+                </span>
+                <span
+                  class="block text-[11px] font-medium"
+                  :class="
+                    outlet.status === 'active' && outlet.cloud_access !== false
+                      ? 'text-emerald-700'
+                      : 'text-amber-700'
+                  "
+                >
+                  {{ formatOutletSubscriptionLabel(outlet) }}
+                </span>
+              </span>
+              <AppIcon
+                v-if="outlet.status === 'active' && outlet.cloud_access !== false"
+                name="chevron-right"
+                class="size-4 shrink-0 text-ink-secondary"
+              />
+            </button>
+
+            <div
+              v-if="
+                isOwnerRole && (outlet.status === 'pending_payment' || outlet.cloud_access === false)
+              "
+              class="flex items-center justify-between gap-2 border-t border-amber-100 bg-amber-50/70 px-4 py-2.5"
+            >
+              <span class="text-[11px] text-amber-800">
+                {{
+                  outlet.status === 'pending_payment'
+                    ? 'Cabang baru menunggu aktivasi paket Cloud.'
+                    : 'Langganan cabang sudah kedaluwarsa.'
+                }}
+              </span>
+              <BaseButton
+                :id="`cloud-pay-outlet-${outlet.id}`"
+                :data-testid="`cloud-pay-outlet-${outlet.id}`"
+                size="sm"
+                variant="primary"
+                class="shrink-0"
+                @click="handlePayOutletSubscription(outlet)"
+              >
+                Bayar Langganan Cabang
+              </BaseButton>
+            </div>
+          </div>
+        </div>
+
+        <p v-if="cloudStore.error" class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger">
+          {{ cloudStore.error }}
+        </p>
+
+        <div class="pt-1">
+          <BaseButton
+            id="cloud-cancel-select-outlet-btn"
+            variant="ghost"
+            size="sm"
+            @click="handleCancelSelectOutlet"
+          >
+            Kembali
+          </BaseButton>
+        </div>
+      </BaseCard>
+
+      <!-- CONFIRM LINK (PREM-M03) -->
+      <BaseCard v-else-if="step === 'confirm-link'" id="cloud-confirm-link" class="space-y-4">
+        <div>
+          <h2 class="text-base font-semibold text-ink-primary">Gunakan bisnis ini?</h2>
+          <p class="mt-1 text-xs text-ink-secondary">
+            Bisnis berikut akan digunakan di perangkat ini.
+          </p>
+        </div>
+
+        <div class="flex items-center gap-3 rounded-2xl border border-primary/15 bg-primary/5 p-4">
+          <span
+            class="flex size-12 shrink-0 items-center justify-center rounded-xl bg-white text-primary"
+            ><AppIcon name="store" class="size-6"
+          /></span>
+          <div class="min-w-0">
+            <p
+              class="break-words text-base font-semibold text-ink-primary"
+              data-testid="link-cloud-business"
+            >
+              {{ pendingBusiness?.name ?? '-' }}
+            </p>
+            <p class="mt-1 text-xs text-ink-secondary">
+              {{
+                (pendingBusiness?.outlets ?? []).filter((outlet) => outlet.status === 'active')
+                  .length
+              }}
+              outlet aktif
+            </p>
+          </div>
+        </div>
+        <p class="text-xs leading-relaxed text-ink-secondary">
+          Ruang kerja lokal: <span data-testid="link-local-business">{{ localBusinessName }}</span>
+        </p>
+
+        <p v-if="cloudStore.error" class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger">
+          {{ cloudStore.error }}
+        </p>
+
+        <div class="flex flex-col gap-2 sm:flex-row">
+          <BaseButton
+            id="cloud-confirm-link-btn"
+            class="w-full sm:flex-1"
+            :loading="cloudStore.loading"
+            :disabled="cloudStore.loading"
+            @click="handleConfirmLink"
+          >
+            Hubungkan bisnis
           </BaseButton>
           <BaseButton
-            id="cloud-disconnect-btn"
-            size="sm"
+            id="cloud-cancel-link-btn"
+            variant="ghost"
+            :disabled="cloudStore.loading"
+            @click="handleCancelLink"
+          >
+            Batal
+          </BaseButton>
+        </div>
+      </BaseCard>
+
+      <!-- UNLINKED (authenticated but no Cloud business linked yet) -->
+      <BaseCard v-else-if="isUnlinkedBusiness" id="cloud-unlinked" class="space-y-3">
+        <div
+          class="flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary"
+        >
+          <AppIcon name="store" class="size-6" />
+        </div>
+        <h2 class="text-lg font-semibold text-ink-primary">Pilih bisnis Anda</h2>
+        <p class="text-sm leading-relaxed text-ink-secondary">
+          Hubungkan bisnis Cloud untuk memuat katalog toko Anda.
+        </p>
+        <p
+          v-if="loginErrorMessage"
+          class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger"
+          role="status"
+        >
+          {{ loginErrorMessage }}
+        </p>
+        <div class="flex flex-wrap gap-2">
+          <BaseButton
+            id="cloud-relink-btn"
+            :loading="cloudStore.loading"
+            :disabled="cloudStore.loading"
+            @click="handleRelink"
+          >
+            Pilih bisnis
+          </BaseButton>
+          <BaseButton
+            id="cloud-unlinked-disconnect"
             variant="danger"
             :disabled="isAnySyncOperationBusy"
             @click="requestDisconnect"
@@ -2075,1381 +3439,413 @@ onMounted(async () => {
             Putuskan
           </BaseButton>
         </div>
-      </div>
+      </BaseCard>
 
-      <!-- P23: Context Guard Warning Banner -->
-      <div
-        v-if="isContextGuardBlocked"
-        id="sync-context-guard-warning"
-        class="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900 shadow-sm"
+      <!-- PENDING EMAIL VERIFICATION: this is not an authenticated session. -->
+      <BaseCard
+        v-else-if="pendingRegistration"
+        id="cloud-otp-form"
+        class="flex justify-center p-6 sm:p-8"
       >
-        <div class="flex items-start gap-3">
-          <span class="text-lg">⚠️</span>
-          <div>
-            <p class="font-semibold">Konteks sinkronisasi tidak cocok dengan data lokal.</p>
-            <p class="mt-1 text-xs text-rose-700">
-              {{
-                syncContextGuardStore.code === 'SYNC_CONTEXT_MISMATCH'
-                  ? 'Data sinkronisasi lokal terikat pada outlet/perangkat berbeda.'
-                  : syncContextGuardStore.code === 'SYNC_CONTEXT_BUSINESS_MISMATCH'
-                    ? 'Data sinkronisasi lokal terikat pada bisnis berbeda.'
-                    : syncContextGuardStore.code === 'SYNC_CONTEXT_METADATA_CONFLICT'
-                      ? 'Metadata sinkronisasi lokal tidak konsisten.'
-                      : syncContextGuardStore.code === 'SYNC_CONTEXT_METADATA_INVALID'
-                        ? 'Metadata sinkronisasi lokal tidak valid.'
-                        : 'Operasi sinkronisasi diblokir untuk mencegah ketidakkonsistenan data.'
-              }}
+        <CloudEmailOtpView
+          :registration-id="pendingRegistration.registrationId"
+          :email="pendingRegistration.email || pendingRegistration.maskedEmail"
+          :otp-expires-at="pendingRegistration.otpExpiresAt"
+          :resend-available-at="pendingRegistration.resendAvailableAt"
+          :loading="cloudStore.loading"
+          :error-message="otpErrorMessage"
+          @verify="handleOtpVerify"
+          @resend="handleOtpResend"
+          @back="handleOtpBack"
+          @offline="handleOtpOffline"
+        />
+      </BaseCard>
+
+      <!-- AUTH FORM: reusable AUTH-M02 UI wired to real v2 requests. -->
+      <BaseCard v-else id="cloud-login-form" class="flex justify-center p-0 sm:p-0">
+        <div class="w-full p-0">
+          <p
+            v-if="otpVerifiedMessage"
+            id="cloud-verified-message"
+            class="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
+            role="status"
+          >
+            {{ otpVerifiedMessage }}
+          </p>
+          <div
+            v-if="googleLinkCollision"
+            class="mb-4 space-y-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3"
+            data-testid="google-link-manual-handoff"
+          >
+            <p class="text-sm text-amber-800">
+              Akun Google sudah memiliki akun Cloud. Masuk ke akun lama untuk melanjutkan
+              penghubungan Google secara aman.
             </p>
+            <BaseButton
+              data-testid="google-link-manual-login"
+              variant="secondary"
+              size="sm"
+              @click="authMode = 'login'"
+            >
+              Masuk ke Akun Lama
+            </BaseButton>
           </div>
-        </div>
-      </div>
-
-      <!-- Workspace recovery required -->
-      <div
-        v-if="cloudStore.workspaceRecoveryRequired"
-        id="workspace-recovery-warning"
-        class="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900 shadow-sm"
-      >
-        <p class="font-semibold">Pemulihan ruang kerja diperlukan.</p>
-        <p class="mt-1 text-xs text-rose-700">
-          Perpindahan bisnis sebelumnya terhenti dan pemulihan otomatis tidak selesai. Sinkronisasi dan
-          akses data tenant diblokir sampai data ruang kerja dipastikan konsisten.
-        </p>
-      </div>
-
-      <!-- P13: Manual Pull Section -->
-      <div
-        v-if="canSync"
-        id="cloud-pull-section"
-        class="space-y-3 rounded-2xl border border-zinc-200/80 bg-white p-4"
-      >
-        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div class="min-w-0">
-            <p class="text-sm font-semibold text-ink-primary">Katalog Cloud</p>
-            <p class="text-xs text-ink-secondary">
-              Produk dan kategori dari bisnis Anda.
-            </p>
-          </div>
-          <BaseButton
-            id="pull-now-btn"
-            v-show="!canInitializeCloudData"
-            variant="secondary"
-            size="md"
-            :disabled="
-              isAnySyncOperationBusy ||
-              isContextGuardMutationBlocked ||
-              isFreshWorkspace
+          <CloudAuthCard
+            v-model="authMode"
+            :loading="cloudStore.loading || googleLoading || recoveryLoading"
+            :error-message="
+              authMode === 'login'
+                ? loginErrorMessage
+                : authMode === 'register'
+                  ? registerErrorMessage
+                  : authMode === 'forgot'
+                    ? forgotErrorMessage
+                    : resetErrorMessage
             "
-            :loading="syncPullStore.loading"
-            aria-label="Tarik Data Cloud"
-            title="Tarik Data Cloud"
-            class="w-full shrink-0 sm:w-auto"
-            @click="handlePullNow"
-          >
-            <AppIcon name="download" class="h-4 w-4" />
-            <span class="ml-1.5">Muat ulang</span>
-          </BaseButton>
+            :success-message="
+              authMode === 'forgot'
+                ? forgotSuccessMessage
+                : authMode === 'reset'
+                  ? resetSuccessMessage
+                  : ''
+            "
+            :initial-email="
+              authMode === 'login'
+                ? email
+                : authMode === 'register'
+                  ? registerEmail
+                  : recoveryEmail || email
+            "
+            :initial-name="registerName"
+            :disabled="cloudStore.loading || googleLoading || recoveryLoading"
+            @login-submit="handleAuthLogin"
+            @register-submit="handleAuthRegister"
+            @forgot-submit="handleForgotSubmit"
+            @reset-submit="handleResetSubmit"
+            @google-click="handleGoogleClick"
+            @forgot-password="handleForgotPassword"
+            @go-to-reset="handleGoToReset"
+            @back-to-forgot="handleBackToForgot"
+            @back-to-login="handleBackToLogin"
+            @offline="handleRecoveryOffline"
+          />
         </div>
-
-        <p
-          v-if="isPushOnlyWorkspace"
-          id="cloud-push-only-notice"
-          class="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800"
-        >
-          Perangkat ini sudah terhubung untuk mengirim data. Gunakan Tarik untuk mengambil data
-          Cloud pertama kali tanpa menghapus data lokal.
-        </p>
-
-        <div
-          v-if="canInitializeCloudData"
-          id="cloud-initialization-notice"
-          class="space-y-3"
-        >
-          <p class="text-xs text-ink-secondary">
-            Katalog belum dimuat di perangkat ini.
-          </p>
-          <BaseButton
-            id="cloud-initialize-btn"
-            variant="primary"
-            size="md"
-            :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked || isInitialPullRunning"
-            :loading="syncPullStore.loading || isInitialPullRunning"
-            aria-label="Muat Data Cloud"
-            title="Muat Data Cloud"
-            class="mt-3 w-full sm:w-auto"
-            @click="handlePullNow({ initialCloudRead: true })"
-          >
-            <AppIcon name="download" class="h-4 w-4" />
-            <span class="ml-1.5">Muat Data Cloud</span>
-          </BaseButton>
-        </div>
-
-        <p
-          v-if="pullMessage"
-          id="pull-result-message"
-          class="rounded-xl px-3 py-2 text-xs font-medium"
-          :class="pullSuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'"
-        >
-          {{ pullMessage }}
-        </p>
-
-        <div
-          v-if="syncPullStore.lastResult?.code === 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY'"
-          id="clear-and-pull-section"
-          class="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3.5 space-y-2"
-        >
-          <p class="text-xs text-amber-800">
-            Ada data lokal yang belum tersinkron (seperti kas/shift). Jika Anda ingin menggunakan data Cloud sepenuhnya di perangkat ini, bersihkan cache lokal lalu muat ulang dari Cloud.
-          </p>
-          <BaseButton
-            id="clear-and-pull-btn"
-            variant="secondary"
-            size="sm"
-            class="w-full sm:w-auto text-amber-800 border-amber-300 hover:bg-amber-100"
-            :disabled="isAnySyncOperationBusy || isInitialPullRunning"
-            :loading="isInitialPullRunning"
-            @click="handleClearAndPull"
-          >
-            <AppIcon name="trash" class="h-4 w-4 text-amber-700" />
-            <span class="ml-1.5 font-medium">Bersihkan</span>
-          </BaseButton>
-        </div>
-      </div>
+      </BaseCard>
 
       <details
-        v-if="canSync"
-        id="cloud-sync-details"
-        class="group rounded-2xl border border-zinc-200/80"
-        :open="syncConflictStore.openConflictCount > 0 || syncStatusStore.reconciliationRequired || syncBootstrapStore.hasContextMismatch"
+        v-if="cloudStore.isAuthenticated || accountSettingsMounted"
+        id="cloud-account-settings"
+        data-testid="cloud-account-settings"
+        class="group rounded-2xl border border-zinc-200/80 bg-white"
+        :open="accountSettingsOpen"
+        @toggle="toggleAccountSettings"
       >
-        <summary class="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-medium text-ink-primary [&::-webkit-details-marker]:hidden">
-          <span>Sinkronisasi &amp; riwayat</span>
-          <AppIcon name="chevron-right" class="size-4 text-ink-secondary transition-transform group-open:rotate-90" />
+        <summary
+          class="flex min-h-16 cursor-pointer list-none items-center gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden"
+        >
+          <span
+            class="flex size-9 shrink-0 items-center justify-center rounded-xl bg-zinc-100 text-ink-secondary"
+            ><AppIcon name="settings" class="size-4"
+          /></span>
+          <span class="min-w-0 flex-1 text-sm font-medium text-ink-primary">Pengaturan akun</span>
+          <AppIcon
+            name="chevron-right"
+            class="size-4 text-ink-secondary transition-transform group-open:rotate-90"
+          />
         </summary>
-        <div class="space-y-4 border-t border-zinc-100 p-4">
-          <p class="text-xs text-ink-secondary" data-testid="cloud-link-checked">Diperiksa: {{ contextCheckedLabel }}</p>
+        <div v-if="accountSettingsMounted" class="space-y-3 border-t border-zinc-100 p-3">
+          <CloudGoogleLinkCard
+            v-if="cloudStore.isAuthenticated"
+            :collision-detected="googleLinkCollision"
+          />
+          <CloudEmailChangeCard
+            @session-revoked="handleEmailChangeSessionRevoked"
+            @login-again="emailChangeCompleted = false"
+          />
+        </div>
+      </details>
 
-      <!-- P14: Initial Bootstrap Section (Free to Cloud) -->
-      <div
-        v-if="canSync && !syncBootstrapStore.isStaged"
-        id="cloud-bootstrap-section"
-        class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
-      >
-        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div class="min-w-0">
-            <p class="text-sm font-semibold text-ink-primary">Siapkan Data Lokal ke Cloud</p>
-            <p class="text-xs text-ink-secondary">
-              Upload data offline/FREE yang sudah ada ke server cloud untuk pertama kali
-            </p>
-          </div>
-          <BaseButton
-            id="bootstrap-btn"
-            variant="primary"
-            size="md"
-            :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
-            :loading="syncBootstrapStore.loading"
-            aria-label="Siapkan Data Lokal ke Cloud"
-            title="Siapkan Data Lokal ke Cloud"
-            class="w-full shrink-0 sm:w-auto"
-            @click="handleBootstrapNow"
+      <!-- Legacy auth markup retained below only as a compatibility reference. -->
+      <!-- AUTH FORM (LOGIN & IN-APP REGISTER) -->
+      <BaseCard v-if="false" class="space-y-4" id="cloud-login-form-legacy">
+        <!-- Tab Switcher -->
+        <div class="grid grid-cols-2 rounded-2xl bg-surface p-1">
+          <button
+            id="cloud-tab-login"
+            type="button"
+            class="rounded-xl py-2 text-xs font-semibold transition"
+            :class="
+              authMode === 'login'
+                ? 'bg-white text-ink-primary shadow-sm'
+                : 'text-ink-secondary hover:text-ink-primary'
+            "
+            @click="authMode = 'login'"
           >
-            <AppIcon name="upload" class="h-4 w-4" />
-            <span class="ml-1.5">Siapkan</span>
-          </BaseButton>
-        </div>
-
-        <div class="grid grid-cols-2 gap-2 text-xs text-ink-secondary sm:grid-cols-3">
-          <div id="preview-products">Produk: {{ syncBootstrapStore.previewCounts.products }}</div>
-          <div id="preview-categories">
-            Kategori: {{ syncBootstrapStore.previewCounts.categories }}
-          </div>
-          <div id="preview-customers">
-            Pelanggan: {{ syncBootstrapStore.previewCounts.customers }}
-          </div>
-          <div id="preview-expenses">
-            Pengeluaran: {{ syncBootstrapStore.previewCounts.expenses }}
-          </div>
-          <div id="preview-transactions">
-            Transaksi: {{ syncBootstrapStore.previewCounts.transactions }}
-          </div>
-        </div>
-
-        <p
-          v-if="bootstrapMessage && !syncBootstrapStore.isStaged"
-          id="bootstrap-result-message"
-          class="rounded-xl px-3 py-2 text-xs font-medium"
-          :class="bootstrapSuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'"
-        >
-          {{ bootstrapMessage }}
-        </p>
-      </div>
-
-      <!-- P14: Bootstrap Context Mismatch Notice -->
-      <div
-        v-if="canSync && syncBootstrapStore.hasContextMismatch"
-        id="cloud-bootstrap-mismatch-notice"
-        class="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-medium text-amber-800"
-      >
-        Data lokal sudah disiapkan untuk Business/Outlet lain.
-      </div>
-
-      <!-- P14: Bootstrap Staged Notice -->
-      <div
-        v-else-if="canSync && syncBootstrapStore.isStagedForCurrentContext"
-        id="cloud-bootstrap-staged-notice"
-        class="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs font-medium text-emerald-800"
-      >
-        Data lokal siap disinkronkan. Gunakan Sync Sekarang.
-      </div>
-
-      <!-- P17: Sync Health & Diagnostics Section -->
-      <div
-        v-if="canSync"
-        id="cloud-health-section"
-        class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
-      >
-        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div class="min-w-0">
-            <p class="text-sm font-semibold text-ink-primary">Status Sinkronisasi</p>
-            <p class="text-xs text-ink-secondary">
-              Periksa kondisi outbox, konflik, envelope, dan binding lokal
-            </p>
-          </div>
-          <BaseButton
-            id="sync-health-btn"
-            variant="secondary"
-            size="md"
-            :disabled="isAnySyncOperationBusy"
-            :loading="syncHealthStore.loading"
-            aria-label="Periksa Status Sync"
-            title="Periksa Status Sync"
-            class="w-full shrink-0 sm:w-auto"
-            @click="handleCheckSyncHealth"
+            Masuk
+          </button>
+          <button
+            id="cloud-tab-register"
+            type="button"
+            class="rounded-xl py-2 text-xs font-semibold transition"
+            :class="
+              authMode === 'register'
+                ? 'bg-white text-ink-primary shadow-sm'
+                : 'text-ink-secondary hover:text-ink-primary'
+            "
+            @click="authMode = 'register'"
           >
-            <AppIcon name="shield" class="h-4 w-4" />
-            <span class="ml-1.5">Periksa</span>
-          </BaseButton>
+            Daftar
+          </button>
         </div>
 
-        <div
-          v-if="syncHealthStore.summary"
-          class="grid grid-cols-2 gap-2 text-xs text-ink-secondary sm:grid-cols-3"
-        >
-          <div id="health-pending-count">Pending: {{ syncHealthStore.summary.pendingCount }}</div>
-          <div id="health-conflict-count">
-            Konflik: {{ syncHealthStore.summary.openConflictCount }}
-          </div>
-          <div id="health-inflight-status">
-            In-flight: {{ syncHealthStore.summary.hasInflight ? 'Ya' : 'Tidak' }}
-          </div>
-          <div id="health-pull-cursor">Pull Cursor: {{ syncHealthStore.summary.pullCursor }}</div>
-          <div id="health-bootstrap-status">
-            Bootstrap:
-            {{
-              syncHealthStore.summary.bootstrapStatus === 'completed'
-                ? 'Completed'
-                : syncHealthStore.summary.bootstrapStatus === 'staged'
-                  ? 'Staged'
-                  : syncHealthStore.summary.bootstrapStatus === 'invalid'
-                    ? 'Invalid'
-                    : 'Belum'
-            }}
-          </div>
-        </div>
-
-        <div v-if="syncHealthStore.status">
-          <p
-            id="sync-health-status-message"
-            class="rounded-xl px-3 py-2 text-xs font-medium"
-            :class="{
-              'bg-emerald-50 text-emerald-700': syncHealthStore.status === 'ready',
-              'bg-amber-50 text-amber-700': syncHealthStore.status === 'attention',
-              'bg-danger/10 text-danger': syncHealthStore.status === 'blocked',
-            }"
-          >
-            {{
-              syncHealthStore.status === 'ready'
-                ? 'Status sinkronisasi lokal sehat.'
-                : syncHealthStore.status === 'attention'
-                  ? 'Sinkronisasi memerlukan perhatian.'
-                  : 'Sinkronisasi memerlukan tindakan sebelum dapat dilanjutkan.'
-            }}
+        <!-- LOGIN MODE -->
+        <template v-if="authMode === 'login'">
+          <p class="rounded-2xl bg-surface px-4 py-3 text-xs leading-relaxed text-ink-secondary">
+            Cloud Login menghubungkan POS ini dengan akun Cloud dan Dashboard. POS tetap dapat
+            digunakan tanpa Cloud Login.
           </p>
 
-          <div
-            v-if="syncHealthStore.issues && syncHealthStore.issues.length > 0"
-            class="mt-2 space-y-1"
-          >
-            <div
-              v-for="(issue, index) in syncHealthStore.issues"
-              :key="`${issue.code}-${index}`"
-              :id="`health-issue-${issue.code}-${index}`"
-              class="flex items-center justify-between rounded-lg px-3 py-1.5 text-xs"
-              :class="
-                issue.severity === 'blocked'
-                  ? 'bg-danger/5 text-danger'
-                  : 'bg-amber-500/10 text-amber-800'
-              "
-            >
-              <span>{{ issue.message }}</span>
-              <span class="font-mono uppercase font-semibold text-[10px]">{{
-                issue.severity
-              }}</span>
-            </div>
-          </div>
+          <BaseInput
+            id="cloud-email"
+            v-model="email"
+            label="Email"
+            type="email"
+            placeholder="email@domain.com"
+            :disabled="cloudStore.loading"
+          />
 
-          <p
-            v-if="syncHealthStore.lastCheckedAt"
-            id="health-last-checked-at"
-            class="mt-2 text-[10px] text-ink-secondary"
-          >
-            Terakhir diperiksa: {{ syncHealthStore.lastCheckedAt }}
-          </p>
-        </div>
-      </div>
-
-      <!-- P18: Manual Sync Recovery Center -->
-      <div
-        v-if="
-          canSync &&
-          (syncHealthStore.lastResult ||
-            syncRecoveryStore.loading ||
-            recoveryMessage ||
-            syncRecoveryStore.lastResult)
-        "
-        id="cloud-recovery-section"
-        class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
-      >
-        <div>
-          <p class="text-sm font-semibold text-ink-primary">Pemulihan Sinkronisasi</p>
-          <p id="recovery-plan-message" class="text-xs text-ink-secondary">
-            {{
-              recoveryPlan?.message ||
-              'Pilih tindakan pemulihan yang sesuai berdasarkan status diagnostik.'
-            }}
-          </p>
-        </div>
-
-        <div
-          v-if="recoveryPlan?.availableActions && recoveryPlan.availableActions.length > 0"
-          class="flex flex-wrap gap-2"
-        >
-          <BaseButton
-            v-if="recoveryActions.includes('RETRY_INFLIGHT')"
-            id="recovery-retry-inflight-btn"
-            variant="primary"
-            size="sm"
-            :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
-            :loading="
-              syncRecoveryStore.loading && syncRecoveryStore.lastAction === 'RETRY_INFLIGHT'
-            "
-            @click="handleRecovery('RETRY_INFLIGHT')"
-          >
-            Coba Ulang Push
-          </BaseButton>
-
-          <BaseButton
-            v-if="recoveryPlan.availableActions.includes('CONTINUE_PENDING')"
-            id="recovery-continue-pending-btn"
-            variant="primary"
-            size="sm"
-            :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
-            :loading="
-              syncRecoveryStore.loading && syncRecoveryStore.lastAction === 'CONTINUE_PENDING'
-            "
-            @click="handleRecovery('CONTINUE_PENDING')"
-          >
-            Lanjutkan Sinkronisasi
-          </BaseButton>
-
-          <BaseButton
-            v-if="recoveryPlan.availableActions.includes('PREPARE_BOOTSTRAP')"
-            id="recovery-prepare-bootstrap-btn"
-            variant="primary"
-            size="sm"
-            :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
-            :loading="
-              syncRecoveryStore.loading && syncRecoveryStore.lastAction === 'PREPARE_BOOTSTRAP'
-            "
-            @click="handleRecovery('PREPARE_BOOTSTRAP')"
-          >
-            Siapkan Data Lokal
-          </BaseButton>
-
-          <BaseButton
-            v-if="recoveryPlan.availableActions.includes('CONTINUE_BOOTSTRAP')"
-            id="recovery-continue-bootstrap-btn"
-            variant="primary"
-            size="sm"
-            :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
-            :loading="
-              syncRecoveryStore.loading && syncRecoveryStore.lastAction === 'CONTINUE_BOOTSTRAP'
-            "
-            @click="handleRecovery('CONTINUE_BOOTSTRAP')"
-          >
-            Lanjutkan Data Bootstrap
-          </BaseButton>
-        </div>
-
-        <p
-          v-if="recoveryMessage"
-          id="recovery-result-message"
-          class="rounded-xl px-3 py-2 text-xs font-medium"
-          :class="recoverySuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'"
-        >
-          {{ recoveryMessage }}
-        </p>
-      </div>
-
-      <!-- INT-04: Sync Request Reconciliation -->
-      <div
-        v-if="reconciliationPresentation"
-        id="cloud-reconciliation-section"
-        class="space-y-3 rounded-2xl border p-4"
-        :class="
-          reconciliationPresentation.tone === 'danger'
-            ? 'border-danger/30 bg-danger/5'
-            : 'border-amber-500/30 bg-amber-500/5'
-        "
-      >
-        <div>
-          <p class="text-sm font-semibold text-ink-primary">Rekonsiliasi Pengiriman</p>
-          <p id="reconciliation-message" class="text-xs text-ink-secondary">
-            {{ reconciliationPresentation.message }}
-          </p>
-        </div>
-
-        <BaseButton
-          id="reconciliation-recheck-btn"
-          variant="secondary"
-          size="sm"
-          :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
-          :loading="syncReconciliationStore.loading"
-          @click="handleReconcileRequests"
-        >
-          Periksa
-        </BaseButton>
-
-        <p
-          v-if="reconciliationMessage"
-          id="reconciliation-result-message"
-          class="rounded-xl px-3 py-2 text-xs font-medium"
-          :class="
-            reconciliationSuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'
-          "
-        >
-          {{ reconciliationMessage }}
-        </p>
-      </div>
-
-      <!-- P16: Manual Full Sync Section -->
-      <div
-        v-if="canSync"
-        id="cloud-sync-all-section"
-        class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
-      >
-        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div class="min-w-0">
-            <p class="text-sm font-semibold text-ink-primary">Sinkronkan Semua</p>
-            <p class="text-xs text-ink-secondary">
-              Kirim data lokal tertunda lalu ambil pembaruan dari cloud
-            </p>
-          </div>
-          <BaseButton
-            id="sync-all-btn"
-            variant="primary"
-            size="md"
-            :disabled="
-              syncBootstrapStore.hasContextMismatch ||
-              isAnySyncOperationBusy ||
-              isContextGuardMutationBlocked ||
-              isFreshWorkspace
-            "
-            :loading="syncOrchestratorStore.loading"
-            aria-label="Sinkronkan Semua"
-            title="Sinkronkan Semua"
-            class="w-full shrink-0 sm:w-auto"
-            @click="handleSyncAll"
-          >
-            <AppIcon name="sync" class="h-4 w-4" />
-            <span class="ml-1.5">Sync</span>
-          </BaseButton>
-        </div>
-
-        <p
-          v-if="syncAllMessage"
-          id="sync-all-result-message"
-          class="rounded-xl px-3 py-2 text-xs font-medium"
-          :class="syncAllSuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'"
-        >
-          {{ syncAllMessage }}
-        </p>
-      </div>
-
-      <!-- P12: Manual Sync Section -->
-      <div
-        v-if="canSync"
-        id="cloud-sync-section"
-        class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
-      >
-        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div class="min-w-0">
-            <p class="text-sm font-semibold text-ink-primary">Sinkronisasi Cloud</p>
-            <p id="sync-pending-label" class="text-xs text-ink-secondary">
-              {{ syncPushStore.pendingCount }} data menunggu sinkronisasi
-            </p>
-          </div>
-          <BaseButton
-            id="sync-now-btn"
-            variant="primary"
-            size="md"
-            :disabled="
-              syncBootstrapStore.hasContextMismatch ||
-              isAnySyncOperationBusy ||
-              isContextGuardMutationBlocked
-            "
-            :loading="syncPushStore.loading"
-            aria-label="Sync Sekarang"
-            title="Sync Sekarang"
-            class="w-full shrink-0 sm:w-auto"
-            @click="handleSyncNow"
-          >
-            <AppIcon name="upload" class="h-4 w-4" />
-            <span class="ml-1.5">Kirim</span>
-          </BaseButton>
-        </div>
-
-        <p
-          v-if="syncMessage"
-          id="sync-result-message"
-          class="rounded-xl px-3 py-2 text-xs font-medium"
-          :class="syncSuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'"
-        >
-          {{ syncMessage }}
-        </p>
-      </div>
-
-
-      <!-- P15: Manual Conflict Resolution Section -->
-      <div
-        v-if="canSync && syncConflictStore.openConflictCount > 0"
-        id="cloud-conflict-section"
-        class="space-y-3 rounded-2xl border border-danger/20 bg-danger/5 p-4"
-      >
-        <div>
-          <p class="text-sm font-semibold text-danger">Konflik Sinkronisasi</p>
-          <p class="text-xs text-ink-secondary">
-            Ada {{ syncConflictStore.openConflictCount }} data konflik yang memerlukan keputusan
-            manual Anda
-          </p>
-        </div>
-
-        <div class="space-y-2">
-          <div
-            v-for="conflict in syncConflictStore.openConflicts"
-            :key="conflict.id"
-            :id="`conflict-item-${conflict.id}`"
-            class="flex flex-col gap-2 rounded-xl bg-surface p-3 sm:flex-row sm:items-center sm:justify-between"
-          >
-            <div class="text-xs">
-              <span class="font-semibold text-ink-primary uppercase">{{
-                conflict.serverEntity || conflict.entityType
-              }}</span>
-              <span class="text-ink-secondary"> • ID: {{ conflict.entityId }}</span>
-              <span class="text-ink-secondary">
-                • Server Version: {{ conflict.serverSyncVersion }}</span
-              >
-            </div>
-            <div class="flex items-center gap-2">
-              <BaseButton
-                :id="`use-server-btn-${conflict.id}`"
-                variant="secondary"
-                size="sm"
-                :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
-                :loading="syncConflictStore.loading"
-                @click="handleUseServer(conflict.id)"
-              >
-                Cloud
-              </BaseButton>
-              <BaseButton
-                :id="`keep-local-btn-${conflict.id}`"
-                variant="primary"
-                size="sm"
-                :disabled="isAnySyncOperationBusy || isContextGuardMutationBlocked"
-                :loading="syncConflictStore.loading"
-                @click="handleKeepLocal(conflict.id)"
-              >
-                Lokal
-              </BaseButton>
-            </div>
-          </div>
-        </div>
-
-        <p
-          v-if="conflictMessage"
-          id="conflict-result-message"
-          class="rounded-xl px-3 py-2 text-xs font-medium"
-          :class="conflictSuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'"
-        >
-          {{ conflictMessage }}
-        </p>
-      </div>
-
-      <!-- P20: Safe Foreground Auto Sync Section -->
-      <div
-        v-if="canSync"
-        id="auto-sync-section"
-        class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
-      >
-        <div class="flex items-center justify-between">
-          <div class="space-y-0.5">
-            <p class="text-sm font-semibold text-ink-primary">Sinkronisasi Otomatis</p>
-            <p class="text-xs text-ink-secondary">
-              Berjalan hanya saat aplikasi aktif ketika koneksi kembali online atau aplikasi dibuka
-              kembali.
-            </p>
-          </div>
-          <label class="relative inline-flex cursor-pointer items-center">
-            <input
-              id="auto-sync-toggle"
-              type="checkbox"
-              class="peer sr-only"
-              :checked="syncAutoSyncStore.enabled"
-              :disabled="
-                isAnySyncOperationBusy ||
-                syncAutoSyncStore.loadingPreference ||
-                isContextGuardMutationBlocked ||
-                (!syncAutoSyncStore.enabled && syncContextGuardStore.status !== 'safe')
-              "
-              @change="handleToggleAutoSync"
+          <div class="space-y-2">
+            <BaseInput
+              id="cloud-password"
+              v-model="password"
+              label="Password"
+              :type="showPassword ? 'text' : 'password'"
+              placeholder="••••••••"
+              :disabled="cloudStore.loading"
             />
-            <div
-              class="peer h-6 w-11 rounded-full bg-surface-muted transition-colors after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:bg-white after:shadow-sm after:transition-all after:content-[''] peer-checked:bg-primary peer-checked:after:translate-x-full peer-disabled:cursor-not-allowed peer-disabled:opacity-50"
-            ></div>
-          </label>
-        </div>
+            <button
+              id="cloud-toggle-password"
+              type="button"
+              class="text-xs font-medium text-primary underline-offset-2 hover:underline"
+              @click="showPassword = !showPassword"
+            >
+              {{ showPassword ? 'Sembunyikan password' : 'Tampilkan password' }}
+            </button>
+          </div>
 
-        <p
-          v-if="autoSyncMessage"
-          id="auto-sync-status-message"
-          class="rounded-xl px-3 py-2 text-xs font-medium"
-          :class="autoSyncSuccess ? 'bg-emerald-50 text-emerald-700' : 'bg-danger/10 text-danger'"
-        >
-          {{ autoSyncMessage }}
-        </p>
+          <p
+            v-if="loginErrorMessage"
+            id="cloud-login-error"
+            class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger"
+            role="status"
+          >
+            {{ loginErrorMessage }}
+          </p>
 
-        <p
-          v-else-if="syncAutoSyncStore.lastTriggeredAt"
-          id="auto-sync-last-status"
-          class="text-[11px] text-ink-secondary"
-        >
-          Auto Sync terakhir: {{ formatActivityTime(syncAutoSyncStore.lastTriggeredAt) }}
-          <span v-if="syncAutoSyncStore.lastResult?.code" class="font-mono text-[10px]">
-            ({{ syncAutoSyncStore.lastResult.code }})
-          </span>
-        </p>
-      </div>
+          <BaseButton
+            id="cloud-login-btn"
+            block
+            :loading="cloudStore.loading"
+            :disabled="!email || !password || cloudStore.loading"
+            @click="handleLogin"
+          >
+            Masuk
+          </BaseButton>
 
-      <!-- P19: Sync Activity Log Section -->
-      <div
-        v-if="canSync"
-        id="sync-activity-section"
-        class="space-y-3 rounded-2xl border border-primary/20 bg-primary/5 p-4"
-      >
-        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div class="min-w-0">
-            <p class="text-sm font-semibold text-ink-primary">Riwayat Sinkronisasi</p>
+          <div class="pt-2 text-center">
             <p class="text-xs text-ink-secondary">
-              Aktivitas dan audit trail sinkronisasi lokal (10 operasi terbaru)
+              Belum punya akun Cloud?
+              <button
+                id="cloud-register-link-btn"
+                type="button"
+                class="font-semibold text-primary underline-offset-2 hover:underline ml-1 cursor-pointer"
+                @click="authMode = 'register'"
+              >
+                Daftar Sekarang
+              </button>
             </p>
           </div>
-          <div class="flex w-full flex-wrap gap-2 sm:w-auto sm:flex-nowrap">
-            <BaseButton
-              id="sync-activity-refresh-btn"
-              variant="secondary"
-              size="md"
-              :disabled="isAnySyncOperationBusy"
-              :loading="syncActivityLogStore.loading"
-              aria-label="Muat Ulang Riwayat"
-              title="Muat Ulang Riwayat"
-              class="min-w-0 flex-1 sm:flex-none"
-              @click="handleRefreshActivityLog"
-            >
-              <AppIcon name="refresh" class="h-4 w-4" />
-              <span class="ml-1.5">Refresh</span>
-            </BaseButton>
-            <BaseButton
-              v-if="syncActivityLogStore.entries.length > 0"
-              id="sync-activity-clear-btn"
-              variant="danger"
-              size="md"
-              :disabled="isAnySyncOperationBusy"
-              :loading="syncActivityLogStore.loading"
-              aria-label="Hapus Riwayat"
-              title="Hapus Riwayat"
-              class="min-w-0 flex-1 sm:flex-none"
-              @click="showClearConfirm = true"
-            >
-              <AppIcon name="trash" class="h-4 w-4" />
-              <span class="ml-1.5">Hapus</span>
-            </BaseButton>
-          </div>
-        </div>
+        </template>
 
-        <!-- Inline clear confirmation -->
-        <div
-          v-if="showClearConfirm"
-          id="sync-activity-clear-confirm"
-          class="rounded-xl border border-danger/20 bg-danger/5 p-3 space-y-2 text-xs"
-        >
-          <p class="font-medium text-danger">
-            Hanya riwayat aktivitas sinkronisasi yang dihapus. Data POS dan antrean sinkronisasi
-            tidak terpengaruh.
+        <!-- REGISTER MODE -->
+        <template v-else>
+          <p class="rounded-2xl bg-surface px-4 py-3 text-xs leading-relaxed text-ink-secondary">
+            Daftarkan akun Cloud baru langsung dari aplikasi untuk sinkronisasi data multi-device,
+            cadangan online, dan integrasi pembayaran.
           </p>
-          <div class="flex items-center gap-2">
-            <BaseButton
-              id="sync-activity-confirm-clear-btn"
-              variant="danger"
-              size="sm"
-              :disabled="isAnySyncOperationBusy"
-              @click="handleConfirmClearActivityLog"
+
+          <BaseInput
+            id="cloud-register-name"
+            v-model="registerName"
+            label="Nama Lengkap"
+            type="text"
+            placeholder="Nama Anda"
+            :disabled="cloudStore.loading"
+          />
+
+          <BaseInput
+            id="cloud-register-business"
+            v-model="registerBusinessName"
+            label="Nama Toko / Usaha (Opsional)"
+            type="text"
+            placeholder="Misal: Toko Berkah"
+            :disabled="cloudStore.loading"
+          />
+
+          <BaseInput
+            id="cloud-register-email"
+            v-model="registerEmail"
+            label="Email"
+            type="email"
+            placeholder="email@domain.com"
+            :disabled="cloudStore.loading"
+          />
+
+          <div class="space-y-2">
+            <BaseInput
+              id="cloud-register-password"
+              v-model="registerPassword"
+              label="Password"
+              :type="showRegisterPassword ? 'text' : 'password'"
+              placeholder="Minimal 8 karakter"
+              :disabled="cloudStore.loading"
+            />
+            <button
+              id="cloud-toggle-register-password"
+              type="button"
+              class="text-xs font-medium text-primary underline-offset-2 hover:underline"
+              @click="showRegisterPassword = !showRegisterPassword"
             >
-              Hapus
+              {{ showRegisterPassword ? 'Sembunyikan password' : 'Tampilkan password' }}
+            </button>
+          </div>
+
+          <BaseInput
+            id="cloud-register-password-confirmation"
+            v-model="registerPasswordConfirmation"
+            label="Konfirmasi Password"
+            :type="showRegisterPassword ? 'text' : 'password'"
+            placeholder="Ulangi password"
+            :disabled="cloudStore.loading"
+          />
+
+          <p
+            v-if="registerErrorMessage"
+            id="cloud-register-error"
+            class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger"
+            role="status"
+          >
+            {{ registerErrorMessage }}
+          </p>
+
+          <BaseButton
+            id="cloud-register-submit-btn"
+            block
+            :loading="cloudStore.loading"
+            :disabled="
+              !registerName ||
+              !registerEmail ||
+              !registerPassword ||
+              !registerPasswordConfirmation ||
+              cloudStore.loading
+            "
+            @click="handleRegister"
+          >
+            Daftar
+          </BaseButton>
+
+          <div class="pt-2 text-center">
+            <p class="text-xs text-ink-secondary">
+              Sudah punya akun Cloud?
+              <button
+                id="cloud-login-link-btn"
+                type="button"
+                class="font-semibold text-primary underline-offset-2 hover:underline ml-1 cursor-pointer"
+                @click="authMode = 'login'"
+              >
+                Masuk di sini
+              </button>
+            </p>
+          </div>
+        </template>
+      </BaseCard>
+
+      <!-- DISCONNECT CONFIRMATION (PREM-M03) -->
+      <BaseModal
+        :open="showDisconnectConfirm"
+        title="Putuskan Cloud"
+        @close="showDisconnectConfirm = false"
+      >
+        <div class="space-y-4" data-testid="cloud-disconnect-modal">
+          <p class="text-sm text-ink-secondary">
+            Apakah Anda yakin ingin memutuskan akun Cloud? Sesi Cloud akan diputuskan dan seluruh
+            data cache lokal (menu produk, transaksi, riwayat kas, dan shift) akan dibersihkan agar
+            data tidak tumpang tindih saat login dengan akun lain.
+          </p>
+          <div class="flex flex-wrap gap-2">
+            <BaseButton
+              id="cloud-disconnect-confirm"
+              variant="danger"
+              :loading="cloudStore.loading"
+              @click="confirmDisconnect"
+            >
+              Putuskan
             </BaseButton>
             <BaseButton
-              id="sync-activity-cancel-clear-btn"
-              variant="secondary"
-              size="sm"
-              @click="showClearConfirm = false"
+              id="cloud-disconnect-cancel"
+              variant="ghost"
+              @click="showDisconnectConfirm = false"
             >
               Batal
             </BaseButton>
           </div>
         </div>
+      </BaseModal>
 
-        <!-- Activity list error or empty -->
-        <p
-          v-if="syncActivityLogStore.error"
-          id="sync-activity-error"
-          class="rounded-xl bg-danger/10 px-3 py-2 text-xs font-medium text-danger"
-        >
-          Gagal memuat riwayat sinkronisasi.
-        </p>
-
-        <div
-          v-else-if="visibleActivityEntries.length === 0"
-          class="text-xs text-ink-secondary italic py-2"
-        >
-          Belum ada riwayat aktivitas sinkronisasi.
-        </div>
-
-        <div v-else class="space-y-2">
-          <div
-            v-for="entry in visibleActivityEntries"
-            :key="entry.id"
-            :id="`activity-entry-${entry.id}`"
-            class="flex flex-col gap-1 rounded-xl bg-surface p-3 text-xs sm:flex-row sm:items-center sm:justify-between"
+      <!-- BUSINESS SWITCH CONFIRMATION -->
+      <BaseModal
+        :open="showSwitchModal && Boolean(switchPrompt)"
+        :title="switchPrompt?.title ?? 'Beralih Bisnis?'"
+        @close="handleCancelBusinessSwitch"
+      >
+        <div class="space-y-4" data-testid="business-switch-modal">
+          <p id="business-switch-message" class="whitespace-pre-line text-sm text-ink-secondary">
+            {{ switchPrompt?.message }}
+          </p>
+          <p
+            v-if="switchErrorMessage"
+            class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger"
+            role="status"
           >
-            <div class="space-y-0.5">
-              <div class="flex items-center gap-2">
-                <span class="font-semibold text-ink-primary">{{
-                  formatActivityAction(entry.action)
-                }}</span>
-                <span
-                  class="rounded px-1.5 py-0.5 font-mono text-[10px] uppercase font-semibold"
-                  :class="{
-                    'bg-emerald-50 text-emerald-700': entry.status === 'success',
-                    'bg-amber-50 text-amber-700': entry.status === 'attention',
-                    'bg-danger/10 text-danger':
-                      entry.status === 'blocked' || entry.status === 'failed',
-                  }"
-                >
-                  {{ entry.status }}
-                </span>
-                <span v-if="entry.code" class="text-[10px] text-ink-secondary font-mono">{{
-                  entry.code
-                }}</span>
-              </div>
-              <p class="text-[11px] text-ink-secondary">
-                {{ formatActivitySummary(entry) }}
-              </p>
-            </div>
-            <div class="text-[10px] text-ink-secondary whitespace-nowrap">
-              {{ formatActivityTime(entry.finishedAt || entry.startedAt) }}
-            </div>
+            {{ switchErrorMessage }}
+          </p>
+          <div class="flex flex-wrap gap-2">
+            <BaseButton
+              id="business-switch-confirm"
+              :loading="cloudStore.loading"
+              :disabled="isAnySyncOperationBusy"
+              @click="handleConfirmBusinessSwitch"
+            >
+              {{ switchPrompt?.confirmLabel ?? 'Beralih' }}
+            </BaseButton>
+            <BaseButton
+              id="business-switch-cancel"
+              variant="ghost"
+              :disabled="isAnySyncOperationBusy"
+              @click="handleCancelBusinessSwitch"
+            >
+              {{ switchPrompt?.cancelLabel ?? 'Batal' }}
+            </BaseButton>
           </div>
         </div>
-      </div>
-
-        </div>
-      </details>
-
-      <!-- Cloud access warning -->
-      <p
-        v-if="!cloudStore.cloudAccess"
-        id="cloud-no-access-notice"
-        class="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-700"
-      >
-        Subscription Anda tidak memiliki akses Cloud Sync. POS lokal tetap dapat digunakan.
-      </p>
-
-      <!-- Device registration error -->
-      <p
-        v-if="cloudStore.error && step === 'done'"
-        id="cloud-device-error"
-        class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger"
-      >
-        {{ cloudStore.error }}
-      </p>
-
-      <BaseButton
-        id="cloud-logout-btn"
-        variant="danger"
-        :disabled="isAnySyncOperationBusy"
-        :loading="cloudStore.loading"
-        @click="requestDisconnect"
-      >
-        Putuskan
-      </BaseButton>
-    </BaseCard>
-
-    <!-- SELECT BUSINESS -->
-    <BaseCard v-else-if="step === 'select-business'" id="cloud-select-business" class="space-y-4">
-      <div class="flex items-center justify-between gap-3">
-        <h2 class="text-base font-semibold text-ink-primary">Bisnis Anda</h2>
-        <span class="text-xs text-ink-secondary">{{ cloudStore.businesses.length }} bisnis</span>
-      </div>
-      <button
-        v-for="biz in cloudStore.businesses"
-        :key="biz.id"
-        type="button"
-        class="flex min-h-20 w-full items-center gap-3 rounded-2xl border border-zinc-200/80 bg-white p-4 text-left transition hover:border-primary/40 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-50"
-        :id="`cloud-business-${biz.id}`"
-        :disabled="cloudStore.loading"
-        @click="handleSelectBusiness(biz.id)"
-      >
-        <span class="flex size-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary"><AppIcon name="store" /></span>
-        <span class="min-w-0 flex-1">
-          <span class="block break-words text-sm font-semibold text-ink-primary">{{ biz.name }}</span>
-          <span class="mt-1 block text-xs text-ink-secondary">{{ (biz.outlets ?? []).filter((outlet) => outlet.status === 'active').length }} outlet aktif</span>
-        </span>
-        <AppIcon name="chevron-right" class="size-4 text-ink-secondary" />
-      </button>
-
-      <p v-if="cloudStore.error" class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger">
-        {{ cloudStore.error }}
-      </p>
-
-      <div class="pt-1">
-        <BaseButton
-          id="cloud-cancel-select-business-btn"
-          variant="ghost"
-          size="sm"
-          @click="confirmDisconnect"
-        >
-          Kembali
-        </BaseButton>
-      </div>
-    </BaseCard>
-
-    <!-- SELECT OUTLET -->
-    <BaseCard v-else-if="step === 'select-outlet'" id="cloud-select-outlet" class="space-y-3">
-      <h2 class="text-base font-semibold text-ink-primary">{{ cloudStore.selectedBusiness?.name || 'Outlet Anda' }}</h2>
-
-      <p
-        v-if="zeroActiveOutlets"
-        id="cloud-no-active-outlet"
-        class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger"
-      >
-        Tidak ada outlet aktif untuk business ini. Aktifkan outlet terlebih dahulu di dashboard web.
-      </p>
-
-      <template v-else>
-        <button
-          v-for="outlet in activeBusinessOutlets"
-          :key="outlet.id"
-          type="button"
-          class="flex min-h-16 w-full items-center gap-3 rounded-2xl border border-zinc-200/80 bg-white p-4 text-left transition hover:border-primary/40 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-50"
-          :id="`cloud-outlet-${outlet.id}`"
-          :disabled="cloudStore.loading"
-          @click="handleSelectOutlet(outlet.id)"
-        >
-          <AppIcon name="store" class="text-primary" />
-          <span class="min-w-0 flex-1 break-words text-sm font-medium text-ink-primary">{{ outlet.name }}</span>
-          <AppIcon name="chevron-right" class="size-4 text-ink-secondary" />
-        </button>
-      </template>
-
-      <p v-if="cloudStore.error" class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger">
-        {{ cloudStore.error }}
-      </p>
-
-      <div class="pt-1">
-        <BaseButton
-          id="cloud-cancel-select-outlet-btn"
-          variant="ghost"
-          size="sm"
-          @click="step = cloudStore.businesses.length > 1 ? 'select-business' : 'login'"
-        >
-          Kembali
-        </BaseButton>
-      </div>
-    </BaseCard>
-
-    <!-- CONFIRM LINK (PREM-M03) -->
-    <BaseCard v-else-if="step === 'confirm-link'" id="cloud-confirm-link" class="space-y-4">
-      <div>
-        <h2 class="text-base font-semibold text-ink-primary">Gunakan bisnis ini?</h2>
-        <p class="mt-1 text-xs text-ink-secondary">
-          Bisnis berikut akan digunakan di perangkat ini.
-        </p>
-      </div>
-
-      <div class="flex items-center gap-3 rounded-2xl border border-primary/15 bg-primary/5 p-4">
-        <span class="flex size-12 shrink-0 items-center justify-center rounded-xl bg-white text-primary"><AppIcon name="store" class="size-6" /></span>
-        <div class="min-w-0">
-          <p class="break-words text-base font-semibold text-ink-primary" data-testid="link-cloud-business">{{ pendingBusiness?.name ?? '-' }}</p>
-          <p class="mt-1 text-xs text-ink-secondary">{{ (pendingBusiness?.outlets ?? []).filter((outlet) => outlet.status === 'active').length }} outlet aktif</p>
-        </div>
-      </div>
-      <p class="text-xs leading-relaxed text-ink-secondary">Ruang kerja lokal: <span data-testid="link-local-business">{{ localBusinessName }}</span></p>
-
-      <p v-if="cloudStore.error" class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger">
-        {{ cloudStore.error }}
-      </p>
-
-      <div class="flex flex-col gap-2 sm:flex-row">
-        <BaseButton
-          id="cloud-confirm-link-btn"
-          class="w-full sm:flex-1"
-          :loading="cloudStore.loading"
-          :disabled="cloudStore.loading"
-          @click="handleConfirmLink"
-        >
-          Hubungkan bisnis
-        </BaseButton>
-        <BaseButton
-          id="cloud-cancel-link-btn"
-          variant="ghost"
-          :disabled="cloudStore.loading"
-          @click="handleCancelLink"
-        >
-          Batal
-        </BaseButton>
-      </div>
-    </BaseCard>
-
-    <!-- UNLINKED (authenticated but no Cloud business linked yet) -->
-    <BaseCard v-else-if="isUnlinkedBusiness" id="cloud-unlinked" class="space-y-3">
-      <div class="flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary"><AppIcon name="store" class="size-6" /></div>
-      <h2 class="text-lg font-semibold text-ink-primary">Pilih bisnis Anda</h2>
-      <p class="text-sm leading-relaxed text-ink-secondary">
-        Hubungkan bisnis Cloud untuk memuat katalog toko Anda.
-      </p>
-      <p
-        v-if="loginErrorMessage"
-        class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger"
-        role="status"
-      >
-        {{ loginErrorMessage }}
-      </p>
-      <div class="flex flex-wrap gap-2">
-        <BaseButton
-          id="cloud-relink-btn"
-          :loading="cloudStore.loading"
-          :disabled="cloudStore.loading"
-          @click="handleRelink"
-        >
-          Pilih bisnis
-        </BaseButton>
-        <BaseButton
-          id="cloud-unlinked-disconnect"
-          variant="danger"
-          :disabled="isAnySyncOperationBusy"
-          @click="requestDisconnect"
-        >
-          Putuskan
-        </BaseButton>
-      </div>
-    </BaseCard>
-
-    <!-- PENDING EMAIL VERIFICATION: this is not an authenticated session. -->
-    <BaseCard v-else-if="pendingRegistration" id="cloud-otp-form" class="flex justify-center p-6 sm:p-8">
-      <CloudEmailOtpView
-        :registration-id="pendingRegistration.registrationId"
-        :email="pendingRegistration.email || pendingRegistration.maskedEmail"
-        :otp-expires-at="pendingRegistration.otpExpiresAt"
-        :resend-available-at="pendingRegistration.resendAvailableAt"
-        :loading="cloudStore.loading"
-        :error-message="otpErrorMessage"
-        @verify="handleOtpVerify"
-        @resend="handleOtpResend"
-        @back="handleOtpBack"
-        @offline="handleOtpOffline"
+      </BaseModal>
+      <!-- CASHIER DEVICE PAIRING MODAL -->
+      <DevicePairingModal
+        :open="showCashierPairingModal"
+        :business-name="cloudStore.selectedBusiness?.name || ''"
+        @close="showCashierPairingModal = false"
+        @paired="handleCashierPaired"
       />
-    </BaseCard>
-
-    <!-- AUTH FORM: reusable AUTH-M02 UI wired to real v2 requests. -->
-    <BaseCard v-else id="cloud-login-form" class="flex justify-center p-0 sm:p-0">
-      <div class="w-full p-0">
-        <p
-          v-if="otpVerifiedMessage"
-          id="cloud-verified-message"
-          class="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"
-          role="status"
-        >
-          {{ otpVerifiedMessage }}
-        </p>
-        <div
-          v-if="googleLinkCollision"
-          class="mb-4 space-y-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3"
-          data-testid="google-link-manual-handoff"
-        >
-          <p class="text-sm text-amber-800">
-            Akun Google sudah memiliki akun Cloud. Masuk ke akun lama untuk melanjutkan
-            penghubungan Google secara aman.
-          </p>
-          <BaseButton
-            data-testid="google-link-manual-login"
-            variant="secondary"
-            size="sm"
-            @click="authMode = 'login'"
-          >
-            Masuk ke Akun Lama
-          </BaseButton>
-        </div>
-        <CloudAuthCard
-          v-model="authMode"
-          :loading="cloudStore.loading || googleLoading || recoveryLoading"
-          :error-message="
-            authMode === 'login'
-              ? loginErrorMessage
-              : authMode === 'register'
-                ? registerErrorMessage
-                : authMode === 'forgot'
-                  ? forgotErrorMessage
-                  : resetErrorMessage
-          "
-          :success-message="
-            authMode === 'forgot'
-              ? forgotSuccessMessage
-              : authMode === 'reset'
-                ? resetSuccessMessage
-                : ''
-          "
-          :initial-email="
-            authMode === 'login'
-              ? email
-              : authMode === 'register'
-                ? registerEmail
-                : recoveryEmail || email
-          "
-          :initial-name="registerName"
-          :disabled="cloudStore.loading || googleLoading || recoveryLoading"
-          @login-submit="handleAuthLogin"
-          @register-submit="handleAuthRegister"
-          @forgot-submit="handleForgotSubmit"
-          @reset-submit="handleResetSubmit"
-          @google-click="handleGoogleClick"
-          @forgot-password="handleForgotPassword"
-          @go-to-reset="handleGoToReset"
-          @back-to-forgot="handleBackToForgot"
-          @back-to-login="handleBackToLogin"
-          @offline="handleRecoveryOffline"
-        />
-      </div>
-    </BaseCard>
-
-    <details
-      v-if="cloudStore.isAuthenticated || accountSettingsMounted"
-      id="cloud-account-settings"
-      data-testid="cloud-account-settings"
-      class="group rounded-2xl border border-zinc-200/80 bg-white"
-      :open="accountSettingsOpen"
-      @toggle="toggleAccountSettings"
-    >
-      <summary class="flex min-h-16 cursor-pointer list-none items-center gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
-        <span class="flex size-9 shrink-0 items-center justify-center rounded-xl bg-zinc-100 text-ink-secondary"><AppIcon name="settings" class="size-4" /></span>
-        <span class="min-w-0 flex-1 text-sm font-medium text-ink-primary">Pengaturan akun</span>
-        <AppIcon name="chevron-right" class="size-4 text-ink-secondary transition-transform group-open:rotate-90" />
-      </summary>
-      <div v-if="accountSettingsMounted" class="space-y-3 border-t border-zinc-100 p-3">
-        <CloudGoogleLinkCard
-          v-if="cloudStore.isAuthenticated"
-          :collision-detected="googleLinkCollision"
-        />
-        <CloudEmailChangeCard
-          @session-revoked="handleEmailChangeSessionRevoked"
-          @login-again="emailChangeCompleted = false"
-        />
-      </div>
-    </details>
-
-    <!-- Legacy auth markup retained below only as a compatibility reference. -->
-    <!-- AUTH FORM (LOGIN & IN-APP REGISTER) -->
-    <BaseCard v-if="false" class="space-y-4" id="cloud-login-form-legacy">
-      <!-- Tab Switcher -->
-      <div class="grid grid-cols-2 rounded-2xl bg-surface p-1">
-        <button
-          id="cloud-tab-login"
-          type="button"
-          class="rounded-xl py-2 text-xs font-semibold transition"
-          :class="
-            authMode === 'login'
-              ? 'bg-white text-ink-primary shadow-sm'
-              : 'text-ink-secondary hover:text-ink-primary'
-          "
-          @click="authMode = 'login'"
-        >
-          Masuk
-        </button>
-        <button
-          id="cloud-tab-register"
-          type="button"
-          class="rounded-xl py-2 text-xs font-semibold transition"
-          :class="
-            authMode === 'register'
-              ? 'bg-white text-ink-primary shadow-sm'
-              : 'text-ink-secondary hover:text-ink-primary'
-          "
-          @click="authMode = 'register'"
-        >
-          Daftar
-        </button>
-      </div>
-
-      <!-- LOGIN MODE -->
-      <template v-if="authMode === 'login'">
-        <p class="rounded-2xl bg-surface px-4 py-3 text-xs leading-relaxed text-ink-secondary">
-          Cloud Login menghubungkan POS ini dengan akun Cloud dan Dashboard. POS tetap dapat digunakan
-          tanpa Cloud Login.
-        </p>
-
-        <BaseInput
-          id="cloud-email"
-          v-model="email"
-          label="Email"
-          type="email"
-          placeholder="email@domain.com"
-          :disabled="cloudStore.loading"
-        />
-
-        <div class="space-y-2">
-          <BaseInput
-            id="cloud-password"
-            v-model="password"
-            label="Password"
-            :type="showPassword ? 'text' : 'password'"
-            placeholder="••••••••"
-            :disabled="cloudStore.loading"
-          />
-          <button
-            id="cloud-toggle-password"
-            type="button"
-            class="text-xs font-medium text-primary underline-offset-2 hover:underline"
-            @click="showPassword = !showPassword"
-          >
-            {{ showPassword ? 'Sembunyikan password' : 'Tampilkan password' }}
-          </button>
-        </div>
-
-        <p
-          v-if="loginErrorMessage"
-          id="cloud-login-error"
-          class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger"
-          role="status"
-        >
-          {{ loginErrorMessage }}
-        </p>
-
-        <BaseButton
-          id="cloud-login-btn"
-          block
-          :loading="cloudStore.loading"
-          :disabled="!email || !password || cloudStore.loading"
-          @click="handleLogin"
-        >
-          Masuk
-        </BaseButton>
-
-        <div class="pt-2 text-center">
-          <p class="text-xs text-ink-secondary">
-            Belum punya akun Cloud?
-            <button
-              id="cloud-register-link-btn"
-              type="button"
-              class="font-semibold text-primary underline-offset-2 hover:underline ml-1 cursor-pointer"
-              @click="authMode = 'register'"
-            >
-              Daftar Sekarang
-            </button>
-          </p>
-        </div>
-      </template>
-
-      <!-- REGISTER MODE -->
-      <template v-else>
-        <p class="rounded-2xl bg-surface px-4 py-3 text-xs leading-relaxed text-ink-secondary">
-          Daftarkan akun Cloud baru langsung dari aplikasi untuk sinkronisasi data multi-device, cadangan online, dan integrasi pembayaran.
-        </p>
-
-        <BaseInput
-          id="cloud-register-name"
-          v-model="registerName"
-          label="Nama Lengkap"
-          type="text"
-          placeholder="Nama Anda"
-          :disabled="cloudStore.loading"
-        />
-
-        <BaseInput
-          id="cloud-register-business"
-          v-model="registerBusinessName"
-          label="Nama Toko / Usaha (Opsional)"
-          type="text"
-          placeholder="Misal: Toko Berkah"
-          :disabled="cloudStore.loading"
-        />
-
-        <BaseInput
-          id="cloud-register-email"
-          v-model="registerEmail"
-          label="Email"
-          type="email"
-          placeholder="email@domain.com"
-          :disabled="cloudStore.loading"
-        />
-
-        <div class="space-y-2">
-          <BaseInput
-            id="cloud-register-password"
-            v-model="registerPassword"
-            label="Password"
-            :type="showRegisterPassword ? 'text' : 'password'"
-            placeholder="Minimal 8 karakter"
-            :disabled="cloudStore.loading"
-          />
-          <button
-            id="cloud-toggle-register-password"
-            type="button"
-            class="text-xs font-medium text-primary underline-offset-2 hover:underline"
-            @click="showRegisterPassword = !showRegisterPassword"
-          >
-            {{ showRegisterPassword ? 'Sembunyikan password' : 'Tampilkan password' }}
-          </button>
-        </div>
-
-        <BaseInput
-          id="cloud-register-password-confirmation"
-          v-model="registerPasswordConfirmation"
-          label="Konfirmasi Password"
-          :type="showRegisterPassword ? 'text' : 'password'"
-          placeholder="Ulangi password"
-          :disabled="cloudStore.loading"
-        />
-
-        <p
-          v-if="registerErrorMessage"
-          id="cloud-register-error"
-          class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger"
-          role="status"
-        >
-          {{ registerErrorMessage }}
-        </p>
-
-        <BaseButton
-          id="cloud-register-submit-btn"
-          block
-          :loading="cloudStore.loading"
-          :disabled="!registerName || !registerEmail || !registerPassword || !registerPasswordConfirmation || cloudStore.loading"
-          @click="handleRegister"
-        >
-          Daftar
-        </BaseButton>
-
-        <div class="pt-2 text-center">
-          <p class="text-xs text-ink-secondary">
-            Sudah punya akun Cloud?
-            <button
-              id="cloud-login-link-btn"
-              type="button"
-              class="font-semibold text-primary underline-offset-2 hover:underline ml-1 cursor-pointer"
-              @click="authMode = 'login'"
-            >
-              Masuk di sini
-            </button>
-          </p>
-        </div>
-      </template>
-    </BaseCard>
-
-    <!-- DISCONNECT CONFIRMATION (PREM-M03) -->
-    <BaseModal
-      :open="showDisconnectConfirm"
-      title="Putuskan Cloud"
-      @close="showDisconnectConfirm = false"
-    >
-      <div class="space-y-4" data-testid="cloud-disconnect-modal">
-        <p class="text-sm text-ink-secondary">
-          Apakah Anda yakin ingin memutuskan akun Cloud? Sesi Cloud akan diputuskan dan seluruh data cache lokal (menu produk, transaksi, riwayat kas, dan shift) akan dibersihkan agar data tidak tumpang tindih saat login dengan akun lain.
-        </p>
-        <div class="flex flex-wrap gap-2">
-          <BaseButton
-            id="cloud-disconnect-confirm"
-            variant="danger"
-            :loading="cloudStore.loading"
-            @click="confirmDisconnect"
-          >
-            Putuskan
-          </BaseButton>
-          <BaseButton
-            id="cloud-disconnect-cancel"
-            variant="ghost"
-            @click="showDisconnectConfirm = false"
-          >
-            Batal
-          </BaseButton>
-        </div>
-      </div>
-    </BaseModal>
-
-    <!-- BUSINESS SWITCH CONFIRMATION -->
-    <BaseModal
-      :open="showSwitchModal && Boolean(switchPrompt)"
-      :title="switchPrompt?.title ?? 'Beralih Bisnis?'"
-      @close="handleCancelBusinessSwitch"
-    >
-      <div class="space-y-4" data-testid="business-switch-modal">
-        <p id="business-switch-message" class="whitespace-pre-line text-sm text-ink-secondary">
-          {{ switchPrompt?.message }}
-        </p>
-        <p
-          v-if="switchErrorMessage"
-          class="rounded-2xl bg-danger/10 px-4 py-3 text-sm text-danger"
-          role="status"
-        >
-          {{ switchErrorMessage }}
-        </p>
-        <div class="flex flex-wrap gap-2">
-          <BaseButton
-            id="business-switch-confirm"
-            :loading="cloudStore.loading"
-            :disabled="isAnySyncOperationBusy"
-            @click="handleConfirmBusinessSwitch"
-          >
-            {{ switchPrompt?.confirmLabel ?? 'Beralih' }}
-          </BaseButton>
-          <BaseButton
-            id="business-switch-cancel"
-            variant="ghost"
-            :disabled="isAnySyncOperationBusy"
-            @click="handleCancelBusinessSwitch"
-          >
-            {{ switchPrompt?.cancelLabel ?? 'Batal' }}
-          </BaseButton>
-        </div>
-      </div>
-    </BaseModal>
     </div>
   </div>
 </template>

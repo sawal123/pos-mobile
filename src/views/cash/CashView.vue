@@ -4,10 +4,47 @@ import { computed, ref } from 'vue'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSheet from '@/components/base/BaseSheet.vue'
+import { isNativePrinterPlatform, openCashDrawer } from '@/services/printer/bluetoothPrinterService'
 import { useCashStore } from '@/stores/cashStore'
+import { useNotificationStore } from '@/stores/notificationStore'
+import { usePrinterStore } from '@/stores/printerStore'
 import { formatCurrency, formatDateTime } from '@/utils/formatters'
 
 const cashStore = useCashStore()
+const notificationStore = useNotificationStore()
+const printerStore = usePrinterStore()
+
+const isNative = computed(() => isNativePrinterPlatform())
+const isOpeningDrawer = ref(false)
+
+async function handleOpenDrawer() {
+  if (isOpeningDrawer.value) return
+  if (!printerStore.hasSelectedPrinter) {
+    notificationStore.notifyError({
+      title: 'Printer Belum Dipilih',
+      message: 'Pilih printer Bluetooth terlebih dahulu di menu Struk atau Pengaturan.',
+    })
+    return
+  }
+
+  isOpeningDrawer.value = true
+  try {
+    const res = await openCashDrawer({ printer: printerStore.selectedPrinter })
+    if (res.success) {
+      notificationStore.notifySuccess({
+        title: 'Laci Terbuka',
+        message: 'Perintah buka laci kasir berhasil dikirim.',
+      })
+    } else {
+      notificationStore.notifyError({
+        title: 'Gagal Buka Laci',
+        message: res.message || 'Tidak dapat mengirim perintah ke printer.',
+      })
+    }
+  } finally {
+    isOpeningDrawer.value = false
+  }
+}
 
 const showRecordSheet = ref(false)
 const filterType = ref('all') // 'all', 'in', 'out'
@@ -67,6 +104,10 @@ function handleManualCash() {
   cashForm.value.amount = ''
   cashForm.value.note = ''
   feedbackMessage.value = 'Transaksi kas berhasil dicatat.'
+  notificationStore.notifySuccessAndSync({
+    title: 'Kas Berhasil Dicatat',
+    message: 'Catatan arus kas berhasil disimpan.',
+  })
   setTimeout(() => {
     showRecordSheet.value = false
     feedbackMessage.value = ''
@@ -101,16 +142,6 @@ const filteredEntries = computed(() => {
         <p class="text-xs font-semibold uppercase tracking-wider text-primary">Kas Operasional</p>
         <h1 class="mt-1 text-2xl font-bold text-ink-primary">Ledger kas operasional</h1>
       </div>
-      <button
-        type="button"
-        class="inline-flex items-center gap-1.5 rounded-2xl bg-primary px-3.5 py-2 text-xs font-semibold text-white shadow-soft hover:bg-primary-light active:scale-[0.98] transition whitespace-nowrap"
-        @click="openRecordModal('in')"
-      >
-        <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-        </svg>
-        <span>Catat</span>
-      </button>
     </div>
 
     <!-- Unified Minimalist Financial Hero Card -->
@@ -188,6 +219,22 @@ const filteredEntries = computed(() => {
             <path stroke-linecap="round" stroke-linejoin="round" d="M5 12h14" />
           </svg>
           <span>Keluar<span class="sr-only"> Kas Keluar</span></span>
+        </button>
+      </div>
+
+      <!-- Quick Buka Laci Kasir Button on Android Native -->
+      <div v-if="isNative" class="pt-1">
+        <button
+          type="button"
+          class="flex w-full items-center justify-center gap-2 rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-2 text-xs font-semibold text-ink-primary shadow-2xs hover:bg-zinc-100 active:scale-[0.98] transition cursor-pointer dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+          :disabled="isOpeningDrawer"
+          @click="handleOpenDrawer"
+        >
+          <svg class="h-4 w-4 text-zinc-500 dark:text-zinc-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="6" width="20" height="12" rx="2" />
+            <circle cx="12" cy="12" r="2" />
+          </svg>
+          <span>{{ isOpeningDrawer ? 'Membuka Laci...' : 'Buka Laci Kasir' }}</span>
         </button>
       </div>
     </div>
@@ -418,5 +465,20 @@ const filteredEntries = computed(() => {
         </div>
       </div>
     </BaseSheet>
+
+    <!-- Floating Action Button (FAB) -->
+    <button
+      type="button"
+      data-testid="cash-open-modal"
+      class="fixed right-5 bottom-[calc(env(safe-area-inset-bottom)+6.75rem)] md:bottom-8 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-primary text-white shadow-[0_10px_25px_rgba(73,69,214,0.45)] transition hover:bg-primary-light active:scale-95 cursor-pointer"
+      title="Catat Kas"
+      aria-label="Catat Kas"
+      @click="openRecordModal('in')"
+    >
+      <svg class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+      </svg>
+      <span class="sr-only">Catat</span>
+    </button>
   </div>
 </template>

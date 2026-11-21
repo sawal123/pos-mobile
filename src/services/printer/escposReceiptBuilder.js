@@ -204,14 +204,28 @@ function normalizeItem(item) {
   }
 }
 
-function buildHeaderLines(business, width, address = '') {
-  const lines = [sanitizePrinterText(business?.name || '-'), sanitizePrinterText(business?.outlet || '-')]
+function buildHeaderLines(business, width, address = '', outlet = null) {
+  const outletName =
+    outlet?.name ||
+    business?.outlet ||
+    business?.outlet_name ||
+    business?.outletName ||
+    '-'
+  const lines = [sanitizePrinterText(business?.name || '-'), sanitizePrinterText(outletName)]
 
-  if (business?.phone) {
-    lines.push(sanitizePrinterText(business.phone))
+  const phone = outlet?.phone || business?.outlet_phone || business?.outletPhone || business?.phone
+  if (phone) {
+    lines.push(sanitizePrinterText(phone))
   }
 
-  lines.push(...address.split('\n').filter(Boolean))
+  const effectiveAddress =
+    outlet?.address ||
+    business?.outlet_address ||
+    business?.outletAddress ||
+    business?.address ||
+    address ||
+    ''
+  lines.push(...effectiveAddress.split('\n').filter(Boolean))
   return lines.map((line) => wrapText(line, width)).flat()
 }
 
@@ -222,6 +236,9 @@ function buildMetadataLines(transaction, width) {
   if (isLaundry) {
     lines.push(...wrapText(`No. Order: ${transaction.orderNumber}`, width))
     lines.push(...wrapText(`Tanggal Masuk: ${formatReceiptDateTime(transaction.createdAt)}`, width))
+    if (transaction?.tableNumber || transaction?.table_number) {
+      lines.push(...wrapText(`Meja: ${transaction.tableNumber || transaction.table_number}`, width))
+    }
     lines.push(...wrapText(`Customer: ${transaction.customer || 'Walk-in Customer'}`, width))
 
     const phone = transaction.customerSnapshot?.phone
@@ -251,6 +268,9 @@ function buildMetadataLines(transaction, width) {
 
   lines.push(...wrapText(`Invoice: ${transaction?.invoiceNumber || transaction?.id || '-'}`, width))
   lines.push(...wrapText(`Tanggal: ${formatReceiptDateTime(transaction?.createdAt)}`, width))
+  if (transaction?.tableNumber || transaction?.table_number) {
+    lines.push(...wrapText(`Meja: ${transaction.tableNumber || transaction.table_number}`, width))
+  }
   lines.push(...wrapText(`Customer: ${transaction?.customer || 'Walk-in Customer'}`, width))
 
   if (isPaidTransaction(transaction) && transaction?.paymentMethod) {
@@ -279,7 +299,14 @@ function buildItemLines(items, width) {
   return lines
 }
 
-export function createReceiptCommands({ transaction, business, paperWidth, receiptSettings, isFree = false } = {}) {
+export function createReceiptCommands({
+  transaction,
+  business,
+  paperWidth,
+  receiptSettings,
+  isFree = false,
+  outlet = null,
+} = {}) {
   const settings = normalizeReceiptSettings(receiptSettings)
   const width = resolveCharsPerLine(paperWidth)
   const separator = createSeparator(width)
@@ -290,7 +317,7 @@ export function createReceiptCommands({ transaction, business, paperWidth, recei
   if (settings.logo) commands.push({ type: 'image', value: settings.logo })
   commands.push({ type: 'bold', value: true })
 
-  for (const line of buildHeaderLines(business, width, settings.address)) {
+  for (const line of buildHeaderLines(business, width, settings.address, outlet)) {
     commands.push({ type: 'text', value: line })
   }
 
@@ -377,12 +404,22 @@ export function createReceiptCommands({ transaction, business, paperWidth, recei
     commands.push({ type: 'align', value: 'left' })
   }
 
+  if (settings.openCashDrawer !== false && receiptSettings?.openCashDrawer !== false) {
+    commands.push({ type: 'open_drawer' })
+  }
+
   commands.push({ type: 'feed', lines: FOOTER_FEED_LINES })
 
   return commands
 }
 
-export function createTestReceiptCommands({ business, paperWidth, now = new Date(), receiptSettings } = {}) {
+export function createTestReceiptCommands({
+  business,
+  paperWidth,
+  now = new Date(),
+  receiptSettings,
+  outlet = null,
+} = {}) {
   const settings = normalizeReceiptSettings(receiptSettings)
   const width = resolveCharsPerLine(paperWidth)
   const normalizedWidth = normalizePaperWidth(paperWidth)
@@ -394,7 +431,14 @@ export function createTestReceiptCommands({ business, paperWidth, now = new Date
   commands.push({ type: 'text', value: 'TEST PRINTER' })
   commands.push({ type: 'bold', value: false })
 
-  for (const paragraph of settings.address.split('\n').filter(Boolean)) {
+  const effectiveAddress =
+    outlet?.address ||
+    business?.outlet_address ||
+    business?.outletAddress ||
+    business?.address ||
+    settings.address ||
+    ''
+  for (const paragraph of effectiveAddress.split('\n').filter(Boolean)) {
     for (const line of wrapText(paragraph, width)) commands.push({ type: 'text', value: line })
   }
   for (const line of wrapText('Printer Bluetooth berhasil terhubung.', width)) {
@@ -410,6 +454,10 @@ export function createTestReceiptCommands({ business, paperWidth, now = new Date
     for (const line of wrapText(paragraph, width)) commands.push({ type: 'text', value: line })
   }
   commands.push({ type: 'align', value: 'left' })
+  if (settings.openCashDrawer !== false && receiptSettings?.openCashDrawer !== false) {
+    commands.push({ type: 'open_drawer' })
+  }
+
   commands.push({ type: 'feed', lines: FOOTER_FEED_LINES })
 
   return commands
@@ -455,6 +503,27 @@ export function commandsToBytes(commands) {
       continue
     }
 
+    if (command.type === 'open_drawer') {
+      // Universal ESC/POS Cash Drawer Kick commands for Pin 2 and Pin 5
+      // Parameter m: 0 (or 48/'0') for Pin 2; 1 (or 49/'1') for Pin 5
+      // Pulse duration: t1 = 60 (120ms ON time), t2 = 120 (240ms OFF time)
+      // OEM standard: t1 = 25 (50ms ON), t2 = 250 (500ms OFF)
+      // Real-time pulse DLE DC4 (0x10 0x14 0x01 m 0x01)
+      // ASCII BEL (0x07) for legacy/mini POS printer drawer triggering
+      bytes.push(
+        ESC, 0x70, 0x00, 0x3C, 0x78, // Pin 2 (binary 0, 120ms strong pulse)
+        ESC, 0x70, 0x01, 0x3C, 0x78, // Pin 5 (binary 1, 120ms strong pulse)
+        ESC, 0x70, 0x30, 0x3C, 0x78, // Pin 2 (ASCII '0')
+        ESC, 0x70, 0x31, 0x3C, 0x78, // Pin 5 (ASCII '1')
+        ESC, 0x70, 0x00, 0x19, 0xFA, // Pin 2 (OEM POS-58 standard: 25, 250)
+        ESC, 0x70, 0x01, 0x19, 0xFA, // Pin 5 (OEM POS-58 standard: 25, 250)
+        0x10, 0x14, 0x01, 0x00, 0x01, // DLE DC4 real-time pulse (Pin 2)
+        0x10, 0x14, 0x01, 0x01, 0x01, // DLE DC4 real-time pulse (Pin 5)
+        0x07, // ASCII BEL trigger
+      )
+      continue
+    }
+
     if (command.type === 'feed') {
       const count = Number.isFinite(Number(command.lines)) ? Math.max(0, Number(command.lines)) : 0
 
@@ -488,6 +557,109 @@ export function buildTestReceiptBytes(input) {
 
 export function buildTestReceiptText(input) {
   return commandsToText(createTestReceiptCommands(input))
+}
+
+export function createShiftReceiptCommands({
+  shiftSummary = {},
+  business = {},
+  paperWidth = DEFAULT_PAPER_WIDTH,
+  receiptSettings = {},
+  outlet = null,
+} = {}) {
+  const width = resolveCharsPerLine(paperWidth)
+  const commands = [{ type: 'init' }]
+
+  const settings = normalizeReceiptSettings(receiptSettings)
+  if (settings.logo && decodeReceiptLogo(settings.logo)) {
+    commands.push({ type: 'align', value: 'center' }, { type: 'image', value: settings.logo })
+  }
+
+  // Header
+  const headerLines = buildHeaderLines(business, width, settings.address, outlet)
+  commands.push({ type: 'align', value: 'center' })
+  for (const line of headerLines) {
+    commands.push({ type: 'text', value: line })
+  }
+
+  // Shift Title
+  commands.push(
+    { type: 'feed', lines: 1 },
+    { type: 'bold', value: true },
+    { type: 'text', value: 'REKAP TUTUP SHIFT (Z-REPORT)' },
+    { type: 'bold', value: false },
+    { type: 'feed', lines: 1 },
+  )
+
+  // Divider
+  commands.push({ type: 'align', value: 'left' }, { type: 'text', value: SEPARATOR_CHAR.repeat(width) })
+
+  // Metadata
+  const cashierName = shiftSummary.cashier || 'Kasir'
+  commands.push({ type: 'text', value: sanitizePrinterText(`Kasir: ${cashierName}`) })
+  if (shiftSummary.openedAt) {
+    commands.push({ type: 'text', value: sanitizePrinterText(`Buka : ${formatReceiptDateTime(shiftSummary.openedAt)}`) })
+  }
+  if (shiftSummary.closedAt) {
+    commands.push({ type: 'text', value: sanitizePrinterText(`Tutup: ${formatReceiptDateTime(shiftSummary.closedAt)}`) })
+  }
+  commands.push({ type: 'text', value: sanitizePrinterText(`Total Transaksi: ${shiftSummary.totalTransactions ?? 0}`) })
+
+  commands.push({ type: 'text', value: SEPARATOR_CHAR.repeat(width) })
+
+  // Financial Summary
+  commands.push({ type: 'bold', value: true }, { type: 'text', value: 'RINGKASAN KAS' }, { type: 'bold', value: false })
+
+  const alignPair = (left, right) => {
+    const l = sanitizePrinterText(left)
+    const r = sanitizePrinterText(right)
+    const spaces = Math.max(1, width - l.length - r.length)
+    return `${l}${' '.repeat(spaces)}${r}`
+  }
+
+  commands.push({ type: 'text', value: alignPair('Saldo Awal', formatIdr(shiftSummary.openingBalance ?? 0)) })
+  commands.push({ type: 'text', value: alignPair('Penjualan Tunai', `+${formatIdr(shiftSummary.cashSales ?? 0)}`) })
+  commands.push({ type: 'text', value: alignPair('Penjualan Non-Tunai', `+${formatIdr(shiftSummary.nonCashSales ?? 0)}`) })
+  commands.push({ type: 'text', value: alignPair('Total Penjualan', formatIdr(shiftSummary.totalOmzet ?? 0)) })
+
+  commands.push({ type: 'text', value: SEPARATOR_CHAR.repeat(width) })
+
+  commands.push({ type: 'text', value: alignPair('Kas Masuk Laci', `+${formatIdr(shiftSummary.manualCashIn ?? 0)}`) })
+  commands.push({ type: 'text', value: alignPair('Kas Keluar Laci', `-${formatIdr(shiftSummary.manualCashOut ?? 0)}`) })
+  commands.push({ type: 'text', value: alignPair('Estimasi Kas Laci', formatIdr(shiftSummary.expectedCash ?? 0)) })
+
+  commands.push({ type: 'text', value: SEPARATOR_CHAR.repeat(width) })
+
+  commands.push({ type: 'bold', value: true }, { type: 'text', value: alignPair('Uang Fisik Aktual', formatIdr(shiftSummary.actualCash ?? 0)) }, { type: 'bold', value: false })
+
+  const diff = Number(shiftSummary.difference ?? 0)
+  const diffLabel = diff === 0 ? 'Pas (Rp 0)' : (diff > 0 ? `+${formatIdr(diff)}` : formatIdr(diff))
+  commands.push({ type: 'bold', value: true }, { type: 'text', value: alignPair('Selisih Kas', diffLabel) }, { type: 'bold', value: false })
+
+  if (shiftSummary.notes) {
+    commands.push({ type: 'text', value: SEPARATOR_CHAR.repeat(width) })
+    commands.push({ type: 'text', value: 'Catatan / Alasan Selisih:' })
+    for (const noteLine of wrapText(shiftSummary.notes, width)) {
+      commands.push({ type: 'text', value: noteLine })
+    }
+  }
+
+  commands.push({ type: 'text', value: SEPARATOR_CHAR.repeat(width) })
+  commands.push({ type: 'align', value: 'center' }, { type: 'text', value: 'Dicetak otomatis oleh Sistem POS' })
+  commands.push({ type: 'feed', lines: FOOTER_FEED_LINES })
+
+  return commands
+}
+
+export function buildShiftReceiptBytes(input) {
+  return commandsToBytes(createShiftReceiptCommands(input))
+}
+
+export function buildShiftReceiptText(input) {
+  return commandsToText(createShiftReceiptCommands(input))
+}
+
+export function buildOpenDrawerBytes() {
+  return commandsToBytes([{ type: 'init' }, { type: 'open_drawer' }])
 }
 
 export function bytesToBase64(bytes) {

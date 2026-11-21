@@ -5,8 +5,10 @@ import { useRoute, useRouter } from 'vue-router'
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import { useCustomerStore } from '@/stores/customerStore'
+import { useNotificationStore } from '@/stores/notificationStore'
 
 const customerStore = useCustomerStore()
+const notificationStore = useNotificationStore()
 const route = useRoute()
 const router = useRouter()
 
@@ -96,6 +98,12 @@ async function handleSubmit() {
   }
 
   errors.value = {}
+  notificationStore.notifySuccessAndSync({
+    title: isEditMode.value ? 'Pelanggan Diperbarui' : 'Pelanggan Ditambahkan',
+    message: isEditMode.value
+      ? `Data pelanggan "${payload.name}" berhasil diperbarui.`
+      : `Pelanggan "${payload.name}" berhasil ditambahkan.`,
+  })
   await router.push({ name: 'customers' })
 }
 

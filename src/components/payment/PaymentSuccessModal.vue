@@ -15,12 +15,13 @@ const props = defineProps({
   },
 })
 
-defineEmits(['new-transaction', 'view-receipt', 'view-transactions'])
+defineEmits(['new-transaction', 'complete-ready', 'view-receipt', 'view-transactions'])
 
 const METHOD_LABELS = {
   cash: 'Cash',
   qris: 'QRIS',
   card: 'Card',
+  unpaid: 'Bayar Nanti (Tempo)',
 }
 
 const methodLabel = computed(() => {
@@ -29,6 +30,7 @@ const methodLabel = computed(() => {
 })
 
 const isCash = computed(() => `${props.summary?.paymentMethod ?? ''}`.toLowerCase() === 'cash')
+const isUnpaid = computed(() => `${props.summary?.paymentMethod ?? ''}`.toLowerCase() === 'unpaid')
 
 const happenedAt = computed(() => props.summary?.paidAt || props.summary?.createdAt || null)
 </script>
@@ -42,15 +44,24 @@ const happenedAt = computed(() => props.summary?.paidAt || props.summary?.create
     <div class="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl">
       <!-- Header -->
       <div class="flex flex-col items-center text-center">
-        <div class="flex h-16 w-16 items-center justify-center rounded-full bg-emerald-100 text-emerald-600">
-          <svg class="h-8 w-8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <div
+          class="flex h-16 w-16 items-center justify-center rounded-full"
+          :class="isUnpaid ? 'bg-amber-100 text-amber-600' : 'bg-emerald-100 text-emerald-600'"
+        >
+          <svg v-if="isUnpaid" class="h-8 w-8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" />
+            <polyline points="12 6 12 12 16 14" />
+          </svg>
+          <svg v-else class="h-8 w-8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <circle cx="12" cy="12" r="9" />
             <path d="M8.5 12.5l2.5 2.5 4.5-5" />
           </svg>
         </div>
-        <h2 class="mt-3 text-xl font-bold text-ink-primary">Pembayaran Berhasil!</h2>
+        <h2 class="mt-3 text-xl font-bold text-ink-primary">
+          {{ isUnpaid ? 'Pesanan Berhasil Disimpan!' : 'Pembayaran Berhasil!' }}
+        </h2>
         <p class="mt-1 text-sm text-ink-secondary">
-          Transaksi berhasil disimpan. Pesanan siap diproses.
+          {{ isUnpaid ? 'Transaksi tempo disimpan. Pesanan siap diproses.' : 'Transaksi berhasil disimpan. Pesanan siap diproses.' }}
         </p>
       </div>
 
@@ -97,16 +108,35 @@ const happenedAt = computed(() => props.summary?.paidAt || props.summary?.create
       </dl>
 
       <!-- Actions -->
-      <div class="mt-5 space-y-2">
-        <BaseButton
-          block
-          size="lg"
+      <div class="mt-5 space-y-2.5">
+        <!-- Pilihan Selesai & Langsung Siap (Grab & Go / Langsung Selesai) -->
+        <button
+          type="button"
+          data-testid="success-complete-ready"
+          class="flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-bold text-white shadow-2xs transition hover:bg-emerald-700 active:scale-98 cursor-pointer"
+          @click="$emit('complete-ready')"
+        >
+          <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+          <span>Selesai & Tandai Siap</span>
+        </button>
+
+        <!-- Pilihan Selesai (Pesanan Masih Diproses di Bar/Dapur) -->
+        <button
+          type="button"
           data-testid="success-new-transaction"
+          class="flex w-full items-center justify-center gap-2 rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm font-bold text-ink-primary shadow-2xs transition hover:bg-zinc-50 active:scale-98 cursor-pointer dark:border-slate-700 dark:bg-slate-800 dark:text-white"
           @click="$emit('new-transaction')"
         >
-          <span>Selesai<span class="sr-only"> / Transaksi Baru</span></span>
-        </BaseButton>
-        <div class="grid grid-cols-2 gap-2">
+          <svg class="h-4 w-4 text-amber-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <polyline points="12 6 12 12 16 14" />
+          </svg>
+          <span>Selesai (Pesanan Diproses)</span>
+        </button>
+
+        <div class="grid grid-cols-2 gap-2 pt-0.5">
           <BaseButton
             variant="secondary"
             data-testid="success-view-receipt"
@@ -119,7 +149,7 @@ const happenedAt = computed(() => props.summary?.paidAt || props.summary?.create
             data-testid="success-view-transactions"
             @click="$emit('view-transactions')"
           >
-            <span class="sr-only">Lihat </span>Riwayat
+            <span>Antrean Pesanan</span>
           </BaseButton>
         </div>
       </div>

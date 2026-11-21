@@ -1,24 +1,22 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import TransactionCard from '@/components/transaction/TransactionCard.vue'
+import { useBusinessStore } from '@/stores/businessStore'
+import { useCloudSessionStore } from '@/stores/cloudSessionStore'
+import { useSyncPullStore } from '@/stores/syncPullStore'
+import { useSyncStatusStore } from '@/stores/syncStatusStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import { formatCurrency, toLocalDateString } from '@/utils/formatters'
 
 const transactionStore = useTransactionStore()
+const businessStore = useBusinessStore()
+const cloudStore = useCloudSessionStore()
+const syncPullStore = useSyncPullStore()
+const syncStatusStore = useSyncStatusStore()
 
-const searchQuery = ref('')
-
-// Default filter tanggal: 'today' (Hari ini)
-const dateFilter = ref('today') // 'today', 'all', 'yesterday', 'last7', 'last30', 'custom'
-
-// Filter metode pembayaran: 'all', 'cash', 'qris', 'transfer', 'card'
-const paymentFilter = ref('all')
-
-// State tanggal flicker / flipper navigator (YYYY-MM-DD)
 const todayStr = toLocalDateString(new Date())
-const flickerDate = ref(todayStr)
 
 const yesterdayStr = (() => {
   const d = new Date()
@@ -26,13 +24,109 @@ const yesterdayStr = (() => {
   return toLocalDateString(d)
 })()
 
-onMounted(async () => {
+// Persistent filter state stored in transactionStore so navigating to Detail & back keeps filters locked
+const searchQuery = computed({
+  get: () => transactionStore.uiFilters.searchQuery,
+  set: (v) => {
+    transactionStore.uiFilters.searchQuery = v
+  },
+})
+
+// Filter tanggal: 'today', 'range', 'yesterday', 'last7', 'last30', 'custom', 'all'
+const dateFilter = computed({
+  get: () => transactionStore.uiFilters.dateFilter,
+  set: (v) => {
+    transactionStore.uiFilters.dateFilter = v
+  },
+})
+
+// Filter metode pembayaran: 'all', 'cash', 'qris', 'transfer', 'card'
+const paymentFilter = computed({
+  get: () => transactionStore.uiFilters.paymentFilter,
+  set: (v) => {
+    transactionStore.uiFilters.paymentFilter = v
+  },
+})
+
+// State tanggal flicker / flipper navigator (YYYY-MM-DD)
+const flickerDate = computed({
+  get: () => transactionStore.uiFilters.flickerDate || todayStr,
+  set: (v) => {
+    transactionStore.uiFilters.flickerDate = v
+  },
+})
+
+const rangeStart = computed({
+  get: () => transactionStore.uiFilters.rangeStart || todayStr,
+  set: (v) => {
+    transactionStore.uiFilters.rangeStart = v
+    if (v && transactionStore.uiFilters.rangeEnd && v > transactionStore.uiFilters.rangeEnd) {
+      transactionStore.uiFilters.rangeEnd = v
+    }
+  },
+})
+
+const rangeEnd = computed({
+  get: () => transactionStore.uiFilters.rangeEnd || todayStr,
+  set: (v) => {
+    transactionStore.uiFilters.rangeEnd = v
+    if (v && transactionStore.uiFilters.rangeStart && v < transactionStore.uiFilters.rangeStart) {
+      transactionStore.uiFilters.rangeStart = v
+    }
+  },
+})
+
+function parseLocalDate(dateStr) {
+  if (typeof dateStr === 'string') {
+    const parts = dateStr.split('-')
+    if (parts.length === 3) {
+      return new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]))
+    }
+  }
+  return new Date()
+}
+
+const unpaidCount = computed(() => {
+  const list = transactionStore.items || transactionStore.transactions || []
+  return list.filter((t) => {
+    const payStatus = String(t.paymentStatus || t.payment_status || t.status || '').toLowerCase()
+    const payMethod = String(t.paymentMethod || t.payment_method || '').toLowerCase()
+    return payStatus === 'unpaid' || payMethod === 'unpaid' || Boolean(t.pay_later || t.payLater)
+  }).length
+})
+
+let refreshTimer = null
+
+async function refreshData() {
   if (typeof transactionStore.loadTransactions === 'function' && (!transactionStore.items || transactionStore.items.length === 0)) {
     try {
       await transactionStore.loadTransactions()
     } catch {
       // non-blocking
     }
+  }
+
+  const isCloud = businessStore.mode === 'cloud' || (cloudStore.isLinked && cloudStore.hasCloudAccess)
+  if (isCloud && syncStatusStore.online && !syncPullStore.loading) {
+    try {
+      await syncPullStore.pullNow()
+    } catch {
+      // non-blocking
+    }
+  }
+}
+
+onMounted(async () => {
+  await refreshData()
+  refreshTimer = setInterval(() => {
+    refreshData()
+  }, 15000)
+})
+
+onUnmounted(() => {
+  if (refreshTimer) {
+    clearInterval(refreshTimer)
+    refreshTimer = null
   }
 })
 
@@ -54,14 +148,14 @@ function getTxTimestamp(t) {
 }
 
 function prevDay() {
-  const base = flickerDate.value ? new Date(flickerDate.value) : new Date()
+  const base = parseLocalDate(flickerDate.value)
   base.setDate(base.getDate() - 1)
   flickerDate.value = toLocalDateString(base)
   dateFilter.value = 'custom'
 }
 
 function nextDay() {
-  const base = flickerDate.value ? new Date(flickerDate.value) : new Date()
+  const base = parseLocalDate(flickerDate.value)
   base.setDate(base.getDate() + 1)
   flickerDate.value = toLocalDateString(base)
   dateFilter.value = 'custom'
@@ -73,6 +167,13 @@ function setDateFilter(filter) {
     flickerDate.value = todayStr
   } else if (filter === 'yesterday') {
     flickerDate.value = yesterdayStr
+  } else if (filter === 'range') {
+    if (!transactionStore.uiFilters.rangeStart) {
+      transactionStore.uiFilters.rangeStart = flickerDate.value || todayStr
+    }
+    if (!transactionStore.uiFilters.rangeEnd) {
+      transactionStore.uiFilters.rangeEnd = flickerDate.value || todayStr
+    }
   }
 }
 
@@ -83,25 +184,14 @@ function onCustomDateChange(e) {
   }
 }
 
-function formatDateDisplay(dateStr) {
+function formatDateDisplay(dateStr, includeWeekday = true) {
   if (!dateStr) return '-'
   try {
-    const parts = dateStr.split('-')
-    if (parts.length === 3) {
-      const d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]))
-      return new Intl.DateTimeFormat('id-ID', {
-        weekday: 'short',
-        day: 'numeric',
-        month: 'short',
-        year: 'numeric',
-      }).format(d)
-    }
-    return new Intl.DateTimeFormat('id-ID', {
-      weekday: 'short',
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric',
-    }).format(new Date(dateStr))
+    const d = dateStr.includes('-') && dateStr.length === 10 ? parseLocalDate(dateStr) : new Date(dateStr)
+    const options = includeWeekday
+      ? { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }
+      : { day: 'numeric', month: 'short', year: 'numeric' }
+    return new Intl.DateTimeFormat('id-ID', options).format(d)
   } catch {
     return dateStr
   }
@@ -111,6 +201,12 @@ const flickerDisplayLabel = computed(() => {
   if (dateFilter.value === 'all') return 'Semua Tanggal'
   if (dateFilter.value === 'last7') return '7 Hari Terakhir'
   if (dateFilter.value === 'last30') return '30 Hari Terakhir'
+  if (dateFilter.value === 'range') {
+    const start = rangeStart.value <= rangeEnd.value ? rangeStart.value : rangeEnd.value
+    const end = rangeStart.value <= rangeEnd.value ? rangeEnd.value : rangeStart.value
+    if (start === end) return formatDateDisplay(start, false)
+    return `${formatDateDisplay(start, false)} - ${formatDateDisplay(end, false)}`
+  }
 
   const activeDate = dateFilter.value === 'today'
     ? todayStr
@@ -146,20 +242,30 @@ const filteredTransactions = computed(() => {
       if (txTs < thirtyDaysAgo) return false
     } else if (dateFilter.value === 'custom') {
       if (txDateStr !== flickerDate.value) return false
+    } else if (dateFilter.value === 'range') {
+      if (!txDateStr) return false
+      const start = rangeStart.value <= rangeEnd.value ? rangeStart.value : rangeEnd.value
+      const end = rangeStart.value <= rangeEnd.value ? rangeEnd.value : rangeStart.value
+      if (txDateStr < start || txDateStr > end) return false
     }
     // 'all' passes date filter
 
     // 2. Payment Method Filter
     if (paymentFilter.value !== 'all') {
+      const payStatus = String(t.paymentStatus || t.payment_status || t.status || '').toLowerCase()
       const method = String(t.paymentMethod || t.payment_method || t.method || '').toLowerCase()
-      if (paymentFilter.value === 'cash') {
-        if (!method.includes('cash') && !method.includes('tunai')) return false
+      const isUnpaid = payStatus === 'unpaid' || method === 'unpaid' || Boolean(t.pay_later || t.payLater)
+
+      if (paymentFilter.value === 'unpaid') {
+        if (!isUnpaid) return false
+      } else if (paymentFilter.value === 'cash') {
+        if (isUnpaid || (!method.includes('cash') && !method.includes('tunai'))) return false
       } else if (paymentFilter.value === 'qris') {
-        if (!method.includes('qris')) return false
+        if (isUnpaid || !method.includes('qris')) return false
       } else if (paymentFilter.value === 'transfer') {
-        if (!method.includes('transfer') && !method.includes('bank') && !method.includes('bca') && !method.includes('mandiri') && !method.includes('bri') && !method.includes('bni')) return false
+        if (isUnpaid || (!method.includes('transfer') && !method.includes('bank') && !method.includes('bca') && !method.includes('mandiri') && !method.includes('bri') && !method.includes('bni'))) return false
       } else if (paymentFilter.value === 'card') {
-        if (!method.includes('card') && !method.includes('kartu') && !method.includes('debit') && !method.includes('credit')) return false
+        if (isUnpaid || (!method.includes('card') && !method.includes('kartu') && !method.includes('debit') && !method.includes('credit'))) return false
       }
     }
 
@@ -188,15 +294,12 @@ const totalRevenue = computed(() => {
 })
 
 function resetAllFilters() {
-  searchQuery.value = ''
-  dateFilter.value = 'today'
-  flickerDate.value = todayStr
-  paymentFilter.value = 'all'
+  transactionStore.resetUiFilters()
 }
 </script>
 
 <template>
-  <div class="space-y-4 pb-32">
+  <div class="w-full min-w-0 space-y-4 pb-32">
     <!-- Header with Revenue & Count Summary -->
     <div class="flex items-center justify-between gap-3">
       <div>
@@ -293,6 +396,19 @@ function resetAllFilters() {
         </button>
         <button
           type="button"
+          data-testid="filter-date-range"
+          class="rounded-full px-3 py-1.5 font-medium whitespace-nowrap transition active:scale-95"
+          :class="
+            dateFilter === 'range'
+              ? 'bg-ink-primary text-white shadow-xs dark:bg-white dark:text-ink-primary'
+              : 'bg-white text-zinc-600 border border-zinc-200/70 hover:bg-zinc-50 dark:border-slate-700/60 dark:bg-[#171C2B] dark:text-zinc-300'
+          "
+          @click="setDateFilter('range')"
+        >
+          Rentang Tanggal
+        </button>
+        <button
+          type="button"
           data-testid="filter-date-yesterday"
           class="rounded-full px-3 py-1.5 font-medium whitespace-nowrap transition active:scale-95"
           :class="
@@ -344,6 +460,36 @@ function resetAllFilters() {
           Semua Tanggal
         </button>
       </div>
+
+      <!-- Date Range Picker Bar -->
+      <div
+        v-if="dateFilter === 'range'"
+        data-testid="date-range-picker"
+        class="grid grid-cols-2 gap-2 rounded-2xl border border-zinc-200/80 bg-white p-3 shadow-xs dark:border-slate-700/60 dark:bg-[#171C2B]"
+      >
+        <label class="space-y-1">
+          <span class="block text-[10px] font-semibold uppercase tracking-wider text-ink-secondary">
+            Dari Tanggal
+          </span>
+          <input
+            v-model="rangeStart"
+            type="date"
+            data-testid="date-range-start"
+            class="h-9 w-full rounded-xl border border-zinc-200 bg-surface px-2.5 text-xs font-medium text-ink-primary focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+          />
+        </label>
+        <label class="space-y-1">
+          <span class="block text-[10px] font-semibold uppercase tracking-wider text-ink-secondary">
+            Sampai Tanggal
+          </span>
+          <input
+            v-model="rangeEnd"
+            type="date"
+            data-testid="date-range-end"
+            class="h-9 w-full rounded-xl border border-zinc-200 bg-surface px-2.5 text-xs font-medium text-ink-primary focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+          />
+        </label>
+      </div>
     </div>
 
     <!-- Payment Method Filter Row -->
@@ -364,6 +510,30 @@ function resetAllFilters() {
           @click="paymentFilter = 'all'"
         >
           Semua
+        </button>
+        <button
+          type="button"
+          data-testid="filter-pay-unpaid"
+          class="relative flex items-center gap-1.5 rounded-xl px-3 py-1.5 font-medium whitespace-nowrap transition active:scale-95"
+          :class="
+            paymentFilter === 'unpaid'
+              ? 'bg-amber-600 text-white shadow-xs'
+              : 'bg-white text-zinc-600 border border-zinc-200/70 hover:bg-zinc-50 dark:border-slate-700/60 dark:bg-[#171C2B] dark:text-zinc-300'
+          "
+          @click="paymentFilter = 'unpaid'"
+        >
+          <span>Belum Lunas</span>
+          <span
+            v-if="unpaidCount > 0"
+            class="rounded-full px-1.5 py-0.5 text-[10px] font-bold"
+            :class="
+              paymentFilter === 'unpaid'
+                ? 'bg-white/20 text-white'
+                : 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300'
+            "
+          >
+            {{ unpaidCount }}
+          </span>
         </button>
         <button
           type="button"
@@ -421,12 +591,12 @@ function resetAllFilters() {
     </div>
 
     <!-- Transaction Cards Grid -->
-    <div v-if="filteredTransactions.length > 0" class="grid gap-3">
+    <div v-if="filteredTransactions.length > 0" class="grid grid-cols-1 gap-3 min-w-0 w-full">
       <RouterLink
         v-for="transaction in filteredTransactions"
         :key="transaction.id"
         :to="`/transactions/${transaction.id}`"
-        class="block focus:outline-none"
+        class="block w-full min-w-0 focus:outline-none"
       >
         <TransactionCard :transaction="transaction" />
       </RouterLink>

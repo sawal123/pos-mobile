@@ -2,7 +2,13 @@
 import { computed } from 'vue'
 
 import { formatCurrency, formatDateTime } from '@/utils/formatters'
-import { normalizeReceiptSettings, receiptLogoDataUrl } from '@/services/printer/receiptSettings'
+import {
+  decodeReceiptLogo,
+  normalizeReceiptSettings,
+  rasterizeImageElement,
+  receiptLogoDataUrl,
+} from '@/services/printer/receiptSettings'
+import { useReceiptStore } from '@/stores/receiptStore'
 import { useSubscriptionStore } from '@/stores/subscriptionStore'
 
 const props = defineProps({
@@ -32,6 +38,26 @@ try {
   subscriptionStore = null
 }
 
+let receiptStore = null
+try {
+  receiptStore = useReceiptStore()
+} catch {
+  receiptStore = null
+}
+
+function handleImageLoad(event) {
+  if (!receiptStore) return
+  if (decodeReceiptLogo(receiptStore.logo)) return
+  try {
+    const raster = rasterizeImageElement(event.target)
+    if (raster) {
+      receiptStore.setLogoRaster(raster)
+    }
+  } catch {
+    // Canvas tainted or unavailable, ignore
+  }
+}
+
 const isFreePlan = computed(() => {
   if (props.isFree !== null && props.isFree !== undefined) {
     return Boolean(props.isFree)
@@ -41,6 +67,12 @@ const isFreePlan = computed(() => {
 
 const settings = computed(() => normalizeReceiptSettings(props.receiptSettings))
 const logoUrl = computed(() => receiptLogoDataUrl(settings.value.logo))
+const effectiveAddress = computed(
+  () => props.business?.address || settings.value.address || '',
+)
+const effectivePhone = computed(
+  () => props.business?.phone || '',
+)
 
 const items = computed(() => {
   if (!Array.isArray(props.transaction.items)) {
@@ -115,11 +147,12 @@ const showCashSummary = computed(
           :src="logoUrl"
           alt="Logo usaha"
           class="receipt-logo mx-auto mb-2.5 object-contain"
-          :style="settings.logo ? {
+          :style="settings.logo?.width && settings.logo?.height ? {
             width: `${settings.logo.width / 2}px`,
             height: `${settings.logo.height / 2}px`,
           } : { maxHeight: '48px', maxWidth: '120px' }"
           data-testid="receipt-logo"
+          @load="handleImageLoad"
         />
 
         <h1 class="text-lg font-extrabold tracking-tight text-ink-primary uppercase">
@@ -128,15 +161,15 @@ const showCashSummary = computed(
         <p class="mt-0.5 text-xs font-medium text-ink-secondary">
           {{ business.outlet || '-' }}
         </p>
-        <p v-if="business.phone" class="mt-0.5 font-mono text-xs text-ink-secondary">
-          {{ business.phone }}
+        <p v-if="effectivePhone" class="mt-0.5 font-mono text-xs text-ink-secondary">
+          {{ effectivePhone }}
         </p>
         <p
-          v-if="settings.address"
+          v-if="effectiveAddress"
           class="mt-1 whitespace-pre-line break-words text-xs text-ink-secondary"
           data-testid="receipt-address"
         >
-          {{ settings.address }}
+          {{ effectiveAddress }}
         </p>
 
         <div
@@ -180,6 +213,16 @@ const showCashSummary = computed(
           <span class="text-ink-secondary">Tanggal</span>
           <span class="text-right font-medium tabular-nums text-ink-primary">
             {{ formatDateTime(transaction.createdAt) }}
+          </span>
+        </div>
+        <div
+          v-if="transaction.tableNumber || transaction.table_number"
+          class="flex items-start justify-between gap-3"
+          data-testid="receipt-table-number"
+        >
+          <span class="text-ink-secondary">Meja</span>
+          <span class="text-right font-semibold text-ink-primary">
+            {{ transaction.tableNumber || transaction.table_number }}
           </span>
         </div>
         <div v-if="transaction.estimatedCompletedAt" class="flex items-start justify-between gap-3">

@@ -14,6 +14,8 @@ import { useShiftStore } from '@/stores/shiftStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import { usePromoStore } from '@/stores/promoStore'
 import { useVariantStore } from '@/stores/variantStore'
+import { useTableStore } from '@/stores/tableStore'
+import { useBusinessStore } from '@/stores/businessStore'
 import {
   inspectCloudFirstWorkspace,
   isTransactionMapped,
@@ -34,20 +36,62 @@ const KNOWN_ENTITIES = new Set([
   'promos',
   'promo_targets',
   'variant_groups',
+  'dining_tables',
 ])
 
 const BASE_URL = (import.meta.env?.VITE_API_BASE_URL ?? '').replace(/\/+$/, '')
 
-export function isProductionApiConfigured() {
-  if (!BASE_URL) {
+function resolveRemoteImageUrl(rawUrl) {
+  if (typeof rawUrl !== 'string') return ''
+  const trimmed = rawUrl.trim()
+  if (!trimmed) return ''
+  if (/^(https?:\/\/|data:)/i.test(trimmed)) {
+    return trimmed
+  }
+  if (BASE_URL) {
+    return `${BASE_URL}/${trimmed.replace(/^\/+/, '')}`
+  }
+  return trimmed
+}
+
+export function isProductionApiConfigured(url = BASE_URL) {
+  const target = (url ?? '').trim()
+  if (!target) {
     return false
   }
 
-  if (/^(https?:\/\/)?localhost([:/]|$)/i.test(BASE_URL)) {
+  if (/^(https?:\/\/)?localhost([:/]|$)/i.test(target)) {
     return false
   }
 
-  return /^https?:\/\//i.test(BASE_URL)
+  return /^https?:\/\//i.test(target)
+}
+
+function isAutoOpenShiftQueueItem(item) {
+  if (!item || typeof item !== 'object') return false
+  const entityType = item.entityType ?? item.entity_type
+  if (entityType !== 'shift') return false
+  const payload = item.payload
+  if (!payload || typeof payload !== 'object') return true
+  return !payload.shiftNumber || String(payload.shiftNumber) === String(payload.id)
+}
+
+function shouldIgnoreAutoOpenShift(shift, { hasLocalTransactions = false, hasLocalCash = false } = {}) {
+  if (!shift || typeof shift !== 'object') return false
+  if (shift.isCloudAutoShift === true) return true
+  return !hasLocalTransactions && !hasLocalCash && shift.shiftNumber === null
+}
+
+function filterOperationalQueueItems(queue, { hasLocalTransactions = false, hasLocalCash = false } = {}) {
+  return (Array.isArray(queue) ? queue : []).filter((item) => {
+    if (!item || item.entityType === 'business' || item.entity_type === 'business') {
+      return false
+    }
+    if (!hasLocalTransactions && !hasLocalCash && isAutoOpenShiftQueueItem(item)) {
+      return false
+    }
+    return true
+  })
 }
 
 async function verifyProvenance({
@@ -108,8 +152,11 @@ async function verifyProvenance({
     }
   }
 
+  const hasLocalTransactions = Boolean(baselineTransactionIds && baselineTransactionIds.size > 0)
+  const hasLocalCash = Boolean(baselineCashEntryIds && baselineCashEntryIds.size > 0)
   const isActualShift = Boolean(
     baselineShift &&
+      !shouldIgnoreAutoOpenShift(baselineShift, { hasLocalTransactions, hasLocalCash }) &&
       (baselineShift.id ||
         baselineShift.openedAt ||
         baselineShift.isOpen === true ||
@@ -276,6 +323,14 @@ export function createSyncPullService({
     const deviceIdentifier = overrideContext.deviceIdentifier ?? activeCloudStore?.deviceIdentifier
     const registeredDeviceId =
       overrideContext.registeredDeviceId ?? activeCloudStore?.registeredDeviceId
+    const role =
+      overrideContext.role ??
+      activeCloudStore?.role ??
+      activeCloudStore?.pushPolicy?.role ??
+      null
+    const requireDeviceRegistration =
+      overrideContext.requireDeviceRegistration ??
+      (role === 'cashier' || activeCloudStore?.isCashierContext === true)
 
     // ── 1. Preconditions check ────────────────────────────────────────────────
     const preconditions = describeSyncPreconditions({
@@ -286,6 +341,8 @@ export function createSyncPullService({
       cloudAccess,
       deviceIdentifier,
       registeredDeviceId,
+      requireDeviceRegistration,
+      role,
     })
 
     if (!preconditions.ok) {
@@ -310,6 +367,8 @@ export function createSyncPullService({
       cloudAccess: cloudAccess === true,
       deviceIdentifier,
       registeredDeviceId,
+      role,
+      requireDeviceRegistration: requireDeviceRegistration === true,
     }
 
     if (contextGuardService && typeof contextGuardService.inspect === 'function') {
@@ -369,6 +428,58 @@ export function createSyncPullService({
               },
             }
           }
+        }
+
+        let activeShiftStore = null
+        try {
+          activeShiftStore = resolveStore(stores?.shiftStore, useShiftStore)
+        } catch {
+          activeShiftStore = stores?.shiftStore ?? null
+        }
+
+        // Bersihkan sisa antrean auto-open shift agar akun Cloud baru tidak tertahan "1 Data Pending"
+        try {
+          const [storedTrxCheck, storedCashCheck, storedShiftCheck] = await Promise.all([
+            typeof adapter.loadTransactions === 'function' ? adapter.loadTransactions() : [],
+            typeof adapter.loadCashState === 'function' ? adapter.loadCashState() : null,
+            typeof adapter.loadShiftState === 'function' ? adapter.loadShiftState() : null,
+          ])
+          const hasTrx = Array.isArray(storedTrxCheck) && storedTrxCheck.length > 0
+          const hasCash = Array.isArray(storedCashCheck?.entries) && storedCashCheck.entries.length > 0
+          const isAutoShiftPresent = Boolean(
+            activeShiftStore?.isCloudAutoShift === true ||
+              (storedShiftCheck &&
+                (storedShiftCheck.isCloudAutoShift === true || storedShiftCheck.shiftNumber === null)),
+          )
+
+          if (!hasTrx && !hasCash && isAutoShiftPresent) {
+            let pendingQueue = []
+            if (activeQueueService && typeof activeQueueService.listPending === 'function') {
+              pendingQueue = await activeQueueService.listPending({ limit: 50 })
+            } else if (typeof adapter.listSyncQueueItems === 'function') {
+              pendingQueue = await adapter.listSyncQueueItems({ limit: 50 })
+            }
+            const autoShiftItems = (Array.isArray(pendingQueue) ? pendingQueue : []).filter(
+              isAutoOpenShiftQueueItem,
+            )
+            if (autoShiftItems.length > 0) {
+              for (const item of autoShiftItems) {
+                if (activeQueueService && typeof activeQueueService.remove === 'function') {
+                  await activeQueueService.remove(item.id)
+                } else if (typeof adapter.deleteSyncQueueItem === 'function') {
+                  await adapter.deleteSyncQueueItem(item.id)
+                }
+              }
+              if (activeShiftStore && activeShiftStore.shiftNumber === null) {
+                activeShiftStore.isCloudAutoShift = true
+              }
+              if (scheduler && typeof scheduler.flush === 'function') {
+                await scheduler.flush()
+              }
+            }
+          }
+        } catch {
+          // Best-effort cleanup; workspace guard below still enforces safety.
         }
 
         const workspace = await inspectCloudFirstWorkspace({
@@ -431,12 +542,19 @@ export function createSyncPullService({
           }
         }
 
+        const hasBaseTrx = baselineTransactionIds.size > 0
+        const hasBaseCash = baselineCashEntryIds.size > 0
+
         if (adapter && typeof adapter.loadShiftState === 'function') {
           try {
             const currentShift = await adapter.loadShiftState()
             if (
               currentShift &&
               typeof currentShift === 'object' &&
+              !shouldIgnoreAutoOpenShift(currentShift, {
+                hasLocalTransactions: hasBaseTrx,
+                hasLocalCash: hasBaseCash,
+              }) &&
               (currentShift.id || currentShift.openedAt || currentShift.isOpen === true || currentShift.status === 'open')
             ) {
               baselineShift = currentShift
@@ -447,15 +565,20 @@ export function createSyncPullService({
         }
         if (
           !baselineShift &&
-          stores?.shiftStore &&
-          (stores.shiftStore.id || stores.shiftStore.openedAt || stores.shiftStore.isOpen === true || stores.shiftStore.status === 'open')
+          activeShiftStore &&
+          !shouldIgnoreAutoOpenShift(activeShiftStore, {
+            hasLocalTransactions: hasBaseTrx,
+            hasLocalCash: hasBaseCash,
+          }) &&
+          (activeShiftStore.id || activeShiftStore.openedAt || activeShiftStore.isOpen === true || activeShiftStore.status === 'open')
         ) {
           baselineShift = {
-            id: stores.shiftStore.id,
-            shiftNumber: stores.shiftStore.shiftNumber,
-            openedAt: stores.shiftStore.openedAt,
-            isOpen: stores.shiftStore.isOpen,
-            status: stores.shiftStore.status,
+            id: activeShiftStore.id,
+            shiftNumber: activeShiftStore.shiftNumber,
+            openedAt: activeShiftStore.openedAt,
+            isOpen: activeShiftStore.isOpen,
+            status: activeShiftStore.status,
+            isCloudAutoShift: activeShiftStore.isCloudAutoShift,
           }
         }
 
@@ -663,13 +786,20 @@ export function createSyncPullService({
       pagesCount++
 
       if (!response.ok) {
+        const errorCode = response.error?.code ?? response.code ?? 'PULL_TRANSPORT_ERROR'
+        let errorMessage = response.error?.message ?? response.message ?? 'Failed to pull changes from server.'
+        if (errorCode === 'OUTLET_ACCESS_DENIED') {
+          errorMessage =
+            'Akun kasir ini hanya memiliki akses untuk cabang yang ditugaskan. Perangkat ini terdaftar di cabang berbeda.'
+        }
         return {
           ok: false,
-          code: response.error?.code ?? 'PULL_TRANSPORT_ERROR',
-          message: response.error?.message ?? 'Failed to pull changes from server.',
-          error: response.error ?? {
-            code: 'PULL_TRANSPORT_ERROR',
-            message: 'Transport error',
+          code: errorCode,
+          message: errorMessage,
+          error: {
+            code: errorCode,
+            message: errorMessage,
+            ...(response.error && typeof response.error === 'object' ? response.error : {}),
           },
         }
       }
@@ -724,6 +854,20 @@ export function createSyncPullService({
         }
       }
 
+      const tableMgmtFlag =
+        respData.table_management_enabled ??
+        respData.business?.table_management_enabled ??
+        respData.business?.tableManagementEnabled ??
+        respData.settings?.table_management_enabled ??
+        response.data?.table_management_enabled ??
+        response.data?.business?.table_management_enabled
+      if (tableMgmtFlag !== undefined) {
+        const bStore = resolveStore(stores?.businessStore, useBusinessStore)
+        if (bStore && typeof bStore.setBusiness === 'function') {
+          bStore.setBusiness({ table_management_enabled: Boolean(tableMgmtFlag) })
+        }
+      }
+
       for (const record of records) {
         if (
           !record ||
@@ -753,6 +897,17 @@ export function createSyncPullService({
       currentAfter = nextCursor
       finalServerSequence = serverSeq
       hasMore = respHasMore
+
+      if (typeof options.onProgress === 'function') {
+        const pct =
+          finalServerSequence > 0
+            ? Math.min(78, Math.max(15, Math.round(15 + (currentAfter / finalServerSequence) * 63)))
+            : 50
+        options.onProgress(
+          pct,
+          `Mengunduh data dari Cloud... (${allRecords.length.toLocaleString('id-ID')} data)`,
+        )
+      }
     }
 
     const cursorAfter = currentAfter
@@ -766,6 +921,81 @@ export function createSyncPullService({
     const shiftStore = resolveStore(stores?.shiftStore, useShiftStore)
     const promoStore = resolveStore(stores?.promoStore, usePromoStore)
     const variantStore = resolveStore(stores?.variantStore, useVariantStore)
+    const tableStore = resolveStore(stores?.tableStore, useTableStore)
+    const businessStore = resolveStore(stores?.businessStore, useBusinessStore)
+
+    // ── 6.1. Auto-Backfill missing product images for already-synced devices ─
+    if (
+      options.backfillProductImages === true &&
+      cursorBefore > 0 &&
+      !isInitialCloudPull &&
+      productStore &&
+      productStore.products.length > 0 &&
+      productStore.products.some((p) => isUuid(p.id)) &&
+      productStore.products.every((p) => !p.imageData)
+    ) {
+      try {
+        const seenProductSyncIds = new Set(
+          allRecords
+            .filter((r) => r.entity === 'products' && r.data?.sync_id)
+            .map((r) => String(r.data.sync_id).toLowerCase()),
+        )
+        let backfillAfter = 0
+        let backfillPages = 0
+        let backfillHasMore = true
+        let sawProducts = false
+
+        while (backfillHasMore && backfillPages < 3) {
+          const bfResp = await transport({
+            token,
+            businessId: selectedBusiness.id,
+            deviceIdentifier,
+            after: backfillAfter,
+            limit: 200,
+          })
+          backfillPages++
+          if (!bfResp?.ok) break
+          const bfData = bfResp.data?.data ?? bfResp.data
+          const bfRecords = bfData?.records
+          if (!Array.isArray(bfRecords) || bfRecords.length === 0) break
+
+          let pageProductsCount = 0
+          for (const rec of bfRecords) {
+            if (
+              rec &&
+              rec.entity === 'products' &&
+              Number.isInteger(rec.sync_sequence) &&
+              rec.sync_sequence > 0 &&
+              rec.data &&
+              typeof rec.data === 'object' &&
+              isUuid(rec.data.sync_id) &&
+              Number.isInteger(rec.data.sync_version) &&
+              rec.data.sync_version >= 1
+            ) {
+              pageProductsCount++
+              const sid = String(rec.data.sync_id).toLowerCase()
+              const hasRemoteImg = Boolean(resolveRemoteImageUrl(rec.data.image_url ?? rec.data.image_path))
+              if (hasRemoteImg && !seenProductSyncIds.has(sid)) {
+                seenProductSyncIds.add(sid)
+                allRecords.push(rec)
+              }
+            }
+          }
+
+          if (pageProductsCount > 0) {
+            sawProducts = true
+          } else if (sawProducts) {
+            break
+          }
+
+          const bfNextCursor = bfData.next_cursor
+          backfillHasMore = Boolean(bfData.has_more) && Number.isInteger(bfNextCursor) && bfNextCursor > backfillAfter
+          backfillAfter = bfNextCursor
+        }
+      } catch {
+        // Non-blocking: normal incremental pull continues even if image backfill fails
+      }
+    }
 
     // ── 6.5. Handle empty snapshot ────────────────────────────────────────────
     if (allRecords.length === 0) {
@@ -809,27 +1039,6 @@ export function createSyncPullService({
           }
         }
 
-        let freshQueue = []
-        if (activeQueueService && typeof activeQueueService.listPending === 'function') {
-          freshQueue = await activeQueueService.listPending()
-        } else if (adapter && typeof adapter.listSyncQueueItems === 'function') {
-          freshQueue = await adapter.listSyncQueueItems()
-        }
-        const freshOperationalQueue = (Array.isArray(freshQueue) ? freshQueue : []).filter(
-          (item) => item && item.entityType !== 'business' && item.entity_type !== 'business',
-        )
-        if (freshOperationalQueue.length > 0) {
-          return {
-            ok: false,
-            code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
-            message: 'Local operations were created during Cloud initialization. Initial pull cannot merge local changes.',
-            error: {
-              code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
-              reasons: ['sync_queue'],
-            },
-          }
-        }
-
         let freshTrx = []
         if (adapter && typeof adapter.loadTransactions === 'function') {
           freshTrx = await adapter.loadTransactions()
@@ -853,12 +1062,38 @@ export function createSyncPullService({
           }
         }
 
+        let freshQueue = []
+        if (activeQueueService && typeof activeQueueService.listPending === 'function') {
+          freshQueue = await activeQueueService.listPending()
+        } else if (adapter && typeof adapter.listSyncQueueItems === 'function') {
+          freshQueue = await adapter.listSyncQueueItems()
+        }
+        const freshOperationalQueue = filterOperationalQueueItems(freshQueue, {
+          hasLocalTransactions: allTransactionIds.size > 0,
+          hasLocalCash: allCashEntryIds.size > 0,
+        })
+        if (freshOperationalQueue.length > 0) {
+          return {
+            ok: false,
+            code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+            message: 'Local operations were created during Cloud initialization. Initial pull cannot merge local changes.',
+            error: {
+              code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+              reasons: ['sync_queue'],
+            },
+          }
+        }
+
         let activeShift = baselineShift
         if (adapter && typeof adapter.loadShiftState === 'function') {
           const shiftState = await adapter.loadShiftState()
           if (
             shiftState &&
             typeof shiftState === 'object' &&
+            !shouldIgnoreAutoOpenShift(shiftState, {
+              hasLocalTransactions: allTransactionIds.size > 0,
+              hasLocalCash: allCashEntryIds.size > 0,
+            }) &&
             (shiftState.id || shiftState.openedAt || shiftState.isOpen === true || shiftState.status === 'open')
           ) {
             activeShift = shiftState
@@ -1216,6 +1451,7 @@ export function createSyncPullService({
       : []
     const nextPromos = promoStore ? promoStore.promos.map((p) => ({ ...p })) : []
     const nextVariantGroups = variantStore ? variantStore.groups.map((g) => ({ ...g })) : []
+    const nextDiningTables = tableStore ? tableStore.tables.map((t) => ({ ...t })) : []
     const nextShift = shiftStore
       ? {
           id: shiftStore.id,
@@ -1227,6 +1463,7 @@ export function createSyncPullService({
           closedAt: shiftStore.closedAt,
           notes: shiftStore.notes,
           isOpen: shiftStore.isOpen,
+          isCloudAutoShift: Boolean(shiftStore.isCloudAutoShift),
         }
       : null
     let prospectiveTransactions = []
@@ -1262,11 +1499,25 @@ export function createSyncPullService({
       ...t,
       items: Array.isArray(t.items) ? t.items.map((it) => ({ ...it })) : [],
     }))
+    const nextTransactionsById = new Map()
+    for (const t of nextTransactions) {
+      if (t && t.id !== undefined && t.id !== null) {
+        nextTransactionsById.set(String(t.id).toLowerCase(), t)
+      }
+    }
 
     const warnings = []
     let appliedCount = 0
     let ignoredCount = 0
     const plannedRegistryBinds = []
+    const plannedBindByEntitySyncId = new Map()
+
+    function pushPlannedBind(plan) {
+      plannedRegistryBinds.push(plan)
+      if (plan && plan.entityType && plan.syncId) {
+        plannedBindByEntitySyncId.set(`${plan.entityType}:${String(plan.syncId).toLowerCase()}`, plan)
+      }
+    }
 
     let serverVersionsToSave = {}
     if (adapter && typeof adapter.loadSyncServerVersions === 'function') {
@@ -1299,6 +1550,10 @@ export function createSyncPullService({
           standaloneSaleItems.push(record)
         }
       }
+    }
+
+    if (typeof options.onProgress === 'function') {
+      options.onProgress(82, `Memproses ${allRecords.length.toLocaleString('id-ID')} data Cloud...`)
     }
 
     // Process non-sale records and sales in order
@@ -1374,7 +1629,7 @@ export function createSyncPullService({
               }
             }
 
-            plannedRegistryBinds.push({
+            pushPlannedBind({
               type: 'rebind',
               entityType: 'category',
               oldKey: existingLocalName,
@@ -1401,7 +1656,7 @@ export function createSyncPullService({
             nextCategories.push(name)
           }
 
-          plannedRegistryBinds.push({
+          pushPlannedBind({
             type: 'bind',
             entityType: 'category',
             key: name,
@@ -1420,6 +1675,8 @@ export function createSyncPullService({
           name,
           sku,
           barcode,
+          image_url,
+          image_path,
           price,
           status,
           kind,
@@ -1474,10 +1731,8 @@ export function createSyncPullService({
           )
 
           if (!resolvedCategoryName) {
-            const plannedBind = plannedRegistryBinds.find(
-              (p) =>
-                p.entityType === 'category' &&
-                p.syncId.toLowerCase() === category_sync_id.toLowerCase(),
+            const plannedBind = plannedBindByEntitySyncId.get(
+              `category:${category_sync_id.toLowerCase()}`,
             )
             if (plannedBind) {
               resolvedCategoryName = plannedBind.newKey ?? plannedBind.key
@@ -1513,6 +1768,23 @@ export function createSyncPullService({
         const hasRemoteBarcode = Object.prototype.hasOwnProperty.call(data, 'barcode')
         const remoteBarcode = normalizeProductCode(barcode)
         const remoteIsActive = normalizeRemoteIsActive(data)
+        const hasRemoteImageUrl = Object.prototype.hasOwnProperty.call(data, 'image_url')
+        const hasRemoteImagePath = Object.prototype.hasOwnProperty.call(data, 'image_path')
+        const remoteImageUrl = resolveRemoteImageUrl(image_url ?? image_path)
+
+        const hasOutletPrice =
+          data.outlet_price !== null &&
+          data.outlet_price !== undefined &&
+          data.outlet_price !== ''
+        const effectivePrice = hasOutletPrice ? Number(data.outlet_price) : Number(price)
+        const isAvailableInOutlet =
+          data.is_available_in_outlet !== undefined
+            ? Boolean(data.is_available_in_outlet) &&
+              data.is_available_in_outlet !== 0 &&
+              data.is_available_in_outlet !== '0'
+            : data.isAvailableInOutlet !== undefined
+              ? Boolean(data.isAvailableInOutlet)
+              : true
 
         // Accepted remote records converge normal mutable fields to the server
         // value (this branch only runs when no pending local mutation
@@ -1522,8 +1794,23 @@ export function createSyncPullService({
           existingProd.category = resolvedCategoryName
           if (remoteSku) existingProd.sku = remoteSku
           if (hasRemoteBarcode) existingProd.barcode = remoteBarcode
-          existingProd.price = Number(price)
-          existingProd.unitPrice = Number(price)
+          if (remoteImageUrl) {
+            existingProd.imageData = remoteImageUrl
+          } else if (
+            (hasRemoteImageUrl || hasRemoteImagePath) &&
+            typeof existingProd.imageData === 'string' &&
+            /^https?:\/\//i.test(existingProd.imageData)
+          ) {
+            existingProd.imageData = ''
+          }
+          existingProd.price = effectivePrice
+          existingProd.unitPrice = effectivePrice
+          if (hasOutletPrice) {
+            existingProd.outletPrice = effectivePrice
+            existingProd.outlet_price = effectivePrice
+          }
+          existingProd.isAvailableInOutlet = isAvailableInOutlet
+          existingProd.is_available_in_outlet = isAvailableInOutlet ? 1 : 0
           if (data.promo_price !== undefined) {
             existingProd.promoPrice = (data.promo_price !== null && data.promo_price !== '') ? Number(data.promo_price) : null
           }
@@ -1549,7 +1836,7 @@ export function createSyncPullService({
             ? estimated_duration
             : ''
           existingProd.isSellable = data.is_sellable !== undefined ? Boolean(data.is_sellable) : true
-          existingProd.isActive = remoteIsActive
+          existingProd.isActive = isAvailableInOutlet ? remoteIsActive : false
           if (Array.isArray(data.variant_group_sync_ids)) {
             existingProd.variantGroupIds = data.variant_group_sync_ids
           }
@@ -1560,9 +1847,14 @@ export function createSyncPullService({
             category: resolvedCategoryName,
             sku: remoteSku,
             barcode: remoteBarcode,
-            price: Number(price),
+            imageData: remoteImageUrl,
+            price: effectivePrice,
+            outletPrice: hasOutletPrice ? effectivePrice : null,
+            outlet_price: hasOutletPrice ? effectivePrice : null,
+            isAvailableInOutlet,
+            is_available_in_outlet: isAvailableInOutlet ? 1 : 0,
             promoPrice: (data.promo_price !== null && data.promo_price !== undefined && data.promo_price !== '') ? Number(data.promo_price) : null,
-            unitPrice: Number(price),
+            unitPrice: effectivePrice,
             kind: remoteKind,
             cost: Number.isFinite(remoteCost) && remoteCost >= 0 ? remoteCost : 0,
             stock: Number.isFinite(remoteStock) && remoteStock >= 0 ? remoteStock : 0,
@@ -1572,10 +1864,10 @@ export function createSyncPullService({
             minQuantity: Number.isFinite(remoteMinQuantity) && remoteMinQuantity >= 0 ? remoteMinQuantity : 0,
             estimatedDuration: typeof estimated_duration === 'string' ? estimated_duration : '',
             isSellable: data.is_sellable !== undefined ? Boolean(data.is_sellable) : true,
-            isActive: remoteIsActive,
+            isActive: isAvailableInOutlet ? remoteIsActive : false,
             variantGroupIds: Array.isArray(data.variant_group_sync_ids) ? data.variant_group_sync_ids : [],
           })
-          plannedRegistryBinds.push({
+          pushPlannedBind({
             type: 'bind',
             entityType: 'product',
             key: syncId,
@@ -1685,6 +1977,41 @@ export function createSyncPullService({
           syncVersion,
           syncSequence: sync_sequence,
         }
+      } else if (entity === 'dining_tables') {
+        const tableRecord = {
+          id: syncId,
+          outlet_id: data.outlet_id ?? data.outletId ?? null,
+          outletId: data.outlet_id ?? data.outletId ?? null,
+          name: data.name,
+          capacity: Number(data.capacity ?? 4),
+          status: data.status ?? 'available',
+          sort_order: Number(data.sort_order ?? data.sortOrder ?? 0),
+          sortOrder: Number(data.sort_order ?? data.sortOrder ?? 0),
+          updated_at: data.updated_at ?? data.updatedAt ?? new Date().toISOString(),
+          updatedAt: data.updated_at ?? data.updatedAt ?? new Date().toISOString(),
+        }
+
+        const existingTableIndex = nextDiningTables.findIndex(
+          (t) => String(t.id).toLowerCase() === syncId,
+        )
+
+        if (data.status === 'deleted') {
+          if (existingTableIndex !== -1) {
+            nextDiningTables.splice(existingTableIndex, 1)
+          }
+        } else {
+          if (existingTableIndex !== -1) {
+            nextDiningTables[existingTableIndex] = tableRecord
+          } else {
+            nextDiningTables.push(tableRecord)
+          }
+        }
+
+        appliedCount++
+        serverVersionsToSave[`dining_tables:${syncId}`] = {
+          syncVersion,
+          syncSequence: sync_sequence,
+        }
       } else if (entity === 'customers') {
         const { name, phone, email, status: customerStatus } = data
 
@@ -1715,7 +2042,7 @@ export function createSyncPullService({
             phone: phone ?? '',
             email: email ?? '',
           })
-          plannedRegistryBinds.push({
+          pushPlannedBind({
             type: 'bind',
             entityType: 'customer',
             key: syncId,
@@ -1758,7 +2085,7 @@ export function createSyncPullService({
             note: notes ?? '',
             createdAt: occurred_at,
           })
-          plannedRegistryBinds.push({
+          pushPlannedBind({
             type: 'bind',
             entityType: 'expense',
             key: syncId,
@@ -1799,7 +2126,7 @@ export function createSyncPullService({
           const isCurrentOpen = (nextShift.status ?? '').toLowerCase() === 'open'
 
           let shouldApplyToNextShift = false
-          if (!nextShift.id) {
+          if (!nextShift.id || nextShift.isCloudAutoShift === true) {
             shouldApplyToNextShift = true
           } else if (isIncomingOpen && !isCurrentOpen) {
             // An incoming open shift ALWAYS supersedes a closed shift
@@ -1829,10 +2156,11 @@ export function createSyncPullService({
             nextShift.closedAt = closed_at ?? nextShift.closedAt
             nextShift.notes = shiftNotes ?? nextShift.notes
             nextShift.isOpen = (shiftStatus ?? nextShift.status) === 'open'
+            nextShift.isCloudAutoShift = false
           }
         }
 
-        plannedRegistryBinds.push({
+        pushPlannedBind({
           type: 'bind',
           entityType: 'shift',
           key: shift_number ?? syncId,
@@ -1894,7 +2222,7 @@ export function createSyncPullService({
             transactionId: data.sale_sync_id ? (cashLocalKey ?? data.sale_sync_id) : null,
             createdAt: cashOccurredAt,
           })
-          plannedRegistryBinds.push({
+          pushPlannedBind({
             type: 'bind',
             entityType: 'cash_entry',
             key: syncId,
@@ -1921,11 +2249,9 @@ export function createSyncPullService({
         } = data
 
         let resolvedProductId = await activeRegistry.findLocalKeyBySyncId('product', product_sync_id)
-        if (!resolvedProductId) {
-          const plannedProdBind = plannedRegistryBinds.find(
-            (p) =>
-              p.entityType === 'product' &&
-              p.syncId.toLowerCase() === `${product_sync_id ?? ''}`.toLowerCase(),
+        if (!resolvedProductId && product_sync_id) {
+          const plannedProdBind = plannedBindByEntitySyncId.get(
+            `product:${String(product_sync_id).toLowerCase()}`,
           )
           if (plannedProdBind) {
             resolvedProductId = plannedProdBind.key
@@ -1967,7 +2293,7 @@ export function createSyncPullService({
             note: movementNote ?? '',
             createdAt: movementOccurredAt,
           })
-          plannedRegistryBinds.push({
+          pushPlannedBind({
             type: 'bind',
             entityType: 'stock_movement',
             key: syncId,
@@ -2016,11 +2342,14 @@ export function createSyncPullService({
 
         const saleItemRecords = pulledSaleItemsBySaleId[syncId] ?? []
 
-        let existingTrx = nextTransactions.find((t) => String(t.id).toLowerCase() === syncId)
+        let existingTrx = nextTransactionsById.get(syncId)
         if (!existingTrx) {
           const localKey = await activeRegistry.findLocalKeyBySyncId('transaction', syncId)
           if (localKey) {
-            existingTrx = nextTransactions.find((t) => String(t.id) === String(localKey))
+            const candidate = nextTransactionsById.get(String(localKey).toLowerCase())
+            if (candidate && String(candidate.id) === String(localKey)) {
+              existingTrx = candidate
+            }
           }
         }
 
@@ -2035,10 +2364,8 @@ export function createSyncPullService({
             localCustKey = await activeRegistry.findLocalKeyBySyncId('customer', customer_sync_id)
           }
           if (!localCustKey) {
-            const plannedCustBind = plannedRegistryBinds.find(
-              (p) =>
-                p.entityType === 'customer' &&
-                p.syncId.toLowerCase() === customer_sync_id.toLowerCase(),
+            const plannedCustBind = plannedBindByEntitySyncId.get(
+              `customer:${String(customer_sync_id).toLowerCase()}`,
             )
             if (plannedCustBind) {
               localCustKey = plannedCustBind.key
@@ -2080,23 +2407,21 @@ export function createSyncPullService({
             saleItemRecords.map(async (siRecord) => {
               const siData = siRecord.data
               let localProdKey = null
-              if (activeRegistry) {
+              if (activeRegistry && siData.product_sync_id) {
                 localProdKey = await activeRegistry.findLocalKeyBySyncId(
                   'product',
                   siData.product_sync_id,
                 )
               }
-              if (!localProdKey) {
-                const plannedProdBind = plannedRegistryBinds.find(
-                  (p) =>
-                    p.entityType === 'product' &&
-                    p.syncId.toLowerCase() === siData.product_sync_id.toLowerCase(),
+              if (!localProdKey && siData.product_sync_id) {
+                const plannedProdBind = plannedBindByEntitySyncId.get(
+                  `product:${String(siData.product_sync_id).toLowerCase()}`,
                 )
                 if (plannedProdBind) {
                   localProdKey = plannedProdBind.key
                 }
               }
-              const resolvedProductId = localProdKey ?? siData.product_sync_id
+              const resolvedProductId = localProdKey ?? siData.product_sync_id ?? `item-${siData.sync_id}`
               const snapshotHpp = Number(siData.cost_snapshot)
               const snapshotLineCost = Number(siData.line_cost)
 
@@ -2204,7 +2529,7 @@ export function createSyncPullService({
           existingTrx.synced = true
           existingTrx.isSynced = true
         } else {
-          nextTransactions.push({
+          const newTrx = {
             id: syncId,
             invoiceNumber: transaction_number,
             customer: customerName,
@@ -2233,8 +2558,10 @@ export function createSyncPullService({
             createdAt: sold_at,
             synced: true,
             isSynced: true,
-          })
-          plannedRegistryBinds.push({
+          }
+          nextTransactions.push(newTrx)
+          nextTransactionsById.set(syncId, newTrx)
+          pushPlannedBind({
             type: 'bind',
             entityType: 'transaction',
             key: syncId,
@@ -2265,11 +2592,14 @@ export function createSyncPullService({
       const siSyncId = data.sync_id.toLowerCase()
       const saleSyncId = data.sale_sync_id?.toLowerCase()
 
-      let existingTrx = nextTransactions.find((t) => String(t.id).toLowerCase() === saleSyncId)
+      let existingTrx = saleSyncId ? nextTransactionsById.get(saleSyncId) : undefined
       if (!existingTrx) {
         const localKey = await activeRegistry.findLocalKeyBySyncId('transaction', saleSyncId)
         if (localKey) {
-          existingTrx = nextTransactions.find((t) => String(t.id) === String(localKey))
+          const candidate = nextTransactionsById.get(String(localKey).toLowerCase())
+          if (candidate && String(candidate.id) === String(localKey)) {
+            existingTrx = candidate
+          }
         }
       }
 
@@ -2286,28 +2616,29 @@ export function createSyncPullService({
       }
 
       let localProdKey = null
-      if (activeRegistry) {
+      if (activeRegistry && data.product_sync_id) {
         localProdKey = await activeRegistry.findLocalKeyBySyncId(
           'product',
           data.product_sync_id,
         )
       }
-      if (!localProdKey) {
-        const plannedProdBind = plannedRegistryBinds.find(
-          (p) =>
-            p.entityType === 'product' &&
-            p.syncId.toLowerCase() === data.product_sync_id.toLowerCase(),
+      if (!localProdKey && data.product_sync_id) {
+        const plannedProdBind = plannedBindByEntitySyncId.get(
+          `product:${String(data.product_sync_id).toLowerCase()}`,
         )
         if (plannedProdBind) {
           localProdKey = plannedProdBind.key
         }
       }
-      const resolvedProductId = localProdKey ?? data.product_sync_id
+      const resolvedProductId = localProdKey ?? data.product_sync_id ?? `item-${data.sync_id}`
+      const productSyncIdLower = data.product_sync_id
+        ? String(data.product_sync_id).toLowerCase()
+        : null
 
       const itemIdx = existingTrx.items.findIndex(
         (it) =>
           String(it.id).toLowerCase() === String(resolvedProductId).toLowerCase() ||
-          String(it.id).toLowerCase() === data.product_sync_id.toLowerCase(),
+          (productSyncIdLower !== null && String(it.id).toLowerCase() === productSyncIdLower),
       )
       const standaloneHpp = Number(data.cost_snapshot)
       const standaloneLineCost = Number(data.line_cost)
@@ -2392,27 +2723,6 @@ export function createSyncPullService({
         }
       }
 
-      let freshQueue = []
-      if (activeQueueService && typeof activeQueueService.listPending === 'function') {
-        freshQueue = await activeQueueService.listPending()
-      } else if (adapter && typeof adapter.listSyncQueueItems === 'function') {
-        freshQueue = await adapter.listSyncQueueItems()
-      }
-      const freshOperationalQueue = (Array.isArray(freshQueue) ? freshQueue : []).filter(
-        (item) => item && item.entityType !== 'business' && item.entity_type !== 'business',
-      )
-      if (freshOperationalQueue.length > 0) {
-        return {
-          ok: false,
-          code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
-          message: 'Local operations were created during Cloud initialization. Initial pull cannot merge local changes.',
-          error: {
-            code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
-            reasons: ['sync_queue'],
-          },
-        }
-      }
-
       let freshTrx = []
       if (adapter && typeof adapter.loadTransactions === 'function') {
         freshTrx = await adapter.loadTransactions()
@@ -2436,12 +2746,41 @@ export function createSyncPullService({
         }
       }
 
+      const hasLocalTrxPreCommit = allTransactionIds.size > 0
+      const hasLocalCashPreCommit = allCashEntryIds.size > 0
+
+      let freshQueue = []
+      if (activeQueueService && typeof activeQueueService.listPending === 'function') {
+        freshQueue = await activeQueueService.listPending()
+      } else if (adapter && typeof adapter.listSyncQueueItems === 'function') {
+        freshQueue = await adapter.listSyncQueueItems()
+      }
+      const freshOperationalQueue = filterOperationalQueueItems(freshQueue, {
+        hasLocalTransactions: hasLocalTrxPreCommit,
+        hasLocalCash: hasLocalCashPreCommit,
+      })
+      if (freshOperationalQueue.length > 0) {
+        return {
+          ok: false,
+          code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+          message: 'Local operations were created during Cloud initialization. Initial pull cannot merge local changes.',
+          error: {
+            code: 'CLOUD_INITIALIZATION_WORKSPACE_NOT_EMPTY',
+            reasons: ['sync_queue'],
+          },
+        }
+      }
+
       let activeShift = baselineShift
       if (adapter && typeof adapter.loadShiftState === 'function') {
         const shiftState = await adapter.loadShiftState()
         if (
           shiftState &&
           typeof shiftState === 'object' &&
+          !shouldIgnoreAutoOpenShift(shiftState, {
+            hasLocalTransactions: hasLocalTrxPreCommit,
+            hasLocalCash: hasLocalCashPreCommit,
+          }) &&
           (shiftState.id || shiftState.openedAt || shiftState.isOpen === true || shiftState.status === 'open')
         ) {
           activeShift = shiftState
@@ -2450,6 +2789,10 @@ export function createSyncPullService({
       if (
         !activeShift &&
         shiftStore &&
+        !shouldIgnoreAutoOpenShift(shiftStore, {
+          hasLocalTransactions: hasLocalTrxPreCommit,
+          hasLocalCash: hasLocalCashPreCommit,
+        }) &&
         (shiftStore.id || shiftStore.openedAt || shiftStore.isOpen === true || shiftStore.status === 'open')
       ) {
         activeShift = {
@@ -2458,10 +2801,15 @@ export function createSyncPullService({
           openedAt: shiftStore.openedAt,
           isOpen: shiftStore.isOpen,
           status: shiftStore.status,
+          isCloudAutoShift: shiftStore.isCloudAutoShift,
         }
       } else if (
         !activeShift &&
         stores?.shiftStore &&
+        !shouldIgnoreAutoOpenShift(stores.shiftStore, {
+          hasLocalTransactions: hasLocalTrxPreCommit,
+          hasLocalCash: hasLocalCashPreCommit,
+        }) &&
         (stores.shiftStore.id || stores.shiftStore.openedAt || stores.shiftStore.isOpen === true || stores.shiftStore.status === 'open')
       ) {
         activeShift = {
@@ -2470,6 +2818,7 @@ export function createSyncPullService({
           openedAt: stores.shiftStore.openedAt,
           isOpen: stores.shiftStore.isOpen,
           status: stores.shiftStore.status,
+          isCloudAutoShift: stores.shiftStore.isCloudAutoShift,
         }
       }
 
@@ -2547,8 +2896,16 @@ export function createSyncPullService({
         groups: nextVariantGroups,
       })
     }
+    if (tableStore) {
+      tableStore.$patch({
+        tables: nextDiningTables,
+      })
+    }
 
     // ── 11. Flush persistence scheduler (persists Pinia state to SQLite) ───────
+    if (typeof options.onProgress === 'function') {
+      options.onProgress(90, 'Menyimpan data ke penyimpanan perangkat...')
+    }
     if (scheduler && typeof scheduler.flush === 'function') {
       await scheduler.flush()
     } else if (adapter && typeof adapter.saveProducts === 'function') {
@@ -2569,20 +2926,30 @@ export function createSyncPullService({
       if (typeof adapter.saveVariantGroups === 'function') {
         await adapter.saveVariantGroups(nextVariantGroups)
       }
+      if (typeof adapter.saveDiningTables === 'function') {
+        await adapter.saveDiningTables(nextDiningTables)
+      }
     }
 
     // ── 12. Execute planned identity registry operations ───────────────────────
+    if (typeof options.onProgress === 'function') {
+      options.onProgress(96, 'Menyelesaikan sinkronisasi data...')
+    }
     if (activeRegistry) {
-      for (const plan of plannedRegistryBinds) {
-        if (plan.type === 'bind') {
-          await activeRegistry.bindSyncId(plan.entityType, plan.key, plan.syncId)
-        } else if (plan.type === 'rebind') {
-          await activeRegistry.rebindSyncId(
-            plan.entityType,
-            plan.oldKey,
-            plan.newKey,
-            plan.syncId,
-          )
+      if (typeof activeRegistry.bindMany === 'function') {
+        await activeRegistry.bindMany(plannedRegistryBinds)
+      } else {
+        for (const plan of plannedRegistryBinds) {
+          if (plan.type === 'bind') {
+            await activeRegistry.bindSyncId(plan.entityType, plan.key, plan.syncId)
+          } else if (plan.type === 'rebind') {
+            await activeRegistry.rebindSyncId(
+              plan.entityType,
+              plan.oldKey,
+              plan.newKey,
+              plan.syncId,
+            )
+          }
         }
       }
     }

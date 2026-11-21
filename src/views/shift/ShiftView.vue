@@ -7,9 +7,12 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
+import { printShiftReceipt } from '@/services/printer/bluetoothPrinterService'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCashierStore } from '@/stores/cashierStore'
 import { useCashStore } from '@/stores/cashStore'
+import { usePrinterStore } from '@/stores/printerStore'
+import { useReceiptStore } from '@/stores/receiptStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import { isPaidTransaction, useTransactionStore } from '@/stores/transactionStore'
 import { formatCurrency, formatDateTime } from '@/utils/formatters'
@@ -18,6 +21,8 @@ const router = useRouter()
 const businessStore = useBusinessStore()
 const cashierStore = useCashierStore()
 const cashStore = useCashStore()
+const printerStore = usePrinterStore()
+const receiptStore = useReceiptStore()
 const shiftStore = useShiftStore()
 const transactionStore = useTransactionStore()
 
@@ -138,6 +143,9 @@ const countedCashInput = ref('')
 const closeShiftNotes = ref('')
 const showCloseSummaryModal = ref(false)
 const closedSummaryData = ref(null)
+const isPrintingShift = ref(false)
+const printShiftFeedback = ref('')
+const printShiftError = ref('')
 
 function openCloseShiftFlow() {
   countedCashInput.value = String(expectedCashInDrawer.value)
@@ -154,11 +162,16 @@ const cashDifference = computed(() => {
   return countedCashNumber.value - expectedCashInDrawer.value
 })
 
+const isCloseNotesRequired = computed(() => cashDifference.value !== 0)
+const canConfirmClose = computed(() => !isCloseNotesRequired.value || Boolean(closeShiftNotes.value.trim()))
+
 function setExactCountedCash() {
   countedCashInput.value = String(expectedCashInDrawer.value)
 }
 
 function confirmCloseShift() {
+  if (!canConfirmClose.value) return
+
   const finalSummary = {
     openedAt: shiftStore.openedAt,
     closedAt: new Date().toISOString(),
@@ -181,6 +194,34 @@ function confirmCloseShift() {
   closedSummaryData.value = finalSummary
   showCloseShiftModal.value = false
   showCloseSummaryModal.value = true
+}
+
+async function handlePrintShiftReceipt() {
+  if (isPrintingShift.value || !closedSummaryData.value) return
+  isPrintingShift.value = true
+  printShiftFeedback.value = ''
+  printShiftError.value = ''
+
+  try {
+    const res = await printShiftReceipt({
+      shiftSummary: closedSummaryData.value,
+      business: businessStore.business,
+      printer: printerStore.selectedPrinter,
+      paperWidth: printerStore.paperWidth,
+      receiptSettings: receiptStore.settings,
+      outlet: businessStore.outlet,
+    })
+
+    if (!res.success) {
+      printShiftError.value = res.message || 'Gagal mencetak struk rekap shift.'
+    } else {
+      printShiftFeedback.value = 'Struk rekap shift berhasil dikirim ke printer.'
+    }
+  } catch (err) {
+    printShiftError.value = err.message || 'Terjadi kesalahan saat mencetak.'
+  } finally {
+    isPrintingShift.value = false
+  }
 }
 
 // ── Quick Mutation Modal (Cash In/Out) ──────────────────────────────────────
@@ -556,6 +597,16 @@ function submitQuickMutation() {
       @close="showCloseShiftModal = false"
     >
       <div class="space-y-4 text-xs" data-testid="modal-close-shift">
+        <!-- Formula Rekonsiliasi Kas -->
+        <div class="rounded-2xl border border-blue-200/80 bg-blue-50/60 p-3 space-y-1 text-xs dark:bg-blue-950/30 dark:border-blue-900/40">
+          <p class="font-bold uppercase tracking-wider text-[11px] text-blue-700 dark:text-blue-300">
+            Formula Rekonsiliasi Kas:
+          </p>
+          <p class="font-mono text-xs font-semibold text-blue-900 dark:text-blue-200" data-testid="reconciliation-formula">
+            Estimasi Kas = Kas Awal + Penjualan Tunai + Kas Masuk - Kas Keluar
+          </p>
+        </div>
+
         <!-- Expected Cash Display -->
         <div class="rounded-2xl border border-zinc-200 bg-surface p-3.5 space-y-2">
           <div class="flex items-center justify-between">
@@ -631,14 +682,20 @@ function submitQuickMutation() {
 
         <!-- Notes -->
         <div class="space-y-1">
-          <label class="font-medium text-ink-secondary">Catatan Tutup Shift (Opsional)</label>
+          <label class="font-medium text-ink-secondary">
+            {{ isCloseNotesRequired ? 'Alasan / Keterangan Selisih Kas' : 'Catatan Tutup Shift (Opsional)' }}
+            <span v-if="isCloseNotesRequired" class="text-danger font-bold">* (Wajib diisi)</span>
+          </label>
           <textarea
             v-model="closeShiftNotes"
             rows="2"
             data-testid="input-close-notes"
             placeholder="Contoh: Selisih Rp 500 karena pembulatan kembalian"
-            class="w-full rounded-2xl border border-zinc-200 bg-white p-2.5 text-xs text-ink-primary outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+            class="w-full rounded-2xl border border-zinc-200 bg-white p-2.5 text-xs text-ink-primary outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
           />
+          <p v-if="isCloseNotesRequired && !closeShiftNotes.trim()" class="text-[11px] text-danger font-medium" data-testid="error-close-notes-required">
+            Wajib memberikan keterangan/alasan jika terdapat selisih uang kas fisik.
+          </p>
         </div>
 
         <!-- Modal Actions -->
@@ -654,6 +711,7 @@ function submitQuickMutation() {
             variant="danger"
             class="flex-1"
             data-testid="btn-confirm-close"
+            :disabled="!canConfirmClose"
             @click="confirmCloseShift"
           >
             Tutup
@@ -714,12 +772,37 @@ function submitQuickMutation() {
             </span>
           </div>
           <div v-if="closedSummaryData.notes" class="border-t border-zinc-200/60 pt-2">
-            <p class="text-ink-secondary">Catatan:</p>
+            <p class="text-ink-secondary">Catatan / Alasan Selisih:</p>
             <p class="italic text-ink-primary">{{ closedSummaryData.notes }}</p>
           </div>
         </div>
 
+        <!-- Print Feedback / Error -->
+        <div v-if="printShiftFeedback" class="rounded-xl bg-emerald-50 border border-emerald-200 p-2.5 text-xs text-emerald-800 font-medium" data-testid="print-shift-feedback">
+          {{ printShiftFeedback }}
+        </div>
+        <div v-if="printShiftError" class="rounded-xl bg-danger/10 p-2.5 text-xs text-danger font-medium" data-testid="print-shift-error">
+          {{ printShiftError }}
+        </div>
+
         <div class="flex flex-col gap-2 pt-2">
+          <BaseButton
+            variant="secondary"
+            block
+            size="md"
+            class="gap-2"
+            :disabled="isPrintingShift"
+            data-testid="btn-print-shift-receipt"
+            @click="handlePrintShiftReceipt"
+          >
+            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="6 9 6 2 18 2 18 9" />
+              <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+              <rect x="6" y="14" width="12" height="8" />
+            </svg>
+            <span>{{ isPrintingShift ? 'Mencetak Rekap...' : 'Cetak Struk Rekap Shift (Z-Report)' }}</span>
+          </BaseButton>
+
           <BaseButton
             block
             data-testid="btn-summary-home"

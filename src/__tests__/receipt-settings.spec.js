@@ -284,4 +284,22 @@ describe('receipt settings persistence and business isolation', () => {
     await applyWorkspaceSnapshot(adapter, saved)
     expect(await adapter.loadReceiptSettings()).toEqual(settings)
   })
+
+  it('normalizes logo url and supports rasterizing image element and url', () => {
+    const fromUrl = normalizeReceiptSettings({ logo: 'https://example.com/logo.png' })
+    expect(fromUrl.logo).toEqual({ url: 'https://example.com/logo.png' })
+    expect(receiptLogoDataUrl(fromUrl.logo)).toBe('https://example.com/logo.png')
+
+    const store = useReceiptStore()
+    store.saveSettings(fromUrl)
+    expect(store.logo).toEqual({ url: 'https://example.com/logo.png' })
+
+    store.setLogoRaster({ width: 16, height: 2, data: 'AAAA' })
+    expect(store.logo).toEqual({
+      url: 'https://example.com/logo.png',
+      width: 16,
+      height: 2,
+      data: 'AAAA',
+    })
+  })
 })

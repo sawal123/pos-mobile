@@ -28,6 +28,7 @@ export function createMemoryAdapter() {
     transactions: [],
     promos: [],
     variantGroups: [],
+    diningTables: [],
     cashierState: null,
     shiftState: null,
     cashState: null,
@@ -135,6 +136,12 @@ export function createMemoryAdapter() {
     },
     async saveVariantGroups(groups) {
       state.variantGroups = cloneValue(groups)
+    },
+    async loadDiningTables() {
+      return cloneValue(state.diningTables || [])
+    },
+    async saveDiningTables(tables) {
+      state.diningTables = cloneValue(tables || [])
     },
     async loadCashierState() {
       return cloneValue(state.cashierState)
@@ -264,7 +271,7 @@ export function createMemoryAdapter() {
       return state.deviceIdentifier ? String(state.deviceIdentifier) : null
     },
     async saveDeviceIdentifier(id) {
-      state.deviceIdentifier = String(id)
+      state.deviceIdentifier = id == null ? null : String(id)
     },
     // P10: non-sensitive cloud session context
     async loadCloudContext() {

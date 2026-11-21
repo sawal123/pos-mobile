@@ -1,3 +1,5 @@
+import { Capacitor, registerPlugin } from '@capacitor/core'
+
 export const DEFAULT_RECEIPT_FOOTER =
   'Terima kasih atas kunjungan Anda!\nSimpan struk ini sebagai bukti pembayaran yang sah.'
 export const MAX_LOGO_WIDTH = 192
@@ -5,6 +7,14 @@ export const MAX_LOGO_HEIGHT = 96
 export const MAX_LOGO_FILE_BYTES = 2 * 1024 * 1024
 export const MAX_ADDRESS_LENGTH = 300
 export const MAX_FOOTER_LENGTH = 300
+
+let bluetoothPrinterPlugin = null
+function getPrinterPlugin() {
+  if (!bluetoothPrinterPlugin) {
+    bluetoothPrinterPlugin = registerPlugin('BluetoothPrinter')
+  }
+  return bluetoothPrinterPlugin
+}
 
 export function receiptText(value, maxLength) {
   return typeof value === 'string'
@@ -40,22 +50,45 @@ export function decodeReceiptLogo(logo) {
 }
 
 export function normalizeReceiptSettings(settings) {
-  return {
+  let logoObj = null
+  if (decodeReceiptLogo(settings?.logo)) {
+    logoObj = {
+      width: settings.logo.width,
+      height: settings.logo.height,
+      data: settings.logo.data,
+      url: settings.logo.url || undefined,
+    }
+  } else if (typeof settings?.logo?.url === 'string' && settings.logo.url) {
+    logoObj = { url: settings.logo.url }
+  } else if (typeof settings?.logo === 'string' && settings.logo) {
+    logoObj = { url: settings.logo }
+  } else if (typeof settings?.logo_url === 'string' && settings.logo_url) {
+    logoObj = { url: settings.logo_url }
+  }
+
+  const normalized = {
     address: receiptText(settings?.address, MAX_ADDRESS_LENGTH),
     footer:
       settings?.footer === undefined
         ? DEFAULT_RECEIPT_FOOTER
         : receiptText(settings.footer, MAX_FOOTER_LENGTH),
-    logo: decodeReceiptLogo(settings?.logo)
-      ? { width: settings.logo.width, height: settings.logo.height, data: settings.logo.data }
-      : (typeof settings?.logo?.url === 'string' && settings.logo.url ? { url: settings.logo.url } : null),
+    logo: logoObj,
   }
+
+  if (settings?.openCashDrawer !== undefined) {
+    normalized.openCashDrawer = Boolean(settings.openCashDrawer)
+  }
+
+  return normalized
 }
 
 // A single canonical black/white raster drives both the screen image and ESC/POS.
 export function receiptLogoDataUrl(logo) {
   if (typeof logo?.url === 'string' && logo.url) {
     return logo.url
+  }
+  if (typeof logo === 'string' && logo) {
+    return logo
   }
   const data = decodeReceiptLogo(logo)
   if (!data) return ''
@@ -67,6 +100,123 @@ export function receiptLogoDataUrl(logo) {
   }
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${logo.width}" height="${logo.height}" viewBox="0 0 ${logo.width} ${logo.height}"><path fill="white" d="M0 0h${logo.width}v${logo.height}H0z"/><path fill="black" d="${path}"/></svg>`
   return `data:image/svg+xml,${encodeURIComponent(svg)}`
+}
+
+export function rasterizeImageElement(imgElement) {
+  if (!imgElement || !imgElement.naturalWidth || !imgElement.naturalHeight) return null
+  try {
+    const scale = Math.min(
+      1,
+      MAX_LOGO_WIDTH / imgElement.naturalWidth,
+      MAX_LOGO_HEIGHT / imgElement.naturalHeight,
+    )
+    const width = Math.max(8, Math.round(imgElement.naturalWidth * scale))
+    const height = Math.max(1, Math.round(imgElement.naturalHeight * scale))
+
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const context = canvas.getContext('2d', { willReadFrequently: true })
+    if (!context) return null
+
+    context.fillStyle = '#FFFFFF'
+    context.fillRect(0, 0, width, height)
+    context.drawImage(imgElement, 0, 0, width, height)
+
+    const imageData = context.getImageData(0, 0, width, height)
+    const raster = monochromeRaster(imageData.data, width, height)
+    return {
+      width: raster.width,
+      height: raster.height,
+      data: raster.data,
+    }
+  } catch {
+    return null
+  }
+}
+
+export async function rasterizeLogoUrl(url) {
+  if (!url || typeof url !== 'string') return null
+
+  const fullUrl =
+    url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:')
+      ? url
+      : `https://pos.eradig.my.id${url.startsWith('/') ? '' : '/'}${url}`
+
+  // 1. Prioritas Native Android: gunakan plugin native BluetoothPrinter.rasterizeLogo
+  // Bebas masalah CORS, SSL redirect, dan canvas-taint pada WebView.
+  if (Capacitor && typeof Capacitor.isNativePlatform === 'function' && Capacitor.isNativePlatform()) {
+    try {
+      const plugin = getPrinterPlugin()
+      const result = await plugin.rasterizeLogo({ url: fullUrl })
+      if (result && result.width && result.height && result.data) {
+        return {
+          width: Number(result.width),
+          height: Number(result.height),
+          data: String(result.data),
+          url: fullUrl,
+        }
+      }
+    } catch (err) {
+      console.warn('Native rasterizeLogo failed, falling back to web canvas:', err)
+    }
+  }
+
+  // 2. Fallback untuk Web / Browser / Test environment
+  try {
+    if (typeof window === 'undefined' || typeof Image === 'undefined') return null
+
+    const isDataOrBlob = fullUrl.startsWith('data:') || fullUrl.startsWith('blob:')
+    const image = new Image()
+    if (!isDataOrBlob) {
+      image.crossOrigin = 'anonymous'
+    }
+
+    await new Promise((resolve, reject) => {
+      image.onload = resolve
+      image.onerror = () => reject(new Error('Gagal memuat gambar logo'))
+      image.src = fullUrl
+    })
+
+    if (!image.naturalWidth || !image.naturalHeight) {
+      return null
+    }
+
+    const scale = Math.min(
+      1,
+      MAX_LOGO_WIDTH / image.naturalWidth,
+      MAX_LOGO_HEIGHT / image.naturalHeight,
+    )
+    const width = Math.max(8, Math.round(image.naturalWidth * scale))
+    const height = Math.max(1, Math.round(image.naturalHeight * scale))
+
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const context = canvas.getContext('2d', { willReadFrequently: true })
+    if (!context) return null
+
+    context.fillStyle = '#FFFFFF'
+    context.fillRect(0, 0, width, height)
+    context.drawImage(image, 0, 0, width, height)
+
+    const imageData = context.getImageData(0, 0, width, height)
+    const raster = monochromeRaster(imageData.data, width, height)
+    return {
+      width: raster.width,
+      height: raster.height,
+      data: raster.data,
+      url: fullUrl,
+    }
+  } catch {
+    try {
+      const response = await fetch(fullUrl)
+      const blob = await response.blob()
+      return await prepareReceiptLogo(blob)
+    } catch {
+      return null
+    }
+  }
 }
 
 export function monochromeRaster(rgba, width, height) {

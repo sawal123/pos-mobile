@@ -214,5 +214,76 @@ describe('Direct Sync and Offline Sync Prompt Flow', () => {
 
       expect(wrapper.find('#offline-sync-prompt-modal').exists()).toBe(false)
     })
+
+    it('does not pop up when pendingCount increases while already online (e.g. online CRUD)', async () => {
+      businessStore.mode = 'cloud'
+      syncStatusStore.online = true
+      syncStatusStore.pendingCount = 0
+      syncPushStore.pendingCount = 0
+      syncStatusStore.refresh = vi.fn().mockResolvedValue({ ok: true, pendingCount: 0 })
+      syncPushStore.refreshPendingCount = vi.fn().mockResolvedValue(0)
+
+      const wrapper = mount(OfflineSyncPromptModal, {
+        global: {
+          plugins: [pinia],
+          stubs: { Teleport: true, AppIcon: true, BaseButton: true },
+        },
+      })
+
+      await flushPromises()
+      expect(wrapper.find('#offline-sync-prompt-modal').exists()).toBe(false)
+
+      // Online create/edit increases pendingCount momentarily before background push completes
+      syncStatusStore.pendingCount = 1
+      syncPushStore.pendingCount = 1
+      await flushPromises()
+
+      expect(wrapper.find('#offline-sync-prompt-modal').exists()).toBe(false)
+    })
+
+    it('only re-opens on offline -> online reconnect and can always be closed via close button', async () => {
+      businessStore.mode = 'cloud'
+      syncStatusStore.online = true
+      syncStatusStore.pendingCount = 0
+      syncPushStore.pendingCount = 0
+      syncStatusStore.refresh = vi.fn().mockImplementation(async () => ({
+        ok: true,
+        pendingCount: syncStatusStore.pendingCount,
+      }))
+      syncPushStore.refreshPendingCount = vi.fn().mockImplementation(async () => syncPushStore.pendingCount)
+
+      const wrapper = mount(OfflineSyncPromptModal, {
+        global: {
+          plugins: [pinia],
+          stubs: {
+            Teleport: true,
+            AppIcon: true,
+            BaseButton: {
+              template: '<button :id="$attrs.id" :disabled="$attrs.disabled"><slot /></button>',
+            },
+          },
+        },
+      })
+
+      await flushPromises()
+      expect(wrapper.find('#offline-sync-prompt-modal').exists()).toBe(false)
+
+      // Drop offline, record mutation, then reconnect -> modal opens with fresh button enabled
+      syncStatusStore.online = false
+      syncStatusStore.pendingCount = 1
+      syncPushStore.pendingCount = 1
+      await flushPromises()
+
+      syncStatusStore.online = true
+      await flushPromises()
+
+      expect(wrapper.find('#offline-sync-prompt-modal').exists()).toBe(true)
+      expect(wrapper.find('#offline-sync-now-btn').attributes('disabled')).toBeUndefined()
+
+      await wrapper.find('[data-testid="offline-sync-close-btn"]').trigger('click')
+      await flushPromises()
+
+      expect(wrapper.find('#offline-sync-prompt-modal').exists()).toBe(false)
+    })
   })
 })

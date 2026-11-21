@@ -6,6 +6,7 @@ import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import {
   PAIRING_CODE_LENGTH,
+  PAIRING_ERROR,
   defaultDeviceName,
   isValidPairingCode,
   normalizePairingCode,
@@ -68,13 +69,31 @@ async function submit() {
     const result = await cloudStore.pairDeviceWithCode({ code: code.value, deviceName: name })
 
     if (!result?.ok) {
-      errorMessage.value = result?.message || 'Pairing perangkat gagal. Coba lagi.'
+      if (
+        result?.code === 'DEVICE_LIMIT_EXCEEDED' ||
+        result?.code === PAIRING_ERROR.DEVICE_LIMIT_EXCEEDED ||
+        result?.status === 403
+      ) {
+        errorMessage.value =
+          'Batas perangkat terhubung untuk bisnis ini telah mencapai batas maksimal. Silakan minta pemilik bisnis menambah batas perangkat di dashboard.'
+      } else {
+        errorMessage.value = result?.message || 'Pairing perangkat gagal. Coba lagi.'
+      }
       return
     }
 
     emit('paired', result.device ?? null)
   } catch (err) {
-    errorMessage.value = err?.message || 'Pairing perangkat gagal. Coba lagi.'
+    if (
+      err?.code === 'DEVICE_LIMIT_EXCEEDED' ||
+      err?.code === PAIRING_ERROR.DEVICE_LIMIT_EXCEEDED ||
+      err?.status === 403
+    ) {
+      errorMessage.value =
+        'Batas perangkat terhubung untuk bisnis ini telah mencapai batas maksimal. Silakan minta pemilik bisnis menambah batas perangkat di dashboard.'
+    } else {
+      errorMessage.value = err?.message || 'Pairing perangkat gagal. Coba lagi.'
+    }
   } finally {
     busy.value = false
   }

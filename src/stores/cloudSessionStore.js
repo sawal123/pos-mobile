@@ -7,6 +7,7 @@ import { useTaxStore } from '@/stores/taxStore'
 import { useCashierStore } from '@/stores/cashierStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import { useReceiptStore } from '@/stores/receiptStore'
+import { useTableStore } from '@/stores/tableStore'
 import {
   cloudLogin,
   cloudGoogleLogin,
@@ -83,17 +84,28 @@ function mapBusinessEntry(b) {
       enabled: Boolean(b.tax_settings.enabled),
       rate: Number(b.tax_settings.rate) || 0,
     } : null,
+    table_settings: b.table_settings && typeof b.table_settings === 'object' ? {
+      enabled: Boolean(b.table_settings.enabled),
+    } : null,
+    dining_tables: Array.isArray(b.dining_tables) ? b.dining_tables : [],
     cashier_pin: typeof b.cashier_pin === 'string' && b.cashier_pin ? b.cashier_pin : '123456',
     shift_settings: b.shift_settings && typeof b.shift_settings === 'object' ? {
       auto_open: b.shift_settings.auto_open !== false,
       default_opening_cash: Number(b.shift_settings.default_opening_cash) || 0,
     } : { auto_open: true, default_opening_cash: 0 },
+    receipt_settings: b.receipt_settings ?? null,
     cloud_access: b.cloud_access,
     subscription: b.subscription ?? null,
     outlets: (b.outlets ?? []).map((o) => ({
       id: o.id,
       name: o.name,
+      code: typeof o.code === 'string' ? o.code : '',
+      address: typeof o.address === 'string' ? o.address : null,
+      phone: typeof o.phone === 'string' ? o.phone : null,
+      is_primary: o.is_primary === true,
       status: o.status,
+      cloud_access: o.cloud_access !== undefined ? Boolean(o.cloud_access) : o.status === 'active',
+      subscription: o.subscription ?? null,
     })),
     device_context: b.device_context ?? null,
   }
@@ -382,7 +394,12 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   /** PREM-M03: a Cloud business is explicitly linked to this POS. */
   const isLinked = computed(() => isAuthenticated.value && selectedBusiness.value !== null)
 
-  const hasCloudAccess = computed(() => isAuthenticated.value && cloudAccess.value === true)
+  const hasCloudAccess = computed(
+    () =>
+      isAuthenticated.value &&
+      cloudAccess.value === true &&
+      selectedOutlet.value?.cloud_access !== false,
+  )
 
   const isDeviceRegistered = computed(() => registeredDeviceId.value !== null)
 
@@ -464,6 +481,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   const isOperationalCloudAccess = computed(
     () =>
       cloudAccess.value === true &&
+      selectedOutlet.value?.cloud_access !== false &&
       isWorkspaceAligned.value &&
       workspaceRecoveryRequired.value !== true &&
       sessionInvalid.value !== true &&
@@ -540,8 +558,28 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       business_type_raw: business.business_type_raw ?? null,
       business_type_status: business.business_type_status ?? 'legacy',
       tax_settings: business.tax_settings ?? null,
+      table_settings: business.table_settings ?? null,
+      dining_tables: Array.isArray(business.dining_tables) ? business.dining_tables : [],
       subscription: business.subscription ?? null,
       catalog_capabilities: business.catalog_capabilities ?? null,
+    }
+  }
+
+  function toSelectedOutlet(outlet) {
+    if (!outlet) return null
+    return {
+      id: outlet.id,
+      name: outlet.name,
+      code: typeof outlet.code === 'string' ? outlet.code : '',
+      address: typeof outlet.address === 'string' ? outlet.address : null,
+      phone: typeof outlet.phone === 'string' ? outlet.phone : null,
+      is_primary: outlet.is_primary === true,
+      status: outlet.status ?? 'active',
+      cloud_access:
+        outlet.cloud_access !== undefined
+          ? Boolean(outlet.cloud_access)
+          : outlet.status === 'active',
+      subscription: outlet.subscription ?? null,
     }
   }
 
@@ -614,8 +652,10 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   function setPendingSwitch({
     localBusiness,
     cloudBusiness,
+    cloudOutlet = null,
     targetWorkspaceId = null,
     currentActiveId = null,
+    previousOperationalContext = null,
   }) {
     pendingSwitch.value = {
       localBusiness,
@@ -624,9 +664,11 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         name: cloudBusiness?.name ?? '',
         business_type: cloudBusiness?.business_type ?? null,
       },
+      cloudOutlet: cloudOutlet ? toSelectedOutlet(cloudOutlet) : null,
       localWorkspaceId: currentActiveId,
       targetWorkspaceId,
-      confirmation: buildBusinessSwitchConfirmation({ localBusiness, cloudBusiness }),
+      previousOperationalContext,
+      confirmation: buildBusinessSwitchConfirmation({ localBusiness, cloudBusiness, cloudOutlet }),
       detectedAt: new Date().toISOString(),
     }
     operationalContext.value = {
@@ -871,6 +913,19 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
           ? {
               id: selectedOutlet.value.id,
               name: selectedOutlet.value.name,
+              ...(selectedOutlet.value.code ? { code: selectedOutlet.value.code } : {}),
+              ...(selectedOutlet.value.address ? { address: selectedOutlet.value.address } : {}),
+              ...(selectedOutlet.value.phone ? { phone: selectedOutlet.value.phone } : {}),
+              ...(typeof selectedOutlet.value.is_primary === 'boolean'
+                ? { is_primary: selectedOutlet.value.is_primary }
+                : {}),
+              ...(selectedOutlet.value.status ? { status: selectedOutlet.value.status } : {}),
+              ...(typeof selectedOutlet.value.cloud_access === 'boolean'
+                ? { cloud_access: selectedOutlet.value.cloud_access }
+                : {}),
+              ...(selectedOutlet.value.subscription !== undefined
+                ? { subscription: selectedOutlet.value.subscription }
+                : {}),
             }
           : null,
         cloudAccess: cloudAccess.value === true,
@@ -2122,15 +2177,34 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       return { ok: false }
     }
 
-    const activeOutlets = (business.outlets ?? []).filter((o) => o.status === 'active')
+    // Cashier isolation: cashier is strictly locked to their single assigned branch
+    const isCashier = role.value === ROLE_CASHIER || pushPolicy.value.role === ROLE_CASHIER || business.role === ROLE_CASHIER
+    if (isCashier) {
+      const assignedOutletId = business.outlets?.[0]?.id
+      if (assignedOutletId && outletId !== assignedOutletId) {
+        error.value = 'Akun kasir ini hanya memiliki akses untuk cabang yang ditugaskan.'
+        return { ok: false, error: error.value, code: 'OUTLET_ACCESS_DENIED' }
+      }
+    }
+
+    const activeOutlets = (business.outlets ?? []).filter(
+      (o) => o.status === 'active' && o.cloud_access !== false,
+    )
     const match = activeOutlets.find((o) => o.id === outletId)
 
     if (!match) {
-      error.value = 'Outlet tidak aktif atau tidak ditemukan'
+      const unpaid = (business.outlets ?? []).find((o) => o.id === outletId)
+      if (unpaid && (unpaid.status === 'pending_payment' || unpaid.cloud_access === false)) {
+        error.value =
+          'Langganan Cloud untuk cabang ini belum aktif. Selesaikan pembayaran cabang terlebih dahulu.'
+      } else {
+        error.value = 'Outlet tidak aktif atau tidak ditemukan'
+      }
       return { ok: false }
     }
 
-    selectedOutlet.value = { id: match.id, name: match.name }
+    selectedOutlet.value = toSelectedOutlet(match)
+    cloudAccess.value = business.cloud_access === true && match.cloud_access !== false
     registeredDeviceId.value = null
 
     // INT-02: a cashier cannot register a device. The owner pre-registers it in
@@ -2219,8 +2293,10 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       setPendingSwitch({
         localBusiness: switchInfo.localBusiness,
         cloudBusiness: business,
+        cloudOutlet: outlet,
         targetWorkspaceId: switchInfo.targetWorkspaceId,
         currentActiveId: switchInfo.currentActiveId,
+        previousOperationalContext: operationalContext.value ? { ...operationalContext.value } : null,
       })
       error.value = null
       return {
@@ -2331,7 +2407,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         const shouldAutoOpen = shiftSettings ? shiftSettings.auto_open !== false : true
         const defaultOpeningCash = Number(shiftSettings?.default_opening_cash) || 0
         if (shouldAutoOpen && !shiftStore.isOpen) {
-          shiftStore.openShift(defaultOpeningCash)
+          shiftStore.openShift(defaultOpeningCash, { fromCloud: true })
         }
       } catch {
         // Best effort UI refresh; the workspace activation remains authoritative.
@@ -2379,7 +2455,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         const shouldAutoOpen = shiftSettings ? shiftSettings.auto_open !== false : true
         const defaultOpeningCash = Number(shiftSettings?.default_opening_cash) || 0
         if (shouldAutoOpen && !shiftStore.isOpen) {
-          shiftStore.openShift(defaultOpeningCash)
+          shiftStore.openShift(defaultOpeningCash, { fromCloud: true })
         }
       } catch {
         // Best effort UI refresh; the workspace activation remains authoritative.
@@ -2433,6 +2509,27 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
   function cancelBusinessSwitch() {
     const pending = pendingSwitch.value
     pendingSwitch.value = null
+    if (
+      pending?.previousOperationalContext?.status === 'active' &&
+      pending.previousOperationalContext.cloudBusinessId === selectedBusiness.value?.id &&
+      pending.previousOperationalContext.outletId
+    ) {
+      operationalContext.value = pending.previousOperationalContext
+      const biz = businesses.value.find((b) => b.id === selectedBusiness.value?.id)
+      const prevOutlet = (biz?.outlets ?? []).find(
+        (o) => o.id === pending.previousOperationalContext.outletId,
+      )
+      selectedOutlet.value = prevOutlet
+        ? toSelectedOutlet(prevOutlet)
+        : {
+            id: pending.previousOperationalContext.outletId,
+            name: pending.previousOperationalContext.outletName || '',
+          }
+      resolveDeviceFromContext()
+      void persistCloudContext()
+      error.value = null
+      return { ok: true, code: 'BUSINESS_SWITCH_DECLINED' }
+    }
     if (operationalContext.value?.status === 'switch_pending') {
       operationalContext.value = {
         status: 'switch_declined',
@@ -2574,6 +2671,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
         ok: false,
         code: result.error?.code ?? 'PAIRING_FAILED',
         message: result.error?.message ?? 'Pairing perangkat gagal.',
+        status: result.error?.status,
       }
     }
 
@@ -2938,6 +3036,24 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       }
     }
 
+    if (business?.table_settings && typeof business.table_settings === 'object') {
+      try {
+        const businessStore = useBusinessStore()
+        businessStore.setTableManagementEnabled(Boolean(business.table_settings.enabled))
+      } catch {
+        // Safe fallback
+      }
+    }
+
+    if (Array.isArray(business?.dining_tables)) {
+      try {
+        const tableStore = useTableStore()
+        tableStore.setTables(business.dining_tables)
+      } catch {
+        // Safe fallback
+      }
+    }
+
     // Apply pengaturan struk & logo dari database Cloud
     if (business?.receipt_settings && typeof business.receipt_settings === 'object') {
       try {
@@ -2967,7 +3083,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       const shouldAutoOpen = shiftSettings ? shiftSettings.auto_open !== false : true
       const defaultOpeningCash = Number(shiftSettings?.default_opening_cash) || 0
       if (shouldAutoOpen && !shiftStore.isOpen) {
-        shiftStore.openShift(defaultOpeningCash)
+        shiftStore.openShift(defaultOpeningCash, { fromCloud: true })
       }
     } catch {
       // Safe fallback if shift store not active
@@ -3193,6 +3309,9 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
           if (!outlet || outlet.status !== 'active') {
             selectedOutlet.value = null
             registeredDeviceId.value = null
+          } else {
+            selectedOutlet.value = toSelectedOutlet(outlet)
+            cloudAccess.value = match.cloud_access === true && outlet.cloud_access !== false
           }
         }
 

@@ -10,5 +10,14 @@ export const useReceiptStore = defineStore('receipt', {
     saveSettings(settings) {
       this.$patch(normalizeReceiptSettings(settings))
     },
+    setLogoRaster(raster) {
+      if (!raster || !raster.data) return
+      this.logo = {
+        ...(typeof this.logo === 'object' && this.logo !== null ? this.logo : {}),
+        width: raster.width,
+        height: raster.height,
+        data: raster.data,
+      }
+    },
   },
 })

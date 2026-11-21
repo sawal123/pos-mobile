@@ -86,6 +86,59 @@ const checkoutNotice = ref('')
 const previewPeriod = ref('monthly')
 const previewSelectedKey = ref('cloud::monthly')
 const showAuthRequiredModal = ref(false)
+const selectedCheckoutOutletId = ref(null)
+
+const businessOutlets = computed(() => {
+  const biz = cloudStore.businesses.find((b) => b.id === cloudStore.selectedBusiness?.id)
+  return (biz?.outlets ?? []).filter((o) => o.status !== 'inactive')
+})
+
+const selectedCheckoutOutlet = computed(() => {
+  if (businessOutlets.value.length === 0) return null
+  return (
+    businessOutlets.value.find((o) => String(o.id) === String(selectedCheckoutOutletId.value)) ??
+    businessOutlets.value.find((o) => o.is_primary) ??
+    businessOutlets.value[0] ??
+    null
+  )
+})
+
+function initSelectedCheckoutOutlet() {
+  if (businessOutlets.value.length === 0) {
+    selectedCheckoutOutletId.value = null
+    return
+  }
+  const preferredId =
+    route.query?.outlet_id ??
+    checkoutStore.targetOutletId ??
+    cloudStore.selectedOutlet?.id ??
+    null
+  const match = preferredId != null
+    ? businessOutlets.value.find((o) => String(o.id) === String(preferredId))
+    : null
+  const chosen =
+    match ??
+    businessOutlets.value.find((o) => o.is_primary) ??
+    businessOutlets.value[0]
+  selectedCheckoutOutletId.value = chosen?.id ?? null
+  if (chosen) {
+    checkoutStore.setTargetOutlet(chosen)
+  }
+}
+
+function handleSelectCheckoutOutlet(outlet) {
+  if (!outlet) return
+  selectedCheckoutOutletId.value = outlet.id
+  checkoutStore.setTargetOutlet(outlet)
+}
+
+function formatOutletExpiry(outlet) {
+  const raw = outlet?.subscription?.expires_at
+  if (!raw) return ''
+  const d = new Date(raw)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })
+}
 
 const subscriptionStatus = computed(() => subscriptionStore.status)
 const isPremium = computed(() => subscriptionStore.isPremium)
@@ -305,6 +358,14 @@ function handleContinue() {
     return
   }
 
+  checkoutStore.setTargetOutlet(selectedCheckoutOutlet.value)
+  if (
+    checkoutStore.attempt &&
+    String(checkoutStore.attempt.outletId ?? '') !== String(selectedCheckoutOutlet.value?.id ?? '')
+  ) {
+    checkoutStore.resetAttempt()
+  }
+
   router.push({ name: 'premium-checkout' })
 }
 
@@ -327,6 +388,7 @@ function goBack() {
 }
 
 onMounted(() => {
+  initSelectedCheckoutOutlet()
   if (route.query?.renew === '1') {
     planStore.enableRenewalMode()
   } else {
@@ -501,6 +563,80 @@ onMounted(() => {
           <span>{{ guarantee }}</span>
         </li>
       </ul>
+    </BaseCard>
+
+    <!-- Branch / Outlet Selection for Subscription Payment -->
+    <BaseCard
+      v-if="cloudStore.isAuthenticated && cloudStore.isLinked && businessOutlets.length > 0"
+      class="space-y-3"
+      data-testid="subscription-outlet-selector"
+    >
+      <div>
+        <h3 class="text-base font-semibold text-ink-primary">Pilih Cabang Tujuan</h3>
+        <p class="mt-1 text-xs text-ink-secondary">
+          1 paket langganan berlaku untuk 1 cabang. Pilih cabang yang ingin diaktifkan atau diperpanjang.
+        </p>
+      </div>
+      <div class="space-y-2">
+        <button
+          v-for="outlet in businessOutlets"
+          :key="outlet.id"
+          type="button"
+          :data-testid="`subscription-outlet-option-${outlet.id}`"
+          class="flex w-full items-center justify-between gap-3 rounded-2xl border p-3.5 text-left transition"
+          :class="
+            String(selectedCheckoutOutlet?.id) === String(outlet.id)
+              ? 'border-primary bg-primary/5 ring-1 ring-primary/20'
+              : 'border-zinc-200 bg-white hover:border-zinc-300'
+          "
+          @click="handleSelectCheckoutOutlet(outlet)"
+        >
+          <div class="min-w-0 space-y-0.5">
+            <div class="flex flex-wrap items-center gap-1.5">
+              <span class="text-sm font-semibold text-ink-primary">{{ outlet.name }}</span>
+              <span
+                v-if="outlet.is_primary"
+                class="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-bold uppercase text-primary"
+              >
+                Utama
+              </span>
+              <span
+                v-if="outlet.code"
+                class="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-ink-secondary"
+              >
+                {{ outlet.code }}
+              </span>
+            </div>
+            <p class="text-[11px] text-ink-secondary">
+              <template v-if="outlet.status === 'pending_payment'">
+                Menunggu pembayaran aktivasi cabang
+              </template>
+              <template v-else-if="outlet.cloud_access === false">
+                Langganan tidak aktif / kedaluwarsa
+              </template>
+              <template v-else>
+                Cloud Aktif<template v-if="formatOutletExpiry(outlet)"> s/d {{ formatOutletExpiry(outlet) }}</template>
+              </template>
+            </p>
+          </div>
+          <span
+            class="shrink-0 rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide"
+            :class="
+              outlet.status === 'active' && outlet.cloud_access !== false
+                ? 'bg-emerald-100 text-emerald-700'
+                : 'bg-amber-100 text-amber-700'
+            "
+          >
+            {{
+              outlet.status === 'pending_payment'
+                ? 'Belum Bayar'
+                : outlet.status === 'active' && outlet.cloud_access !== false
+                  ? 'Aktif'
+                  : 'Perlu Perpanjang'
+            }}
+          </span>
+        </button>
+      </div>
     </BaseCard>
 
     <!-- Plan selection -->

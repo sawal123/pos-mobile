@@ -1,8 +1,10 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { createSyncPullService } from '@/services/sync/syncPullService'
+import { isUuid } from '@/services/sync/syncIdentityRegistry'
 import { useCloudSessionStore } from './cloudSessionStore'
 import { useProductStore } from './productStore'
+import { useSyncProgressStore } from './syncProgressStore'
 
 export const useSyncPullStore = defineStore('syncPull', () => {
   const cloudStore = useCloudSessionStore()
@@ -13,6 +15,7 @@ export const useSyncPullStore = defineStore('syncPull', () => {
   let _pullService = null
   let _adapter = null
   let _scheduler = null
+  let _imageBackfillAttempted = false
 
   function init({ pullService = null, adapter = null, scheduler = null } = {}) {
     if (adapter) {
@@ -151,17 +154,50 @@ export const useSyncPullStore = defineStore('syncPull', () => {
       }
     }
 
+    let backfillProductImages = options.backfillProductImages
+    if (backfillProductImages === undefined && !_imageBackfillAttempted) {
+      try {
+        const productStore = useProductStore()
+        if (
+          productStore &&
+          productStore.products.length > 0 &&
+          productStore.products.some((p) => isUuid(p.id)) &&
+          productStore.products.every((p) => !p.imageData)
+        ) {
+          backfillProductImages = true
+        }
+      } catch {
+        // unavailable outside a Pinia component context
+      }
+    }
+
     try {
+      const progressStore = useSyncProgressStore()
       const result = await _pullService.pullNow({
         ...options,
         ...(isInitialCloudRead !== undefined ? { initialCloudRead: isInitialCloudRead } : {}),
+        ...(backfillProductImages !== undefined ? { backfillProductImages } : {}),
         context: resolvedContext,
+        onProgress: (pct, msg) => {
+          if (progressStore.isRunning) {
+            progressStore.setProgress(pct, msg)
+          }
+          options.onProgress?.(pct, msg)
+        },
       })
       lastResult.value = result
       if (!result.ok) {
-        lastError.value = result.error?.message ?? result.message ?? 'Sync pull failed'
+        const isOutletDenied =
+          result.code === 'OUTLET_ACCESS_DENIED' ||
+          result.error?.code === 'OUTLET_ACCESS_DENIED'
+        lastError.value = isOutletDenied
+          ? 'Akun kasir ini hanya memiliki akses untuk cabang yang ditugaskan. Perangkat ini terdaftar di cabang berbeda.'
+          : (result.error?.message ?? result.message ?? 'Sync pull failed')
       } else {
         lastError.value = null
+        if (backfillProductImages) {
+          _imageBackfillAttempted = true
+        }
 
         // Data Cloud yang baru diterapkan harus langsung tersimpan di SQLite,
         // bukan menunggu flush berikutnya. Tanpa ini data bisa "hilang" lagi
@@ -227,8 +263,17 @@ export const useSyncPullStore = defineStore('syncPull', () => {
     // The default local template is not a Cloud catalog. Only a completed
     // pull binding proves that the current business/outlet has been loaded.
     // A push-only workspace must still perform a normal incremental pull.
+    const needsImageBackfill = Boolean(
+      !_imageBackfillAttempted &&
+      productStore &&
+      productStore.products.length > 0 &&
+      productStore.products.some((p) => isUuid(p.id)) &&
+      productStore.products.every((p) => !p.imageData),
+    )
+
     if (
       !force &&
+      !needsImageBackfill &&
       pullBinding?.status === 'completed' &&
       productStore &&
       productStore.products.length > 0
@@ -236,7 +281,10 @@ export const useSyncPullStore = defineStore('syncPull', () => {
       return { ok: true, alreadyLoaded: true }
     }
 
-    return pullNow({ initialCloudRead: isInitial })
+    return pullNow({
+      initialCloudRead: isInitial,
+      ...(needsImageBackfill ? { backfillProductImages: true } : {}),
+    })
   }
 
   return {

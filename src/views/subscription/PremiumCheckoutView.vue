@@ -19,6 +19,9 @@ const redirectNotice = ref('')
 
 const option = computed(() => planStore.selectedOption)
 const businessName = computed(() => cloudStore.selectedBusiness?.name ?? '-')
+const targetOutletName = computed(
+  () => checkoutStore.attempt?.outletName ?? checkoutStore.targetOutletName ?? null,
+)
 const periodLabel = computed(
   () => option.value?.periodLabel ?? PLAN_PERIOD_LABELS[option.value?.period] ?? '-',
 )
@@ -57,7 +60,11 @@ onMounted(async () => {
   if (planStore.isIdle) {
     await planStore.loadCatalog()
   }
-  if (checkoutStore.phase === 'idle' || checkoutStore.attempt === null) {
+  if (
+    checkoutStore.phase === 'idle' ||
+    checkoutStore.attempt === null ||
+    String(checkoutStore.attempt?.outletId ?? '') !== String(checkoutStore.targetOutletId ?? '')
+  ) {
     checkoutStore.startAttempt(option.value)
   }
 })
@@ -133,6 +140,15 @@ async function handlePay() {
           <dt class="text-ink-secondary">Bisnis</dt>
           <dd class="font-medium text-ink-primary" data-testid="checkout-business">
             {{ businessName }}
+          </dd>
+        </div>
+        <div
+          v-if="targetOutletName"
+          class="flex items-center justify-between rounded-2xl bg-surface px-4 py-3"
+        >
+          <dt class="text-ink-secondary">Cabang</dt>
+          <dd class="font-medium text-ink-primary" data-testid="checkout-outlet">
+            {{ targetOutletName }}
           </dd>
         </div>
       </dl>

@@ -19,6 +19,10 @@ const variantClasses = {
     'border border-rose-200/80 bg-rose-50 text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-300',
   primary:
     'border border-primary/20 bg-primary/10 text-primary dark:border-indigo-400/30 dark:bg-indigo-500/15 dark:text-indigo-300',
+  info:
+    'border border-blue-200/80 bg-blue-50 text-blue-700 dark:border-blue-500/30 dark:bg-blue-500/15 dark:text-blue-300',
+  purple:
+    'border border-purple-200/80 bg-purple-50 text-purple-700 dark:border-purple-500/30 dark:bg-purple-500/15 dark:text-purple-300',
 }
 
 const badgeClass = computed(() => [

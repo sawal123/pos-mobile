@@ -789,4 +789,44 @@ describe('PremiumPaymentStatusView', () => {
     wrapper.unmount()
     if (original) Object.defineProperty(document, 'visibilityState', original)
   })
+
+  it('sends optional outlet_id in checkout payload when paying for a specific branch', async () => {
+    apiRequest.mockResolvedValueOnce(apiOk(CHECKOUT_PAYLOAD))
+
+    await createSubscriptionCheckout({
+      token: TOKEN,
+      businessId: BUSINESS_ID,
+      outletId: 102,
+      plan: 'cloud',
+      billingPeriod: 'monthly',
+      idempotencyKey: 'key-branch-102',
+    })
+
+    const [path, options] = apiRequest.mock.calls[0]
+    expect(path).toBe('/api/mobile/subscription/checkout')
+    expect(options.body).toEqual({
+      business_id: BUSINESS_ID,
+      outlet_id: 102,
+      plan: 'cloud',
+      billing_period: 'monthly',
+      idempotency_key: 'key-branch-102',
+    })
+  })
+
+  it('persists target outlet in premiumCheckoutStore and includes outlet_id in createCheckout', async () => {
+    await saveToken(TOKEN)
+    const { checkoutStore } = setupEnv()
+    checkoutStore.setTargetOutlet({ id: 102, name: 'Cabang Kemang' })
+    checkoutStore.startAttempt(monthlyOption())
+
+    expect(checkoutStore.attempt.outletId).toBe(102)
+    expect(checkoutStore.attempt.outletName).toBe('Cabang Kemang')
+
+    apiRequest.mockResolvedValueOnce(apiOk(CHECKOUT_PAYLOAD))
+    const res = await checkoutStore.createCheckout()
+    expect(res.ok).toBe(true)
+
+    const [, options] = apiRequest.mock.calls[0]
+    expect(options.body.outlet_id).toBe(102)
+  })
 })

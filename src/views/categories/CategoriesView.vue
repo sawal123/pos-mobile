@@ -7,10 +7,12 @@ import BaseCard from '@/components/base/BaseCard.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import BaseModal from '@/components/base/BaseModal.vue'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
+import { useNotificationStore } from '@/stores/notificationStore'
 import { useProductStore } from '@/stores/productStore'
 import { useSyncPullStore } from '@/stores/syncPullStore'
 
 const cloudStore = useCloudSessionStore()
+const notificationStore = useNotificationStore()
 const productStore = useProductStore()
 const syncPullStore = useSyncPullStore()
 
@@ -59,6 +61,10 @@ function handleCreateCategory() {
 
   newCategoryName.value = ''
   message.value = 'Kategori berhasil ditambahkan.'
+  notificationStore.notifySuccessAndSync({
+    title: 'Kategori Ditambahkan',
+    message: 'Kategori baru berhasil ditambahkan.',
+  })
 }
 
 function openEditModal(category) {
@@ -86,6 +92,10 @@ function handleUpdateCategory() {
 
   message.value = 'Kategori berhasil diperbarui.'
   closeEditModal()
+  notificationStore.notifySuccessAndSync({
+    title: 'Kategori Diperbarui',
+    message: 'Nama kategori berhasil diperbarui.',
+  })
 }
 
 function promptDeleteCategory(category) {
@@ -143,7 +153,18 @@ function confirmDeleteCategory() {
           @update:model-value="newCategoryName = $event"
         />
         <div class="md:pt-8">
-          <BaseButton @click="handleCreateCategory">Tambah</BaseButton>
+          <button
+            type="button"
+            class="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-primary text-white shadow-soft transition hover:bg-primary-light active:scale-95 cursor-pointer"
+            title="Tambah Kategori"
+            aria-label="Tambah Kategori"
+            @click="handleCreateCategory"
+          >
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+            </svg>
+            <span class="sr-only">Tambah</span>
+          </button>
         </div>
       </div>
     </BaseCard>
@@ -166,8 +187,30 @@ function confirmDeleteCategory() {
           </div>
 
           <div v-if="!isCashier" class="flex flex-wrap gap-2">
-            <BaseButton size="sm" variant="secondary" @click="openEditModal(category)">Edit</BaseButton>
-            <BaseButton size="sm" variant="danger" @click="promptDeleteCategory(category)">Hapus</BaseButton>
+            <button
+              type="button"
+              class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-200 bg-white text-ink-secondary transition hover:border-primary/40 hover:text-primary active:scale-95 cursor-pointer"
+              title="Edit kategori"
+              aria-label="Edit kategori"
+              @click="openEditModal(category)"
+            >
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+              </svg>
+              <span class="sr-only">Edit</span>
+            </button>
+            <button
+              type="button"
+              class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-rose-200 bg-rose-50 text-rose-600 transition hover:bg-rose-100 active:scale-95 cursor-pointer"
+              title="Hapus kategori"
+              aria-label="Hapus kategori"
+              @click="promptDeleteCategory(category)"
+            >
+              <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              </svg>
+              <span class="sr-only">Hapus</span>
+            </button>
           </div>
         </div>
       </div>

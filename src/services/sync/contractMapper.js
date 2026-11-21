@@ -644,7 +644,11 @@ export async function mapOutboxEntries(
           break
         }
 
-        const prodLocalId = item.id ?? item.productId ?? item.product_id ?? item.name
+        const rawProdLocalId = item.productId ?? item.product_id ?? item.id ?? item.name
+        const prodLocalId =
+          typeof rawProdLocalId === 'string' && rawProdLocalId.includes('::')
+            ? rawProdLocalId.split('::')[0]
+            : rawProdLocalId
         const prodSyncId = await activeRegistry.resolveSyncId(SYNC_ENTITY_TYPES.PRODUCT, prodLocalId)
         const itemSyncId = await activeRegistry.resolveSyncId(
           'sale_item',
@@ -737,13 +741,16 @@ export async function mapOutboxEntries(
         ? payload.invoiceNumber.trim()
         : `LOCAL-${saleSyncId}`
 
-      const status = isNonEmptyString(payload.status) ? payload.status.trim() : 'completed'
+      const rawStatus = isNonEmptyString(payload.status) ? payload.status.trim() : 'completed'
+      const status = rawStatus === 'cancelled' || rawStatus === 'batal' ? 'cancelled' : rawStatus
       const salePaymentMethod = isNonEmptyString(payload.paymentMethod)
         ? payload.paymentMethod.trim().toLowerCase()
         : null
-      const salePaymentStatus = payload.paymentStatus === 'paid' || payload.paymentStatus === 'unpaid'
+      const salePaymentStatus = payload.paymentStatus === 'paid' || payload.paymentStatus === 'unpaid' || payload.paymentStatus === 'cancelled'
         ? payload.paymentStatus
-        : (payload.status === 'paid' || payload.status === 'unpaid' ? payload.status : null)
+        : (payload.status === 'paid' || payload.status === 'unpaid' || payload.status === 'cancelled' || payload.status === 'batal'
+            ? (payload.status === 'batal' ? 'cancelled' : payload.status)
+            : null)
 
       const saleChange = {
         sync_id: saleSyncId,
@@ -775,6 +782,7 @@ export async function mapOutboxEntries(
 
       if (salePaymentStatus) {
         saleChange.payment_status = salePaymentStatus
+        saleChange.pay_later = salePaymentStatus === 'unpaid' || Boolean(payload.pay_later)
       }
 
       const paidAtRaw = payload.paidAt ?? null
@@ -805,6 +813,17 @@ export async function mapOutboxEntries(
 
       if (isNonEmptyString(payload.note)) {
         saleChange.note = payload.note.trim()
+      }
+
+      saleChange.table_number = payload.tableNumber || payload.table_number || null
+
+      if (isNonEmptyString(payload.voidReason ?? payload.void_reason)) {
+        saleChange.void_reason = (payload.voidReason ?? payload.void_reason).trim()
+      }
+
+      const cancelledAtRaw = payload.cancelledAt ?? payload.cancelled_at ?? null
+      if (isNonEmptyString(cancelledAtRaw) && isValidDateString(cancelledAtRaw)) {
+        saleChange.cancelled_at = new Date(cancelledAtRaw).toISOString()
       }
 
       const customerSnapshot = payload.customerSnapshot

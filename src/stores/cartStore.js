@@ -31,11 +31,17 @@ export const useCartStore = defineStore('cart', {
     items: [],
     customerPhone: '',
     customerId: null,
+    customerName: '',
+    tableNumber: '',
     appliedPromo: null,
     manualDiscountType: 'fixed', // 'fixed' | 'percent'
     manualDiscountValue: 0,
+    editingTransactionId: null,
+    editingTransactionInvoice: '',
+    editingTransactionOrderStatus: '',
   }),
   getters: {
+    isEditingOrder: (state) => Boolean(state.editingTransactionId),
     customerPhoneMatch: (state) => useCustomerStore().lookupByPhone(state.customerPhone),
     selectedCustomer(state) {
       if (state.customerId === null) return this.customerPhoneMatch.customer
@@ -88,6 +94,12 @@ export const useCartStore = defineStore('cart', {
     },
   },
   actions: {
+    setTableNumber(table) {
+      this.tableNumber = String(table ?? '').trim()
+    },
+    setCustomerName(name) {
+      this.customerName = String(name ?? '').trim()
+    },
     setCustomerPhone(phone) {
       this.customerId = null
       this.customerPhone = String(phone ?? '')
@@ -96,10 +108,14 @@ export const useCartStore = defineStore('cart', {
       const stored = useCustomerStore().getCustomerById(customer?.id)
       this.customerId = stored?.id ?? null
       this.customerPhone = stored?.phone ?? ''
+      if (stored?.name) {
+        this.customerName = stored.name
+      }
     },
     clearCustomer() {
       this.customerPhone = ''
       this.customerId = null
+      this.customerName = ''
     },
     applyPromo(promo) {
       this.appliedPromo = promo ?? null
@@ -242,12 +258,73 @@ export const useCartStore = defineStore('cart', {
       this.items = this.items.filter((item) => item.id !== id && String(item.id) !== String(id))
       if (!this.items.length) this.clearCustomer()
     },
+    loadOrderForEditing(transaction) {
+      if (!transaction) return
+      this.editingTransactionId = transaction.id
+      this.editingTransactionInvoice = transaction.invoiceNumber || transaction.id
+      this.editingTransactionOrderStatus = transaction.orderStatus || 'Proses'
+
+      this.items = (transaction.items || []).map((it) => {
+        const qty = Number(it.qty ?? it.quantity) || 1
+        const price = Number(it.price ?? it.unitPrice) || 0
+        const prodId = it.productId ?? it.product_id ?? it.id
+        const options = Array.isArray(it.selectedOptions) ? it.selectedOptions : []
+        const variantKey = options
+          .map((opt) => String(opt.id ?? opt.syncId ?? opt.name))
+          .sort()
+          .join('-')
+        const lineId = it.id || (variantKey ? `${prodId}::${variantKey}` : prodId)
+
+        return {
+          id: lineId,
+          productId: prodId,
+          name: it.name || it.serviceName || 'Item',
+          price,
+          unitPrice: price,
+          qty,
+          selectedOptions: options,
+          notes: it.notes || '',
+          kind: it.kind ?? 'product',
+          pricingUnit: it.pricingUnit ?? it.unit ?? 'pcs',
+        }
+      })
+
+      this.tableNumber = transaction.tableNumber || transaction.table_number || ''
+      this.customerName = transaction.customer || transaction.customerSnapshot?.name || ''
+      this.customerPhone = transaction.customerSnapshot?.phone || ''
+      this.customerId = transaction.customerId || transaction.customerSnapshot?.id || null
+      this.appliedPromo = transaction.appliedPromo || null
+    },
+    attachToActiveOrder(transaction) {
+      if (!transaction) return
+      const currentCartItems = [...this.items]
+      this.loadOrderForEditing(transaction)
+
+      for (const cartItem of currentCartItems) {
+        const existing = this.items.find((it) => String(it.id) === String(cartItem.id))
+        if (existing) {
+          existing.qty = (Number(existing.qty) || 1) + (Number(cartItem.qty) || 1)
+        } else {
+          this.items.push({ ...cartItem })
+        }
+      }
+    },
+    cancelEditingOrder() {
+      this.editingTransactionId = null
+      this.editingTransactionInvoice = ''
+      this.editingTransactionOrderStatus = ''
+      this.clearCart()
+    },
     clearCart() {
       this.items = []
       this.clearCustomer()
+      this.tableNumber = ''
       this.appliedPromo = null
       this.manualDiscountType = 'fixed'
       this.manualDiscountValue = 0
+      this.editingTransactionId = null
+      this.editingTransactionInvoice = ''
+      this.editingTransactionOrderStatus = ''
     },
   },
 })

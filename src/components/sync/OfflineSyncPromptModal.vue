@@ -7,12 +7,14 @@ import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useSyncStatusStore } from '@/stores/syncStatusStore'
 import { useSyncPushStore } from '@/stores/syncPushStore'
 import { useSyncOrchestratorStore } from '@/stores/syncOrchestratorStore'
+import { useSyncProgressStore } from '@/stores/syncProgressStore'
 
 const businessStore = useBusinessStore()
 const cloudStore = useCloudSessionStore()
 const syncStatusStore = useSyncStatusStore()
 const syncPushStore = useSyncPushStore()
 const syncOrchestratorStore = useSyncOrchestratorStore()
+const syncProgressStore = useSyncProgressStore()
 
 const isOpen = ref(false)
 const isSyncing = ref(false)
@@ -21,9 +23,7 @@ const syncError = ref('')
 const dismissedCount = ref(0)
 
 const isCloudMode = computed(
-  () =>
-    businessStore.mode === 'cloud' ||
-    (cloudStore.isLinked && cloudStore.hasCloudAccess),
+  () => businessStore.mode === 'cloud' || (cloudStore.isLinked && cloudStore.hasCloudAccess),
 )
 
 const pendingCount = computed(() => {
@@ -37,45 +37,51 @@ function checkPromptCondition() {
 
   const count = pendingCount.value
   if (count > 0 && count !== dismissedCount.value) {
+    syncSuccess.value = false
+    syncError.value = ''
     isOpen.value = true
   } else if (count === 0) {
     isOpen.value = false
   }
 }
 
-// Watch online status: when online becomes true, check if we have pending data to prompt
+// Only check/open modal on initial mount (with leftover offline queue) or when transitioning offline -> online.
 watch(
   () => syncStatusStore.online,
-  (isOnline) => {
-    if (isOnline) {
+  (isOnline, prevOnline) => {
+    if (isOnline && (prevOnline === undefined || prevOnline === false)) {
+      if (prevOnline === false) {
+        dismissedCount.value = 0
+      }
       void syncStatusStore.refresh().then(() => {
         void syncPushStore.refreshPendingCount().then(() => {
           checkPromptCondition()
         })
       })
-    } else {
+    } else if (!isOnline) {
       isOpen.value = false
     }
   },
   { immediate: true },
 )
 
-// Watch pending count changes
+// Watch pending count changes only to auto-close when queue drains to 0 (never auto-open while online).
 watch(
   () => pendingCount.value,
   (count) => {
-    if (count > 0 && syncStatusStore.online) {
-      if (count !== dismissedCount.value) {
-        checkPromptCondition()
-      }
-    } else if (count === 0) {
+    if (count === 0) {
       isOpen.value = false
+      syncSuccess.value = false
+      syncError.value = ''
     }
   },
 )
 
 function dismiss() {
+  if (isSyncing.value) return
   dismissedCount.value = pendingCount.value
+  syncSuccess.value = false
+  syncError.value = ''
   isOpen.value = false
 }
 
@@ -85,28 +91,39 @@ async function handleSyncNow() {
   isSyncing.value = true
   syncError.value = ''
   syncSuccess.value = false
+  isOpen.value = false
 
   try {
-    let result = null
-    if (syncOrchestratorStore && typeof syncOrchestratorStore.syncAll === 'function') {
-      result = await syncOrchestratorStore.syncAll()
-    } else {
-      result = await syncPushStore.pushNow()
-    }
+    await syncProgressStore.runWithProgress(
+      {
+        type: 'sync',
+        title: 'Sinkronisasi Transaksi Offline',
+        description: 'Sedang mengirim antrean transaksi offline ke server...',
+      },
+      async (setProgress) => {
+        setProgress(20, 'Menghubungkan ke server cloud...')
+        let result = null
+        if (syncOrchestratorStore && typeof syncOrchestratorStore.syncAll === 'function') {
+          result = await syncOrchestratorStore.syncAll()
+        } else {
+          result = await syncPushStore.pushNow()
+        }
 
-    await syncPushStore.refreshPendingCount()
-    await syncStatusStore.refresh()
+        setProgress(70, 'Memverifikasi status antrean...')
+        await syncPushStore.refreshPendingCount()
+        await syncStatusStore.refresh()
 
-    if (result && result.ok === false) {
-      syncError.value = result.message || 'Sinkronisasi gagal. Coba lagi.'
-    } else {
-      syncSuccess.value = true
-      dismissedCount.value = 0
-      setTimeout(() => {
-        isOpen.value = false
-        syncSuccess.value = false
-      }, 1800)
-    }
+        if (result && result.ok === false) {
+          syncError.value = result.message || 'Sinkronisasi gagal. Coba lagi.'
+          return result
+        }
+
+        setProgress(100, 'Semua data offline berhasil disinkronkan!')
+        syncSuccess.value = true
+        dismissedCount.value = 0
+        return { ok: true }
+      },
+    )
   } catch (err) {
     syncError.value = err.message || 'Terjadi kesalahan saat sinkronisasi.'
   } finally {
@@ -122,9 +139,10 @@ async function handleSyncNow() {
       id="offline-sync-prompt-modal"
       data-testid="offline-sync-prompt-modal"
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4"
+      @click.self="!isSyncing && dismiss()"
     >
       <div
-        class="w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl border border-zinc-100 transition-all transform animate-in fade-in zoom-in-95 duration-200"
+        class="w-full max-w-sm rounded-3xl bg-white p-6 shadow-2xl border border-zinc-100 transition-all transform animate-in fade-in zoom-in-95 duration-200 dark:border-slate-700/70 dark:bg-[#171C2B]"
       >
         <!-- Icon & Header -->
         <div class="flex items-center gap-3.5 mb-4">
@@ -136,21 +154,41 @@ async function handleSyncNow() {
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-1.5">
               <span class="inline-block size-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span class="text-xs font-semibold uppercase tracking-wider text-emerald-600">Online</span>
+              <span class="text-xs font-semibold uppercase tracking-wider text-emerald-600"
+                >Online</span
+              >
             </div>
             <h3 class="text-base font-bold text-ink-primary leading-tight mt-0.5">
               Koneksi Internet Pulih
             </h3>
           </div>
+          <button
+            type="button"
+            :disabled="isSyncing"
+            data-testid="offline-sync-close-btn"
+            aria-label="Tutup"
+            class="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-ink-secondary transition hover:bg-zinc-100 hover:text-ink-primary disabled:opacity-40 dark:hover:bg-slate-800"
+            @click="dismiss"
+          >
+            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
         </div>
 
         <!-- Description -->
         <div class="space-y-2 mb-6">
           <p class="text-sm text-ink-secondary leading-relaxed">
-            Terdapat <strong class="text-ink-primary font-bold">{{ pendingCount }} transaksi offline</strong> yang belum disinkronkan ke server database.
+            Terdapat
+            <strong class="text-ink-primary font-bold">{{ pendingCount }} transaksi offline</strong>
+            yang belum disinkronkan ke server database.
           </p>
-          <p class="text-xs text-ink-secondary/80 leading-relaxed bg-zinc-50 border border-zinc-200/60 rounded-xl p-2.5">
-            Sinkronkan sekarang agar data penjualan dan stok langsung tercatat di dashboard web Cloud.
+          <p
+            class="text-xs text-ink-secondary/80 leading-relaxed bg-zinc-50 border border-zinc-200/60 rounded-xl p-2.5"
+          >
+            Sinkronkan sekarang agar data penjualan dan stok langsung tercatat di dashboard web
+            Cloud.
           </p>
         </div>
 
@@ -179,11 +217,14 @@ async function handleSyncNow() {
             size="md"
             class="w-full justify-center font-semibold"
             :loading="isSyncing"
-            :disabled="isSyncing || syncSuccess"
-            @click="handleSyncNow"
+            :disabled="isSyncing"
+            @click="syncSuccess ? dismiss() : handleSyncNow()"
           >
-            <AppIcon v-if="!isSyncing" name="sync" class="size-4 mr-1.5" />
-            <span>{{ isSyncing ? 'Menyinkronkan...' : (syncSuccess ? 'Selesai' : 'Sinkronkan Sekarang') }}</span>
+            <AppIcon v-if="!isSyncing && !syncSuccess" name="sync" class="size-4 mr-1.5" />
+            <AppIcon v-else-if="!isSyncing && syncSuccess" name="check" class="size-4 mr-1.5" />
+            <span>{{
+              isSyncing ? 'Menyinkronkan...' : syncSuccess ? 'Selesai' : 'Sinkronkan Sekarang'
+            }}</span>
           </BaseButton>
 
           <BaseButton

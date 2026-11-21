@@ -14,6 +14,7 @@ import { useProductStore } from '@/stores/productStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useSubscriptionStore } from '@/stores/subscriptionStore'
 import { useSyncPullStore } from '@/stores/syncPullStore'
+import { useSyncPushStore } from '@/stores/syncPushStore'
 import { useVariantStore } from '@/stores/variantStore'
 import { formatCurrency } from '@/utils/formatters'
 
@@ -22,6 +23,7 @@ const productStore = useProductStore()
 const cloudStore = useCloudSessionStore()
 const subscriptionStore = useSubscriptionStore()
 const syncPullStore = useSyncPullStore()
+const syncPushStore = useSyncPushStore()
 const variantStore = useVariantStore()
 const router = useRouter()
 const { isRetail, canManageCodes } = useRetailProductCodes()
@@ -119,6 +121,7 @@ const filteredProducts = computed(() => {
 
 function handleToggle(product) {
   productStore.toggleProductActive(product.id)
+  void syncPushStore.pushIfOnline()
 }
 
 function promptDelete(product) {
@@ -131,6 +134,7 @@ function confirmDelete() {
   if (productToDelete.value) {
     productStore.deleteProduct(productToDelete.value.id)
     productToDelete.value = null
+    void syncPushStore.pushIfOnline()
   }
 }
 
@@ -238,24 +242,6 @@ function resetFilters() {
           <AppIcon name="package" class="h-3.5 w-3.5 text-ink-secondary" />
           <span class="hidden sm:inline">Satuan</span>
         </button>
-
-        <!-- Tambah Produk Button -->
-        <BaseButton
-          v-if="!isCashier"
-          size="sm"
-          class="h-9 font-semibold shadow-soft whitespace-nowrap"
-          @click="goToCreate"
-        >
-          <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2.5"
-              d="M12 4v16m8-8H4"
-            />
-          </svg>
-          <span>Tambah</span>
-        </BaseButton>
       </div>
     </header>
 
@@ -679,6 +665,7 @@ function resetFilters() {
                   d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"
                 />
               </svg>
+              <span class="sr-only">Edit</span>
             </button>
 
             <!-- Delete Icon Button -->
@@ -691,6 +678,7 @@ function resetFilters() {
               @click="promptDelete(product)"
             >
               <AppIcon name="trash" class="h-4 w-4" />
+              <span class="sr-only">Hapus</span>
             </button>
           </div>
         </div>
@@ -741,17 +729,18 @@ function resetFilters() {
         transaksi penjualan di POS.
       </p>
       <div v-if="!isCashier" class="mt-5 flex justify-center gap-2">
-        <BaseButton size="sm" @click="goToCreate">
-          <svg class="mr-1 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              stroke-width="2"
-              d="M12 4v16m8-8H4"
-            />
+        <button
+          type="button"
+          class="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-primary text-white shadow-soft transition hover:bg-primary-light active:scale-95 cursor-pointer"
+          title="Tambah produk"
+          aria-label="Tambah produk"
+          @click="goToCreate"
+        >
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
           </svg>
-          Tambah
-        </BaseButton>
+          <span class="sr-only">Tambah</span>
+        </button>
       </div>
     </div>
 
@@ -789,6 +778,21 @@ function resetFilters() {
       @close="qrProduct = null"
     />
     <VariantCloudLockModal :open="showVariantModal" @close="showVariantModal = false" />
+
+    <!-- Floating Action Button (FAB) -->
+    <button
+      v-if="!isCashier"
+      type="button"
+      class="fixed right-5 bottom-[calc(env(safe-area-inset-bottom)+6.75rem)] md:bottom-8 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-primary text-white shadow-[0_10px_25px_rgba(73,69,214,0.45)] transition hover:bg-primary-light active:scale-95 cursor-pointer"
+      title="Tambah Produk"
+      aria-label="Tambah Produk"
+      @click="goToCreate"
+    >
+      <svg class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+      </svg>
+      <span class="sr-only">Tambah</span>
+    </button>
   </div>
 </template>
 

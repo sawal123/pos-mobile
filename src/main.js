@@ -12,6 +12,7 @@ import {
 } from './services/database/localOperationService'
 import { initializeSyncFoundation } from './services/sync'
 import { resolveDeviceIdentifier } from './services/cloud/deviceIdentifier'
+import { ensureCleanInstallState } from './services/localCacheService'
 import {
   RESTORE_RESULT_CODE,
   createRestoreSafetyEngine,
@@ -250,6 +251,18 @@ export async function bootstrapApp({
         runtimeSignalService: null,
         restoreSafetyEngine,
         workspaceRecovery: workspaceRecoveryResult,
+      }
+    }
+
+    if (persistence.adapter) {
+      try {
+        await ensureCleanInstallState({
+          pinia,
+          adapter: persistence.adapter,
+          scheduler: persistence,
+        })
+      } catch (error) {
+        console.warn('Failed to verify clean install state.', error)
       }
     }
   }

@@ -139,8 +139,8 @@ beforeEach(() => {
 })
 
 describe('P9 database migration v2/v3/v4', () => {
-  it('DB_VERSION sekarang 7', () => {
-    expect(DB_VERSION).toBe(7)
+  it('DB_VERSION sekarang 8', () => {
+    expect(DB_VERSION).toBe(8)
   })
 
   it('migrasi v2 mendefinisikan sync_queue', () => {

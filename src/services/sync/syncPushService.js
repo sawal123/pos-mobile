@@ -24,11 +24,18 @@ function isBootstrapContextMatch(
   bootstrapState,
   { businessId, outletId, deviceIdentifier, registeredDeviceId },
 ) {
+  const regMatch =
+    registeredDeviceId === null ||
+    registeredDeviceId === undefined ||
+    bootstrapState.registeredDeviceId === null ||
+    bootstrapState.registeredDeviceId === undefined ||
+    String(bootstrapState.registeredDeviceId) === String(registeredDeviceId)
+
   return (
     Number(bootstrapState.businessId) === Number(businessId) &&
     Number(bootstrapState.outletId) === Number(outletId) &&
     String(bootstrapState.deviceIdentifier) === String(deviceIdentifier) &&
-    String(bootstrapState.registeredDeviceId) === String(registeredDeviceId)
+    regMatch
   )
 }
 
@@ -36,6 +43,13 @@ function isValidCloudFirstPullBinding(
   binding,
   { businessId, outletId, deviceIdentifier, registeredDeviceId },
 ) {
+  const regMatch =
+    registeredDeviceId === null ||
+    registeredDeviceId === undefined ||
+    binding.registeredDeviceId === null ||
+    binding.registeredDeviceId === undefined ||
+    String(binding.registeredDeviceId) === String(registeredDeviceId)
+
   return Boolean(
     binding &&
       binding.mode === 'cloud_first_read' &&
@@ -43,7 +57,7 @@ function isValidCloudFirstPullBinding(
       Number(binding.businessId) === Number(businessId) &&
       Number(binding.outletId) === Number(outletId) &&
       String(binding.deviceIdentifier) === String(deviceIdentifier) &&
-      String(binding.registeredDeviceId) === String(registeredDeviceId) &&
+      regMatch &&
       typeof binding.boundAt === 'string' &&
       binding.boundAt.trim().length > 0,
   )
@@ -533,6 +547,15 @@ export function createSyncPushService({
       const deviceIdentifier = options.context?.deviceIdentifier ?? cloudStore?.deviceIdentifier
       const registeredDeviceId =
         options.context?.registeredDeviceId ?? cloudStore?.registeredDeviceId
+      const role =
+        options.context?.role ??
+        cloudStore?.role ??
+        cloudStore?.pushPolicy?.role ??
+        null
+      const requireDeviceRegistration =
+        options.context?.requireDeviceRegistration !== undefined
+          ? options.context.requireDeviceRegistration
+          : (role ? role === 'cashier' || cloudStore?.isCashierContext === true : true)
 
       const token = options.token ?? (await tokenFetcher())
 
@@ -544,6 +567,8 @@ export function createSyncPushService({
         cloudAccess,
         deviceIdentifier,
         registeredDeviceId,
+        requireDeviceRegistration,
+        role,
       })
 
       if (!preconditions.ok) {
@@ -575,6 +600,8 @@ export function createSyncPushService({
         cloudAccess: cloudAccess === true,
         deviceIdentifier,
         registeredDeviceId,
+        role,
+        requireDeviceRegistration: requireDeviceRegistration === true,
       }
 
       if (contextGuardService && typeof contextGuardService.inspect === 'function') {
@@ -1957,6 +1984,7 @@ export function createSyncPushService({
       // envelope without a condition change.
       if (responseStatus === 403) {
         const isOperationNotAllowed = responseCode === 'SYNC_OPERATION_NOT_ALLOWED'
+        const isOutletAccessDenied = responseCode === 'OUTLET_ACCESS_DENIED'
         const violations =
           response.data?.violations ??
           response.data?.data?.violations ??
@@ -1965,14 +1993,17 @@ export function createSyncPushService({
 
         const rejectionMessage = isOperationNotAllowed
           ? 'Server menolak sebagian operasi untuk peran ini. Data lokal tetap aman dan akan dikirim ulang setelah izin diperbarui.'
-          : (response.data?.message ??
-            response.error?.message ??
-            'Akses sinkronisasi ditolak oleh server.')
+          : (isOutletAccessDenied
+            ? 'Akun kasir ini hanya memiliki akses untuk cabang yang ditugaskan. Perangkat ini terdaftar di cabang berbeda.'
+            : (response.data?.message ??
+              response.error?.message ??
+              'Akses sinkronisasi ditolak oleh server.'))
 
         const requiresContextRefresh =
           isOperationNotAllowed ||
           responseCode === 'CLOUD_SUBSCRIPTION_REQUIRED' ||
-          responseCode === 'BUSINESS_ACCESS_DENIED'
+          responseCode === 'BUSINESS_ACCESS_DENIED' ||
+          isOutletAccessDenied
 
         // Every push path (manual, orchestrator "Sync Semua" and auto-sync)
         // shares this single hook, so a permission change refreshes role +

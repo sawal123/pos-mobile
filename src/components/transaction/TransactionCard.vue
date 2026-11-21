@@ -66,12 +66,52 @@ const paymentMethodLabel = computed(() => {
   if (method === 'card' || method === 'kartu') return 'Card'
   if (method === 'cash' || method === 'tunai') return 'Cash'
   if (method === 'transfer') return 'Transfer'
+  if (method === 'unpaid') return 'Tempo'
   return props.transaction.paymentMethod || props.transaction.payment_method || '-'
+})
+
+const paymentBadge = computed(() => {
+  const pStatus = `${props.transaction.paymentStatus ?? props.transaction.payment_status ?? props.transaction.status ?? ''}`.toLowerCase()
+  if (pStatus === 'unpaid' || pStatus === 'pending' || pStatus === 'tempo' || pStatus === 'belum lunas') {
+    return { label: 'Belum Lunas', variant: 'warning' }
+  }
+  if (pStatus === 'refund' || pStatus === 'refunded') {
+    return { label: 'Refund', variant: 'purple' }
+  }
+  if (pStatus === 'paid' || pStatus === 'lunas' || pStatus === 'completed') {
+    return { label: 'Lunas', variant: 'success' }
+  }
+  return { label: props.transaction.paymentStatus || props.transaction.status || 'Lunas', variant: 'success' }
+})
+
+const orderBadge = computed(() => {
+  const os = props.transaction.orderStatus ?? props.transaction.order_status
+  if (!os) {
+    if (props.transaction.status === 'completed') {
+      return { label: 'Selesai', variant: 'success' }
+    }
+    return null
+  }
+  const s = String(os).toLowerCase()
+  if (s === 'batal' || s === 'cancelled' || s === 'void') {
+    return { label: 'Batal', variant: 'danger' }
+  }
+  if (s === 'proses' || s === 'diproses' || s === 'processing' || s === 'masuk') {
+    return { label: 'Proses', variant: 'info' }
+  }
+  if (s === 'siap' || s === 'siap diambil' || s === 'ready') {
+    return { label: 'Siap', variant: 'success' }
+  }
+  if (s === 'selesai' || s === 'completed') {
+    return { label: 'Selesai', variant: 'success' }
+  }
+  return { label: os, variant: 'info' }
 })
 
 function statusVariant(status) {
   if (status === 'paid' || status === 'completed') return 'success'
-  if (status === 'refunded') return 'warning'
+  if (status === 'refunded') return 'purple'
+  if (status === 'unpaid' || status === 'pending') return 'warning'
   return 'neutral'
 }
 
@@ -79,7 +119,7 @@ function statusLabel(status) {
   if (status === 'paid') return 'Lunas'
   if (status === 'completed') return 'Selesai'
   if (status === 'refunded') return 'Refund'
-  if (status === 'unpaid' || status === 'pending') return 'Belum Bayar'
+  if (status === 'unpaid' || status === 'pending') return 'Belum Lunas'
   return status || '-'
 }
 
@@ -93,15 +133,29 @@ const txDate = computed(() => {
     class="group relative rounded-3xl border border-zinc-200/70 bg-white p-4 shadow-soft transition hover:border-primary/40 hover:shadow-medium active:scale-[0.99] space-y-2.5"
     data-testid="transaction-card"
   >
-    <!-- Top Row: ID & Status -->
+    <!-- Top Row: ID & Badges -->
     <div class="flex items-center justify-between gap-2">
       <span class="font-mono text-xs font-semibold uppercase tracking-wider text-primary">
         {{ displayId }}
       </span>
 
-      <BaseBadge :variant="statusVariant(transaction.status)" class="capitalize">
-        {{ statusLabel(transaction.status) }}
-      </BaseBadge>
+      <div class="flex items-center gap-1.5 flex-wrap justify-end">
+        <BaseBadge
+          v-if="orderBadge"
+          :variant="orderBadge.variant"
+          class="capitalize"
+          data-testid="order-status-badge"
+        >
+          {{ orderBadge.label }}
+        </BaseBadge>
+        <BaseBadge
+          :variant="paymentBadge.variant"
+          class="capitalize"
+          data-testid="payment-status-badge"
+        >
+          {{ paymentBadge.label }}
+        </BaseBadge>
+      </div>
     </div>
 
     <!-- Middle: Customer & Items Preview -->

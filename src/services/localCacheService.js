@@ -1,3 +1,4 @@
+import { Capacitor } from '@capacitor/core'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useReceiptStore } from '@/stores/receiptStore'
 import { normalizeReceiptSettings } from '@/services/printer/receiptSettings'
@@ -8,8 +9,13 @@ import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useCustomerStore } from '@/stores/customerStore'
 import { useExpenseStore } from '@/stores/expenseStore'
 import { useProductStore } from '@/stores/productStore'
+import { usePromoStore } from '@/stores/promoStore'
 import { useShiftStore } from '@/stores/shiftStore'
+import { useTaxStore } from '@/stores/taxStore'
 import { useTransactionStore } from '@/stores/transactionStore'
+import { useVariantStore } from '@/stores/variantStore'
+import { useTableStore } from '@/stores/tableStore'
+import { getInstallMarker, getToken, saveInstallMarker } from '@/services/cloud/tokenRepository'
 import { useSyncPushStore } from '@/stores/syncPushStore'
 import { useSyncPullStore } from '@/stores/syncPullStore'
 import { useSyncBootstrapStore } from '@/stores/syncBootstrapStore'
@@ -73,6 +79,15 @@ export async function clearLocalCache({
       }
       if (typeof resolvedAdapter.saveExpenses === 'function') {
         await resolvedAdapter.saveExpenses([])
+      }
+      if (typeof resolvedAdapter.savePromos === 'function') {
+        await resolvedAdapter.savePromos([])
+      }
+      if (typeof resolvedAdapter.saveVariantGroups === 'function') {
+        await resolvedAdapter.saveVariantGroups([])
+      }
+      if (resetBusiness && typeof resolvedAdapter.saveTaxState === 'function') {
+        await resolvedAdapter.saveTaxState({ enabled: false, rate: 0 })
       }
       if (typeof resolvedAdapter.saveCashState === 'function') {
         await resolvedAdapter.saveCashState({ entries: [] })
@@ -169,6 +184,26 @@ export async function clearLocalCache({
     const expenseStore = useExpenseStore(pinia)
     expenseStore.expenses = []
   } catch {}
+
+  try {
+    const promoStore = usePromoStore(pinia)
+    promoStore.promos = []
+  } catch {}
+
+  try {
+    const variantStore = useVariantStore(pinia)
+    variantStore.groups = []
+    const tableStore = useTableStore(pinia)
+    tableStore.tables = []
+  } catch {}
+
+  if (resetBusiness) {
+    try {
+      const taxStore = useTaxStore(pinia)
+      taxStore.enabled = false
+      taxStore.rate = 0
+    } catch {}
+  }
 
   try {
     const cashStore = useCashStore(pinia)
@@ -269,4 +304,89 @@ export async function clearLocalCache({
   }
 
   return { ok: true }
+}
+
+function generateInstallMarker() {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID()
+  }
+  return `install-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+/**
+ * Guard against stale SQLite snapshots silently restored by OS Auto Backup
+ * after an uninstall + reinstall. Because Android Keystore keys/entries are
+ * deleted on uninstall while Auto Backup can restore SQLite/SharedPreferences,
+ * finding neither an install marker nor a Cloud token on a native build indicates
+ * a fresh install or reinstall where any residual local database data must be wiped.
+ */
+export async function ensureCleanInstallState({
+  pinia = null,
+  adapter = null,
+  scheduler = null,
+  isNative = Capacitor.isNativePlatform(),
+} = {}) {
+  if (!isNative || !adapter) {
+    return { ok: true, cleared: false, reason: 'skipped' }
+  }
+
+  let installMarker = null
+  try {
+    installMarker = await getInstallMarker()
+  } catch {
+    installMarker = null
+  }
+
+  if (typeof installMarker === 'string' && installMarker.trim().length > 0) {
+    return { ok: true, cleared: false, reason: 'already_marked' }
+  }
+
+  let token = null
+  try {
+    token = await getToken()
+  } catch {
+    token = null
+  }
+
+  if (typeof token === 'string' && token.trim().length > 0) {
+    try {
+      await saveInstallMarker(generateInstallMarker())
+    } catch {
+      // Non-blocking: Keystore marker write failure must not break existing session
+    }
+    return { ok: true, cleared: false, reason: 'existing_session_marked' }
+  }
+
+  await clearLocalCache({
+    pinia,
+    adapter,
+    scheduler,
+    resetBusiness: true,
+  })
+
+  try {
+    await adapter.clearCloudContext?.()
+  } catch {
+    // non-blocking
+  }
+  try {
+    await adapter.saveDeviceIdentifier?.(null)
+  } catch {
+    // non-blocking
+  }
+  if (scheduler?.flush) {
+    try {
+      await scheduler.flush()
+    } catch {
+      // non-blocking
+    }
+  }
+
+  try {
+    await saveInstallMarker(generateInstallMarker())
+  } catch {
+    // non-blocking
+  }
+
+  return { ok: true, cleared: true, reason: 'fresh_install_cleanup' }
 }

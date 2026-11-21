@@ -6,7 +6,7 @@ import AppIcon from '@/components/base/AppIcon.vue'
 import BaseBadge from '@/components/base/BaseBadge.vue'
 import HomeSalesChart from '@/components/home/HomeSalesChart.vue'
 import SyncLockedModal from '@/components/sync/SyncLockedModal.vue'
-import { usePullToRefresh } from '@/composables/usePullToRefresh'
+import { usePageRefresh } from '@/composables/usePageRefresh'
 import { useSyncAccess } from '@/composables/useSyncAccess'
 import { getOperationalMenuItems } from '@/navigation/operationalMenu'
 import { useBusinessStore } from '@/stores/businessStore'
@@ -29,7 +29,6 @@ const cloudStore = useCloudSessionStore()
 const syncPullStore = useSyncPullStore()
 const { isSyncLocked } = useSyncAccess()
 const showSyncLockedModal = ref(false)
-const refreshRoot = ref(null)
 
 function isMenuItemLocked(item) {
   return item.key === 'sync' && isSyncLocked.value
@@ -54,16 +53,7 @@ async function refreshHome() {
   return syncStatusStore.refresh()
 }
 
-const {
-  indicatorOffset,
-  isDragging,
-  isRefreshing,
-  isVisible: isRefreshIndicatorVisible,
-  message: refreshMessage,
-} = usePullToRefresh({
-  root: refreshRoot,
-  onRefresh: refreshHome,
-})
+usePageRefresh(refreshHome)
 
 function isToday(dateString) {
   if (!dateString) return false
@@ -93,7 +83,20 @@ const isLaundry = computed(() => businessStore.normalizedType === 'Laundry')
 const todayFormatted = computed(() => {
   const now = new Date()
   const day = now.getDate()
-  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des']
+  const monthNames = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'Mei',
+    'Jun',
+    'Jul',
+    'Agu',
+    'Sep',
+    'Okt',
+    'Nov',
+    'Des',
+  ]
   return `${day} ${monthNames[now.getMonth()]} ${now.getFullYear()}`
 })
 
@@ -121,32 +124,12 @@ const laundryStatusSummaries = computed(() => {
 </script>
 
 <template>
-  <div ref="refreshRoot" data-testid="home-pull-to-refresh" class="relative space-y-4 pb-28 sm:pb-16">
-    <!-- Pull to refresh spinner indicator -->
-    <div
-      v-show="isRefreshIndicatorVisible"
-      class="pointer-events-none absolute inset-x-0 -top-11 z-10 flex items-center justify-center gap-2 text-sm font-medium text-ink-secondary"
-      aria-live="polite"
-      :style="{ transform: `translateY(${indicatorOffset}px)` }"
-    >
-      <span
-        class="h-4 w-4 rounded-full border-2 border-primary/25 border-t-primary"
-        :class="isRefreshing ? 'animate-spin' : ''"
-      />
-      <span>{{ refreshMessage }}</span>
-    </div>
-
-    <div
-      class="space-y-4"
-      :class="
-        isDragging || isRefreshing
-          ? 'transition-transform duration-150'
-          : 'transition-transform duration-300'
-      "
-      :style="{ transform: `translateY(${indicatorOffset}px)` }"
-    >
+  <div data-testid="home-pull-to-refresh" class="relative space-y-4 pb-28 sm:pb-16">
+    <div class="space-y-4">
       <!-- Minimalist Header Profile Card -->
-      <header class="flex items-center justify-between gap-3 rounded-2xl bg-white px-4 py-3.5 border border-zinc-200/80 shadow-soft">
+      <header
+        class="flex items-center justify-between gap-3 rounded-2xl bg-white px-4 py-3.5 border border-zinc-200/80 shadow-soft"
+      >
         <div class="min-w-0">
           <h2 class="truncate text-base font-bold text-ink-primary sm:text-lg">
             {{ businessStore.name || 'POS Mobile' }}
@@ -158,25 +141,35 @@ const laundryStatusSummaries = computed(() => {
 
         <RouterLink to="/shift/open" class="shrink-0 transition active:scale-95">
           <BaseBadge :variant="shiftStore.isOpen ? 'success' : 'warning'" class="cursor-pointer">
-            <span class="mr-1.5 inline-block h-1.5 w-1.5 rounded-full" :class="shiftStore.isOpen ? 'bg-emerald-500' : 'bg-amber-500'" />
+            <span
+              class="mr-1.5 inline-block h-1.5 w-1.5 rounded-full"
+              :class="shiftStore.isOpen ? 'bg-emerald-500' : 'bg-amber-500'"
+            />
             {{ shiftStore.isOpen ? 'Shift Aktif' : 'Shift Tutup' }}
           </BaseBadge>
         </RouterLink>
       </header>
 
       <!-- Minimalist Hero: Omzet Hari Ini & Quick Stats -->
-      <section class="min-h-[88px] rounded-3xl border border-zinc-200/80 bg-white p-5 shadow-soft space-y-4">
+      <section
+        class="min-h-[88px] rounded-3xl border border-zinc-200/80 bg-white p-5 shadow-soft space-y-4"
+      >
         <div class="flex items-center justify-between">
           <div>
             <p class="text-xs font-semibold uppercase tracking-wider text-ink-secondary">
               Omzet Hari Ini
             </p>
-            <p class="mt-1 font-mono text-2xl font-bold tracking-tight text-primary sm:text-3xl" data-testid="today-revenue">
+            <p
+              class="mt-1 font-mono text-2xl font-bold tracking-tight text-primary sm:text-3xl"
+              data-testid="today-revenue"
+            >
               {{ formatCurrency(todayRevenue) }}
             </p>
           </div>
           <div class="text-right">
-            <span class="inline-flex items-center rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
+            <span
+              class="inline-flex items-center rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary"
+            >
               {{ todayFormatted }}
             </span>
           </div>
@@ -188,7 +181,10 @@ const laundryStatusSummaries = computed(() => {
             <p class="text-xs font-medium uppercase tracking-[0.14em] text-ink-secondary">
               {{ isLaundry ? 'Order Hari Ini' : 'Transaksi Hari Ini' }}
             </p>
-            <p class="mt-1 font-mono text-xl font-bold text-ink-primary" data-testid="today-transaction-count">
+            <p
+              class="mt-1 font-mono text-xl font-bold text-ink-primary"
+              data-testid="today-transaction-count"
+            >
               {{ todayTransactions.length }}
             </p>
           </div>
@@ -197,16 +193,25 @@ const laundryStatusSummaries = computed(() => {
             <p class="text-xs font-medium uppercase tracking-[0.14em] text-ink-secondary">
               Saldo Kas
             </p>
-            <p class="mt-1 font-mono text-base sm:text-xl font-bold text-success truncate" data-testid="today-cash-balance">
+            <p
+              class="mt-1 font-mono text-base sm:text-xl font-bold text-success truncate"
+              data-testid="today-cash-balance"
+            >
               {{ formatCurrency(cashStore.balance) }}
             </p>
           </div>
 
-          <div v-if="!isLaundry" class="col-span-2 sm:col-span-1 min-h-[88px] rounded-2xl bg-surface p-3.5 flex flex-col justify-between">
+          <div
+            v-if="!isLaundry"
+            class="col-span-2 sm:col-span-1 min-h-[88px] rounded-2xl bg-surface p-3.5 flex flex-col justify-between"
+          >
             <p class="text-xs font-medium uppercase tracking-[0.14em] text-ink-secondary">
               Stok Minimum
             </p>
-            <p class="mt-1 font-mono text-xl font-bold text-warning" data-testid="today-low-stock-count">
+            <p
+              class="mt-1 font-mono text-xl font-bold text-warning"
+              data-testid="today-low-stock-count"
+            >
               {{ productStore.lowStockProducts.length }}
             </p>
           </div>
@@ -222,7 +227,10 @@ const laundryStatusSummaries = computed(() => {
             <p class="text-xs font-semibold uppercase tracking-wider text-ink-secondary">
               Status Order Laundry
             </p>
-            <RouterLink to="/laundry/orders" class="text-xs font-medium text-primary hover:underline">
+            <RouterLink
+              to="/laundry/orders"
+              class="text-xs font-medium text-primary hover:underline"
+            >
               Lihat Semua &rarr;
             </RouterLink>
           </div>
@@ -235,7 +243,9 @@ const laundryStatusSummaries = computed(() => {
               :data-testid="`laundry-summary-${item.status}`"
               class="group rounded-2xl border border-zinc-200/70 bg-white p-3 shadow-xs transition hover:border-primary/40 hover:shadow-soft"
             >
-              <p class="text-[11px] font-medium text-ink-secondary group-hover:text-primary transition">
+              <p
+                class="text-[11px] font-medium text-ink-secondary group-hover:text-primary transition"
+              >
                 {{ item.status }}
               </p>
               <p class="mt-0.5 text-lg font-bold" :class="item.tone">{{ item.count }}</p>

@@ -223,13 +223,6 @@ function viewCustomerDetail(customer) {
           <h1 class="text-xl font-black tracking-tight text-ink-primary sm:text-2xl">Daftar Pelanggan</h1>
         </div>
       </div>
-
-      <BaseButton size="sm" class="shrink-0 font-semibold shadow-soft whitespace-nowrap" @click="goToCreate">
-        <svg class="mr-1.5 h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M12 4v16m8-8H4" />
-        </svg>
-        <span>Tambah<span class="sr-only"> Customer</span></span>
-      </BaseButton>
     </header>
 
     <!-- Eyecatching Minimalist Hero Metric Banner -->
@@ -439,28 +432,47 @@ function viewCustomerDetail(customer) {
 
               <button
                 type="button"
-                class="inline-flex items-center gap-1 rounded-xl bg-zinc-100 px-2.5 py-1 text-xs font-medium text-zinc-700 transition hover:bg-zinc-200 active:scale-95"
+                class="inline-flex h-8 w-8 items-center justify-center rounded-xl bg-zinc-100 text-zinc-700 transition hover:bg-zinc-200 active:scale-95 cursor-pointer"
+                title="Detail pelanggan"
+                aria-label="Detail pelanggan"
                 @click="viewCustomerDetail(customer)"
               >
-                Detail
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 010-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178z" />
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+                <span class="sr-only">Detail</span>
               </button>
             </div>
 
             <!-- Right: Edit & Delete -->
             <div class="flex items-center gap-1.5 ml-auto">
-              <BaseButton size="sm" variant="secondary" class="h-7 px-2 text-xs" @click="goToEdit(customer)">
-                <svg class="mr-0.5 h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+              <button
+                type="button"
+                class="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-zinc-200 bg-white text-ink-secondary transition hover:border-primary/40 hover:text-primary active:scale-95 cursor-pointer"
+                title="Edit pelanggan"
+                aria-label="Edit pelanggan"
+                @click="goToEdit(customer)"
+              >
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
                 </svg>
-                Edit
-              </BaseButton>
+                <span class="sr-only">Edit</span>
+              </button>
 
-              <BaseButton v-if="!isCashier" size="sm" variant="danger" class="h-7 px-2 text-xs" @click="confirmDelete(customer)">
-                <svg class="mr-0.5 h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              <button
+                v-if="!isCashier"
+                type="button"
+                class="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-rose-200 bg-rose-50 text-rose-600 transition hover:bg-rose-100 active:scale-95 cursor-pointer"
+                title="Hapus pelanggan"
+                aria-label="Hapus pelanggan"
+                @click="confirmDelete(customer)"
+              >
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                 </svg>
-                Delete
-              </BaseButton>
+                <span class="sr-only">Delete</span>
+              </button>
             </div>
           </div>
         </article>
@@ -609,9 +621,18 @@ function viewCustomerDetail(customer) {
 
         <!-- Modal Actions -->
         <div class="flex items-center gap-2 pt-2 border-t border-zinc-100">
-          <BaseButton block variant="secondary" @click="goToEdit(selectedCustomer)">
-            Edit Data Pelanggan
-          </BaseButton>
+          <button
+            type="button"
+            class="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-zinc-200 bg-white text-ink-primary transition hover:border-primary/40 hover:text-primary active:scale-95 cursor-pointer"
+            title="Edit Data Pelanggan"
+            aria-label="Edit Data Pelanggan"
+            @click="goToEdit(selectedCustomer)"
+          >
+            <svg class="h-4.5 w-4.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+            </svg>
+            <span class="sr-only">Edit Data Pelanggan</span>
+          </button>
           <BaseButton block variant="ghost" @click="selectedCustomer = null">
             Tutup
           </BaseButton>
@@ -654,5 +675,19 @@ function viewCustomerDetail(customer) {
         </div>
       </div>
     </BaseModal>
+
+    <!-- Floating Action Button (FAB) -->
+    <button
+      type="button"
+      class="fixed right-5 bottom-[calc(env(safe-area-inset-bottom)+6.75rem)] md:bottom-8 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-primary text-white shadow-[0_10px_25px_rgba(73,69,214,0.45)] transition hover:bg-primary-light active:scale-95 cursor-pointer"
+      title="Tambah Customer"
+      aria-label="Tambah Customer"
+      @click="goToCreate"
+    >
+      <svg class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+      </svg>
+      <span class="sr-only">Tambah Customer</span>
+    </button>
   </div>
 </template>

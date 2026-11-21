@@ -347,7 +347,10 @@ export const useProductStore = defineStore('product', {
       let list = this.products.filter((product) => {
         if (!product.isActive) return false
         const sellable = product.isSellable !== undefined ? product.isSellable : product.is_sellable
-        return sellable === undefined || sellable === true || sellable === 1 || sellable === '1'
+        if (sellable !== undefined && sellable !== true && sellable !== 1 && sellable !== '1') return false
+        const outletAvail = product.isAvailableInOutlet !== undefined ? product.isAvailableInOutlet : product.is_available_in_outlet
+        if (outletAvail !== undefined && (outletAvail === false || outletAvail === 0 || outletAvail === '0')) return false
+        return true
       })
 
       if (this.selectedCategory !== DEFAULT_FILTER_CATEGORY) {
@@ -389,7 +392,16 @@ export const useProductStore = defineStore('product', {
       this.searchQuery = query
     },
     getProductById(id) {
-      return this.products.find((product) => String(product.id) === String(id)) ?? null
+      if (id == null) return null
+      const target = String(id)
+      return (
+        this.products.find(
+          (product) =>
+            String(product.id) === target ||
+            (product.sync_id && String(product.sync_id) === target) ||
+            (product.syncId && String(product.syncId) === target),
+        ) ?? null
+      )
     },
     createProduct(payload) {
       if (isCashierRole()) {
@@ -546,7 +558,25 @@ export const useProductStore = defineStore('product', {
     },
     canFulfillSale(items) {
       for (const item of items) {
-        const product = this.getProductById(item.id)
+        const rawProdId = item.productId ?? item.product_id ?? item.id
+        const prodId =
+          typeof rawProdId === 'string' && rawProdId.includes('::')
+            ? rawProdId.split('::')[0]
+            : rawProdId
+        let product = this.getProductById(prodId)
+
+        if (!product && (item.sync_id || item.syncId)) {
+          const syncId = item.sync_id || item.syncId
+          product = this.products.find(
+            (p) => String(p.sync_id) === String(syncId) || String(p.syncId) === String(syncId),
+          )
+        }
+
+        if (!product && item.name) {
+          product = this.products.find(
+            (p) => p.name && p.name.trim().toLowerCase() === String(item.name).trim().toLowerCase(),
+          )
+        }
 
         if (!product) {
           return {

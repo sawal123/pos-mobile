@@ -1,16 +1,22 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import ProductCard from '@/components/pos/ProductCard.vue'
 import { createAppRouter } from '@/router'
+import { createMemoryAdapter } from '@/services/database/memoryAdapter'
+import { createSyncPullService } from '@/services/sync/syncPullService'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCashierStore } from '@/stores/cashierStore'
+import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useProductStore } from '@/stores/productStore'
 import { useShiftStore } from '@/stores/shiftStore'
+import { useSyncPullStore } from '@/stores/syncPullStore'
 import ProductFormView from '@/views/products/ProductFormView.vue'
 
 const IMAGE_DATA = 'data:image/webp;base64,abc123'
+const REMOTE_IMAGE_URL =
+  'https://pos.eradig.my.id/storage/menu/GNh11hHl1qP9iydjhgfn9JjH0YZXRm7Ib3qliZns.jpg'
 
 function createContext(type = 'Cafe / UMKM') {
   const pinia = createPinia()
@@ -163,5 +169,153 @@ describe('product image support', () => {
 
     expect(result.success).toBe(true)
     expect(result.product.imageData).toBe(IMAGE_DATA)
+  })
+
+  it('ProductCard merender URL Cloud image dan fallback ke icon saat @error', async () => {
+    const wrapper = mount(ProductCard, {
+      props: {
+        product: {
+          id: 'p-cloud-1',
+          name: 'Americano',
+          category: 'Black Coffee',
+          kind: 'product',
+          price: 18000,
+          stock: 999,
+          imageData: REMOTE_IMAGE_URL,
+        },
+      },
+    })
+
+    const img = wrapper.find('[data-testid="product-card-image"]')
+    expect(img.exists()).toBe(true)
+    expect(img.attributes('src')).toBe(REMOTE_IMAGE_URL)
+
+    await img.trigger('error')
+    expect(wrapper.find('[data-testid="product-card-image"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="product-card-fallback"]').exists()).toBe(true)
+  })
+
+  it('sync pull menyimpan image_url Cloud ke imageData productStore dan backfill otomatis jika produk lama belum punya gambar', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+
+    const adapter = createMemoryAdapter()
+    await adapter.initialize()
+
+    const cloudStore = useCloudSessionStore(pinia)
+    cloudStore.user = { id: 1, email: 'owner@temuanspace.id', name: 'Owner' }
+    cloudStore.selectedBusiness = { id: 10, name: 'Temuan Space', business_type: 'Cafe / UMKM' }
+    cloudStore.selectedOutlet = { id: 101, name: 'Temuan Space Laksana' }
+    cloudStore.cloudAccess = true
+    cloudStore.capabilityState = 'verified'
+    cloudStore.role = 'owner'
+    cloudStore.syncCapabilities = { push_mode: 'full' }
+    cloudStore.deviceIdentifier = '33333333-3333-4333-8333-333333333333'
+    cloudStore.registeredDeviceId = 77
+    cloudStore.ensureVerifiedContext = vi.fn().mockResolvedValue({ ok: true })
+
+    const catUuid = '11111111-1111-4111-8111-111111111111'
+    const prodUuid = '22222222-2222-4222-8222-222222222222'
+
+    // Simulasikan perangkat yang sudah menyelesaikan sync awal sebelum dukungan gambar ada
+    await adapter.saveSyncPushBinding({
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: '33333333-3333-4333-8333-333333333333',
+      registeredDeviceId: 77,
+    })
+    await adapter.saveSyncPullBinding({
+      businessId: 10,
+      outletId: 101,
+      deviceIdentifier: '33333333-3333-4333-8333-333333333333',
+      registeredDeviceId: 77,
+      status: 'completed',
+    })
+    await adapter.saveSyncPullState({ version: 1, cursor: 500, serverSequence: 500 })
+
+    const productStore = useProductStore(pinia)
+    productStore.$patch({
+      categories: ['Black Coffee'],
+      products: [
+        {
+          id: prodUuid,
+          name: 'Americano',
+          category: 'Black Coffee',
+          price: 18000,
+          unitPrice: 18000,
+          stock: 999,
+          imageData: '',
+          isActive: true,
+        },
+      ],
+    })
+
+    const transport = vi.fn(async ({ after }) => {
+      if (after >= 500) {
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            data: {
+              records: [],
+              next_cursor: 500,
+              server_sequence: 500,
+              has_more: false,
+            },
+          },
+        }
+      }
+      return {
+        ok: true,
+        status: 200,
+        data: {
+          data: {
+            records: [
+              {
+                entity: 'categories',
+                sync_sequence: 1,
+                data: { sync_id: catUuid, sync_version: 1, name: 'Black Coffee' },
+              },
+              {
+                entity: 'products',
+                sync_sequence: 2,
+                data: {
+                  sync_id: prodUuid,
+                  sync_version: 1,
+                  category_sync_id: catUuid,
+                  name: 'Americano',
+                  image_url: REMOTE_IMAGE_URL,
+                  price: 18000,
+                  stock: 999,
+                  is_active: 1,
+                },
+              },
+            ],
+            next_cursor: 500,
+            server_sequence: 500,
+            has_more: false,
+          },
+        },
+      }
+    })
+
+    const pullService = createSyncPullService({
+      adapter,
+      cloudStore,
+      tokenFetcher: async () => 'test-token',
+      transport,
+    })
+
+    const syncPullStore = useSyncPullStore(pinia)
+    syncPullStore.init({ pullService, adapter })
+
+    const res = await syncPullStore.ensureCatalogLoaded()
+    expect(res.ok).toBe(true)
+    expect(transport).toHaveBeenCalledWith(expect.objectContaining({ after: 500 }))
+    expect(transport).toHaveBeenCalledWith(expect.objectContaining({ after: 0 }))
+    expect(productStore.products[0].imageData).toBe(REMOTE_IMAGE_URL)
+
+    const persisted = await adapter.loadProducts()
+    expect(persisted.products[0].imageData).toBe(REMOTE_IMAGE_URL)
   })
 })

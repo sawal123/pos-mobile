@@ -275,6 +275,46 @@ export function createSyncChangeTracker({ pinia, queueService, stores = {} }) {
     })
   })
 
+  track(transactionStore, 'settleTransactionPayment', ({ after }) => {
+    after((result) => {
+      if (result?.success && !result?.duplicated && result?.transaction?.id) {
+        enqueueTransactionSnapshot(result.transaction.id)
+      }
+    })
+  })
+
+  track(transactionStore, 'updateTransactionItems', ({ after }) => {
+    after((result) => {
+      if (result?.success && result?.transaction?.id) {
+        enqueueTransactionSnapshot(result.transaction.id)
+      }
+    })
+  })
+
+  track(transactionStore, 'updateTransactionPayment', ({ after }) => {
+    after((result) => {
+      if (result?.success && result?.transaction?.id) {
+        enqueueTransactionSnapshot(result.transaction.id)
+      }
+    })
+  })
+
+  track(transactionStore, 'updatePaymentMethod', ({ after }) => {
+    after((result) => {
+      if (result?.success && result?.transaction?.id) {
+        enqueueTransactionSnapshot(result.transaction.id)
+      }
+    })
+  })
+
+  track(transactionStore, 'voidTransaction', ({ after }) => {
+    after((result) => {
+      if (result?.success && result?.transaction?.id) {
+        enqueueTransactionSnapshot(result.transaction.id)
+      }
+    })
+  })
+
   // ---- CASH ----
   // recordEntry is the canonical cash sync point: recordSalePayment and
   // recordOpeningBalance both funnel into it, so tracking it alone gives
@@ -335,8 +375,12 @@ export function createSyncChangeTracker({ pinia, queueService, stores = {} }) {
     })
   }
 
-  track(shiftStore, 'openShift', ({ after }) => {
+  track(shiftStore, 'openShift', ({ args, after }) => {
+    const fromCloud = args?.[1]?.fromCloud === true
     after(() => {
+      if (fromCloud || shiftStore.isCloudAutoShift === true) {
+        return
+      }
       enqueueShift(shiftStore)
     })
   })

@@ -8,6 +8,7 @@ import { useBusinessStore } from '@/stores/businessStore'
 import { useCartStore } from '@/stores/cartStore'
 import { useCashierStore } from '@/stores/cashierStore'
 import { useCustomerStore } from '@/stores/customerStore'
+import { useProductStore } from '@/stores/productStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import PaymentSuccessView from '@/views/payment/PaymentSuccessView.vue'
@@ -26,6 +27,7 @@ function createContext() {
     cartStore: useCartStore(),
     cashierStore: useCashierStore(),
     customerStore: useCustomerStore(),
+    productStore: useProductStore(),
     shiftStore: useShiftStore(),
     transactionStore: useTransactionStore(),
   }
@@ -110,6 +112,7 @@ async function mountPaymentView() {
   makeBusinessReady(context.businessStore)
   context.cashierStore.setPinConfigured(true)
   context.shiftStore.openShift(100000)
+  context.productStore.products.push({ id: 1, name: 'Es Kopi Susu', category: 'Minuman', price: 22000, stock: 10, kind: 'product' })
   context.cartStore.addItem({ id: 1, name: 'Es Kopi Susu', category: 'Minuman', price: 22000, stock: 10 })
 
   await context.router.push('/payment')

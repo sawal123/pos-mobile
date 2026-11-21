@@ -31,6 +31,7 @@ export const PAIRING_ERROR = Object.freeze({
   DEVICE_INACTIVE: 'DEVICE_INACTIVE',
   DEVICE_OUTLET_MISMATCH: 'DEVICE_OUTLET_MISMATCH',
   DEVICE_LIMIT: 'CLOUD_DEVICE_LIMIT_REACHED',
+  DEVICE_LIMIT_EXCEEDED: 'DEVICE_LIMIT_EXCEEDED',
   NETWORK: 'NETWORK_ERROR',
 })
 
@@ -50,6 +51,8 @@ const ERROR_MESSAGES = {
     'Perangkat ini terdaftar di outlet lain. Minta pemilik memindahkannya lewat Dashboard.',
   [PAIRING_ERROR.DEVICE_LIMIT]:
     'Batas perangkat Cloud tercapai. Nonaktifkan perangkat lain di Dashboard terlebih dahulu.',
+  [PAIRING_ERROR.DEVICE_LIMIT_EXCEEDED]:
+    'Batas perangkat terhubung untuk bisnis ini telah mencapai batas maksimal. Silakan minta pemilik bisnis menambah batas perangkat di dashboard.',
   [PAIRING_ERROR.NETWORK]: 'Tidak dapat menghubungi server. Periksa koneksi internet.',
 }
 
@@ -230,7 +233,14 @@ export async function pairDeviceWithCode({
   })
 
   if (!response.ok) {
-    const errorCode = response.error?.code ?? 'PAIRING_FAILED'
+    let errorCode = response.error?.code ?? 'PAIRING_FAILED'
+    if (
+      errorCode === PAIRING_ERROR.DEVICE_LIMIT_EXCEEDED ||
+      (response.status === 403 && (errorCode === 'DEVICE_LIMIT_EXCEEDED' || errorCode === 'FORBIDDEN'))
+    ) {
+      errorCode = PAIRING_ERROR.DEVICE_LIMIT_EXCEEDED
+    }
+
     return {
       ok: false,
       device: null,

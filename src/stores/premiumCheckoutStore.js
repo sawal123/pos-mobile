@@ -52,6 +52,8 @@ const ACTIVATION_MAX_ATTEMPTS = 5
 const PENDING_FIELDS = [
   'paymentId',
   'businessId',
+  'outletId',
+  'outletName',
   'plan',
   'billingPeriod',
   'currency',
@@ -124,6 +126,8 @@ export const usePremiumCheckoutStore = defineStore('premiumCheckout', () => {
   const pollingStoppedReason = ref(null)
   const lastCheckedAt = ref(null)
   const activationPending = ref(false)
+  const targetOutletId = ref(null)
+  const targetOutletName = ref(null)
 
   let _adapter = null
   let _runtime = null
@@ -216,11 +220,16 @@ export const usePremiumCheckoutStore = defineStore('premiumCheckout', () => {
     return { ok: true, pending: normalized !== null }
   }
 
+  function setTargetOutlet(outlet = null) {
+    targetOutletId.value = outlet?.id ?? null
+    targetOutletName.value = outlet?.name ?? null
+  }
+
   /**
    * Start a checkout attempt from the server catalog option.
    * `amount`/`priceLabel` are display-only and are never sent to the backend.
    */
-  function startAttempt(option) {
+  function startAttempt(option, { outletId = undefined, outletName = undefined } = {}) {
     const cloudStore = useCloudSessionStore()
     const businessId = cloudStore.selectedBusiness?.id ?? null
 
@@ -234,10 +243,15 @@ export const usePremiumCheckoutStore = defineStore('premiumCheckout', () => {
       return { ok: false, code: 'INVALID_OPTION' }
     }
 
+    const resolvedOutletId = outletId !== undefined ? outletId : targetOutletId.value
+    const resolvedOutletName = outletName !== undefined ? outletName : targetOutletName.value
+
     statusVersion += 1
     attempt.value = {
       key: createIdempotencyKey(),
       businessId,
+      outletId: resolvedOutletId ?? null,
+      outletName: resolvedOutletName ?? null,
       plan: option.code,
       period: option.period,
       currency: option.currency ?? null,
@@ -255,6 +269,8 @@ export const usePremiumCheckoutStore = defineStore('premiumCheckout', () => {
     pending.value = {
       paymentId: paymentLike.id,
       businessId: attempt.value?.businessId ?? null,
+      outletId: attempt.value?.outletId ?? null,
+      outletName: attempt.value?.outletName ?? null,
       plan: attempt.value?.plan ?? null,
       billingPeriod: attempt.value?.period ?? null,
       currency: attempt.value?.currency ?? null,
@@ -312,6 +328,7 @@ export const usePremiumCheckoutStore = defineStore('premiumCheckout', () => {
     const result = await createSubscriptionCheckout({
       token,
       businessId: attempt.value.businessId,
+      outletId: attempt.value.outletId ?? null,
       plan: attempt.value.plan,
       billingPeriod: attempt.value.period,
       idempotencyKey: attempt.value.key,
@@ -400,7 +417,15 @@ export const usePremiumCheckoutStore = defineStore('premiumCheckout', () => {
 
     if (result.payment.status === PAYMENT_STATUS.PAID) {
       const subscriptionStore = useSubscriptionStore()
-      if (!subscriptionStore.hasCloudAccess) {
+      const paidOutletId = pending.value?.outletId ?? attempt.value?.outletId ?? null
+      const targetOutletActive = paidOutletId != null
+        ? (() => {
+            const biz = cloudStore.businesses.find((b) => b.id === cloudStore.selectedBusiness?.id)
+            const out = (biz?.outlets ?? []).find((o) => String(o.id) === String(paidOutletId))
+            return out ? out.status === 'active' && out.cloud_access !== false : false
+          })()
+        : subscriptionStore.hasCloudAccess
+      if (!targetOutletActive || !subscriptionStore.hasCloudAccess) {
         await completeActivation()
       }
     }
@@ -420,6 +445,7 @@ export const usePremiumCheckoutStore = defineStore('premiumCheckout', () => {
     activationPending.value = true
     const cloudStore = useCloudSessionStore()
     const subscriptionStore = useSubscriptionStore()
+    const paidOutletId = pending.value?.outletId ?? attempt.value?.outletId ?? null
 
     for (let i = 0; i < ACTIVATION_MAX_ATTEMPTS; i += 1) {
       const result = await cloudStore.refreshContext()
@@ -427,7 +453,14 @@ export const usePremiumCheckoutStore = defineStore('premiumCheckout', () => {
         activationPending.value = false
         return { ok: false, code: 'TOKEN_INVALID' }
       }
-      if (result?.ok && subscriptionStore.hasCloudAccess) {
+      const outletActivated = paidOutletId != null
+        ? (() => {
+            const biz = cloudStore.businesses.find((b) => b.id === cloudStore.selectedBusiness?.id)
+            const out = (biz?.outlets ?? []).find((o) => String(o.id) === String(paidOutletId))
+            return Boolean(out && out.status === 'active' && out.cloud_access !== false)
+          })()
+        : false
+      if (result?.ok && (subscriptionStore.hasCloudAccess || outletActivated)) {
         activationPending.value = false
         return { ok: true }
       }
@@ -528,6 +561,8 @@ export const usePremiumCheckoutStore = defineStore('premiumCheckout', () => {
 
   async function reset() {
     resetAttempt()
+    targetOutletId.value = null
+    targetOutletName.value = null
     await clearPending()
   }
 
@@ -544,6 +579,8 @@ export const usePremiumCheckoutStore = defineStore('premiumCheckout', () => {
     pollingStoppedReason,
     lastCheckedAt,
     activationPending,
+    targetOutletId,
+    targetOutletName,
     // computed
     status,
     statusLabel,
@@ -558,6 +595,7 @@ export const usePremiumCheckoutStore = defineStore('premiumCheckout', () => {
     setPersistenceAdapter,
     init,
     hydratePending,
+    setTargetOutlet,
     startAttempt,
     createCheckout,
     launchPayment,

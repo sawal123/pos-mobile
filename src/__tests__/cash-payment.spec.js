@@ -46,6 +46,8 @@ async function mountPaymentView(product = { id: 1, name: 'Es Kopi Susu', categor
   makeBusinessReady(context.businessStore)
   context.cashierStore.setPinConfigured(true)
   context.shiftStore.openShift(100000)
+  const productStore = useProductStore(context.pinia)
+  productStore.products = [{ ...product, isActive: true, isSellable: true }]
   context.cartStore.addItem(product)
 
   await context.router.push('/payment')

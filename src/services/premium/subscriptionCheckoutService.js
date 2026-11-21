@@ -151,6 +151,7 @@ export async function cancelSubscriptionPayment({
  * @param {object} params
  * @param {string|null} params.token
  * @param {number|string} params.businessId
+ * @param {number|string|null} [params.outletId]
  * @param {string} params.plan
  * @param {'monthly'|'yearly'} params.billingPeriod
  * @param {string|null} [params.idempotencyKey]
@@ -160,6 +161,7 @@ export async function cancelSubscriptionPayment({
 export async function createSubscriptionCheckout({
   token = null,
   businessId,
+  outletId = null,
   plan,
   billingPeriod,
   idempotencyKey = null,
@@ -170,6 +172,10 @@ export async function createSubscriptionCheckout({
     business_id: businessId,
     plan,
     billing_period: billingPeriod,
+  }
+
+  if (outletId !== null && outletId !== undefined && `${outletId}`.trim() !== '') {
+    body.outlet_id = outletId
   }
 
   if (typeof idempotencyKey === 'string' && idempotencyKey.trim().length > 0) {

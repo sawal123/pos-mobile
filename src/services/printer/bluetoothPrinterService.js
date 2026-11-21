@@ -1,11 +1,14 @@
 import { Capacitor, registerPlugin } from '@capacitor/core'
 
 import {
+  buildOpenDrawerBytes,
   buildReceiptBytes,
+  buildShiftReceiptBytes,
   buildTestReceiptBytes,
   bytesToBase64,
 } from './escposReceiptBuilder'
 import { createPrinterError, normalizePrinterError } from './printerErrors'
+import { decodeReceiptLogo, rasterizeLogoUrl } from './receiptSettings'
 
 export const DEFAULT_PRINT_TIMEOUT_MS = 10000
 
@@ -118,6 +121,7 @@ export async function printReceipt({
   receiptSettings,
   isFree = false,
   timeoutMs,
+  outlet = null,
   capacitor = Capacitor,
   plugin,
   windowRef = typeof window !== 'undefined' ? window : null,
@@ -136,11 +140,43 @@ export async function printReceipt({
   activePrint = true
 
   try {
+    let effectiveReceiptSettings = receiptSettings
+    if (receiptSettings?.logo && !decodeReceiptLogo(receiptSettings.logo)) {
+      const url =
+        receiptSettings.logo?.url ||
+        (typeof receiptSettings.logo === 'string' ? receiptSettings.logo : null)
+      if (url) {
+        try {
+          const raster = await rasterizeLogoUrl(url)
+          if (raster) {
+            effectiveReceiptSettings = {
+              ...receiptSettings,
+              logo: {
+                ...(typeof receiptSettings.logo === 'object' ? receiptSettings.logo : {}),
+                width: raster.width,
+                height: raster.height,
+                data: raster.data,
+              },
+            }
+          }
+        } catch {
+          // If rasterization fails, proceed with printing without logo
+        }
+      }
+    }
+
     return {
       ...(await sendRaw({
         plugin,
         printer,
-        bytes: buildReceiptBytes({ transaction, business, paperWidth, receiptSettings, isFree }),
+        bytes: buildReceiptBytes({
+          transaction,
+          business,
+          paperWidth,
+          receiptSettings: effectiveReceiptSettings,
+          isFree,
+          outlet,
+        }),
         timeoutMs,
       })),
       mode: 'native',
@@ -156,6 +192,7 @@ export async function printTestReceipt({
   business,
   receiptSettings,
   timeoutMs,
+  outlet = null,
   capacitor = Capacitor,
   plugin,
   now = new Date(),
@@ -175,7 +212,85 @@ export async function printTestReceipt({
       ...(await sendRaw({
         plugin,
         printer,
-        bytes: buildTestReceiptBytes({ business, paperWidth, now, receiptSettings }),
+        bytes: buildTestReceiptBytes({ business, paperWidth, now, receiptSettings, outlet }),
+        timeoutMs,
+      })),
+      mode: 'native',
+    }
+  } finally {
+    activePrint = false
+  }
+}
+
+export async function printShiftReceipt({
+  shiftSummary,
+  business,
+  printer,
+  paperWidth,
+  receiptSettings,
+  timeoutMs,
+  outlet = null,
+  capacitor = Capacitor,
+  plugin,
+  windowRef = typeof window !== 'undefined' ? window : null,
+} = {}) {
+  if (!isNativePlatform(capacitor)) {
+    windowRef?.print?.()
+    return { success: true, mode: 'browser' }
+  }
+
+  if (activePrint) {
+    return createPrinterError('PRINTER_BUSY')
+  }
+
+  activePrint = true
+
+  try {
+    return {
+      ...(await sendRaw({
+        plugin,
+        printer,
+        bytes: buildShiftReceiptBytes({
+          shiftSummary,
+          business,
+          paperWidth,
+          receiptSettings,
+          outlet,
+        }),
+        timeoutMs,
+      })),
+      mode: 'native',
+    }
+  } finally {
+    activePrint = false
+  }
+}
+
+export async function openCashDrawer({
+  printer,
+  timeoutMs,
+  capacitor = Capacitor,
+  plugin,
+} = {}) {
+  if (!isNativePlatform(capacitor)) {
+    return createPrinterError(
+      'PRINTER_NOT_SELECTED',
+      'Buka laci kasir hanya tersedia di perangkat Android dengan printer Bluetooth.',
+    )
+  }
+
+  if (activePrint) {
+    return createPrinterError('PRINTER_BUSY')
+  }
+
+  activePrint = true
+
+  try {
+    return {
+      ...(await sendRaw({
+        plugin,
+        printer,
+        bytes: buildOpenDrawerBytes(),
         timeoutMs,
       })),
       mode: 'native',

@@ -90,13 +90,14 @@ export function collectMissingSyncRequirements({
   deviceIdentifier = null,
   registeredDeviceId = null,
   requireDeviceRegistration = true,
+  role = null,
 } = {}) {
   const missing = []
 
   if (!isNonEmptyString(token) || !isPlainObject(user)) {
     missing.push(SYNC_REQUIREMENT.AUTHENTICATION)
   }
-  if (cloudAccess !== true) {
+  if (cloudAccess !== true || selectedOutlet?.cloud_access === false) {
     missing.push(SYNC_REQUIREMENT.CLOUD_ACCESS)
   }
   if (!isPresentId(selectedBusiness?.id)) {
@@ -111,7 +112,12 @@ export function collectMissingSyncRequirements({
   // PAIR-01: pairing hanya wajib untuk role kasir. Perangkat owner/member
   // dikelola dari Dashboard dan di-bind otomatis oleh server saat sync pertama,
   // jadi bukan prasyarat yang perlu ditampilkan ke mereka.
-  if (requireDeviceRegistration && !isPresentId(registeredDeviceId)) {
+  const resolvedRequireDevice =
+    requireDeviceRegistration !== null && requireDeviceRegistration !== undefined
+      ? requireDeviceRegistration
+      : role ? role === 'cashier' : true
+
+  if (resolvedRequireDevice && !isPresentId(registeredDeviceId)) {
     missing.push(SYNC_REQUIREMENT.DEVICE_REGISTRATION)
   }
 
@@ -125,8 +131,12 @@ export function collectMissingSyncRequirements({
  * @returns {{ok: boolean, missing: string[], labels: string[], hints: string[], message: string|null}}
  */
 export function describeSyncPreconditions(context = {}) {
-  const { requireDeviceRegistration = true, ...requirements } = context
-  const missing = collectMissingSyncRequirements({ ...requirements, requireDeviceRegistration })
+  const { requireDeviceRegistration = true, role = null, ...requirements } = context
+  const missing = collectMissingSyncRequirements({
+    ...requirements,
+    requireDeviceRegistration,
+    role,
+  })
   const labels = missing.map((key) => SYNC_REQUIREMENT_LABELS[key] ?? key)
   const hints = missing.map((key) => SYNC_REQUIREMENT_HINTS[key] ?? '')
 
@@ -163,7 +173,8 @@ export function buildSyncReadiness({
   cloudAccess = false,
   deviceIdentifier = null,
   registeredDeviceId = null,
-  requireDeviceRegistration = true,
+  requireDeviceRegistration = null,
+  role = null,
 } = {}) {
   const described = describeSyncPreconditions({
     token: authenticated ? 'session' : null,
@@ -174,6 +185,7 @@ export function buildSyncReadiness({
     deviceIdentifier,
     registeredDeviceId,
     requireDeviceRegistration,
+    role,
   })
 
   return {

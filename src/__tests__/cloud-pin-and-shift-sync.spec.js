@@ -3,6 +3,11 @@ import { createPinia, setActivePinia } from 'pinia'
 import { describe, expect, it, vi } from 'vitest'
 
 import { createAppRouter, resolveStartupRoute } from '@/router'
+import { inspectCloudFirstWorkspace } from '@/services/cloud/businessContextActivation'
+import { createMemoryAdapter } from '@/services/database/memoryAdapter'
+import { createPersistenceService } from '@/services/database/persistenceService'
+import { createSyncQueueService } from '@/services/sync/syncQueueService'
+import { createSyncChangeTracker } from '@/services/sync/syncTracker'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCashierStore } from '@/stores/cashierStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
@@ -140,5 +145,52 @@ describe('Cloud Cashier PIN and Shift Synchronization', () => {
     expect(wrapper.find('[data-testid="cloud-onboarding-continue-pos"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="cloud-onboarding-continue-pin"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('PIN kasir dan sesi shift telah disinkronkan dari Cloud')
+  })
+
+  it('5. auto-open shift from Cloud does not enqueue sync_queue or block inspectCloudFirstWorkspace', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+
+    const adapter = createMemoryAdapter()
+    const persistence = createPersistenceService({ adapter, pinia })
+    await persistence.initialize()
+
+    const queueService = createSyncQueueService({ adapter, scheduler: persistence })
+    const enqueueSpy = vi.spyOn(queueService, 'enqueueUpsert')
+    const tracker = createSyncChangeTracker({ pinia, queueService })
+
+    try {
+      const businessStore = useBusinessStore()
+      const cloudStore = useCloudSessionStore()
+      const shiftStore = useShiftStore()
+
+      businessStore.mode = 'cloud'
+
+      cloudStore.applyBusinessContext({
+        id: 10,
+        name: 'Temuan Space',
+        role: 'owner',
+        cashier_pin: '123456',
+        shift_settings: {
+          auto_open: true,
+          default_opening_cash: 100000,
+        },
+      })
+
+      await persistence.flush()
+
+      expect(shiftStore.isOpen).toBe(true)
+      expect(shiftStore.isCloudAutoShift).toBe(true)
+      expect(enqueueSpy).not.toHaveBeenCalled()
+      expect(await adapter.listSyncQueueItems()).toHaveLength(0)
+
+      const workspace = await inspectCloudFirstWorkspace({ adapter })
+      expect(workspace.ok).toBe(true)
+      expect(workspace.safeToInitialize).toBe(true)
+      expect(workspace.reasons).toEqual([])
+    } finally {
+      tracker.dispose()
+      await persistence.close()
+    }
   })
 })

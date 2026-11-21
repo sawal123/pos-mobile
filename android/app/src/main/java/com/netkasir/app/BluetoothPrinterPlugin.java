@@ -6,8 +6,12 @@ import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
 import android.bluetooth.BluetoothSocket;
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Color;
 import android.os.Build;
 import android.util.Base64;
+import android.util.Log;
 
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -19,8 +23,12 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -67,7 +75,7 @@ public class BluetoothPrinterPlugin extends Plugin {
     private static final long DEFAULT_TIMEOUT_MS = 10000L;
     private static final long MAX_TIMEOUT_MS = 60000L;
     private static final int WRITE_CHUNK_BYTES = 512;
-    private static final long POST_WRITE_DRAIN_MS = 250L;
+    private static final long POST_WRITE_DRAIN_MS = 500L;
     private static final Pattern MAC_ADDRESS = Pattern.compile("^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$");
 
     private final ExecutorService printExecutor = Executors.newSingleThreadExecutor();
@@ -190,6 +198,162 @@ public class BluetoothPrinterPlugin extends Plugin {
         }
 
         startPrint(call);
+    }
+
+    @PluginMethod
+    public void rasterizeLogo(PluginCall call) {
+        String urlString = call.getString("url", "");
+        String dataBase64 = call.getString("dataBase64", "");
+
+        if (urlString.isEmpty() && dataBase64.isEmpty()) {
+            call.reject("MISSING_IMAGE_DATA");
+            return;
+        }
+
+        printExecutor.execute(() -> {
+            try {
+                byte[] imageBytes = null;
+                if (!urlString.isEmpty()) {
+                    if (urlString.startsWith("data:")) {
+                        int comma = urlString.indexOf(',');
+                        if (comma != -1) {
+                            imageBytes = Base64.decode(urlString.substring(comma + 1), Base64.DEFAULT);
+                        }
+                    } else {
+                        String fullUrl = urlString;
+                        if (!fullUrl.startsWith("http://") && !fullUrl.startsWith("https://")) {
+                            fullUrl = "https://pos.eradig.my.id" + (fullUrl.startsWith("/") ? "" : "/") + fullUrl;
+                        }
+                        URL url = new URL(fullUrl);
+                        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                        conn.setInstanceFollowRedirects(true);
+                        conn.setConnectTimeout(10000);
+                        conn.setReadTimeout(10000);
+                        conn.setRequestProperty("User-Agent", "Mozilla/5.0 POS-Mobile");
+                        conn.connect();
+
+                        int code = conn.getResponseCode();
+                        if (code == HttpURLConnection.HTTP_MOVED_PERM || code == HttpURLConnection.HTTP_MOVED_TEMP) {
+                            String newUrl = conn.getHeaderField("Location");
+                            conn.disconnect();
+                            conn = (HttpURLConnection) new URL(newUrl).openConnection();
+                            conn.setConnectTimeout(10000);
+                            conn.setReadTimeout(10000);
+                            conn.setRequestProperty("User-Agent", "Mozilla/5.0 POS-Mobile");
+                            conn.connect();
+                            code = conn.getResponseCode();
+                        }
+
+                        if (code >= 200 && code < 300) {
+                            InputStream in = conn.getInputStream();
+                            ByteArrayOutputStream out = new ByteArrayOutputStream();
+                            byte[] buffer = new byte[4096];
+                            int read;
+                            while ((read = in.read(buffer)) != -1) {
+                                out.write(buffer, 0, read);
+                            }
+                            in.close();
+                            conn.disconnect();
+                            imageBytes = out.toByteArray();
+                        } else {
+                            conn.disconnect();
+                            call.reject("HTTP_ERROR_" + code);
+                            return;
+                        }
+                    }
+                } else if (!dataBase64.isEmpty()) {
+                    imageBytes = Base64.decode(dataBase64, Base64.DEFAULT);
+                }
+
+                if (imageBytes == null || imageBytes.length == 0) {
+                    call.reject("INVALID_IMAGE_BYTES");
+                    return;
+                }
+
+                Bitmap bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.length);
+                if (bitmap == null) {
+                    call.reject("BITMAP_DECODE_FAILED");
+                    return;
+                }
+
+                int maxW = 192;
+                int maxH = 96;
+                int origW = bitmap.getWidth();
+                int origH = bitmap.getHeight();
+
+                if (origW <= 0 || origH <= 0) {
+                    call.reject("INVALID_BITMAP_DIMENSIONS");
+                    return;
+                }
+
+                float scale = Math.min(1.0f, Math.min((float) maxW / origW, (float) maxH / origH));
+                int targetW = Math.max(8, Math.round(origW * scale));
+                int targetH = Math.max(1, Math.round(origH * scale));
+
+                Bitmap scaled = Bitmap.createScaledBitmap(bitmap, targetW, targetH, true);
+
+                int paddedW = ((targetW + 7) / 8) * 8;
+                byte[] raster = new byte[(paddedW / 8) * targetH];
+                int ink = 0;
+
+                for (int y = 0; y < targetH; y++) {
+                    for (int x = 0; x < targetW; x++) {
+                        int pixel = scaled.getPixel(x, y);
+                        int a = Color.alpha(pixel);
+                        int r = Color.red(pixel);
+                        int g = Color.green(pixel);
+                        int b = Color.blue(pixel);
+
+                        float alphaFactor = a / 255.0f;
+                        float luminance = (0.299f * r + 0.587f * g + 0.114f * b) * alphaFactor + 255.0f * (1.0f - alphaFactor);
+
+                        if (luminance < 160.0f) {
+                            int byteIndex = (y * paddedW) / 8 + (x / 8);
+                            int bit = 0x80 >> (x % 8);
+                            raster[byteIndex] |= (byte) bit;
+                            ink++;
+                        }
+                    }
+                }
+
+                if (ink == 0) {
+                    // Retry with higher threshold for lighter logos
+                    for (int y = 0; y < targetH; y++) {
+                        for (int x = 0; x < targetW; x++) {
+                            int pixel = scaled.getPixel(x, y);
+                            int a = Color.alpha(pixel);
+                            int r = Color.red(pixel);
+                            int g = Color.green(pixel);
+                            int b = Color.blue(pixel);
+
+                            float alphaFactor = a / 255.0f;
+                            float luminance = (0.299f * r + 0.587f * g + 0.114f * b) * alphaFactor + 255.0f * (1.0f - alphaFactor);
+
+                            if (luminance < 220.0f) {
+                                int byteIndex = (y * paddedW) / 8 + (x / 8);
+                                int bit = 0x80 >> (x % 8);
+                                raster[byteIndex] |= (byte) bit;
+                                ink++;
+                            }
+                        }
+                    }
+                }
+
+                if (ink == 0) {
+                    call.reject("LOGO_EMPTY_AFTER_CONVERSION");
+                    return;
+                }
+
+                String rasterBase64 = Base64.encodeToString(raster, Base64.NO_WRAP);
+                JSObject ret = new JSObject();
+                ret.put("width", paddedW);
+                ret.put("height", targetH);
+                ret.put("data", rasterBase64);
+                call.resolve(ret);
+            } catch (Exception e) {
+                call.reject("RASTERIZE_FAILED: " + e.getMessage());
+            }
+        });
     }
 
     @PermissionCallback

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
 import { isPaidTransaction, useTransactionStore } from '@/stores/transactionStore'
 import { formatCurrency } from '@/utils/formatters'
@@ -63,16 +63,17 @@ const averageDailyRevenue = computed(() => {
   return Math.round(totalPeriodRevenue.value / chartData.value.length)
 })
 
-// SVG Coordinates
-const SVG_WIDTH = 320
-const SVG_HEIGHT = 120
+// Responsive SVG Coordinates measured 1:1 from container dimensions
+const svgRef = ref(null)
+const svgWidth = ref(320)
+const svgHeight = ref(140)
 const PADDING_TOP = 15
 const PADDING_BOTTOM = 25
 const PADDING_LEFT = 20
 const PADDING_RIGHT = 20
 
-const plotWidth = SVG_WIDTH - PADDING_LEFT - PADDING_RIGHT
-const plotHeight = SVG_HEIGHT - PADDING_TOP - PADDING_BOTTOM
+const plotWidth = computed(() => Math.max(100, svgWidth.value - PADDING_LEFT - PADDING_RIGHT))
+const plotHeight = computed(() => Math.max(40, svgHeight.value - PADDING_TOP - PADDING_BOTTOM))
 
 const maxAmount = computed(() => {
   const max = Math.max(...chartData.value.map((d) => d.amount), 0)
@@ -84,12 +85,12 @@ const points = computed(() => {
   const len = data.length
   if (len === 0) return []
 
-  const stepX = len > 1 ? plotWidth / (len - 1) : plotWidth / 2
+  const stepX = len > 1 ? plotWidth.value / (len - 1) : plotWidth.value / 2
 
   return data.map((d, index) => {
     const x = PADDING_LEFT + index * stepX
     const normalizedY = d.amount / maxAmount.value
-    const y = PADDING_TOP + plotHeight * (1 - Math.min(Math.max(normalizedY, 0), 1))
+    const y = PADDING_TOP + plotHeight.value * (1 - Math.min(Math.max(normalizedY, 0), 1))
     return {
       x,
       y,
@@ -117,7 +118,7 @@ const linePath = computed(() => {
 const areaPath = computed(() => {
   const pts = points.value
   if (pts.length === 0) return ''
-  const baseLine = PADDING_TOP + plotHeight
+  const baseLine = PADDING_TOP + plotHeight.value
   const first = pts[0]
   const last = pts[pts.length - 1]
 
@@ -132,7 +133,35 @@ const selectedPoint = computed(() => {
   return points.value[activePointIndex.value] || null
 })
 
-const svgRef = ref(null)
+function updateSvgDimensions() {
+  if (!svgRef.value) return
+  const rect = svgRef.value.getBoundingClientRect?.()
+  const nextWidth = Math.round(rect?.width || svgRef.value.clientWidth || 0)
+  const nextHeight = Math.round(rect?.height || svgRef.value.clientHeight || 0)
+  if (nextWidth > 0) svgWidth.value = nextWidth
+  if (nextHeight > 0) svgHeight.value = nextHeight
+}
+
+let resizeObserver = null
+
+onMounted(() => {
+  updateSvgDimensions()
+  if (typeof ResizeObserver !== 'undefined' && svgRef.value) {
+    resizeObserver = new ResizeObserver(() => {
+      updateSvgDimensions()
+    })
+    resizeObserver.observe(svgRef.value)
+  }
+  window.addEventListener('resize', updateSvgDimensions)
+})
+
+onBeforeUnmount(() => {
+  if (resizeObserver) {
+    resizeObserver.disconnect()
+    resizeObserver = null
+  }
+  window.removeEventListener('resize', updateSvgDimensions)
+})
 
 function handlePointTap(index) {
   activePointIndex.value = index
@@ -144,7 +173,7 @@ function handleChartTouch(event) {
   if (!touch) return
   const rect = svgRef.value.getBoundingClientRect()
   if (!rect.width) return
-  const relativeX = ((touch.clientX - rect.left) / rect.width) * SVG_WIDTH
+  const relativeX = ((touch.clientX - rect.left) / rect.width) * svgWidth.value
 
   let nearestIdx = 0
   let minDist = Infinity
@@ -223,9 +252,8 @@ function handleChartTouch(event) {
     <div class="relative w-full overflow-hidden select-none">
       <svg
         ref="svgRef"
-        class="w-full h-36 cursor-pointer"
-        viewBox="0 0 320 120"
-        preserveAspectRatio="none"
+        class="w-full h-36 sm:h-44 lg:h-48 cursor-pointer"
+        :viewBox="`0 0 ${svgWidth} ${svgHeight}`"
         @touchstart.passive="handleChartTouch"
         @click="handleChartTouch"
       >
@@ -240,7 +268,7 @@ function handleChartTouch(event) {
         <line
           x1="10"
           :y1="PADDING_TOP"
-          x2="310"
+          :x2="svgWidth - 10"
           :y2="PADDING_TOP"
           stroke="#f4f4f5"
           stroke-width="1"
@@ -249,7 +277,7 @@ function handleChartTouch(event) {
         <line
           x1="10"
           :y1="PADDING_TOP + plotHeight / 2"
-          x2="310"
+          :x2="svgWidth - 10"
           :y2="PADDING_TOP + plotHeight / 2"
           stroke="#f4f4f5"
           stroke-width="1"
@@ -258,7 +286,7 @@ function handleChartTouch(event) {
         <line
           x1="10"
           :y1="PADDING_TOP + plotHeight"
-          x2="310"
+          :x2="svgWidth - 10"
           :y2="PADDING_TOP + plotHeight"
           stroke="#e4e4e7"
           stroke-width="1"

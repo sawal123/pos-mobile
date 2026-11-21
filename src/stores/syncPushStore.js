@@ -131,7 +131,12 @@ export const useSyncPushStore = defineStore('syncPush', () => {
       // manual push, "Sync Semua" and auto-sync all recover identically.
       lastResult.value = result
       if (!result.ok) {
-        lastError.value = result.error?.message ?? result.message ?? 'Sync push failed'
+        const isOutletDenied =
+          result.code === 'OUTLET_ACCESS_DENIED' ||
+          result.error?.code === 'OUTLET_ACCESS_DENIED'
+        lastError.value = isOutletDenied
+          ? 'Akun kasir ini hanya memiliki akses untuk cabang yang ditugaskan. Perangkat ini terdaftar di cabang berbeda.'
+          : (result.error?.message ?? result.message ?? 'Sync push failed')
       } else {
         lastError.value = null
       }
@@ -149,6 +154,45 @@ export const useSyncPushStore = defineStore('syncPush', () => {
     }
   }
 
+  let _directPushTimer = null
+
+  async function pushIfOnline({ delay = 100 } = {}) {
+    if (_directPushTimer) {
+      clearTimeout(_directPushTimer)
+      _directPushTimer = null
+    }
+
+    return new Promise((resolve) => {
+      _directPushTimer = setTimeout(async () => {
+        try {
+          const { useBusinessStore } = await import('@/stores/businessStore')
+          const { useSyncStatusStore } = await import('@/stores/syncStatusStore')
+          const businessStore = useBusinessStore()
+          const syncStatusStore = useSyncStatusStore()
+
+          const isCloudMode =
+            businessStore.mode === 'cloud' ||
+            (cloudStore.isLinked && cloudStore.hasCloudAccess)
+
+          if (!isCloudMode || !syncStatusStore.online) {
+            resolve({ ok: false, code: 'OFFLINE_OR_NOT_CLOUD' })
+            return
+          }
+
+          const scheduler =
+            cloudStore.scheduler ?? cloudStore.getPersistenceScheduler?.()
+          await scheduler?.flush?.()
+
+          const result = await pushNow()
+          await syncStatusStore.refresh()
+          resolve(result)
+        } catch (err) {
+          resolve({ ok: false, error: err })
+        }
+      }, delay)
+    })
+  }
+
   return {
     loading,
     pendingCount,
@@ -157,6 +201,7 @@ export const useSyncPushStore = defineStore('syncPush', () => {
     init,
     refreshPendingCount,
     pushNow,
+    pushIfOnline,
     getPushService: () => _pushService,
   }
 })

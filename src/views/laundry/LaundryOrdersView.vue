@@ -104,19 +104,13 @@ function formatEstimatedCompletion(datetime) {
 </script>
 
 <template>
-  <div class="space-y-4">
+  <div class="space-y-4 pb-28">
     <!-- Header -->
     <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div>
         <p class="text-xs font-semibold uppercase tracking-wider text-primary">Laundry Service</p>
         <h1 class="text-2xl font-bold text-ink-primary">Daftar Order Laundry</h1>
       </div>
-      <BaseButton
-        data-testid="btn-create-order"
-        @click="router.push('/laundry/orders/create')"
-      >
-        Tambah
-      </BaseButton>
     </div>
 
     <!-- Search input -->
@@ -224,11 +218,35 @@ function formatEstimatedCompletion(datetime) {
       <p class="mt-1 text-sm text-ink-secondary">
         {{ searchQuery ? 'Tidak ada order yang cocok dengan pencarian.' : 'Mulai transaksi dengan membuat order baru.' }}
       </p>
-      <div class="mt-4">
-        <BaseButton @click="router.push('/laundry/orders/create')">
-          Tambah
-        </BaseButton>
+      <div class="mt-4 flex justify-center">
+        <button
+          type="button"
+          class="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-primary text-white shadow-soft transition hover:bg-primary-light active:scale-95 cursor-pointer"
+          title="Tambah Order Laundry"
+          aria-label="Tambah Order Laundry"
+          @click="router.push('/laundry/orders/create')"
+        >
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+          </svg>
+          <span class="sr-only">Tambah</span>
+        </button>
       </div>
     </BaseCard>
+
+    <!-- Floating Action Button (FAB) -->
+    <button
+      type="button"
+      data-testid="btn-create-order"
+      class="fixed right-5 bottom-[calc(env(safe-area-inset-bottom)+6.75rem)] md:bottom-8 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-primary text-white shadow-[0_10px_25px_rgba(73,69,214,0.45)] transition hover:bg-primary-light active:scale-95 cursor-pointer"
+      title="Tambah Order Laundry"
+      aria-label="Tambah Order Laundry"
+      @click="router.push('/laundry/orders/create')"
+    >
+      <svg class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+      </svg>
+      <span class="sr-only">Tambah</span>
+    </button>
   </div>
 </template>
