@@ -206,7 +206,7 @@ public class BluetoothPrinterPlugin extends Plugin {
         String dataBase64 = call.getString("dataBase64", "");
 
         if (urlString.isEmpty() && dataBase64.isEmpty()) {
-            call.reject("MISSING_IMAGE_DATA");
+            reject(call, "MISSING_IMAGE_DATA");
             return;
         }
 
@@ -257,7 +257,7 @@ public class BluetoothPrinterPlugin extends Plugin {
                             imageBytes = out.toByteArray();
                         } else {
                             conn.disconnect();
-                            call.reject("HTTP_ERROR_" + code);
+                            reject(call, "HTTP_ERROR_" + code);
                             return;
                         }
                     }
@@ -266,13 +266,13 @@ public class BluetoothPrinterPlugin extends Plugin {
                 }
 
                 if (imageBytes == null || imageBytes.length == 0) {
-                    call.reject("INVALID_IMAGE_BYTES");
+                    reject(call, "INVALID_IMAGE_BYTES");
                     return;
                 }
 
                 Bitmap bitmap = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.length);
                 if (bitmap == null) {
-                    call.reject("BITMAP_DECODE_FAILED");
+                    reject(call, "BITMAP_DECODE_FAILED");
                     return;
                 }
 
@@ -282,7 +282,7 @@ public class BluetoothPrinterPlugin extends Plugin {
                 int origH = bitmap.getHeight();
 
                 if (origW <= 0 || origH <= 0) {
-                    call.reject("INVALID_BITMAP_DIMENSIONS");
+                    reject(call, "INVALID_BITMAP_DIMENSIONS");
                     return;
                 }
 
@@ -340,7 +340,7 @@ public class BluetoothPrinterPlugin extends Plugin {
                 }
 
                 if (ink == 0) {
-                    call.reject("LOGO_EMPTY_AFTER_CONVERSION");
+                    reject(call, "LOGO_EMPTY_AFTER_CONVERSION");
                     return;
                 }
 
@@ -351,7 +351,7 @@ public class BluetoothPrinterPlugin extends Plugin {
                 ret.put("data", rasterBase64);
                 call.resolve(ret);
             } catch (Exception e) {
-                call.reject("RASTERIZE_FAILED: " + e.getMessage());
+                reject(call, "RASTERIZE_FAILED: " + e.getMessage());
             }
         });
     }

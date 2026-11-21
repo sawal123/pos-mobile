@@ -53,22 +53,39 @@ onUnmounted(() => {
       >
         <!-- Icon & Radial Progress Spinner -->
         <div class="flex flex-col items-center justify-center pt-2">
-          <!-- Running State: Radial Progress Ring with Percentage -->
+          <!-- Running State: Radial Progress Ring with Percentage & Continuous Orbit Animation -->
           <div
             v-if="syncProgressStore.status === 'running'"
             data-testid="sync-progress-circle"
-            class="relative inline-flex items-center justify-center"
+            class="relative inline-flex items-center justify-center p-2"
           >
-            <svg class="h-32 w-32 -rotate-90 transform" viewBox="0 0 100 100">
+            <!-- Pulsing ambient aura -->
+            <div class="absolute inset-0 rounded-full bg-primary/5 animate-pulse pointer-events-none" />
+
+            <svg class="h-36 w-36 -rotate-90 transform" viewBox="0 0 110 110">
+              <!-- Outer Indeterminate Rotating Orbit Ring (Proves app is active even when paused at 90%) -->
+              <circle
+                class="text-primary/35 origin-center animate-spin"
+                style="animation-duration: 2.2s;"
+                stroke-width="2.5"
+                stroke-dasharray="24 60"
+                stroke-linecap="round"
+                stroke="currentColor"
+                fill="transparent"
+                r="49"
+                cx="55"
+                cy="55"
+              />
+
               <!-- Background Circle Track -->
               <circle
-                class="text-zinc-100"
+                class="text-zinc-100 dark:text-slate-800"
                 stroke-width="7"
                 stroke="currentColor"
                 fill="transparent"
                 :r="radius"
-                cx="50"
-                cy="50"
+                cx="55"
+                cy="55"
               />
               <!-- Progress Circle Bar -->
               <circle
@@ -80,22 +97,24 @@ onUnmounted(() => {
                 stroke="currentColor"
                 fill="transparent"
                 :r="radius"
-                cx="50"
-                cy="50"
+                cx="55"
+                cy="55"
               />
             </svg>
             <!-- Percentage Number Center -->
-            <div class="absolute inset-0 flex flex-col items-center justify-center">
+            <div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
               <span
                 data-testid="sync-progress-percent"
-                class="font-mono text-3xl font-black tracking-tight text-primary"
+                class="font-mono text-3xl font-black tracking-tight text-primary flex items-center justify-center"
               >
                 {{ Math.round(syncProgressStore.progress) }}%
               </span>
               <span
-                class="text-[10px] font-semibold tracking-widest uppercase text-ink-secondary mt-0.5"
-                >Progres</span
+                class="text-[10px] font-semibold tracking-widest uppercase text-ink-secondary mt-0.5 flex items-center gap-1"
               >
+                <span>Progres</span>
+                <span class="inline-block h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
+              </span>
             </div>
           </div>
 
@@ -123,9 +142,14 @@ onUnmounted(() => {
           </h3>
           <p
             data-testid="sync-progress-description"
-            class="text-sm text-ink-secondary leading-relaxed"
+            class="text-sm text-ink-secondary leading-relaxed flex items-center justify-center gap-1.5 flex-wrap"
           >
-            {{ syncProgressStore.description }}
+            <span>{{ syncProgressStore.description }}</span>
+            <span v-if="syncProgressStore.status === 'running'" class="inline-flex gap-0.5 items-center">
+              <span class="h-1 w-1 rounded-full bg-primary animate-bounce [animation-delay:-0.3s]"></span>
+              <span class="h-1 w-1 rounded-full bg-primary animate-bounce [animation-delay:-0.15s]"></span>
+              <span class="h-1 w-1 rounded-full bg-primary animate-bounce"></span>
+            </span>
           </p>
         </div>
 

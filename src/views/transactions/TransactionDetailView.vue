@@ -977,7 +977,12 @@ async function copyInvoiceNumber() {
               <div class="flex items-center gap-1.5 shrink-0">
                 <button
                   type="button"
-                  class="flex h-8 w-8 items-center justify-center rounded-xl border border-zinc-300 bg-white text-ink-primary shadow-2xs hover:bg-zinc-100 active:scale-95 transition cursor-pointer dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                  class="flex h-8 w-8 items-center justify-center rounded-xl border shadow-2xs active:scale-95 transition cursor-pointer"
+                  :class="
+                    item.qty === 1
+                      ? 'border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100 hover:border-rose-300 dark:border-rose-900/60 dark:bg-rose-950/50 dark:text-rose-400'
+                      : 'border-zinc-300 bg-white text-ink-primary hover:bg-zinc-100 dark:border-slate-700 dark:bg-slate-800 dark:text-white'
+                  "
                   :title="item.qty === 1 ? 'Hapus Item' : 'Kurangi Jumlah'"
                   :data-testid="`btn-decrement-${idx}`"
                   @click="decrementEditItem(idx)"
@@ -985,7 +990,7 @@ async function copyInvoiceNumber() {
                   <svg v-if="item.qty > 1" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
                     <line x1="5" y1="12" x2="19" y2="12" />
                   </svg>
-                  <svg v-else class="h-4 w-4 text-rose-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <svg v-else class="h-4 w-4 text-rose-600 dark:text-rose-400" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
                     <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                   </svg>
                 </button>
@@ -1129,7 +1134,7 @@ async function copyInvoiceNumber() {
       class="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] backdrop-blur-xs sm:items-center"
       data-testid="edit-payment-modal"
     >
-      <div class="max-h-[90vh] w-full max-w-sm flex flex-col overflow-hidden rounded-3xl bg-white shadow-2xl dark:bg-slate-900">
+      <div class="max-h-[90vh] w-full max-w-md flex flex-col overflow-hidden rounded-3xl bg-white shadow-2xl dark:bg-slate-900">
         <!-- Header -->
         <div class="flex items-center justify-between border-b border-zinc-100 p-4 dark:border-slate-800">
           <div>
@@ -1247,36 +1252,38 @@ async function copyInvoiceNumber() {
               placeholder="Nominal uang tunai"
             />
 
-            <div class="flex gap-2">
-              <BaseButton
-                size="sm"
-                variant="secondary"
-                class="flex-1 text-xs"
+            <div class="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                class="rounded-xl border border-zinc-200/90 bg-white py-1.5 text-xs font-bold text-zinc-700 shadow-2xs transition hover:bg-zinc-50 active:scale-95 cursor-pointer dark:border-slate-700 dark:bg-slate-800 dark:text-zinc-200"
                 @click="editCashReceived = String(transaction.total)"
               >
                 Uang Pas
-              </BaseButton>
-              <BaseButton
-                size="sm"
-                variant="secondary"
-                class="flex-1 text-xs"
+              </button>
+              <button
+                type="button"
+                class="rounded-xl border border-zinc-200/90 bg-white py-1.5 text-xs font-bold text-zinc-700 shadow-2xs transition hover:bg-zinc-50 active:scale-95 cursor-pointer dark:border-slate-700 dark:bg-slate-800 dark:text-zinc-200"
                 @click="editCashReceived = '50000'"
               >
                 Rp 50.000
-              </BaseButton>
-              <BaseButton
-                size="sm"
-                variant="secondary"
-                class="flex-1 text-xs"
+              </button>
+              <button
+                type="button"
+                class="rounded-xl border border-zinc-200/90 bg-white py-1.5 text-xs font-bold text-zinc-700 shadow-2xs transition hover:bg-zinc-50 active:scale-95 cursor-pointer dark:border-slate-700 dark:bg-slate-800 dark:text-zinc-200"
                 @click="editCashReceived = '100000'"
               >
                 Rp 100.000
-              </BaseButton>
+              </button>
             </div>
 
             <div class="flex items-center justify-between border-t border-zinc-200/80 pt-2 text-xs">
               <span class="text-ink-secondary font-medium">Kembalian:</span>
-              <span class="font-bold text-ink-primary dark:text-white">{{ formatCurrency(editCalculatedChange) }}</span>
+              <span
+                class="font-bold font-mono"
+                :class="editCalculatedChange < 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'"
+              >
+                {{ formatCurrency(editCalculatedChange) }}
+              </span>
             </div>
           </div>
 
@@ -1286,11 +1293,11 @@ async function copyInvoiceNumber() {
         </div>
 
         <!-- Footer -->
-        <div class="flex gap-2 border-t border-zinc-100 p-4 dark:border-slate-800">
+        <div class="flex items-center gap-3 border-t border-zinc-100 p-4 bg-zinc-50/50 dark:border-slate-800 dark:bg-slate-900/50">
           <BaseButton
             variant="secondary"
             size="md"
-            class="flex-1"
+            class="w-24 shrink-0 rounded-2xl h-11 text-xs font-semibold cursor-pointer"
             @click="showEditPaymentModal = false"
           >
             Batal
@@ -1298,11 +1305,14 @@ async function copyInvoiceNumber() {
           <BaseButton
             variant="primary"
             size="md"
-            class="flex-1"
+            class="flex-1 rounded-2xl h-11 text-xs sm:text-sm font-bold shadow-md shadow-primary/25 whitespace-nowrap inline-flex items-center justify-center gap-2 cursor-pointer"
             data-testid="btn-save-edited-payment"
             @click="saveEditedPayment"
           >
-            Simpan Perubahan
+            <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+            <span>Simpan Perubahan</span>
           </BaseButton>
         </div>
       </div>

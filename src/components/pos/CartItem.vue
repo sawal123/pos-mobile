@@ -56,8 +56,8 @@ const stepperButtonClass = computed(() => [
 ])
 
 const removeButtonClass = computed(() => [
-  'flex items-center justify-center rounded-xl text-zinc-400 transition active:scale-95 cursor-pointer hover:bg-rose-50 hover:text-danger',
-  props.touch ? 'h-10 w-10' : 'h-8 w-8',
+  'flex items-center justify-center rounded-xl border border-rose-200/90 bg-rose-50 text-rose-600 transition active:scale-90 cursor-pointer hover:bg-rose-100 hover:text-rose-700 hover:border-rose-300 dark:border-rose-900/60 dark:bg-rose-950/50 dark:text-rose-400 dark:hover:bg-rose-900/60 shadow-2xs shrink-0',
+  props.touch ? 'h-9 w-9' : 'h-8 w-8',
 ])
 
 function roundQty(value) {
@@ -172,7 +172,7 @@ function handleQtyInput(event) {
         aria-label="Hapus Item"
         @click="$emit('remove', item.id)"
       >
-        <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg class="h-4 w-4 shrink-0 text-rose-600 dark:text-rose-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="3 6 5 6 21 6" />
           <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
           <line x1="10" y1="11" x2="10" y2="17" />
