@@ -35,6 +35,21 @@ function isSameDay(date1, date2) {
   )
 }
 
+function formatOrderTime(value) {
+  if (!value) return ''
+  try {
+    const d = new Date(value)
+    if (isNaN(d.getTime())) return ''
+    return new Intl.DateTimeFormat('id-ID', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(d)
+  } catch {
+    return ''
+  }
+}
+
 const activeOrders = computed(() => {
   const today = new Date()
   return transactionStore.items
@@ -147,16 +162,19 @@ function viewAllTransactions() {
           <!-- Card Header: Invoice & Status Badges -->
           <div class="flex items-start justify-between gap-2 border-b border-zinc-100 pb-2 dark:border-slate-800/80">
             <div class="min-w-0">
-              <div class="flex items-center gap-2">
+              <div class="flex items-center gap-1.5 flex-wrap">
                 <span class="truncate font-mono text-xs font-bold text-ink-primary dark:text-white">
                   {{ order.invoiceNumber || '-' }}
                 </span>
-                <span class="text-[11px] text-ink-secondary">
-                  {{ order.createdAt ? formatDateTime(order.createdAt).split(' ')[1] : '' }}
+                <span v-if="order.createdAt" class="text-[11px] text-ink-secondary">
+                  • {{ formatOrderTime(order.createdAt) }}
                 </span>
               </div>
-              <p class="truncate text-xs font-medium text-ink-secondary">
+              <p class="truncate text-xs font-medium text-ink-secondary mt-0.5">
                 {{ order.customer || 'Walk-in Customer' }}
+                <span v-if="order.tableNumber || order.table_number" class="ml-1 font-bold text-amber-700 dark:text-amber-400">
+                  • Meja {{ order.tableNumber || order.table_number }}
+                </span>
               </p>
             </div>
 
@@ -221,14 +239,14 @@ function viewAllTransactions() {
                 type="button"
                 data-testid="btn-add-items-to-order"
                 title="Tambah pesanan untuk antrean ini di kasir"
-                class="inline-flex h-8 items-center gap-1.5 rounded-xl bg-primary/10 border border-primary/25 px-2.5 text-xs font-bold text-primary hover:bg-primary/20 active:scale-95 transition cursor-pointer dark:border-primary/40 dark:bg-primary/20 dark:text-primary-light"
+                class="inline-flex h-8 items-center gap-1.5 rounded-xl bg-primary/10 border border-primary/25 px-2.5 text-xs font-bold text-primary hover:bg-primary/20 active:scale-95 transition cursor-pointer whitespace-nowrap shrink-0 dark:border-primary/40 dark:bg-primary/20 dark:text-primary-light"
                 @click="addToOrder(order)"
               >
-                <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <svg class="h-3.5 w-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                   <line x1="12" y1="5" x2="12" y2="19" />
                   <line x1="5" y1="12" x2="19" y2="12" />
                 </svg>
-                <span>+ Tambah Pesanan</span>
+                <span>Tambah Pesanan</span>
               </button>
 
               <!-- Tombol Cetak Struk -->

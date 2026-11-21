@@ -602,33 +602,35 @@ async function copyInvoiceNumber() {
 
         <!-- Detail Item List (User Request) -->
         <div class="space-y-3">
-          <div class="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-ink-secondary">
-            <span>Rincian Item</span>
+          <div class="flex flex-wrap items-center justify-between gap-2 text-xs font-semibold uppercase tracking-wider text-ink-secondary">
             <div class="flex items-center gap-2">
-              <span class="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-medium text-zinc-600">
+              <span>Rincian Item</span>
+              <span class="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-medium text-zinc-600 dark:bg-slate-800 dark:text-slate-300">
                 {{ totalItemCount }} item
               </span>
+            </div>
+            <div class="flex flex-wrap items-center gap-1.5 shrink-0">
               <button
                 v-if="canEditItems"
                 type="button"
-                class="inline-flex items-center gap-1 rounded-lg border border-sky-300 bg-sky-50 px-2.5 py-1 text-xs font-bold text-sky-700 hover:bg-sky-100 transition cursor-pointer dark:border-sky-800 dark:bg-sky-950/60 dark:text-sky-300"
+                class="inline-flex shrink-0 whitespace-nowrap items-center gap-1 rounded-lg border border-sky-300 bg-sky-50 px-2.5 py-1 text-xs font-bold text-sky-700 hover:bg-sky-100 transition cursor-pointer dark:border-sky-800 dark:bg-sky-950/60 dark:text-sky-300"
                 data-testid="btn-add-items-in-pos"
                 title="Buka di kasir POS untuk tambah menu"
                 @click="router.push({ path: '/pos', query: { add_to_order: transaction.id } })"
               >
-                <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <svg class="h-3.5 w-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                   <path d="M12 5v14M5 12h14" />
                 </svg>
-                <span>+ Tambah di Kasir</span>
+                <span>Tambah di Kasir</span>
               </button>
               <button
                 v-if="canEditItems"
                 type="button"
-                class="inline-flex items-center gap-1 rounded-lg bg-primary/10 px-2.5 py-1 text-xs font-bold text-primary hover:bg-primary/20 transition cursor-pointer"
+                class="inline-flex shrink-0 whitespace-nowrap items-center gap-1 rounded-lg bg-primary/10 px-2.5 py-1 text-xs font-bold text-primary hover:bg-primary/20 transition cursor-pointer dark:bg-primary/20 dark:text-primary-light"
                 data-testid="btn-open-edit-items"
                 @click="openEditItemsModal"
               >
-                <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <svg class="h-3.5 w-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
                   <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
                 </svg>
@@ -992,7 +994,7 @@ async function copyInvoiceNumber() {
             </div>
 
             <div v-if="editableItems.length === 0" class="rounded-2xl border border-dashed border-zinc-200 p-6 text-center text-xs text-ink-secondary dark:border-slate-700">
-              Belum ada menu yang dipilih. Klik "+ Tambah Menu" di bawah.
+              Belum ada menu yang dipilih. Klik "Tambah Menu Lain" di bawah.
             </div>
           </div>
 
@@ -1001,15 +1003,15 @@ async function copyInvoiceNumber() {
             <button
               v-if="!showAddProductPicker"
               type="button"
-              class="w-full inline-flex items-center justify-center gap-1.5 rounded-2xl border-2 border-dashed border-primary/40 bg-primary/5 py-2.5 text-xs font-bold text-primary hover:bg-primary/10 transition cursor-pointer"
+              class="w-full inline-flex items-center justify-center gap-1.5 rounded-2xl border-2 border-dashed border-primary/40 bg-primary/5 py-2.5 text-xs font-bold text-primary hover:bg-primary/10 transition cursor-pointer dark:bg-primary/10"
               data-testid="btn-show-add-product"
               @click="showAddProductPicker = true"
             >
-              <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                 <line x1="12" y1="5" x2="12" y2="19" />
                 <line x1="5" y1="12" x2="19" y2="12" />
               </svg>
-              <span>+ Tambah Menu Lain</span>
+              <span>Tambah Menu Lain</span>
             </button>
 
             <!-- Product Picker Dropdown / Box -->
