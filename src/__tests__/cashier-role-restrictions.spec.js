@@ -173,6 +173,31 @@ describe('Cashier Role Restrictions in Mobile', () => {
       const catDelRes = productStore.deleteCategory('Makanan')
       expect(catDelRes.success).toBe(false)
       expect(catDelRes.error).toMatch(/Kasir tidak diizinkan/i)
+
+      // 7. Cannot toggle product active/inactive status
+      const toggleRes = productStore.toggleProductActive('p-1')
+      expect(toggleRes).toBe(false)
+      expect(productStore.products[0].isActive).toBe(true)
+    })
+
+    it('allows owner to toggle product active/inactive status', () => {
+      cloudStore.role = 'owner'
+      productStore.products = [
+        {
+          id: 'p-owner',
+          name: 'Kopi Susu',
+          price: 15000,
+          isActive: true,
+        },
+      ]
+
+      const toggleRes = productStore.toggleProductActive('p-owner')
+      expect(toggleRes).toBe(true)
+      expect(productStore.products[0].isActive).toBe(false)
+
+      const toggleBack = productStore.toggleProductActive('p-owner')
+      expect(toggleBack).toBe(true)
+      expect(productStore.products[0].isActive).toBe(true)
     })
 
     it('hides edit and delete buttons in ProductsView for cashier', async () => {
@@ -209,6 +234,16 @@ describe('Cashier Role Restrictions in Mobile', () => {
       expect(wrapper.find('button[title="Edit produk"]').exists()).toBe(false)
       // Delete button is hidden
       expect(wrapper.find('button[title="Hapus produk"]').exists()).toBe(false)
+
+      // Toggle active status button is disabled for cashier
+      const toggleBtn = wrapper.find('[data-testid="toggle-product-active"]')
+      expect(toggleBtn.exists()).toBe(true)
+      expect(toggleBtn.attributes('disabled')).toBeDefined()
+      expect(toggleBtn.attributes('title')).toContain('Kasir tidak dapat mengubah status menu')
+
+      // Clicking does not toggle product isActive
+      await toggleBtn.trigger('click')
+      expect(productStore.products[0].isActive).toBe(true)
     })
   })
 

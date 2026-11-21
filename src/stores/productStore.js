@@ -19,7 +19,11 @@ const DEFAULT_FILTER_CATEGORY_KEY = DEFAULT_FILTER_CATEGORY.toLowerCase()
 function isCashierRole() {
   try {
     const cloudStore = useCloudSessionStore()
-    return cloudStore.role === 'cashier' || cloudStore.isCashierContext === true
+    return (
+      cloudStore.role === 'cashier' ||
+      cloudStore.isCashierContext === true ||
+      cloudStore.pushPolicy?.pushMode === 'cashier_safe'
+    )
   } catch {
     return false
   }
@@ -538,6 +542,9 @@ export const useProductStore = defineStore('product', {
       return this.updateProduct(id, { ...product, barcode: '' })
     },
     toggleProductActive(id) {
+      if (isCashierRole()) {
+        return false
+      }
       const product = this.getProductById(id)
 
       if (!product) {

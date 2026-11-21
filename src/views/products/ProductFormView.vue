@@ -37,7 +37,10 @@ const savedProduct = computed(() =>
 )
 
 const isCashier = computed(
-  () => cloudStore.role === 'cashier' || cloudStore.isCashierContext === true,
+  () =>
+    cloudStore.role === 'cashier' ||
+    cloudStore.isCashierContext === true ||
+    cloudStore.pushPolicy?.pushMode === 'cashier_safe',
 )
 
 const hasCloudAccess = computed(
@@ -950,9 +953,13 @@ watch(
             type="button"
             role="switch"
             :aria-checked="form.isActive"
-            class="relative inline-flex h-7 w-12 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none"
-            :class="form.isActive ? 'bg-primary' : 'bg-zinc-200'"
-            @click="form.isActive = !form.isActive"
+            :disabled="isCashier"
+            class="relative inline-flex h-7 w-12 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none"
+            :class="[
+              form.isActive ? 'bg-primary' : 'bg-zinc-200',
+              isCashier ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
+            ]"
+            @click="!isCashier && (form.isActive = !form.isActive)"
           >
             <span
               class="pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out flex items-center justify-center text-[10px]"

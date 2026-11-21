@@ -50,7 +50,10 @@ function getProductVariantCount(product) {
 }
 
 const isCashier = computed(
-  () => cloudStore.role === 'cashier' || cloudStore.isCashierContext === true,
+  () =>
+    cloudStore.role === 'cashier' ||
+    cloudStore.isCashierContext === true ||
+    cloudStore.pushPolicy?.pushMode === 'cashier_safe',
 )
 
 const isLaundry = computed(() => businessStore.normalizedType === 'Laundry')
@@ -120,6 +123,7 @@ const filteredProducts = computed(() => {
 })
 
 function handleToggle(product) {
+  if (isCashier.value) return
   productStore.toggleProductActive(product.id)
   void syncPushStore.pushIfOnline()
 }
@@ -579,16 +583,26 @@ function resetFilters() {
           <!-- Toggle Active Icon Button (No Text) -->
           <button
             type="button"
-            class="inline-flex h-8 w-8 items-center justify-center rounded-xl border transition active:scale-95"
-            :class="
+            data-testid="toggle-product-active"
+            :disabled="isCashier"
+            class="inline-flex h-8 w-8 items-center justify-center rounded-xl border transition"
+            :class="[
               product.isActive
-                ? 'border-emerald-200 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 shadow-2xs'
-                : 'border-zinc-200 bg-zinc-100 text-zinc-400 hover:bg-zinc-200'
-            "
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-600 shadow-2xs'
+                : 'border-zinc-200 bg-zinc-100 text-zinc-400',
+              isCashier
+                ? 'cursor-not-allowed opacity-60'
+                : 'active:scale-95 cursor-pointer ' +
+                  (product.isActive ? 'hover:bg-emerald-100' : 'hover:bg-zinc-200'),
+            ]"
             :title="
-              product.isActive
-                ? 'Menu aktif di POS (Klik untuk nonaktifkan)'
-                : 'Menu nonaktif (Klik untuk aktifkan)'
+              isCashier
+                ? (product.isActive
+                    ? 'Menu aktif (Kasir tidak dapat mengubah status menu)'
+                    : 'Menu nonaktif (Kasir tidak dapat mengubah status menu)')
+                : (product.isActive
+                    ? 'Menu aktif di POS (Klik untuk nonaktifkan)'
+                    : 'Menu nonaktif (Klik untuk aktifkan)')
             "
             :aria-label="product.isActive ? 'Menu aktif di POS' : 'Menu nonaktif'"
             @click="handleToggle(product)"
