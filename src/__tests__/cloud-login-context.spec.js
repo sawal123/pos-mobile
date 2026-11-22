@@ -835,7 +835,7 @@ describe('Outlet selection & cloud access rules', () => {
     await store.selectBusiness(10)
     await store.selectOutlet(301)
 
-    const act1 = await store.activateOperationalContext()
+    const act1 = await store.activateOperationalContext({ confirmed: true })
     expect(act1.ok).toBe(true)
     expect(store.activeWorkspaceId).toBe('cloud:10:301')
     await store.ensureDeviceBinding({ platform: 'android' })

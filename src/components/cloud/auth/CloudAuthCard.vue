@@ -115,7 +115,7 @@ function handleOffline() {
 
 <template>
   <div
-    class="w-full max-w-md rounded-3xl border border-zinc-200/80 bg-white p-6 shadow-card transition-all sm:p-8"
+    class="w-full max-w-md mx-auto rounded-3xl border border-zinc-200/80 bg-white p-6 shadow-card transition-all sm:p-8"
     data-testid="cloud-auth-card"
   >
     <!-- Segmented Tab Switcher -->

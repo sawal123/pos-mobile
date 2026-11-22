@@ -2061,8 +2061,21 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div :class="isOnboarding ? 'min-h-dvh bg-[#F7F8FC] px-4 py-6 sm:px-6' : ''">
-    <div class="mx-auto max-w-2xl space-y-5 pb-6">
+  <div
+    :class="
+      isOnboarding
+        ? 'min-h-dvh flex flex-col justify-center items-center bg-[#F7F8FC] px-4 py-8 sm:px-6'
+        : ''
+    "
+  >
+    <div
+      :class="[
+        'w-full space-y-5 pb-6 mx-auto',
+        isOnboarding && !cloudStore.isAuthenticated
+          ? 'max-w-md'
+          : 'max-w-2xl'
+      ]"
+    >
       <!-- Back button during onboarding login step -->
       <div v-if="isOnboarding && !cloudStore.isAuthenticated && step === 'login'" class="mb-2">
         <button
@@ -3462,8 +3475,8 @@ onMounted(async () => {
       </BaseCard>
 
       <!-- AUTH FORM: reusable AUTH-M02 UI wired to real v2 requests. -->
-      <BaseCard v-else id="cloud-login-form" class="flex justify-center p-0 sm:p-0">
-        <div class="w-full p-0">
+      <div v-else id="cloud-login-form" class="flex w-full justify-center">
+        <div class="w-full max-w-md mx-auto">
           <p
             v-if="otpVerifiedMessage"
             id="cloud-verified-message"
@@ -3530,7 +3543,7 @@ onMounted(async () => {
             @offline="handleRecoveryOffline"
           />
         </div>
-      </BaseCard>
+      </div>
 
       <details
         v-if="cloudStore.isAuthenticated || accountSettingsMounted"
