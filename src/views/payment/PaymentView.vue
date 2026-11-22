@@ -18,6 +18,7 @@ import { usePromoStore } from '@/stores/promoStore'
 import { useTaxStore } from '@/stores/taxStore'
 import { useSyncPushStore } from '@/stores/syncPushStore'
 import { useSyncStatusStore } from '@/stores/syncStatusStore'
+import { useTransactionStore } from '@/stores/transactionStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { resolveLocalOperationService } from '@/services/database/localOperationService'
 import { formatCurrency } from '@/utils/formatters'
@@ -34,6 +35,7 @@ const paymentMethodStore = usePaymentMethodStore()
 const promoStore = usePromoStore()
 const taxStore = useTaxStore()
 const productStore = useProductStore()
+const transactionStore = useTransactionStore()
 const localOperations = resolveLocalOperationService()
 const route = useRoute()
 const router = useRouter()
@@ -483,20 +485,22 @@ function goToNewTransaction() {
 }
 
 function handleCompleteReady() {
-  const id = successSummary.value?.id || transactionStore.lastTransaction?.id
-  if (id) {
-    transactionStore.updateOrderStatus(id, 'Siap')
-    if (businessStore.isCloudMode) {
-      try {
-        const syncPushStore = useSyncPushStore()
+  try {
+    const id = successSummary.value?.id || transactionStore.lastTransaction?.id
+    if (id) {
+      transactionStore.updateOrderStatus(id, 'Siap')
+      const isCloudMode =
+        businessStore.mode === 'cloud' || (cloudStore.isLinked && cloudStore.hasCloudAccess)
+      if (isCloudMode) {
         syncPushStore.pushIfOnline?.()
-      } catch {
-        // Safe fallback
       }
     }
+  } catch (err) {
+    console.error('Failed to update order status to ready:', err)
+  } finally {
+    successSummary.value = null
+    router.replace('/pos')
   }
-  successSummary.value = null
-  router.replace('/pos')
 }
 
 function goToReceipt() {

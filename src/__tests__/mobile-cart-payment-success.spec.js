@@ -380,7 +380,9 @@ describe('Payment success modal', () => {
     const { wrapper, cartStore, transactionStore, productStore, product } = await mountPayment()
     const initialCount = transactionStore.items.length
 
-    productStore.deleteProduct(product.id)
+    productStore.products = productStore.products.filter(
+      (p) => p.id !== product.id && p.name !== product.name,
+    )
     await flushPromises()
 
     await getButtonByText(wrapper, 'QRIS').trigger('click')
