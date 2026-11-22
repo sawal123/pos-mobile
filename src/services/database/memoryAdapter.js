@@ -29,6 +29,7 @@ export function createMemoryAdapter() {
     promos: [],
     variantGroups: [],
     diningTables: [],
+    paymentMethods: [],
     cashierState: null,
     shiftState: null,
     cashState: null,
@@ -142,6 +143,12 @@ export function createMemoryAdapter() {
     },
     async saveDiningTables(tables) {
       state.diningTables = cloneValue(tables || [])
+    },
+    async loadPaymentMethods() {
+      return cloneValue(state.paymentMethods || [])
+    },
+    async savePaymentMethods(methods) {
+      state.paymentMethods = cloneValue(methods || [])
     },
     async loadCashierState() {
       return cloneValue(state.cashierState)

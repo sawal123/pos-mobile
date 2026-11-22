@@ -116,7 +116,7 @@ describe('UI Improvements Round 2 (User Feedback)', () => {
 
       const headerAddBtn = wrapper.find('[data-testid="btn-add-items-to-order-header"]')
       expect(headerAddBtn.exists()).toBe(true)
-      expect(headerAddBtn.text()).toContain('Tambah Pesanan')
+      expect(headerAddBtn.text()).toContain('Pesanan')
     })
 
     it('displays direct Tambah Pesanan button on TransactionCard for in-process orders', async () => {
@@ -137,7 +137,7 @@ describe('UI Improvements Round 2 (User Feedback)', () => {
 
       const addBtn = wrapper.find('[data-testid="btn-card-add-items"]')
       expect(addBtn.exists()).toBe(true)
-      expect(addBtn.text()).toContain('Tambah Pesanan')
+      expect(addBtn.text()).toContain('Pesanan')
     })
   })
 

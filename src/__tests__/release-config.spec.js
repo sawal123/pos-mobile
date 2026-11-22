@@ -20,8 +20,8 @@ const appBuildGradle = read('../../android/app/build.gradle')
 const androidGitignore = read('../../android/.gitignore')
 const keystoreExample = read('../../android/keystore.properties.example')
 
-const RELEASE_VERSION_NAME = '1.0.1'
-const RELEASE_VERSION_CODE = 10001
+const RELEASE_VERSION_NAME = '1.0.2'
+const RELEASE_VERSION_CODE = 10002
 const APPLICATION_ID = 'com.netkasir.app'
 
 // Source selection lives between the header comment and the android block.
@@ -71,8 +71,8 @@ describe('P35 Android release configuration', () => {
     expect(capacitorConfig.appId).toBe(APPLICATION_ID)
   })
 
-  it('DB_VERSION 8 mencakup migrasi barcode produk dan units/promo_price', () => {
-    expect(DB_VERSION).toBe(8)
+  it('DB_VERSION 9 mencakup migrasi barcode produk, units/promo_price, dan payment_methods', () => {
+    expect(DB_VERSION).toBe(9)
   })
 
   it('kredensial signing hanya dibaca dari env var atau keystore.properties', () => {

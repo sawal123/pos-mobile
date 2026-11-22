@@ -1,4 +1,17 @@
 import { defineStore } from 'pinia'
+import { usePaymentMethodStore } from '@/stores/paymentMethodStore'
+
+function isCashPaymentMethod(method) {
+  if (!method) return false
+  const m = String(method).toLowerCase().trim()
+  if (m === 'cash' || m === 'tunai') return true
+  try {
+    const paymentStore = usePaymentMethodStore()
+    return paymentStore.isCashMethod(m)
+  } catch {
+    return false
+  }
+}
 
 function createCashEntryId() {
   if (globalThis.crypto?.randomUUID) {
@@ -94,7 +107,7 @@ export const useCashStore = defineStore('cash', {
       })
     },
     recordSalePayment(transaction) {
-      if (`${transaction.paymentMethod ?? ''}`.toLowerCase() !== 'cash') {
+      if (!isCashPaymentMethod(transaction.paymentMethod)) {
         return {
           success: true,
           skipped: true,

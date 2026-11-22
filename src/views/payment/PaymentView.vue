@@ -38,10 +38,36 @@ const localOperations = resolveLocalOperationService()
 const route = useRoute()
 const router = useRouter()
 
+const selectedOutletId = computed(() => cloudStore.selectedOutlet?.id)
+
+const paymentMethods = computed(() => {
+  const methods = paymentMethodStore.getMethodsForOutlet(selectedOutletId.value).map((m) => ({
+    id: m.code || m.id,
+    label: m.name || m.label,
+    description: m.description,
+    type: m.category || m.type || 'other',
+    is_cash: Boolean(m.is_cash ?? m.isCash),
+    accountNumber: m.accountNumber,
+    accountHolder: m.accountHolder,
+  }))
+
+  if (!methods.some((m) => m.id === 'unpaid')) {
+    methods.push({
+      id: 'unpaid',
+      label: 'Bayar Nanti',
+      description: 'Transaksi tempo / piutang pelanggan',
+      type: 'unpaid',
+      is_cash: false,
+    })
+  }
+
+  return methods
+})
+
 const selectedMethod = ref(
   route?.query?.method === 'unpaid'
     ? 'unpaid'
-    : (paymentMethodStore.activeMethods.find((m) => m.id === 'cash')?.id || paymentMethodStore.activeMethods[0]?.id || 'cash')
+    : (paymentMethods.value.find((m) => paymentMethodStore.isCashMethod(m.id))?.id || paymentMethods.value[0]?.id || 'cash')
 )
 
 watch(
@@ -131,24 +157,11 @@ const successSummary = ref(null)
 
 const isPaymentCompleted = computed(() => successSummary.value !== null)
 
-const paymentMethods = computed(() => {
-  return paymentMethodStore.activeMethods.map((m) => ({
-    id: m.id,
-    label: m.label || m.name,
-    description: m.description,
-    type: m.type,
-    accountNumber: m.accountNumber,
-    accountHolder: m.accountHolder,
-  }))
-})
-
 const isCashMethod = computed(() => {
-  const method = paymentMethodStore.allMethods.find((m) => m.id === selectedMethod.value)
-  return selectedMethod.value === 'cash' || method?.type === 'cash'
+  return paymentMethodStore.isCashMethod(selectedMethod.value)
 })
 const isUnpaidMethod = computed(() => {
-  const method = paymentMethodStore.allMethods.find((m) => m.id === selectedMethod.value)
-  return selectedMethod.value === 'unpaid' || method?.type === 'unpaid'
+  return selectedMethod.value === 'unpaid'
 })
 const selectedCustomer = computed(() => cartStore.selectedCustomer)
 
@@ -294,7 +307,7 @@ function selectQuickCashAmount(amount) {
 
 function selectMethod(id) {
   selectedMethod.value = id
-  if (id === 'cash' && !cashReceived.value) {
+  if (paymentMethodStore.isCashMethod(id) && !cashReceived.value) {
     isCashModalOpen.value = true
   }
 }

@@ -8,6 +8,7 @@ import { useCashierStore } from '@/stores/cashierStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import { useReceiptStore } from '@/stores/receiptStore'
 import { useTableStore } from '@/stores/tableStore'
+import { usePaymentMethodStore } from '@/stores/paymentMethodStore'
 import {
   cloudLogin,
   cloudGoogleLogin,
@@ -88,6 +89,7 @@ function mapBusinessEntry(b) {
       enabled: Boolean(b.table_settings.enabled),
     } : null,
     dining_tables: Array.isArray(b.dining_tables) ? b.dining_tables : [],
+    payment_methods: Array.isArray(b.payment_methods) ? b.payment_methods : [],
     cashier_pin: typeof b.cashier_pin === 'string' && b.cashier_pin ? b.cashier_pin : '123456',
     shift_settings: b.shift_settings && typeof b.shift_settings === 'object' ? {
       auto_open: b.shift_settings.auto_open !== false,
@@ -560,6 +562,7 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       tax_settings: business.tax_settings ?? null,
       table_settings: business.table_settings ?? null,
       dining_tables: Array.isArray(business.dining_tables) ? business.dining_tables : [],
+      payment_methods: Array.isArray(business.payment_methods) ? business.payment_methods : [],
       subscription: business.subscription ?? null,
       catalog_capabilities: business.catalog_capabilities ?? null,
     }
@@ -3049,6 +3052,15 @@ export const useCloudSessionStore = defineStore('cloudSession', () => {
       try {
         const tableStore = useTableStore()
         tableStore.setTables(business.dining_tables)
+      } catch {
+        // Safe fallback
+      }
+    }
+
+    if (Array.isArray(business?.payment_methods) && business.payment_methods.length > 0) {
+      try {
+        const paymentMethodStore = usePaymentMethodStore()
+        paymentMethodStore.setMethods(business.payment_methods)
       } catch {
         // Safe fallback
       }

@@ -7,6 +7,8 @@ import BaseButton from '@/components/base/BaseButton.vue'
 import BaseInput from '@/components/base/BaseInput.vue'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCashStore } from '@/stores/cashStore'
+import { useCloudSessionStore } from '@/stores/cloudSessionStore'
+import { usePaymentMethodStore } from '@/stores/paymentMethodStore'
 import { useProductStore } from '@/stores/productStore'
 import { useSyncPushStore } from '@/stores/syncPushStore'
 import { useTransactionStore } from '@/stores/transactionStore'
@@ -16,9 +18,28 @@ const route = useRoute()
 const router = useRouter()
 const businessStore = useBusinessStore()
 const cashStore = useCashStore()
+const cloudStore = useCloudSessionStore()
+const paymentMethodStore = usePaymentMethodStore()
 const productStore = useProductStore()
 const transactionStore = useTransactionStore()
 const syncPushStore = useSyncPushStore()
+
+const selectedOutletId = computed(() => cloudStore.selectedOutlet?.id)
+const availablePaymentMethods = computed(() => {
+  const methods = paymentMethodStore.getMethodsForOutlet(selectedOutletId.value)
+  if (methods && methods.length > 0) {
+    return methods.map((m) => ({
+      id: m.code || m.id,
+      label: m.name || m.label || (m.code || m.id).toUpperCase(),
+    }))
+  }
+  return [
+    { id: 'cash', label: 'Tunai' },
+    { id: 'qris', label: 'QRIS' },
+    { id: 'transfer', label: 'Transfer' },
+    { id: 'card', label: 'Kartu' },
+  ]
+})
 
 const copied = ref(false)
 const feedbackToast = ref('')
@@ -89,13 +110,8 @@ const totalItemCount = computed(() => {
 })
 
 const paymentMethodLabel = computed(() => {
-  const method = `${transaction.value?.paymentMethod ?? ''}`.toLowerCase()
-  if (method === 'qris') return 'QRIS'
-  if (method === 'card') return 'Kartu Debit/Kredit'
-  if (method === 'cash') return 'Tunai (Cash)'
-  if (method === 'transfer') return 'Transfer Bank'
-  if (method === 'unpaid') return 'Bayar Nanti (Tempo)'
-  return transaction.value?.paymentMethod || '-'
+  if (!transaction.value?.paymentMethod) return '-'
+  return paymentMethodStore.getMethodName(transaction.value.paymentMethod)
 })
 
 const taxLabel = computed(() => {
@@ -107,7 +123,7 @@ const taxLabel = computed(() => {
 
 const showCashSummary = computed(() => {
   return (
-    `${transaction.value?.paymentMethod ?? ''}`.toLowerCase() === 'cash' &&
+    paymentMethodStore.isCashMethod(transaction.value?.paymentMethod) &&
     transaction.value?.cashReceived != null &&
     transaction.value?.changeAmount != null
   )
@@ -359,8 +375,12 @@ function openEditPaymentModal() {
   showEditPaymentModal.value = true
 }
 
+const isEditPaymentCash = computed(() => {
+  return paymentMethodStore.isCashMethod(editPaymentMethod.value)
+})
+
 const editCalculatedChange = computed(() => {
-  if (editPaymentMethod.value !== 'cash' || !transaction.value) return 0
+  if (!isEditPaymentCash.value || !transaction.value) return 0
   const received = Number(editCashReceived.value) || 0
   return Math.max(0, received - Number(transaction.value.total || 0))
 })
@@ -369,7 +389,7 @@ function saveEditedPayment() {
   if (!transaction.value) return
   editPaymentError.value = ''
 
-  const isCash = editPaymentMethod.value === 'cash'
+  const isCash = isEditPaymentCash.value
   const isPaid = editPaymentStatus.value === 'paid'
   const total = Number(transaction.value.total) || 0
 
@@ -426,7 +446,7 @@ function confirmSettlement() {
   if (!transaction.value) return
   settlementError.value = ''
   const total = Number(transaction.value.total) || 0
-  const isCash = settlementMethod.value === 'cash'
+  const isCash = paymentMethodStore.isCashMethod(settlementMethod.value)
   const cashRec = isCash ? Number(settlementCashReceived.value) : 0
   if (isCash && (Number.isNaN(cashRec) || cashRec < total)) {
     settlementError.value = 'Nominal uang diterima kurang dari total tagihan.'
@@ -1152,12 +1172,7 @@ async function copyInvoiceNumber() {
             <label class="text-xs font-bold uppercase tracking-wider text-ink-secondary">Metode Pembayaran</label>
             <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
               <button
-                v-for="m in [
-                  { id: 'cash', label: 'Tunai' },
-                  { id: 'qris', label: 'QRIS' },
-                  { id: 'transfer', label: 'Transfer' },
-                  { id: 'card', label: 'Kartu' },
-                ]"
+                v-for="m in availablePaymentMethods"
                 :key="m.id"
                 type="button"
                 class="rounded-xl border p-2 text-center text-xs font-bold transition cursor-pointer"
@@ -1176,7 +1191,7 @@ async function copyInvoiceNumber() {
 
           <!-- 4. Uang Diterima & Kembalian jika Tunai -->
           <div
-            v-if="editPaymentStatus === 'paid' && editPaymentMethod === 'cash'"
+            v-if="editPaymentStatus === 'paid' && isEditPaymentCash"
             class="space-y-2 rounded-2xl bg-zinc-50 p-3 border border-zinc-100 dark:bg-slate-800/50 dark:border-slate-700"
           >
             <div class="flex items-center justify-between text-xs text-ink-secondary">

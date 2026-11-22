@@ -627,6 +627,71 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
         }
       })
     },
+    async loadPaymentMethods() {
+      const db = await ensureConnection()
+      try {
+        const { values: rows = [] } = await db.query(
+          `SELECT id, name, code, category, is_cash, sort_order, description, enabled_outlet_ids, updated_at
+           FROM payment_methods ORDER BY sort_order ASC, rowid ASC`,
+        )
+
+        return rows.map((row) => ({
+          id: row.id,
+          name: row.name,
+          label: row.name,
+          code: row.code,
+          category: row.category,
+          type: row.category,
+          is_cash: Boolean(row.is_cash),
+          isCash: Boolean(row.is_cash),
+          sort_order: Number(row.sort_order ?? 0),
+          sortOrder: Number(row.sort_order ?? 0),
+          description: row.description || '',
+          enabled_outlet_ids: (() => {
+            try {
+              const parsed = JSON.parse(row.enabled_outlet_ids || '[]')
+              return Array.isArray(parsed) ? parsed : []
+            } catch {
+              return []
+            }
+          })(),
+          updated_at: row.updated_at || null,
+        }))
+      } catch {
+        return []
+      }
+    },
+    async savePaymentMethods(methods = []) {
+      await withTransaction(async (db) => {
+        try {
+          await db.run('DELETE FROM payment_methods', [], false)
+
+          for (const method of methods) {
+            await db.run(
+              `INSERT OR REPLACE INTO payment_methods
+                (id, name, code, category, is_cash, sort_order, description, enabled_outlet_ids, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                String(method.id ?? method.code),
+                method.name || method.label || '',
+                String(method.code || method.id || '').toLowerCase(),
+                method.category || method.type || 'other',
+                (method.is_cash ?? method.isCash) ? 1 : 0,
+                Number(method.sort_order ?? method.sortOrder ?? 0),
+                method.description || '',
+                Array.isArray(method.enabled_outlet_ids)
+                  ? JSON.stringify(method.enabled_outlet_ids)
+                  : (typeof method.enabled_outlet_ids === 'string' ? method.enabled_outlet_ids : '[]'),
+                method.updated_at ?? method.updatedAt ?? new Date().toISOString(),
+              ],
+              false,
+            )
+          }
+        } catch (e) {
+          console.error('Failed to save payment methods', e)
+        }
+      })
+    },
     async loadExpenses() {
       const db = await ensureConnection()
       const { values = [] } = await db.query(

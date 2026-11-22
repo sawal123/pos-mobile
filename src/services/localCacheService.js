@@ -15,6 +15,7 @@ import { useTaxStore } from '@/stores/taxStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import { useVariantStore } from '@/stores/variantStore'
 import { useTableStore } from '@/stores/tableStore'
+import { usePaymentMethodStore } from '@/stores/paymentMethodStore'
 import { getInstallMarker, getToken, saveInstallMarker } from '@/services/cloud/tokenRepository'
 import { useSyncPushStore } from '@/stores/syncPushStore'
 import { useSyncPullStore } from '@/stores/syncPullStore'
@@ -85,6 +86,9 @@ export async function clearLocalCache({
       }
       if (typeof resolvedAdapter.saveVariantGroups === 'function') {
         await resolvedAdapter.saveVariantGroups([])
+      }
+      if (typeof resolvedAdapter.savePaymentMethods === 'function') {
+        await resolvedAdapter.savePaymentMethods([])
       }
       if (resetBusiness && typeof resolvedAdapter.saveTaxState === 'function') {
         await resolvedAdapter.saveTaxState({ enabled: false, rate: 0 })
@@ -195,6 +199,8 @@ export async function clearLocalCache({
     variantStore.groups = []
     const tableStore = useTableStore(pinia)
     tableStore.tables = []
+    const paymentMethodStore = usePaymentMethodStore(pinia)
+    paymentMethodStore.clearMethods()
   } catch {}
 
   if (resetBusiness) {

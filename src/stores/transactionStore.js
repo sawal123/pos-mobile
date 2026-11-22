@@ -2,8 +2,21 @@ import { defineStore } from 'pinia'
 
 import { transactions } from '@/data/transactions'
 import { useCashStore } from '@/stores/cashStore'
+import { usePaymentMethodStore } from '@/stores/paymentMethodStore'
 import { useProductStore } from '@/stores/productStore'
 import { toLocalDateString } from '@/utils/formatters'
+
+function isCashPaymentMethod(method) {
+  if (!method) return false
+  const m = String(method).toLowerCase().trim()
+  if (m === 'cash' || m === 'tunai') return true
+  try {
+    const paymentStore = usePaymentMethodStore()
+    return paymentStore.isCashMethod(m)
+  } catch {
+    return false
+  }
+}
 
 function createDefaultUiFilters() {
   const today = toLocalDateString(new Date())
@@ -409,7 +422,7 @@ export const useTransactionStore = defineStore('transaction', {
       }
 
       const method = (paymentMethod || 'cash').toLowerCase()
-      const isCash = method === 'cash'
+      const isCash = isCashPaymentMethod(method)
 
       if (isCash) {
         const received = cashReceived != null ? Number(cashReceived) : transaction.total
@@ -423,7 +436,7 @@ export const useTransactionStore = defineStore('transaction', {
           activeCashStore.recordSalePayment({
             id: transaction.id,
             total: transaction.total,
-            paymentMethod: 'cash',
+            paymentMethod: method,
             invoiceNumber: transaction.invoiceNumber,
             paidAt: new Date().toISOString(),
           })
@@ -433,7 +446,7 @@ export const useTransactionStore = defineStore('transaction', {
         transaction.paymentStatus = 'paid'
         transaction.status = 'paid'
         transaction.orderStatus = 'Siap'
-        transaction.paymentMethod = 'cash'
+        transaction.paymentMethod = method
         transaction.pay_later = false
         transaction.payLater = false
         transaction.cashReceived = received
@@ -601,9 +614,11 @@ export const useTransactionStore = defineStore('transaction', {
 
       const oldPaymentStatus = String(transaction.paymentStatus || transaction.status || 'paid').toLowerCase()
       const oldPaymentMethod = String(transaction.paymentMethod || 'cash').toLowerCase()
+      const isOldCash = isCashPaymentMethod(oldPaymentMethod)
 
       const targetStatus = (paymentStatus || oldPaymentStatus).toLowerCase()
       const targetMethod = (paymentMethod || oldPaymentMethod).toLowerCase()
+      const isTargetCash = isCashPaymentMethod(targetMethod)
 
       if (targetStatus === 'unpaid') {
         transaction.paymentStatus = 'unpaid'
@@ -620,7 +635,7 @@ export const useTransactionStore = defineStore('transaction', {
         transaction.pay_later = false
         transaction.payLater = false
 
-        if (oldPaymentStatus === 'paid' && oldPaymentMethod === 'cash' && cashStore && typeof cashStore.recordEntry === 'function') {
+        if (oldPaymentStatus === 'paid' && isOldCash && cashStore && typeof cashStore.recordEntry === 'function') {
           cashStore.recordEntry({
             type: 'out',
             amount: transaction.total,
@@ -637,28 +652,28 @@ export const useTransactionStore = defineStore('transaction', {
         transaction.payLater = false
         transaction.paidAt = transaction.paidAt || now
 
-        if (targetMethod === 'cash') {
+        if (isTargetCash) {
           const received = cashReceived != null ? Number(cashReceived) : transaction.total
           if (Number.isNaN(received) || received < transaction.total) {
             return { success: false, error: 'Uang diterima kurang dari total pembayaran.' }
           }
           const calcChange = changeAmount != null ? Number(changeAmount) : Math.max(0, received - transaction.total)
 
-          if ((oldPaymentStatus !== 'paid' || oldPaymentMethod !== 'cash') && cashStore && typeof cashStore.recordSalePayment === 'function') {
+          if ((oldPaymentStatus !== 'paid' || !isOldCash) && cashStore && typeof cashStore.recordSalePayment === 'function') {
             cashStore.recordSalePayment({
               id: transaction.id,
               total: transaction.total,
-              paymentMethod: 'cash',
+              paymentMethod: targetMethod,
               invoiceNumber: transaction.invoiceNumber,
               paidAt: now,
             })
           }
 
-          transaction.paymentMethod = 'cash'
+          transaction.paymentMethod = targetMethod
           transaction.cashReceived = received
           transaction.changeAmount = calcChange
         } else {
-          if (oldPaymentStatus === 'paid' && oldPaymentMethod === 'cash' && cashStore && typeof cashStore.recordEntry === 'function') {
+          if (oldPaymentStatus === 'paid' && isOldCash && cashStore && typeof cashStore.recordEntry === 'function') {
             cashStore.recordEntry({
               type: 'out',
               amount: transaction.total,
@@ -692,6 +707,8 @@ export const useTransactionStore = defineStore('transaction', {
       const oldMethod = String(transaction.paymentMethod || 'cash').toLowerCase()
       const targetMethod = String(newPaymentMethod || 'cash').toLowerCase()
       const isPaid = isPaidTransaction(transaction)
+      const isOldCash = isCashPaymentMethod(oldMethod)
+      const isTargetCash = isCashPaymentMethod(targetMethod)
       const now = new Date().toISOString()
 
       let activeCashStore = null
@@ -701,8 +718,8 @@ export const useTransactionStore = defineStore('transaction', {
         activeCashStore = null
       }
 
-      if (isPaid && oldMethod !== targetMethod) {
-        if (oldMethod === 'cash') {
+      if (isPaid && isOldCash !== isTargetCash) {
+        if (isOldCash) {
           if (activeCashStore && typeof activeCashStore.recordEntry === 'function') {
             activeCashStore.recordEntry({
               type: 'out',
@@ -715,12 +732,12 @@ export const useTransactionStore = defineStore('transaction', {
           }
           transaction.cashReceived = null
           transaction.changeAmount = null
-        } else if (targetMethod === 'cash') {
+        } else if (isTargetCash) {
           if (activeCashStore && typeof activeCashStore.recordSalePayment === 'function') {
             activeCashStore.recordSalePayment({
               id: transaction.id,
               total: transaction.total,
-              paymentMethod: 'cash',
+              paymentMethod: targetMethod,
               invoiceNumber: transaction.invoiceNumber,
               paidAt: transaction.paidAt || now,
             })
@@ -787,7 +804,7 @@ export const useTransactionStore = defineStore('transaction', {
       } catch {
         activeCashStore = null
       }
-      if (isPaid && oldMethod === 'cash' && activeCashStore && typeof activeCashStore.recordEntry === 'function') {
+      if (isPaid && isCashPaymentMethod(oldMethod) && activeCashStore && typeof activeCashStore.recordEntry === 'function') {
         activeCashStore.recordEntry({
           type: 'out',
           amount: transaction.total,

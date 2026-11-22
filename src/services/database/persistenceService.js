@@ -15,6 +15,7 @@ import { useTransactionStore } from '@/stores/transactionStore'
 import { useTaxStore } from '@/stores/taxStore'
 import { useVariantStore } from '@/stores/variantStore'
 import { useTableStore } from '@/stores/tableStore'
+import { usePaymentMethodStore } from '@/stores/paymentMethodStore'
 
 import { DB_VERSION } from './schema'
 
@@ -41,6 +42,7 @@ function createPersistenceContexts(pinia) {
   const promoStore = usePromoStore(pinia)
   const variantStore = useVariantStore(pinia)
   const tableStore = useTableStore(pinia)
+  const paymentMethodStore = usePaymentMethodStore(pinia)
 
   return [
     {
@@ -310,6 +312,30 @@ function createPersistenceContexts(pinia) {
       async save(adapter, snapshot) {
         if (typeof adapter.saveDiningTables === 'function') {
           await adapter.saveDiningTables(snapshot.tables)
+        }
+      },
+    },
+    {
+      key: 'paymentMethods',
+      store: paymentMethodStore,
+      initialState: cloneValue(paymentMethodStore.$state),
+      read() {
+        return {
+          methods: cloneValue(paymentMethodStore.methods),
+        }
+      },
+      async load(adapter) {
+        if (typeof adapter.loadPaymentMethods === 'function') {
+          const methods = await adapter.loadPaymentMethods()
+          if (Array.isArray(methods) && methods.length > 0) {
+            return { methods }
+          }
+        }
+        return null
+      },
+      async save(adapter, snapshot) {
+        if (typeof adapter.savePaymentMethods === 'function') {
+          await adapter.savePaymentMethods(snapshot.methods)
         }
       },
     },

@@ -10,6 +10,7 @@ import {
 } from '@/services/printer/receiptSettings'
 import { useReceiptStore } from '@/stores/receiptStore'
 import { useSubscriptionStore } from '@/stores/subscriptionStore'
+import { usePaymentMethodStore } from '@/stores/paymentMethodStore'
 
 const props = defineProps({
   transaction: {
@@ -36,6 +37,13 @@ try {
   subscriptionStore = useSubscriptionStore()
 } catch {
   subscriptionStore = null
+}
+
+let paymentMethodStore = null
+try {
+  paymentMethodStore = usePaymentMethodStore()
+} catch {
+  paymentMethodStore = null
 }
 
 let receiptStore = null
@@ -99,12 +107,14 @@ const items = computed(() => {
 })
 
 const paymentMethodLabel = computed(() => {
-  const method = `${props.transaction.paymentMethod ?? ''}`.toLowerCase()
-
+  if (!props.transaction.paymentMethod) return '-'
+  if (paymentMethodStore) {
+    return paymentMethodStore.getMethodName(props.transaction.paymentMethod)
+  }
+  const method = `${props.transaction.paymentMethod}`.toLowerCase()
   if (method === 'qris') return 'QRIS'
   if (method === 'card') return 'Card'
   if (method === 'cash') return 'Cash'
-
   return props.transaction.paymentMethod || '-'
 })
 
@@ -121,12 +131,17 @@ const taxLabel = computed(() => {
     : 'Pajak'
 })
 
-const showCashSummary = computed(
-  () =>
-    `${props.transaction.paymentMethod ?? ''}`.toLowerCase() === 'cash' &&
+const showCashSummary = computed(() => {
+  const isCash = paymentMethodStore
+    ? paymentMethodStore.isCashMethod(props.transaction.paymentMethod)
+    : `${props.transaction.paymentMethod ?? ''}`.toLowerCase() === 'cash'
+
+  return (
+    isCash &&
     props.transaction.cashReceived != null &&
-    props.transaction.changeAmount != null,
-)
+    props.transaction.changeAmount != null
+  )
+})
 </script>
 
 <template>

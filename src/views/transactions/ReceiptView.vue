@@ -26,16 +26,35 @@ import { useReceiptStore } from '@/stores/receiptStore'
 import { useSubscriptionStore } from '@/stores/subscriptionStore'
 import { useSyncPushStore } from '@/stores/syncPushStore'
 import { useTransactionStore } from '@/stores/transactionStore'
+import { usePaymentMethodStore } from '@/stores/paymentMethodStore'
 
 const route = useRoute()
 const router = useRouter()
 const businessStore = useBusinessStore()
 const cloudStore = useCloudSessionStore()
+const paymentMethodStore = usePaymentMethodStore()
 const printerStore = usePrinterStore()
 const receiptStore = useReceiptStore()
 const subscriptionStore = useSubscriptionStore()
 const syncPushStore = useSyncPushStore()
 const transactionStore = useTransactionStore()
+
+const selectedOutletId = computed(() => cloudStore.selectedOutlet?.id)
+const availablePaymentMethods = computed(() => {
+  const methods = paymentMethodStore.getMethodsForOutlet(selectedOutletId.value)
+  if (methods && methods.length > 0) {
+    return methods.map((m) => ({
+      code: m.code || m.id,
+      name: m.name || m.label || (m.code || m.id).toUpperCase(),
+    }))
+  }
+  return [
+    { code: 'cash', name: 'Tunai' },
+    { code: 'qris', name: 'QRIS' },
+    { code: 'transfer', name: 'Transfer' },
+    { code: 'card', name: 'Card / EDC' },
+  ]
+})
 
 const isFree = computed(() => !subscriptionStore.isPremium)
 
@@ -73,7 +92,7 @@ async function confirmChangePayment() {
   const res = transactionStore.updatePaymentMethod(transaction.value.id, selectedNewPaymentMethod.value)
   if (res.success) {
     showChangePaymentModal.value = false
-    paymentChangeSuccess.value = `Metode pembayaran berhasil diubah ke ${selectedNewPaymentMethod.value.toUpperCase()}.`
+    paymentChangeSuccess.value = `Metode pembayaran berhasil diubah ke ${paymentMethodStore.getMethodName(selectedNewPaymentMethod.value)}.`
     void syncPushStore.pushIfOnline?.()
   } else {
     paymentChangeError.value = res.error || 'Gagal mengubah metode pembayaran.'
@@ -681,19 +700,19 @@ async function handlePrint() {
 
         <div class="grid grid-cols-2 gap-2">
           <button
-            v-for="method in ['cash', 'qris', 'transfer', 'edc']"
-            :key="method"
+            v-for="method in availablePaymentMethods"
+            :key="method.code"
             type="button"
-            :data-testid="`btn-select-payment-${method}`"
+            :data-testid="`btn-select-payment-${method.code}`"
             class="flex items-center justify-center gap-2 rounded-xl border p-3 text-xs font-semibold capitalize transition cursor-pointer"
             :class="
-              selectedNewPaymentMethod === method
+              selectedNewPaymentMethod === method.code
                 ? 'border-primary bg-primary/10 text-primary font-bold shadow-2xs'
                 : 'border-zinc-200 bg-white hover:bg-zinc-50 text-ink-primary dark:border-slate-700 dark:bg-slate-800 dark:text-zinc-200'
             "
-            @click="selectedNewPaymentMethod = method"
+            @click="selectedNewPaymentMethod = method.code"
           >
-            <span>{{ method.toUpperCase() }}</span>
+            <span>{{ method.name }}</span>
           </button>
         </div>
 

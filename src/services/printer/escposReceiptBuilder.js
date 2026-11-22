@@ -171,9 +171,15 @@ function paymentMethodLabel(paymentMethod) {
   if (!method) return ''
   if (method === 'qris') return 'QRIS'
   if (method === 'card') return 'Card'
-  if (method === 'cash') return 'Cash'
+  if (method === 'cash' || method === 'tunai') return 'Tunai'
+  if (method === 'transfer') return 'Transfer Bank'
+  if (method === 'unpaid') return 'Bayar Nanti'
+  if (method === 'gopay') return 'GoPay'
+  if (method === 'ovo') return 'OVO'
+  if (method === 'dana') return 'DANA'
+  if (method === 'shopeepay') return 'ShopeePay'
 
-  return sanitizePrinterText(paymentMethod)
+  return sanitizePrinterText(paymentMethod.toUpperCase())
 }
 
 function isPaidTransaction(transaction) {
@@ -184,7 +190,8 @@ function isPaidTransaction(transaction) {
 }
 
 function isCashPayment(transaction) {
-  return `${transaction?.paymentMethod ?? ''}`.trim().toLowerCase() === 'cash'
+  const method = `${transaction?.paymentMethod ?? ''}`.trim().toLowerCase()
+  return method === 'cash' || method === 'tunai'
 }
 
 function normalizeItem(item) {

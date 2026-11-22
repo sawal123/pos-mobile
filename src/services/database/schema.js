@@ -1,5 +1,5 @@
 export const DB_NAME = 'pos_mobile'
-export const DB_VERSION = 8
+export const DB_VERSION = 9
 
 export const APP_META_KEYS = {
   initialized: 'data_initialized',
@@ -15,6 +15,7 @@ export const APP_STATE_KEYS = {
   tax: 'tax_settings',
   promos: 'promos_state',
   variantGroups: 'variant_groups_state',
+  paymentMethods: 'payment_methods_state',
 }
 
 export const RESERVED_CATEGORY = 'Semua'
@@ -89,6 +90,19 @@ export const CREATE_TABLE_STATEMENTS = `
     sort_order INTEGER DEFAULT 0,
     updated_at TEXT
   );
+
+  CREATE TABLE IF NOT EXISTS payment_methods (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    code TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT 'other',
+    is_cash INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    description TEXT NULL,
+    enabled_outlet_ids TEXT NOT NULL DEFAULT '[]',
+    updated_at TEXT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_payment_methods_code ON payment_methods(code);
 `
 
 export const SYNC_QUEUE_TABLE_STATEMENT = `
@@ -189,5 +203,19 @@ export const MIGRATIONS = {
     created_at TEXT NOT NULL
   );
   CREATE UNIQUE INDEX IF NOT EXISTS idx_units_name ON units(name);
+  `,
+  9: `
+  CREATE TABLE IF NOT EXISTS payment_methods (
+    id TEXT PRIMARY KEY NOT NULL,
+    name TEXT NOT NULL,
+    code TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT 'other',
+    is_cash INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    description TEXT NULL,
+    enabled_outlet_ids TEXT NOT NULL DEFAULT '[]',
+    updated_at TEXT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_payment_methods_code ON payment_methods(code);
   `,
 }
