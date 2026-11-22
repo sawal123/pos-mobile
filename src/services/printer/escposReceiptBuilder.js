@@ -348,6 +348,10 @@ export function createReceiptCommands({
     for (const line of alignRow(promoLabel, `-${formatIdr(transaction.discount)}`, width)) {
       commands.push({ type: 'text', value: line })
     }
+  } else {
+    for (const line of alignRow('Diskon', 'Rp 0', width)) {
+      commands.push({ type: 'text', value: line })
+    }
   }
 
   if (Number(transaction?.tax) > 0) {

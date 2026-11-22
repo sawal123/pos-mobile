@@ -656,7 +656,7 @@ export async function inspectCloudFirstWorkspace({
     const isAutoOpenShift = Boolean(
       storedShift &&
       (storedShift.isCloudAutoShift === true ||
-        (isWorkspaceEmptyOfUserData && storedShift.shiftNumber === null)),
+        (isWorkspaceEmptyOfUserData && (storedShift.shiftNumber === null || storedShift.isOpen === true))),
     )
     const effectiveShift = isAutoOpenShift ? null : storedShift
 

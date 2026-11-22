@@ -32,9 +32,7 @@ const digits = computed(() =>
 )
 
 function focusInput() {
-  nextTick(() => {
-    hiddenInputRef.value?.focus()
-  })
+  // Keypad sentuh sudah disediakan di dalam modal, cegah keyboard Android muncul
 }
 
 watch(
@@ -43,7 +41,6 @@ watch(
     if (isOpen) {
       pin.value = ''
       errorMessage.value = ''
-      focusInput()
     }
   },
 )
@@ -84,7 +81,6 @@ function removeLastDigit() {
 function clearPin() {
   errorMessage.value = ''
   pin.value = ''
-  focusInput()
 }
 
 function verifyAndConfirm() {
@@ -184,7 +180,9 @@ onUnmounted(() => {
         <input
           ref="hiddenInputRef"
           type="password"
-          inputmode="numeric"
+          inputmode="none"
+          tabindex="-1"
+          readonly
           pattern="[0-9]*"
           maxlength="6"
           autocomplete="off"

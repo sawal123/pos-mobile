@@ -11,6 +11,7 @@ import { createSyncChangeTracker } from '@/services/sync/syncTracker'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCashierStore } from '@/stores/cashierStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
+import { useProductStore } from '@/stores/productStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import CloudLoginView from '@/views/settings/CloudLoginView.vue'
 
@@ -163,6 +164,9 @@ describe('Cloud Cashier PIN and Shift Synchronization', () => {
       const businessStore = useBusinessStore()
       const cloudStore = useCloudSessionStore()
       const shiftStore = useShiftStore()
+      const productStore = useProductStore()
+      productStore.products = []
+      productStore.categories = []
 
       businessStore.mode = 'cloud'
 

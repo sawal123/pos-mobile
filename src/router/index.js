@@ -14,6 +14,7 @@ import SplashView from '../views/onboarding/SplashView.vue'
 import WelcomeView from '../views/onboarding/WelcomeView.vue'
 import PaymentSuccessView from '../views/payment/PaymentSuccessView.vue'
 import PaymentView from '../views/payment/PaymentView.vue'
+import PaymentMethodsView from '../views/payment/PaymentMethodsView.vue'
 import PosView from '../views/pos/PosView.vue'
 import CategoriesView from '../views/categories/CategoriesView.vue'
 import UnitsView from '../views/units/UnitsView.vue'
@@ -173,6 +174,11 @@ const routes = [
         component: UnitsView,
       },
       {
+        path: 'payment-methods',
+        name: 'payment-methods',
+        component: PaymentMethodsView,
+      },
+      {
         path: 'promos',
         name: 'promos',
         component: PromosView,
@@ -312,6 +318,7 @@ const businessRequiredRoutes = new Set([
   'product-edit',
   'categories',
   'units',
+  'payment-methods',
   'customers',
   'customer-create',
   'customer-edit',
@@ -348,6 +355,7 @@ const pinRequiredRoutes = new Set([
   'product-edit',
   'categories',
   'units',
+  'payment-methods',
   'customers',
   'customer-create',
   'customer-edit',

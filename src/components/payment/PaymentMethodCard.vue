@@ -24,13 +24,13 @@ defineProps({
       :class="active ? 'bg-primary text-white shadow-xs' : 'bg-zinc-100 text-zinc-500'"
     >
       <!-- Cash Icon -->
-      <svg v-if="method.id === 'cash'" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <svg v-if="method.type === 'cash' || method.id === 'cash'" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <rect x="2" y="6" width="20" height="12" rx="2" />
         <circle cx="12" cy="12" r="2" />
         <path d="M6 12h.01M18 12h.01" />
       </svg>
       <!-- QRIS Icon -->
-      <svg v-else-if="method.id === 'qris'" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <svg v-else-if="method.type === 'qris' || method.id === 'qris'" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="7" height="7" rx="1" />
         <rect x="14" y="3" width="7" height="7" rx="1" />
         <rect x="3" y="14" width="7" height="7" rx="1" />
@@ -38,11 +38,15 @@ defineProps({
         <path d="M21 14v.01M18 18v3M21 21v.01M14 21v.01" />
       </svg>
       <!-- Unpaid / Bayar Nanti Icon -->
-      <svg v-else-if="method.id === 'unpaid'" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <svg v-else-if="method.type === 'unpaid' || method.id === 'unpaid'" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="12" r="10" />
         <polyline points="12 6 12 12 16 14" />
       </svg>
-      <!-- Card Icon -->
+      <!-- Transfer Bank Icon -->
+      <svg v-else-if="method.type === 'transfer' || method.id === 'transfer'" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M3 21h18M3 10h18M5 10v11M19 10v11M9 10v11M15 10v11M12 2L2 7h20L12 2z" />
+      </svg>
+      <!-- Card / Other Icon -->
       <svg v-else class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <rect x="2" y="5" width="20" height="14" rx="2" />
         <line x1="2" y1="10" x2="22" y2="10" />

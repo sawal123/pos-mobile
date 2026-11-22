@@ -12,6 +12,7 @@ import CartSummary from '@/components/pos/CartSummary.vue'
 import DiscountPromoModal from '@/components/pos/DiscountPromoModal.vue'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCartStore } from '@/stores/cartStore'
+import { usePaymentMethodStore } from '@/stores/paymentMethodStore'
 import { useProductStore } from '@/stores/productStore'
 import { usePromoStore } from '@/stores/promoStore'
 import { useTaxStore } from '@/stores/taxStore'
@@ -29,6 +30,7 @@ const cloudStore = useCloudSessionStore()
 const syncPushStore = useSyncPushStore()
 const syncStatusStore = useSyncStatusStore()
 const cartStore = useCartStore()
+const paymentMethodStore = usePaymentMethodStore()
 const promoStore = usePromoStore()
 const taxStore = useTaxStore()
 const productStore = useProductStore()
@@ -36,18 +38,24 @@ const localOperations = resolveLocalOperationService()
 const route = useRoute()
 const router = useRouter()
 
-const selectedMethod = ref(route?.query?.method === 'unpaid' ? 'unpaid' : 'cash')
+const selectedMethod = ref(
+  route?.query?.method === 'unpaid'
+    ? 'unpaid'
+    : (paymentMethodStore.activeMethods.find((m) => m.id === 'cash')?.id || paymentMethodStore.activeMethods[0]?.id || 'cash')
+)
 
 watch(
   () => route?.query?.method,
   (method) => {
-    if (method && ['cash', 'qris', 'card', 'unpaid'].includes(method)) {
+    if (method) {
       selectedMethod.value = method
     }
   },
   { immediate: true },
 )
-const customerQuery = ref(cartStore.selectedCustomer?.name ?? cartStore.customerPhone)
+const customerQuery = ref(
+  cartStore.selectedCustomer?.name || cartStore.customerName || cartStore.customerPhone || ''
+)
 const cashReceived = ref('')
 const isProcessing = ref(false)
 const hasAttemptedSubmit = ref(false)
@@ -123,31 +131,65 @@ const successSummary = ref(null)
 
 const isPaymentCompleted = computed(() => successSummary.value !== null)
 
-const paymentMethods = [
-  { id: 'cash', label: 'Cash', description: 'Pembayaran tunai di kasir' },
-  { id: 'qris', label: 'QRIS', description: 'Scan QR untuk pelanggan' },
-  { id: 'card', label: 'Card', description: 'Debit atau kartu kredit' },
-  { id: 'unpaid', label: 'Bayar Nanti', description: 'Tempo / bayar belakangan' },
-]
+const paymentMethods = computed(() => {
+  return paymentMethodStore.activeMethods.map((m) => ({
+    id: m.id,
+    label: m.label || m.name,
+    description: m.description,
+    type: m.type,
+    accountNumber: m.accountNumber,
+    accountHolder: m.accountHolder,
+  }))
+})
 
-const isCashMethod = computed(() => selectedMethod.value === 'cash')
-const isUnpaidMethod = computed(() => selectedMethod.value === 'unpaid')
+const isCashMethod = computed(() => {
+  const method = paymentMethodStore.allMethods.find((m) => m.id === selectedMethod.value)
+  return selectedMethod.value === 'cash' || method?.type === 'cash'
+})
+const isUnpaidMethod = computed(() => {
+  const method = paymentMethodStore.allMethods.find((m) => m.id === selectedMethod.value)
+  return selectedMethod.value === 'unpaid' || method?.type === 'unpaid'
+})
 const selectedCustomer = computed(() => cartStore.selectedCustomer)
+
+const currentCustomerDisplay = computed(() => {
+  if (selectedCustomer.value?.name) return selectedCustomer.value.name
+  if (cartStore.customerName?.trim()) return cartStore.customerName.trim()
+  if (customerQuery.value?.trim()) return customerQuery.value.trim()
+  return 'Walk-in Customer'
+})
 
 function onSelectCustomer(customer) {
   cartStore.selectCustomer(customer)
+  cartStore.setCustomerName('')
   customerQuery.value = customer.name
 }
 
 function clearCustomer() {
   cartStore.clearCustomer()
+  cartStore.setCustomerName('')
   customerQuery.value = ''
 }
 
-// Share the customer with the cart and resolve an exact phone match automatically.
+// Share the customer with the cart and resolve an exact phone match or ad-hoc guest name automatically.
 watch(customerQuery, (value) => {
-  if (selectedCustomer.value?.name.trim() === String(value).trim()) return
-  cartStore.setCustomerPhone(normalizeCustomerPhone(value) ? value : '')
+  const trimmed = String(value || '').trim()
+  if (selectedCustomer.value?.name?.trim() === trimmed) return
+
+  if (!trimmed) {
+    cartStore.setCustomerName('')
+    cartStore.setCustomerPhone('')
+    return
+  }
+
+  const phoneMatch = normalizeCustomerPhone(trimmed)
+  if (phoneMatch) {
+    cartStore.setCustomerPhone(trimmed)
+    cartStore.setCustomerName('')
+  } else {
+    cartStore.setCustomerName(trimmed)
+    cartStore.setCustomerPhone('')
+  }
 })
 
 const parsedCashReceived = computed(() => {
@@ -495,8 +537,8 @@ function goToTransactions() {
         />
 
         <div class="flex items-center justify-between gap-2 text-[11px]">
-          <span class="truncate text-ink-secondary" data-testid="selected-customer-label">
-            {{ selectedCustomer ? selectedCustomer.name : 'Walk-in Customer' }}
+          <span class="truncate text-ink-secondary font-medium" data-testid="selected-customer-label">
+            {{ currentCustomerDisplay }}
           </span>
           <button
             v-if="selectedCustomer || customerQuery"
@@ -739,10 +781,14 @@ function goToTransactions() {
           :tax-rate="taxStore.rate"
           :total="cartStore.total"
           :show-action="false"
-          :allow-promo-select="!isPaymentCompleted"
+          :allow-promo-select="false"
           @select-promo="showPromoModal = true"
           @remove-promo="handleRemovePaymentDiscount"
         />
+        <div class="flex items-center justify-between border-t border-zinc-100 pt-2.5 text-xs text-ink-secondary dark:border-slate-800">
+          <span>Pelanggan</span>
+          <span class="font-semibold text-ink-primary dark:text-white truncate max-w-[180px]">{{ currentCustomerDisplay }}</span>
+        </div>
       </BaseCard>
 
       <!-- Desktop checkout CTA (mobile uses the sticky CTA below). The wrapper
@@ -775,7 +821,13 @@ function goToTransactions() {
     >
       <div class="mx-auto flex max-w-xl items-center gap-3 rounded-2xl border border-zinc-200/90 bg-white/95 px-4 py-2.5 shadow-[0_12px_32px_rgba(15,19,31,0.16)] backdrop-blur-xl dark:border-slate-700/70 dark:bg-[#1B2133]/96 dark:shadow-[0_16px_36px_rgba(0,0,0,0.65)]">
         <div class="min-w-0 flex-1">
-          <p class="text-[10px] font-semibold uppercase tracking-wider text-ink-secondary">Total Pembayaran</p>
+          <div class="flex items-center gap-1.5 text-[10px] text-ink-secondary font-medium truncate">
+            <span class="font-semibold uppercase tracking-wider">Total</span>
+            <span>•</span>
+            <span class="truncate font-semibold text-primary dark:text-indigo-400" data-testid="mobile-cta-customer">
+              {{ currentCustomerDisplay }}
+            </span>
+          </div>
           <p class="truncate font-mono text-base font-bold text-ink-primary" data-testid="mobile-payment-total">
             {{ formatCurrency(cartStore.total) }}
           </p>

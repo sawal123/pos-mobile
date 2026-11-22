@@ -342,7 +342,7 @@ async function handleSubmit() {
 }
 
 watch(
-  () => [route.params.id, categories.value.length],
+  () => [route.params?.id, categories.value.length],
   () => {
     loadProduct()
   },
@@ -962,24 +962,9 @@ watch(
             @click="!isCashier && (form.isActive = !form.isActive)"
           >
             <span
-              class="pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out flex items-center justify-center text-[10px]"
-              :class="form.isActive ? 'translate-x-5 text-primary' : 'translate-x-0 text-zinc-400'"
-            >
-              <svg
-                v-if="form.isActive"
-                class="h-3.5 w-3.5"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="3"
-                  d="M5 13l4 4L19 7"
-                />
-              </svg>
-            </span>
+              class="pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out"
+              :class="form.isActive ? 'translate-x-5' : 'translate-x-0'"
+            />
           </button>
         </div>
       </section>

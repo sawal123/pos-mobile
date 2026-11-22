@@ -30,15 +30,13 @@ const digits = computed(() =>
 const isComplete = computed(() => pin.value.length === PIN_LENGTH)
 
 function focusPinInput() {
-  hiddenInputRef.value?.focus()
+  // Pad angka sudah disediakan di layar, cegah virtual keyboard Android muncul
 }
 
 onMounted(() => {
   if (businessStore.mode === 'cloud' && cashierStore.activeCashier?.pinConfigured) {
     router.replace('/home')
-    return
   }
-  focusPinInput()
 })
 
 function sanitizePin(raw) {
@@ -75,13 +73,11 @@ function removeLastDigit() {
 function clearPin() {
   errorMessage.value = ''
   pin.value = ''
-  focusPinInput()
 }
 
 function savePin() {
   if (pin.value.length < PIN_LENGTH) {
     errorMessage.value = 'Masukkan 6 digit angka PIN terlebih dahulu.'
-    focusPinInput()
     return
   }
 
@@ -198,7 +194,9 @@ function savePin() {
               ref="hiddenInputRef"
               data-testid="pin-input"
               :type="showPin ? 'text' : 'password'"
-              inputmode="numeric"
+              inputmode="none"
+              tabindex="-1"
+              readonly
               pattern="[0-9]*"
               maxlength="6"
               autocomplete="off"

@@ -225,12 +225,16 @@ function onAttachToOrderSelect(orderId) {
 
     <div
       v-if="appliedPromo || discount > 0"
-      class="flex items-center justify-between rounded-lg bg-emerald-50 px-2.5 py-1.5 text-sm font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
-      :class="allowPromoSelect ? 'cursor-pointer hover:bg-emerald-100/70 transition-colors' : ''"
+      class="flex items-center justify-between text-sm"
+      :class="
+        allowPromoSelect
+          ? 'rounded-lg bg-emerald-50 px-2.5 py-1.5 font-medium text-emerald-700 cursor-pointer hover:bg-emerald-100/70 transition-colors dark:bg-emerald-950/40 dark:text-emerald-300'
+          : 'text-ink-secondary'
+      "
       @click="allowPromoSelect && $emit('select-promo')"
     >
       <div class="flex items-center gap-1.5 min-w-0">
-        <span class="text-xs">🏷️</span>
+        <span v-if="allowPromoSelect" class="text-xs">🏷️</span>
         <span class="truncate font-medium">{{ discountLabel || appliedPromo?.name || 'Diskon' }}</span>
         <button
           v-if="allowPromoSelect"
@@ -243,7 +247,7 @@ function onAttachToOrderSelect(orderId) {
           ✕
         </button>
       </div>
-      <span class="shrink-0 font-semibold">-{{ formatCurrency(discount) }}</span>
+      <span class="shrink-0 font-semibold text-emerald-600 dark:text-emerald-400">-{{ formatCurrency(discount) }}</span>
     </div>
 
     <div
@@ -258,6 +262,15 @@ function onAttachToOrderSelect(orderId) {
         <span>🏷️</span> Tambah Diskon / Promo
       </span>
       <span class="text-zinc-400">›</span>
+    </div>
+
+    <div
+      v-else-if="!allowPromoSelect"
+      class="flex items-center justify-between text-sm text-ink-secondary"
+      data-testid="cart-summary-zero-discount"
+    >
+      <span>Diskon</span>
+      <span class="font-mono text-ink-primary dark:text-zinc-300">Rp 0</span>
     </div>
 
     <div v-if="taxEnabled && taxRate > 0" class="flex items-center justify-between text-sm text-ink-secondary">

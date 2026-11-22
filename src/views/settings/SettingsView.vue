@@ -1147,7 +1147,7 @@ async function handleRestoreFileChange(event) {
       <SettingsSection
         section-id="catalog-master"
         title="Master Data & Katalog"
-        summary="Kategori produk & satuan ukuran"
+        summary="Kategori produk, satuan & metode pembayaran"
         icon="categories"
         :open="activeSection === 'catalog-master'"
         @toggle="toggleSection('catalog-master')"
@@ -1166,6 +1166,13 @@ async function handleRestoreFileChange(event) {
             subtitle="Kelola satuan takaran seperti ml, gr, pcs, pack, cup"
             testid="settings-menu-units"
             @select="router.push({ name: 'units' })"
+          />
+          <SettingsMenuItem
+            icon="card"
+            title="Metode Pembayaran"
+            subtitle="Kelola metode bayar aktif di kasir (Tunai, QRIS, EDC, Transfer)"
+            testid="settings-menu-payment-methods"
+            @select="router.push({ name: 'payment-methods' })"
           />
         </div>
       </SettingsSection>

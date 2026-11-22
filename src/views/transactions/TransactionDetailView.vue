@@ -1019,67 +1019,6 @@ async function copyInvoiceNumber() {
             </div>
           </div>
 
-          <!-- Add Product Section -->
-          <div class="space-y-2 border-t border-zinc-100 pt-3 dark:border-slate-800">
-            <button
-              v-if="!showAddProductPicker"
-              type="button"
-              class="w-full inline-flex items-center justify-center gap-1.5 rounded-2xl border-2 border-dashed border-primary/40 bg-primary/5 py-2.5 text-xs font-bold text-primary hover:bg-primary/10 transition cursor-pointer dark:bg-primary/10"
-              data-testid="btn-show-add-product"
-              @click="showAddProductPicker = true"
-            >
-              <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                <line x1="12" y1="5" x2="12" y2="19" />
-                <line x1="5" y1="12" x2="19" y2="12" />
-              </svg>
-              <span>Tambah Menu Lain</span>
-            </button>
-
-            <!-- Product Picker Dropdown / Box -->
-            <div v-else class="rounded-2xl border border-zinc-200 bg-white p-3 space-y-2 shadow-xs dark:border-slate-700 dark:bg-slate-800">
-              <div class="flex items-center justify-between gap-2">
-                <span class="text-xs font-bold text-ink-primary dark:text-white">Pilih Menu untuk Ditambahkan</span>
-                <button
-                  type="button"
-                  class="text-xs text-zinc-400 hover:text-zinc-600 cursor-pointer"
-                  @click="showAddProductPicker = false"
-                >
-                  Tutup
-                </button>
-              </div>
-
-              <input
-                v-model="productSearchQuery"
-                type="text"
-                placeholder="Cari menu produk..."
-                class="w-full rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-1.5 text-xs text-ink-primary focus:border-primary focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-white"
-              />
-
-              <div class="max-h-44 overflow-y-auto space-y-1 pr-1">
-                <div
-                  v-for="prod in availableProducts"
-                  :key="prod.id"
-                  class="flex items-center justify-between rounded-xl p-2 hover:bg-zinc-50 transition cursor-pointer dark:hover:bg-slate-700/60"
-                  @click="addProductToEdit(prod)"
-                >
-                  <div class="min-w-0 pr-2">
-                    <p class="text-xs font-semibold text-ink-primary truncate dark:text-white">{{ prod.name }}</p>
-                    <p class="text-[11px] text-ink-secondary">{{ formatCurrency(prod.price) }}</p>
-                  </div>
-                  <button
-                    type="button"
-                    class="shrink-0 rounded-lg bg-primary/10 px-2 py-1 text-xs font-bold text-primary hover:bg-primary/20 cursor-pointer"
-                  >
-                    + Tambah
-                  </button>
-                </div>
-                <div v-if="availableProducts.length === 0" class="py-3 text-center text-xs text-zinc-400">
-                  Tidak ada menu yang sesuai
-                </div>
-              </div>
-            </div>
-          </div>
-
           <!-- Total Calculation Summary -->
           <div class="rounded-2xl bg-zinc-50 p-3 space-y-1.5 border border-zinc-100 text-xs dark:bg-slate-800/40 dark:border-slate-800">
             <div class="flex items-center justify-between text-ink-secondary">
@@ -1122,7 +1061,7 @@ async function copyInvoiceNumber() {
             data-testid="btn-save-edited-items"
             @click="saveEditedItems"
           >
-            Simpan Perubahan
+            Simpan
           </BaseButton>
         </div>
       </div>
