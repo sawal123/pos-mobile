@@ -4,7 +4,6 @@ import { useRoute, useRouter } from 'vue-router'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import BaseCard from '@/components/base/BaseCard.vue'
-import BaseModal from '@/components/base/BaseModal.vue'
 import BaseSheet from '@/components/base/BaseSheet.vue'
 import ReceiptContent from '@/components/receipt/ReceiptContent.vue'
 import {
@@ -24,37 +23,16 @@ import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { usePrinterStore } from '@/stores/printerStore'
 import { useReceiptStore } from '@/stores/receiptStore'
 import { useSubscriptionStore } from '@/stores/subscriptionStore'
-import { useSyncPushStore } from '@/stores/syncPushStore'
 import { useTransactionStore } from '@/stores/transactionStore'
-import { usePaymentMethodStore } from '@/stores/paymentMethodStore'
 
 const route = useRoute()
 const router = useRouter()
 const businessStore = useBusinessStore()
 const cloudStore = useCloudSessionStore()
-const paymentMethodStore = usePaymentMethodStore()
 const printerStore = usePrinterStore()
 const receiptStore = useReceiptStore()
 const subscriptionStore = useSubscriptionStore()
-const syncPushStore = useSyncPushStore()
 const transactionStore = useTransactionStore()
-
-const selectedOutletId = computed(() => cloudStore.selectedOutlet?.id)
-const availablePaymentMethods = computed(() => {
-  const methods = paymentMethodStore.getMethodsForOutlet(selectedOutletId.value)
-  if (methods && methods.length > 0) {
-    return methods.map((m) => ({
-      code: m.code || m.id,
-      name: m.name || m.label || (m.code || m.id).toUpperCase(),
-    }))
-  }
-  return [
-    { code: 'cash', name: 'Tunai' },
-    { code: 'qris', name: 'QRIS' },
-    { code: 'transfer', name: 'Transfer' },
-    { code: 'card', name: 'Card / EDC' },
-  ]
-})
 
 const isFree = computed(() => !subscriptionStore.isPremium)
 
@@ -63,61 +41,11 @@ const isOpeningDrawer = ref(false)
 const printFeedback = ref('')
 const printError = ref('')
 
-const showChangePaymentModal = ref(false)
-const selectedNewPaymentMethod = ref('cash')
-const paymentChangeSuccess = ref('')
-const paymentChangeError = ref('')
-
-const showVoidModal = ref(false)
-const voidReason = ref('')
-const voidError = ref('')
-const voidSuccess = ref('')
-
 const isVoided = computed(() => {
   const status = String(transaction.value?.status || '').toLowerCase()
   const paymentStatus = String(transaction.value?.paymentStatus || '').toLowerCase()
   return status === 'cancelled' || status === 'batal' || paymentStatus === 'cancelled'
 })
-
-function openChangePayment() {
-  selectedNewPaymentMethod.value = transaction.value?.paymentMethod || 'cash'
-  paymentChangeError.value = ''
-  paymentChangeSuccess.value = ''
-  showChangePaymentModal.value = true
-}
-
-async function confirmChangePayment() {
-  if (!transaction.value) return
-  paymentChangeError.value = ''
-  const res = transactionStore.updatePaymentMethod(transaction.value.id, selectedNewPaymentMethod.value)
-  if (res.success) {
-    showChangePaymentModal.value = false
-    paymentChangeSuccess.value = `Metode pembayaran berhasil diubah ke ${paymentMethodStore.getMethodName(selectedNewPaymentMethod.value)}.`
-    void syncPushStore.pushIfOnline?.()
-  } else {
-    paymentChangeError.value = res.error || 'Gagal mengubah metode pembayaran.'
-  }
-}
-
-function openVoidModal() {
-  voidReason.value = ''
-  voidError.value = ''
-  voidSuccess.value = ''
-  showVoidModal.value = true
-}
-
-async function confirmVoidTransaction() {
-  if (!transaction.value) return
-  voidError.value = ''
-  const res = transactionStore.voidTransaction(transaction.value.id, voidReason.value)
-  if (res.success) {
-    showVoidModal.value = false
-    voidSuccess.value = 'Transaksi berhasil dibatalkan (Void).'
-    void syncPushStore.pushIfOnline?.()
-  } else {
-    voidError.value = res.error || 'Gagal membatalkan transaksi.'
-  }
-}
 
 async function handleOpenCashDrawer() {
   if (isOpeningDrawer.value || isPrinting.value) return
@@ -319,12 +247,12 @@ async function handlePrint() {
 </script>
 
 <template>
-  <div class="mx-auto max-w-xl space-y-4 pb-8 print:max-w-none print:space-y-0 print:pb-0">
+  <div class="mx-auto max-w-xl space-y-4 pb-48 md:pb-40 print:max-w-none print:space-y-0 print:pb-0">
     <!-- Top Navigation Bar (Hidden during print) -->
     <div class="flex items-center justify-between gap-3 print:hidden">
       <button
         type="button"
-        class="inline-flex items-center gap-1.5 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs font-semibold text-ink-primary shadow-2xs transition hover:bg-zinc-50 active:scale-95 cursor-pointer"
+        class="inline-flex items-center gap-1.5 rounded-xl border border-zinc-200 bg-white px-3 py-2 text-xs font-semibold text-ink-primary shadow-2xs transition hover:bg-zinc-50 active:scale-95 cursor-pointer dark:border-slate-700 dark:bg-slate-800 dark:text-zinc-200"
         @click="router.back()"
       >
         <svg class="h-4 w-4 text-ink-secondary" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -346,262 +274,16 @@ async function handlePrint() {
       </button>
     </div>
 
-    <!-- Printer Control & Print Struk Action Card -->
-    <BaseCard
-      v-if="transaction"
-      class="space-y-3.5 border border-zinc-200/80 p-4 shadow-sm print:hidden"
-      data-testid="receipt-printer-bar"
-    >
-      <div class="flex items-center justify-between gap-3">
-        <div class="flex min-w-0 items-center gap-2.5">
-          <div
-            class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl"
-            :class="
-              !isNativePrinter || printerStore.hasSelectedPrinter
-                ? 'bg-primary/10 text-primary'
-                : 'bg-amber-100 text-amber-600'
-            "
-          >
-            <!-- Bluetooth Icon on Android, Printer Icon on Web -->
-            <svg
-              v-if="isNativePrinter"
-              class="h-4 w-4"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
-            >
-              <polyline points="6.5 6.5 17.5 17.5 12 23 12 1 17.5 6.5 6.5 17.5" />
-            </svg>
-            <svg
-              v-else
-              class="h-4 w-4"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
-            >
-              <polyline points="6 9 6 2 18 2 18 9" />
-              <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
-              <rect x="6" y="14" width="12" height="8" />
-            </svg>
-          </div>
-
-          <div class="min-w-0">
-            <div class="flex items-center gap-1.5">
-              <p class="truncate text-xs font-bold text-ink-primary">
-                {{ selectedPrinterLabel }}
-              </p>
-              <span
-                v-if="isNativePrinter && printerStore.hasSelectedPrinter"
-                class="inline-block h-2 w-2 shrink-0 rounded-full bg-emerald-500"
-                title="Printer siap"
-              />
-            </div>
-            <p class="truncate text-[11px] text-ink-secondary">
-              <template v-if="isNativePrinter && printerStore.hasSelectedPrinter">
-                {{ printerStore.selectedPrinter.address }} &bull; Thermal {{ printerStore.paperWidth }}mm
-              </template>
-              <template v-else-if="isNativePrinter">
-                Pilih printer thermal 58mm / 80mm yang sudah dipairing
-              </template>
-              <template v-else>
-                Dialog cetak sistem atau simpan PDF
-              </template>
-            </p>
-          </div>
-        </div>
-
-        <!-- Quick Bluetooth Printer Selector & Paper Size on Android -->
-        <div v-if="isNativePrinter" class="flex shrink-0 items-center gap-1.5">
-          <div class="inline-flex rounded-lg border border-zinc-200 bg-zinc-50 p-0.5">
-            <button
-              v-for="width in SUPPORTED_PAPER_WIDTHS"
-              :key="width"
-              type="button"
-              class="rounded-md px-2 py-1 text-[10px] font-bold transition cursor-pointer"
-              :class="
-                printerStore.paperWidth === width
-                  ? 'bg-white text-primary shadow-2xs'
-                  : 'text-ink-secondary hover:text-ink-primary'
-              "
-              @click="handlePaperWidthSelect(width)"
-            >
-              {{ width }}mm
-            </button>
-          </div>
-
-          <button
-            type="button"
-            data-testid="btn-quick-select-printer"
-            class="rounded-xl border border-zinc-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-ink-primary hover:bg-zinc-50 active:scale-95 transition cursor-pointer"
-            @click="openPrinterPicker"
-          >
-            {{ printerStore.hasSelectedPrinter ? 'Ganti' : 'Pilih' }}
-          </button>
-        </div>
-      </div>
-
-      <!-- Primary Print Struk CTA Button -->
-      <BaseButton
-        block
-        size="lg"
-        class="gap-2 shadow-md shadow-primary/20"
-        :disabled="isPrinting"
-        data-testid="btn-print-receipt"
-        @click="handlePrint"
-      >
-        <svg
-          v-if="isPrinting"
-          class="h-4 w-4 animate-spin"
-          viewBox="0 0 24 24"
-          fill="none"
-          aria-hidden="true"
-        >
-          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3.5" />
-          <path class="opacity-80" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-        </svg>
-        <svg
-          v-else
-          class="h-5 w-5"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <polyline points="6 9 6 2 18 2 18 9" />
-          <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
-          <rect x="6" y="14" width="12" height="8" />
-        </svg>
-        <span>{{ isPrinting ? 'Mencetak...' : 'Print' }}</span>
-      </BaseButton>
-
-      <!-- Secondary Actions: Ubah Metode Bayar & Void -->
-      <div v-if="transaction" class="grid grid-cols-2 gap-2 pt-2 border-t border-zinc-100 print:hidden dark:border-slate-800">
-        <BaseButton
-          variant="secondary"
-          size="md"
-          data-testid="btn-change-payment-method"
-          :disabled="isVoided"
-          @click="openChangePayment"
-        >
-          Ubah Metode Bayar
-        </BaseButton>
-
-        <BaseButton
-          variant="danger"
-          size="md"
-          data-testid="btn-void-transaction"
-          :disabled="isVoided"
-          @click="openVoidModal"
-        >
-          {{ isVoided ? 'Dibatalkan (Void)' : 'Batalkan (Void)' }}
-        </BaseButton>
-      </div>
-
-      <div
-        v-if="isVoided"
-        class="rounded-xl bg-rose-50 border border-rose-200 p-2.5 text-xs text-rose-700 dark:bg-rose-950/40 dark:border-rose-900/60 dark:text-rose-300"
-        data-testid="badge-void-notice"
-      >
-        <p class="font-bold">⚠️ Transaksi Telah Dibatalkan (Void)</p>
-        <p v-if="transaction?.voidReason" class="mt-0.5 text-[11px] italic">
-          Alasan: {{ transaction.voidReason }}
-        </p>
-      </div>
-
-      <!-- Cash Drawer Quick Indicator & Manual Kick -->
-      <div class="flex items-center justify-between border-t border-zinc-100 pt-2.5 text-xs print:hidden dark:border-slate-800">
-        <div class="flex items-center gap-1.5 text-ink-secondary">
-          <svg class="h-4 w-4 text-emerald-600 dark:text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="2" y="4" width="20" height="16" rx="2" />
-            <path d="M6 12h.01M10 12h8" />
-          </svg>
-          <span class="text-[11px] font-medium">Laci kasir otomatis terbuka saat print</span>
-        </div>
-
-        <button
-          v-if="isNativePrinter"
-          type="button"
-          class="inline-flex items-center gap-1 rounded-xl border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-xs font-semibold text-ink-primary shadow-2xs hover:bg-zinc-100 active:scale-95 transition cursor-pointer dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-          data-testid="btn-manual-open-drawer"
-          :disabled="isOpeningDrawer || isPrinting"
-          @click="handleOpenCashDrawer"
-        >
-          <svg class="h-3.5 w-3.5 text-zinc-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="2" y="6" width="20" height="12" rx="2" />
-            <circle cx="12" cy="12" r="2" />
-          </svg>
-          <span>{{ isOpeningDrawer ? 'Membuka...' : 'Buka Laci' }}</span>
-        </button>
-      </div>
-    </BaseCard>
-
-    <!-- Payment Change Feedback Banner -->
+    <!-- Void Notice Banner (if voided) -->
     <div
-      v-if="paymentChangeSuccess"
-      class="flex items-center gap-2.5 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700 print:hidden"
-      data-testid="payment-change-feedback"
+      v-if="isVoided"
+      class="rounded-2xl bg-rose-50 border border-rose-200 p-3 text-xs text-rose-700 dark:bg-rose-950/40 dark:border-rose-900/60 dark:text-rose-300 print:hidden"
+      data-testid="badge-void-notice"
     >
-      <p>{{ paymentChangeSuccess }}</p>
-    </div>
-
-    <!-- Void Feedback Banner -->
-    <div
-      v-if="voidSuccess"
-      class="flex items-center gap-2.5 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700 print:hidden"
-      data-testid="void-feedback"
-    >
-      <p>{{ voidSuccess }}</p>
-    </div>
-
-    <!-- Print Feedback Banner -->
-    <div
-      v-if="printFeedback"
-      class="flex items-center gap-2.5 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-700 print:hidden"
-    >
-      <svg class="h-4 w-4 shrink-0 text-emerald-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <circle cx="12" cy="12" r="9" />
-        <path d="M8.5 12.5l2.5 2.5 4.5-5" />
-      </svg>
-      <p data-testid="print-feedback">{{ printFeedback }}</p>
-    </div>
-
-    <!-- Print Error Banner -->
-    <div
-      v-if="printError"
-      class="space-y-2 rounded-2xl border border-danger/20 bg-danger/10 px-4 py-3 text-sm text-danger print:hidden"
-      data-testid="print-error"
-    >
-      <p class="font-medium">{{ printError }}</p>
-      <div v-if="needsPrinterSelection || isNativePrinter" class="flex flex-wrap items-center gap-3 text-xs">
-        <button
-          v-if="isNativePrinter"
-          type="button"
-          class="rounded-lg bg-white px-2.5 py-1 font-semibold text-ink-primary shadow-2xs hover:bg-zinc-50 cursor-pointer"
-          @click="openPrinterPicker"
-        >
-          Pilih Printer Sekarang
-        </button>
-        <button
-          v-if="needsPrinterSelection"
-          type="button"
-          class="font-semibold underline cursor-pointer"
-          data-testid="link-configure-printer"
-          @click="router.push('/settings')"
-        >
-          Atur Printer
-        </button>
-      </div>
+      <p class="font-bold">⚠️ Transaksi Telah Dibatalkan (Void)</p>
+      <p v-if="transaction?.voidReason" class="mt-0.5 text-[11px] italic">
+        Alasan: {{ transaction.voidReason }}
+      </p>
     </div>
 
     <!-- Thermal Paper Receipt Preview -->
@@ -616,6 +298,219 @@ async function handlePrint() {
     <BaseCard v-else>
       <p class="text-sm text-ink-secondary">Transaksi tidak ditemukan.</p>
     </BaseCard>
+
+    <!-- Floating Print Control Card ("ngambang" above bottom navigation) -->
+    <div
+      v-if="transaction"
+      class="fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+4.85rem)] z-30 px-3 md:bottom-6 md:px-0 pointer-events-none print:hidden"
+    >
+      <div class="mx-auto max-w-xl pointer-events-auto">
+        <div
+          class="space-y-3 rounded-2xl md:rounded-3xl border border-zinc-200/90 bg-white/95 p-3.5 sm:p-4 shadow-[0_12px_36px_rgba(15,19,31,0.18)] backdrop-blur-xl dark:border-slate-700/80 dark:bg-[#1B2133]/96 dark:shadow-[0_16px_40px_rgba(0,0,0,0.65)]"
+          data-testid="receipt-printer-bar"
+        >
+          <!-- Printer Selector Row -->
+          <div class="flex items-center justify-between gap-3">
+            <div class="flex min-w-0 items-center gap-2.5">
+              <div
+                class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl"
+                :class="
+                  !isNativePrinter || printerStore.hasSelectedPrinter
+                    ? 'bg-primary/10 text-primary'
+                    : 'bg-amber-100 text-amber-600'
+                "
+              >
+                <!-- Bluetooth Icon on Android, Printer Icon on Web -->
+                <svg
+                  v-if="isNativePrinter"
+                  class="h-4 w-4"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <polyline points="6.5 6.5 17.5 17.5 12 23 12 1 17.5 6.5 6.5 17.5" />
+                </svg>
+                <svg
+                  v-else
+                  class="h-4 w-4"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <polyline points="6 9 6 2 18 2 18 9" />
+                  <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+                  <rect x="6" y="14" width="12" height="8" />
+                </svg>
+              </div>
+
+              <div class="min-w-0">
+                <div class="flex items-center gap-1.5">
+                  <p class="truncate text-xs font-bold text-ink-primary dark:text-white">
+                    {{ selectedPrinterLabel }}
+                  </p>
+                  <span
+                    v-if="isNativePrinter && printerStore.hasSelectedPrinter"
+                    class="inline-block h-2 w-2 shrink-0 rounded-full bg-emerald-500"
+                    title="Printer siap"
+                  />
+                </div>
+                <p class="truncate text-[11px] text-ink-secondary dark:text-zinc-400">
+                  <template v-if="isNativePrinter && printerStore.hasSelectedPrinter">
+                    {{ printerStore.selectedPrinter.address }} &bull; Thermal {{ printerStore.paperWidth }}mm
+                  </template>
+                  <template v-else-if="isNativePrinter">
+                    Pilih printer thermal 58mm / 80mm
+                  </template>
+                  <template v-else>
+                    Dialog cetak sistem atau simpan PDF
+                  </template>
+                </p>
+              </div>
+            </div>
+
+            <!-- Quick Bluetooth Printer Selector & Paper Size on Android -->
+            <div v-if="isNativePrinter" class="flex shrink-0 items-center gap-1.5">
+              <div class="inline-flex rounded-lg border border-zinc-200 bg-zinc-50 p-0.5 dark:border-slate-700 dark:bg-slate-800">
+                <button
+                  v-for="width in SUPPORTED_PAPER_WIDTHS"
+                  :key="width"
+                  type="button"
+                  class="rounded-md px-2 py-1 text-[10px] font-bold transition cursor-pointer"
+                  :class="
+                    printerStore.paperWidth === width
+                      ? 'bg-white text-primary shadow-2xs dark:bg-slate-700 dark:text-white'
+                      : 'text-ink-secondary hover:text-ink-primary dark:text-zinc-400'
+                  "
+                  @click="handlePaperWidthSelect(width)"
+                >
+                  {{ width }}mm
+                </button>
+              </div>
+
+              <button
+                type="button"
+                data-testid="btn-quick-select-printer"
+                class="rounded-xl border border-zinc-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-ink-primary hover:bg-zinc-50 active:scale-95 transition cursor-pointer dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                @click="openPrinterPicker"
+              >
+                {{ printerStore.hasSelectedPrinter ? 'Ganti' : 'Pilih' }}
+              </button>
+            </div>
+          </div>
+
+          <!-- Print Feedback Banner inside card -->
+          <div
+            v-if="printFeedback"
+            class="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700 dark:bg-emerald-950/40 dark:border-emerald-800 dark:text-emerald-300"
+          >
+            <svg class="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M8.5 12.5l2.5 2.5 4.5-5" />
+            </svg>
+            <p data-testid="print-feedback">{{ printFeedback }}</p>
+          </div>
+
+          <!-- Print Error Banner inside card -->
+          <div
+            v-if="printError"
+            class="space-y-1.5 rounded-xl border border-danger/20 bg-danger/10 px-3 py-2 text-xs text-danger"
+            data-testid="print-error"
+          >
+            <p class="font-medium">{{ printError }}</p>
+            <div v-if="needsPrinterSelection || isNativePrinter" class="flex flex-wrap items-center gap-2">
+              <button
+                v-if="isNativePrinter"
+                type="button"
+                class="rounded-lg bg-white px-2 py-0.5 font-semibold text-ink-primary shadow-2xs hover:bg-zinc-50 cursor-pointer dark:bg-slate-800 dark:text-white"
+                @click="openPrinterPicker"
+              >
+                Pilih Printer Sekarang
+              </button>
+              <button
+                v-if="needsPrinterSelection"
+                type="button"
+                class="font-semibold underline cursor-pointer"
+                data-testid="link-configure-printer"
+                @click="router.push('/settings')"
+              >
+                Atur Printer
+              </button>
+            </div>
+          </div>
+
+          <!-- Primary Print Struk CTA Button -->
+          <BaseButton
+            block
+            size="lg"
+            class="gap-2 shadow-md shadow-primary/20"
+            :disabled="isPrinting"
+            data-testid="btn-print-receipt"
+            @click="handlePrint"
+          >
+            <svg
+              v-if="isPrinting"
+              class="h-4 w-4 animate-spin"
+              viewBox="0 0 24 24"
+              fill="none"
+              aria-hidden="true"
+            >
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3.5" />
+              <path class="opacity-80" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+            </svg>
+            <svg
+              v-else
+              class="h-5 w-5"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <polyline points="6 9 6 2 18 2 18 9" />
+              <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+              <rect x="6" y="14" width="12" height="8" />
+            </svg>
+            <span>{{ isPrinting ? 'Mencetak...' : 'Print' }}</span>
+          </BaseButton>
+
+          <!-- Cash Drawer Quick Indicator & Manual Kick -->
+          <div class="flex items-center justify-between border-t border-zinc-100 pt-2 text-xs print:hidden dark:border-slate-800">
+            <div class="flex items-center gap-1.5 text-ink-secondary dark:text-zinc-400">
+              <svg class="h-4 w-4 text-emerald-600 dark:text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="4" width="20" height="16" rx="2" />
+                <path d="M6 12h.01M10 12h8" />
+              </svg>
+              <span class="text-[11px] font-medium">Laci kasir otomatis terbuka saat print</span>
+            </div>
+
+            <button
+              v-if="isNativePrinter"
+              type="button"
+              class="inline-flex items-center gap-1 rounded-xl border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-xs font-semibold text-ink-primary shadow-2xs hover:bg-zinc-100 active:scale-95 transition cursor-pointer dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+              data-testid="btn-manual-open-drawer"
+              :disabled="isOpeningDrawer || isPrinting"
+              @click="handleOpenCashDrawer"
+            >
+              <svg class="h-3.5 w-3.5 text-zinc-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="6" width="20" height="12" rx="2" />
+                <circle cx="12" cy="12" r="2" />
+              </svg>
+              <span>{{ isOpeningDrawer ? 'Membuka...' : 'Buka Laci' }}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <!-- Quick Paired Bluetooth Printer Bottom Sheet (Android) -->
     <BaseSheet
@@ -682,97 +577,5 @@ async function handlePrint() {
         </div>
       </div>
     </BaseSheet>
-
-    <!-- Modal Ubah Metode Bayar -->
-    <BaseModal
-      :open="showChangePaymentModal"
-      title="Ubah Metode Pembayaran"
-      @close="showChangePaymentModal = false"
-    >
-      <div class="space-y-4">
-        <p class="text-xs text-ink-secondary">
-          Pilih metode pembayaran baru untuk transaksi ini. Jika diubah ke/dari Tunai, kas fisik shift akan disesuaikan secara otomatis.
-        </p>
-
-        <div v-if="paymentChangeError" class="rounded-xl bg-danger/10 p-3 text-xs text-danger font-medium" data-testid="payment-change-error">
-          {{ paymentChangeError }}
-        </div>
-
-        <div class="grid grid-cols-2 gap-2">
-          <button
-            v-for="method in availablePaymentMethods"
-            :key="method.code"
-            type="button"
-            :data-testid="`btn-select-payment-${method.code}`"
-            class="flex items-center justify-center gap-2 rounded-xl border p-3 text-xs font-semibold capitalize transition cursor-pointer"
-            :class="
-              selectedNewPaymentMethod === method.code
-                ? 'border-primary bg-primary/10 text-primary font-bold shadow-2xs'
-                : 'border-zinc-200 bg-white hover:bg-zinc-50 text-ink-primary dark:border-slate-700 dark:bg-slate-800 dark:text-zinc-200'
-            "
-            @click="selectedNewPaymentMethod = method.code"
-          >
-            <span>{{ method.name }}</span>
-          </button>
-        </div>
-
-        <div class="flex items-center justify-end gap-2 pt-2 border-t border-zinc-100 dark:border-slate-800">
-          <BaseButton variant="secondary" size="md" @click="showChangePaymentModal = false">
-            Batal
-          </BaseButton>
-          <BaseButton variant="primary" size="md" data-testid="btn-confirm-change-payment" @click="confirmChangePayment">
-            Simpan Perubahan
-          </BaseButton>
-        </div>
-      </div>
-    </BaseModal>
-
-    <!-- Modal Batalkan Transaksi (Void) -->
-    <BaseModal
-      :open="showVoidModal"
-      title="Batalkan Transaksi (Void)"
-      @close="showVoidModal = false"
-    >
-      <div class="space-y-4">
-        <div class="rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800 dark:bg-amber-950/40 dark:border-amber-900/60 dark:text-amber-300">
-          <p class="font-bold">Perhatian</p>
-          <p class="mt-0.5">
-            Membatalkan transaksi akan mengubah status transaksi menjadi batal, mengembalikan stok produk, dan memotong uang tunai pada shift kasir jika dibayar tunai.
-          </p>
-        </div>
-
-        <div v-if="voidError" class="rounded-xl bg-danger/10 p-3 text-xs text-danger font-medium" data-testid="void-error">
-          {{ voidError }}
-        </div>
-
-        <div>
-          <label class="block text-xs font-semibold text-ink-primary mb-1">
-            Alasan Pembatalan <span class="text-danger">*</span>
-          </label>
-          <textarea
-            v-model="voidReason"
-            rows="3"
-            class="w-full rounded-xl border border-zinc-200 p-2.5 text-xs text-ink-primary placeholder:text-ink-secondary/50 focus:border-primary focus:outline-hidden dark:border-slate-700 dark:bg-slate-900 dark:text-white"
-            placeholder="Contoh: Pelanggan salah pesan / transaksi dobel / pesanan dibatalkan..."
-            data-testid="input-void-reason"
-          ></textarea>
-        </div>
-
-        <div class="flex items-center justify-end gap-2 pt-2 border-t border-zinc-100 dark:border-slate-800">
-          <BaseButton variant="secondary" size="md" @click="showVoidModal = false">
-            Kembali
-          </BaseButton>
-          <BaseButton
-            variant="danger"
-            size="md"
-            data-testid="btn-confirm-void"
-            :disabled="!voidReason.trim()"
-            @click="confirmVoidTransaction"
-          >
-            Konfirmasi Void
-          </BaseButton>
-        </div>
-      </div>
-    </BaseModal>
   </div>
 </template>

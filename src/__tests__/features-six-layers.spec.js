@@ -286,7 +286,7 @@ describe('6 Core Feature Layers in pos-mobile', () => {
       expect(prod.stock).toBe(12)
     })
 
-    it('ReceiptView provides interactive modals for changing payment method and voiding', async () => {
+    it('ReceiptView provides clean floating print bar without void or change-payment buttons', async () => {
       const txStore = useTransactionStore()
       const tx = txStore.createTransaction({
         id: 'tx-receipt-test',
@@ -304,35 +304,18 @@ describe('6 Core Feature Layers in pos-mobile', () => {
       })
       await flushPromises()
 
-      // Change payment modal
-      const changePayBtn = wrapper.find('[data-testid="btn-change-payment-method"]')
-      expect(changePayBtn.exists()).toBe(true)
-      await changePayBtn.trigger('click')
+      // Void & Change Payment buttons must not be present on ReceiptView
+      expect(wrapper.find('[data-testid="btn-change-payment-method"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="btn-void-transaction"]').exists()).toBe(false)
+
+      // Floating print bar is available
+      const printBar = wrapper.find('[data-testid="receipt-printer-bar"]')
+      expect(printBar.exists()).toBe(true)
+      expect(wrapper.find('[data-testid="btn-print-receipt"]').exists()).toBe(true)
+
+      // When transaction is cancelled/voided, badge-void-notice is shown
+      txStore.voidTransaction(tx.id, 'Pesanan dibatalkan tamu')
       await flushPromises()
-
-      const edcBtn = wrapper.find('[data-testid="btn-select-payment-edc"]')
-      expect(edcBtn.exists()).toBe(true)
-      await edcBtn.trigger('click')
-
-      await wrapper.find('[data-testid="btn-confirm-change-payment"]').trigger('click')
-      await flushPromises()
-
-      expect(txStore.items.find((it) => it.id === tx.id).paymentMethod).toBe('edc')
-
-      // Void modal
-      const voidBtn = wrapper.find('[data-testid="btn-void-transaction"]')
-      expect(voidBtn.exists()).toBe(true)
-      await voidBtn.trigger('click')
-      await flushPromises()
-
-      const voidReasonInput = wrapper.find('[data-testid="input-void-reason"]')
-      expect(voidReasonInput.exists()).toBe(true)
-      await voidReasonInput.setValue('Pesanan dibatalkan tamu')
-
-      await wrapper.find('[data-testid="btn-confirm-void"]').trigger('click')
-      await flushPromises()
-
-      expect(txStore.items.find((it) => it.id === tx.id).status).toBe('cancelled')
       expect(wrapper.find('[data-testid="badge-void-notice"]').exists()).toBe(true)
     })
   })
