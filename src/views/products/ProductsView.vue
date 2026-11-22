@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 
 import ProductQrModal from '@/components/products/ProductQrModal.vue'
 import VariantCloudLockModal from '@/components/products/VariantCloudLockModal.vue'
+import HppCloudLockModal from '@/components/products/HppCloudLockModal.vue'
 import { useRetailProductCodes } from '@/composables/useRetailProductCodes'
 
 import AppIcon from '@/components/base/AppIcon.vue'
@@ -29,6 +30,7 @@ const router = useRouter()
 const { isRetail, canManageCodes } = useRetailProductCodes()
 const qrProduct = ref(null)
 const showVariantModal = ref(false)
+const showHppModal = ref(false)
 
 function handleOpenProductQr(product) {
   if (!product) return
@@ -218,6 +220,33 @@ function resetFilters() {
             :class="hasCloudAccess ? 'text-primary' : 'text-amber-600'"
           />
           <span>Varian</span>
+          <span
+            v-if="!hasCloudAccess"
+            class="hidden sm:inline rounded-md bg-amber-200/80 px-1.5 py-0.2 text-[9px] font-extrabold uppercase tracking-wide text-amber-900"
+          >
+            Cloud
+          </span>
+        </button>
+
+        <!-- Hitung HPP & Persediaan Bahan (Locked when not Cloud) -->
+        <button
+          v-if="!isLaundry"
+          type="button"
+          data-testid="products-hpp-btn"
+          class="inline-flex h-9 items-center gap-1.5 rounded-xl border px-3 text-xs font-semibold shadow-xs transition active:scale-95"
+          :class="
+            hasCloudAccess
+              ? 'border-zinc-200/90 bg-white text-ink-primary hover:bg-zinc-50'
+              : 'border-amber-200/90 bg-amber-50/70 text-amber-800 hover:bg-amber-100/70'
+          "
+          @click="showHppModal = true"
+        >
+          <AppIcon
+            :name="hasCloudAccess ? 'calculator' : 'lock'"
+            class="h-3.5 w-3.5"
+            :class="hasCloudAccess ? 'text-primary' : 'text-amber-600'"
+          />
+          <span>HPP &amp; Bahan</span>
           <span
             v-if="!hasCloudAccess"
             class="hidden sm:inline rounded-md bg-amber-200/80 px-1.5 py-0.2 text-[9px] font-extrabold uppercase tracking-wide text-amber-900"
@@ -792,6 +821,7 @@ function resetFilters() {
       @close="qrProduct = null"
     />
     <VariantCloudLockModal :open="showVariantModal" @close="showVariantModal = false" />
+    <HppCloudLockModal :open="showHppModal" @close="showHppModal = false" />
 
     <!-- Floating Action Button (FAB) -->
     <button

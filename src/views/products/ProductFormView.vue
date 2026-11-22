@@ -6,6 +6,7 @@ import { useRoute, useRouter } from 'vue-router'
 import ProductScannerSheet from '@/components/scanner/ProductScannerSheet.vue'
 import ProductQrModal from '@/components/products/ProductQrModal.vue'
 import VariantCloudLockModal from '@/components/products/VariantCloudLockModal.vue'
+import HppCloudLockModal from '@/components/products/HppCloudLockModal.vue'
 import { useRetailProductCodes } from '@/composables/useRetailProductCodes'
 import { generateProductCode } from '@/services/products/productCodeService'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
@@ -32,6 +33,7 @@ const { isRetail, canManageCodes, scanContext } = useRetailProductCodes()
 const showScanner = ref(false)
 const showQr = ref(false)
 const showVariantModal = ref(false)
+const showHppModal = ref(false)
 const savedProduct = computed(() =>
   isEditMode.value ? productStore.getProductById(route.params.id) : null,
 )
@@ -651,9 +653,24 @@ watch(
 
           <!-- HPP Modal -->
           <div class="space-y-1">
+            <div class="flex items-center justify-between">
+              <label class="text-xs font-semibold text-ink-secondary">
+                {{ isLaundry ? 'Estimasi HPP / Unit (Rp)' : 'HPP Modal (Rp)' }}
+              </label>
+              <button
+                v-if="!isLaundry"
+                type="button"
+                data-testid="btn-hpp-recipe-helper"
+                class="inline-flex items-center gap-1 text-[11px] font-semibold text-primary hover:underline"
+                @click="showHppModal = true"
+              >
+                <AppIcon v-if="!hasCloudAccess" name="lock" class="h-3 w-3 text-amber-500" />
+                <AppIcon v-else name="calculator" class="h-3 w-3 text-primary" />
+                <span>{{ hasCloudAccess ? 'Hitung dari Resep' : 'Hitung dari Bahan (Cloud)' }}</span>
+              </button>
+            </div>
             <BaseInput
               :model-value="form.cost"
-              :label="isLaundry ? 'Estimasi HPP / Unit (Rp)' : 'HPP Modal (Rp)'"
               type="number"
               placeholder="0"
               @update:model-value="form.cost = $event"
@@ -789,6 +806,107 @@ watch(
               type="button"
               class="shrink-0 rounded-xl border border-zinc-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-primary shadow-2xs transition hover:bg-zinc-50"
               @click="showVariantModal = true"
+            >
+              Lihat
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- 3c. Hitung HPP & Persediaan Bahan (Locked with Upgrade to Cloud when not Cloud) -->
+      <section
+        v-if="!isLaundry"
+        data-testid="product-form-hpp-section"
+        class="rounded-3xl border border-zinc-200/80 bg-white p-4 shadow-soft space-y-3.5"
+      >
+        <div class="flex items-center justify-between gap-2">
+          <div class="flex items-center gap-2">
+            <h2 class="text-xs font-bold uppercase tracking-wider text-ink-secondary">
+              Hitung HPP &amp; Persediaan Bahan
+            </h2>
+          </div>
+
+          <span
+            v-if="!hasCloudAccess"
+            class="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-700"
+          >
+            <AppIcon name="lock" class="h-3 w-3" />
+            <span>Paket Cloud</span>
+          </span>
+          <span
+            v-else
+            class="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-primary"
+          >
+            <AppIcon name="cloud" class="h-3 w-3" />
+            <span>Cloud Aktif</span>
+          </span>
+        </div>
+
+        <!-- Locked State for Non-Cloud Users -->
+        <div
+          v-if="!hasCloudAccess"
+          data-testid="product-form-hpp-locked"
+          class="space-y-3 rounded-2xl border border-amber-200/90 bg-amber-50/60 p-3.5"
+        >
+          <div class="flex items-start gap-3">
+            <span
+              class="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-amber-100 text-amber-600"
+            >
+              <AppIcon name="lock" class="h-5 w-5" />
+            </span>
+            <div class="min-w-0 space-y-1">
+              <p class="text-sm font-bold text-ink-primary">Hitung HPP &amp; Persediaan Bahan Terkunci</p>
+              <p
+                class="text-xs leading-relaxed text-ink-secondary"
+                data-testid="product-form-hpp-lock-text"
+              >
+                Fitur hitung HPP otomatis dari resep dan pemotongan persediaan bahan baku (kopi, susu, sirup, cup) hanya tersedia pada Paket Cloud. Silakan upgrade ke Paket Cloud untuk mengaktifkan fitur ini.
+              </p>
+            </div>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-2 pt-0.5">
+            <button
+              type="button"
+              data-testid="btn-locked-add-hpp"
+              class="inline-flex h-9 items-center gap-1.5 rounded-xl border border-zinc-200 bg-white/80 px-3 text-xs font-semibold text-ink-secondary shadow-2xs transition hover:bg-white active:scale-95"
+              @click="showHppModal = true"
+            >
+              <AppIcon name="lock" class="h-3.5 w-3.5 text-amber-500" />
+              <span>Hitung HPP &amp; Resep Bahan</span>
+            </button>
+
+            <BaseButton
+              v-if="!isCashier"
+              type="button"
+              size="sm"
+              data-testid="btn-upgrade-cloud-hpp"
+              class="h-9 text-xs font-bold"
+              @click="goToUpgradeCloud"
+            >
+              <AppIcon name="cloud" class="h-3.5 w-3.5" />
+              <span>Upgrade ke Paket Cloud</span>
+            </BaseButton>
+          </div>
+        </div>
+
+        <!-- Cloud Active State -->
+        <div v-else class="space-y-3" data-testid="product-form-hpp-cloud">
+          <div
+            class="flex items-start justify-between gap-3 rounded-2xl border border-zinc-200/80 bg-surface/70 p-3 text-xs"
+          >
+            <div class="flex items-start gap-2.5">
+              <AppIcon name="calculator" class="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+              <p class="leading-relaxed text-ink-secondary">
+                Pengaturan takaran resep bahan baku dan kalkulasi HPP otomatis dikelola melalui
+                <strong class="font-semibold text-ink-primary">Dashboard Web Cloud</strong>, lalu
+                otomatis tersinkron ke POS Mobile.
+              </p>
+            </div>
+            <button
+              type="button"
+              class="shrink-0 rounded-xl border border-zinc-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-primary shadow-2xs transition hover:bg-zinc-50"
+              @click="showHppModal = true"
             >
               Lihat
             </button>
@@ -992,5 +1110,6 @@ watch(
     />
     <ProductQrModal :open="showQr && isRetail" :product="savedProduct" @close="showQr = false" />
     <VariantCloudLockModal :open="showVariantModal" @close="showVariantModal = false" />
+    <HppCloudLockModal :open="showHppModal" @close="showHppModal = false" />
   </div>
 </template>
