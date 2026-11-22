@@ -5,6 +5,7 @@ import { useExpenseStore } from '@/stores/expenseStore'
 import { useProductStore } from '@/stores/productStore'
 import { useShiftStore } from '@/stores/shiftStore'
 import { useTransactionStore } from '@/stores/transactionStore'
+import { usePromoStore } from '@/stores/promoStore'
 
 import { SYNC_BUSINESS_ENTITY_ID, SYNC_ENTITY_TYPES, SYNC_RESERVED_CATEGORY } from './syncConstants'
 
@@ -39,6 +40,7 @@ export function createSyncChangeTracker({ pinia, queueService, stores = {} }) {
   const expenseStore = stores.expenseStore ?? useExpenseStore(pinia)
   const transactionStore = stores.transactionStore ?? useTransactionStore(pinia)
   const shiftStore = stores.shiftStore ?? useShiftStore(pinia)
+  const promoStore = stores.promoStore ?? usePromoStore(pinia)
 
   const stopHandlers = []
 
@@ -388,6 +390,44 @@ export function createSyncChangeTracker({ pinia, queueService, stores = {} }) {
   track(shiftStore, 'closeShift', ({ after }) => {
     after(() => {
       enqueueShift(shiftStore)
+    })
+  })
+
+  // ---- PROMO (PROMO-D01) ----
+  track(promoStore, 'createPromo', ({ after }) => {
+    after((result) => {
+      if (result?.id) {
+        enqueueUpsert(SYNC_ENTITY_TYPES.PROMO, result.id, result)
+      }
+    })
+  })
+
+  track(promoStore, 'updatePromo', ({ after }) => {
+    after((result) => {
+      if (result?.id) {
+        enqueueUpsert(SYNC_ENTITY_TYPES.PROMO, result.id, result)
+      }
+    })
+  })
+
+  track(promoStore, 'togglePromoStatus', ({ args, after }) => {
+    const [id] = args
+    after((result) => {
+      if (result) {
+        const promo = promoStore.promos.find(
+          (p) => String(p.id) === String(id) || String(p.syncId) === String(id),
+        )
+        if (promo) {
+          enqueueUpsert(SYNC_ENTITY_TYPES.PROMO, promo.id, promo)
+        }
+      }
+    })
+  })
+
+  track(promoStore, 'removePromo', ({ args, after }) => {
+    const [id] = args
+    after(() => {
+      enqueueDelete(SYNC_ENTITY_TYPES.PROMO, id)
     })
   })
 

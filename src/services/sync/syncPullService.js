@@ -1899,6 +1899,7 @@ export function createSyncPullService({
           endTime: data.end_time ?? null,
           usageLimitTotal: data.usage_limit_total !== null && data.usage_limit_total !== undefined ? Number(data.usage_limit_total) : null,
           usageLimitPerCustomer: data.usage_limit_per_customer !== null && data.usage_limit_per_customer !== undefined ? Number(data.usage_limit_per_customer) : null,
+          usageCount: Number(data.usage_count ?? data.usageCount ?? 0),
           isStackable: Boolean(data.is_stackable),
           status: data.status ?? 'active',
           targets: Array.isArray(data.targets) ? data.targets : [],
@@ -1909,7 +1910,7 @@ export function createSyncPullService({
           (p) => String(p.id).toLowerCase() === syncId || String(p.syncId).toLowerCase() === syncId,
         )
 
-        if (data.status === 'deleted' || data.status === 'inactive') {
+        if (data.status === 'deleted') {
           if (existingPromoIndex !== -1) {
             nextPromos.splice(existingPromoIndex, 1)
           }

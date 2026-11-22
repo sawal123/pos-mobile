@@ -395,7 +395,11 @@ async function completePayment() {
         subtotal: cartStore.subtotal,
         discount: cartStore.discount,
         discountLabel: cartStore.discountLabel || null,
-        promoSyncId: cartStore.appliedPromo?.sync_id ?? null,
+        promoSyncId:
+          cartStore.appliedPromo?.syncId ??
+          cartStore.appliedPromo?.sync_id ??
+          cartStore.appliedPromo?.id ??
+          null,
         appliedPromo: cartStore.appliedPromo,
         tax: cartStore.tax,
         taxEnabled: taxStore.enabled,

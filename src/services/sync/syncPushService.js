@@ -505,6 +505,7 @@ export function createSyncPushService({
       changes.expenses.length > MAX_ENTITY_PER_TYPE ||
       changes.cash_ledger.length > MAX_ENTITY_PER_TYPE ||
       changes.stock_movements.length > MAX_ENTITY_PER_TYPE ||
+      (changes.promos?.length || 0) > MAX_ENTITY_PER_TYPE ||
       changes.deletions.length > MAX_ENTITY_PER_TYPE
     )
   }
@@ -1206,6 +1207,7 @@ export function createSyncPushService({
           expenses: [],
           cash_ledger: [],
           stock_movements: [],
+          promos: [],
           deletions: [],
         }
 
@@ -1392,6 +1394,7 @@ export function createSyncPushService({
             mapped.changes.expenses.length > 0 ||
             mapped.changes.cash_ledger.length > 0 ||
             mapped.changes.stock_movements.length > 0 ||
+            (mapped.changes.promos?.length || 0) > 0 ||
             mapped.changes.deletions.length > 0
 
           if (!isMapped || !hasServerChanges) {
@@ -1461,6 +1464,9 @@ export function createSyncPushService({
           accumulatedChanges.expenses.push(...mapped.changes.expenses)
           accumulatedChanges.cash_ledger.push(...mapped.changes.cash_ledger)
           accumulatedChanges.stock_movements.push(...mapped.changes.stock_movements)
+          if (mapped.changes.promos) {
+            accumulatedChanges.promos.push(...mapped.changes.promos)
+          }
           accumulatedChanges.deletions.push(...mapped.changes.deletions)
 
           if (entry.entityType === SYNC_ENTITY_TYPES.CATEGORY) {

@@ -13,6 +13,7 @@ export const SYNC_ENTITY_TYPES = {
   SHIFT: 'shift',
   CASH_ENTRY: 'cash_entry',
   STOCK_MOVEMENT: 'stock_movement',
+  PROMO: 'promo',
 }
 
 export const SYNC_QUEUE_DEFAULT_LIMIT = 100

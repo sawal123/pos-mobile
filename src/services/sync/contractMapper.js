@@ -93,6 +93,7 @@ export async function mapOutboxEntries(
     expenses: [],
     cash_ledger: [],
     stock_movements: [],
+    promos: [],
     deletions: [],
   }
 
@@ -116,6 +117,7 @@ export async function mapOutboxEntries(
         [SYNC_ENTITY_TYPES.PRODUCT]: 'products',
         [SYNC_ENTITY_TYPES.CUSTOMER]: 'customers',
         [SYNC_ENTITY_TYPES.EXPENSE]: 'expenses',
+        [SYNC_ENTITY_TYPES.PROMO]: 'promos',
       }
 
       const tombstoneTarget = tombstoneEntities[entityType]
@@ -770,6 +772,7 @@ export async function mapOutboxEntries(
         payload.promo_sync_id ??
         payload.appliedPromo?.sync_id ??
         payload.appliedPromo?.syncId ??
+        payload.appliedPromo?.id ??
         null
 
       if (rawPromoSyncId && isUuid(rawPromoSyncId)) {
@@ -1198,7 +1201,67 @@ export async function mapOutboxEntries(
       continue
     }
 
-    // ── 11. Unknown entity type fallback
+    // ── 11. Promo (PROMO-D01)
+    if (entityType === SYNC_ENTITY_TYPES.PROMO) {
+      // Upsert promo
+      let syncId = await activeRegistry.resolveSyncId(SYNC_ENTITY_TYPES.PROMO, entityId)
+      if (!syncId || !isUuid(syncId)) {
+        syncId = payload.syncId || payload.id || entityId
+      }
+
+      const discVal = Number(payload.discountValue ?? 0)
+      const discountValue =
+        payload.discountType === 'percent' && discVal > 0 && discVal <= 100
+          ? discVal * 100
+          : discVal
+
+      const promoChange = {
+        sync_id: syncId,
+        name: String(payload.name ?? '').trim(),
+        code: payload.code ? String(payload.code).trim().toUpperCase() : null,
+        discount_type: payload.discountType || 'fixed',
+        discount_value: discountValue,
+        scope: payload.scope || 'all',
+        min_purchase: Number(payload.minPurchase ?? 0),
+        max_discount:
+          payload.maxDiscount !== null &&
+          payload.maxDiscount !== undefined &&
+          payload.maxDiscount !== ''
+            ? Number(payload.maxDiscount)
+            : null,
+        weekdays: payload.weekdays ?? null,
+        starts_at: payload.startsAt ? new Date(payload.startsAt).toISOString() : null,
+        ends_at: payload.endsAt ? new Date(payload.endsAt).toISOString() : null,
+        start_time: payload.startTime ?? null,
+        end_time: payload.endTime ?? null,
+        usage_limit_total:
+          payload.usageLimitTotal !== null &&
+          payload.usageLimitTotal !== undefined &&
+          payload.usageLimitTotal !== ''
+            ? Number(payload.usageLimitTotal)
+            : null,
+        usage_limit_per_customer:
+          payload.usageLimitPerCustomer !== null &&
+          payload.usageLimitPerCustomer !== undefined &&
+          payload.usageLimitPerCustomer !== ''
+            ? Number(payload.usageLimitPerCustomer)
+            : null,
+        is_stackable: Boolean(payload.isStackable),
+        status: payload.status ?? 'active',
+        targets: Array.isArray(payload.targets) ? payload.targets : [],
+      }
+
+      const promoBaseVer = extractServerSyncVersion(serverVersions, 'promos', syncId)
+      if (promoBaseVer !== undefined) {
+        promoChange.base_sync_version = promoBaseVer
+      }
+
+      changes.promos.push(promoChange)
+      mappedQueueIds.push(queueId)
+      continue
+    }
+
+    // ── 12. Unknown entity type fallback
     blocked.push({
       queueId,
       entityType,

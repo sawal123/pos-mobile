@@ -1003,6 +1003,80 @@ describe('P11: Mapper Durability & Fail-Closed Factory Guards', () => {
   })
 })
 
+describe('P11: Promo Mapping', () => {
+  let adapter
+  let registry
+
+  beforeEach(async () => {
+    adapter = createMemoryAdapter()
+    await adapter.initialize()
+    registry = createSyncIdentityRegistry({ adapter })
+  })
+
+  it('maps valid promo upsert with basis points for percentage discount and targets', async () => {
+    const promoUuid = '11111111-2222-4333-8444-555555555555'
+    const entries = [
+      {
+        id: 'q-promo-1',
+        entityType: SYNC_ENTITY_TYPES.PROMO,
+        entityId: promoUuid,
+        operation: SYNC_OPERATIONS.UPSERT,
+        payload: {
+          id: promoUuid,
+          syncId: promoUuid,
+          name: 'Diskon Kopi 20%',
+          code: 'KOPI20',
+          discountType: 'percent',
+          discountValue: 20,
+          scope: 'product',
+          minPurchase: 10000,
+          maxDiscount: 5000,
+          usageLimitTotal: 100,
+          isStackable: false,
+          status: 'active',
+          targets: [{ target_type: 'product', target_sync_id: 'prod-uuid-1', name: 'Americano' }],
+        },
+      },
+    ]
+
+    const result = await mapOutboxEntries(entries, { registry })
+    expect(result.changes.promos).toHaveLength(1)
+    const mapped = result.changes.promos[0]
+    expect(mapped.sync_id).toBe(promoUuid)
+    expect(mapped.name).toBe('Diskon Kopi 20%')
+    expect(mapped.code).toBe('KOPI20')
+    expect(mapped.discount_type).toBe('percent')
+    expect(mapped.discount_value).toBe(2000) // Basis points
+    expect(mapped.scope).toBe('product')
+    expect(mapped.min_purchase).toBe(10000)
+    expect(mapped.max_discount).toBe(5000)
+    expect(mapped.usage_limit_total).toBe(100)
+    expect(mapped.status).toBe('active')
+    expect(mapped.targets).toHaveLength(1)
+    expect(result.mappedQueueIds).toEqual(['q-promo-1'])
+  })
+
+  it('maps promo delete to changes.deletions with entity promos', async () => {
+    const promoUuid = '22222222-3333-4444-8555-666666666666'
+    const entries = [
+      {
+        id: 'q-promo-del',
+        entityType: SYNC_ENTITY_TYPES.PROMO,
+        entityId: promoUuid,
+        operation: SYNC_OPERATIONS.DELETE,
+      },
+    ]
+
+    const result = await mapOutboxEntries(entries, { registry })
+    expect(result.changes.deletions).toHaveLength(1)
+    expect(result.changes.deletions[0]).toEqual({
+      entity: 'promos',
+      sync_id: promoUuid,
+    })
+    expect(result.mappedQueueIds).toEqual(['q-promo-del'])
+  })
+})
+
 describe('P11: Strict Network & Storage Isolation', () => {
   it('does not invoke global fetch or make HTTP calls during contract mapping', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
