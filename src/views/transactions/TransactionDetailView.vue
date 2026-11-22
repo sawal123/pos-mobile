@@ -773,7 +773,7 @@ async function copyInvoiceNumber() {
               data-testid="btn-open-settle-modal"
               @click="openSettlement"
             >
-              Lunasi Pembayaran
+              Lunasi
             </BaseButton>
           </div>
         </div>
@@ -821,10 +821,21 @@ async function copyInvoiceNumber() {
               :key="status"
               size="sm"
               :variant="currentOrderStatus === status ? 'primary' : 'secondary'"
-              class="w-full text-xs"
+              class="w-full text-xs inline-flex items-center justify-center gap-1.5"
               @click="handleUpdateOrderStatus(status)"
             >
-              {{ status }}
+              <svg v-if="status === 'Proses'" class="h-3.5 w-3.5 shrink-0 text-amber-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <polyline points="12 6 12 12 16 14" />
+              </svg>
+              <svg v-else-if="status === 'Siap'" class="h-3.5 w-3.5 shrink-0 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+              <svg v-else-if="status === 'Batal'" class="h-3.5 w-3.5 shrink-0 text-rose-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+              </svg>
+              <span>{{ status }}</span>
             </BaseButton>
           </div>
         </div>

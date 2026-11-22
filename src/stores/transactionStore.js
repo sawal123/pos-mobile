@@ -277,29 +277,38 @@ export const useTransactionStore = defineStore('transaction', {
       return this.addTransaction(order)
     },
     updateOrderStatus(id, status) {
-      const transaction = this.items.find((item) => item.id === id)
+      const transaction =
+        this.items.find((item) => String(item.id) === String(id)) ||
+        (this.lastTransaction && String(this.lastTransaction.id) === String(id) ? this.lastTransaction : null)
 
       if (!transaction || !ALL_ORDER_STATUSES.includes(status)) {
         return false
       }
 
-      const currentIndex = ORDER_LIFECYCLE.indexOf(transaction.orderStatus)
-      const targetIndex = ORDER_LIFECYCLE.indexOf(status)
+      // Linear lifecycle constraint only applies when BOTH statuses belong strictly to laundry ORDER_LIFECYCLE
+      const isLaundryLifecycle =
+        ORDER_LIFECYCLE.includes(transaction.orderStatus) && ORDER_LIFECYCLE.includes(status)
 
-      if (currentIndex !== -1 && targetIndex !== -1) {
-        if (currentIndex === targetIndex) {
-          return true
-        }
-        if (targetIndex !== currentIndex + 1) {
-          return false
+      if (isLaundryLifecycle) {
+        const currentIndex = ORDER_LIFECYCLE.indexOf(transaction.orderStatus)
+        const targetIndex = ORDER_LIFECYCLE.indexOf(status)
+
+        if (currentIndex !== -1 && targetIndex !== -1) {
+          if (currentIndex === targetIndex) {
+            return true
+          }
+          if (targetIndex !== currentIndex + 1) {
+            return false
+          }
         }
       }
 
       transaction.orderStatus = status
       transaction.updatedAt = new Date().toISOString()
 
-      if (this.lastTransaction?.id === id) {
-        this.lastTransaction = transaction
+      if (this.lastTransaction && String(this.lastTransaction.id) === String(id)) {
+        this.lastTransaction.orderStatus = status
+        this.lastTransaction.updatedAt = transaction.updatedAt
       }
 
       return true
