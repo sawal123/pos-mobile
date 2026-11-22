@@ -89,7 +89,7 @@ describe('UI Improvements Round 2 (User Feedback)', () => {
   })
 
   describe('3. ActiveOrdersSheet & TransactionCard - Tambah Pesanan Visibility', () => {
-    it('displays Tambah Pesanan button in header of ActiveOrdersSheet without needing to scroll', () => {
+    it('displays single Tambah Pesanan button in action row of ActiveOrdersSheet (no duplicate in header)', () => {
       const transactionStore = useTransactionStore()
       transactionStore.items = [
         {
@@ -114,9 +114,14 @@ describe('UI Improvements Round 2 (User Feedback)', () => {
         global: { plugins: [pinia, router] },
       })
 
+      // Duplicate button in header is removed
       const headerAddBtn = wrapper.find('[data-testid="btn-add-items-to-order-header"]')
-      expect(headerAddBtn.exists()).toBe(true)
-      expect(headerAddBtn.text()).toContain('Pesanan')
+      expect(headerAddBtn.exists()).toBe(false)
+
+      // Single button in action section exists
+      const actionAddBtn = wrapper.find('[data-testid="btn-add-items-to-order"]')
+      expect(actionAddBtn.exists()).toBe(true)
+      expect(actionAddBtn.text()).toContain('Pesanan')
     })
 
     it('displays direct Tambah Pesanan button on TransactionCard for in-process orders', async () => {
