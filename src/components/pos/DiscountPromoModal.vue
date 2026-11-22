@@ -136,12 +136,24 @@ function applyVoucherCode() {
 
   const promo = promoStore.findPromoByCode(code)
   if (!promo) {
+    const rawPromo = promoStore.promos.find(
+      (p) => p.code && p.code.trim().toUpperCase() === code.toUpperCase(),
+    )
+    if (rawPromo) {
+      const limit = rawPromo.usageLimitTotal ?? rawPromo.usage_limit_total
+      const count = Number(rawPromo.usageCount ?? rawPromo.usage_count ?? 0)
+      if (limit !== null && limit !== undefined && Number(limit) > 0 && count >= Number(limit)) {
+        promoErrorMessage.value = 'Batas kuota penggunaan promo ini telah habis.'
+        return
+      }
+    }
     promoErrorMessage.value = 'Kode promo tidak valid atau telah berakhir'
     return
   }
 
   if (promo.scope === 'customer' && !cartStore.selectedCustomer) {
-    promoErrorMessage.value = 'Promo ini khusus untuk pelanggan terdaftar. Silakan pilih pelanggan di kasir terlebih dahulu.'
+    promoErrorMessage.value =
+      'Promo ini khusus untuk pelanggan terdaftar. Silakan pilih pelanggan di kasir terlebih dahulu.'
     return
   }
 
@@ -351,7 +363,7 @@ function selectPromo(promo) {
                 </div>
                 <p class="text-[11px] text-ink-secondary">
                   <span v-if="(promo.discountType ?? promo.discount_type ?? promo.type) === 'percent'">
-                    Diskon {{ Number(promo.discountValue ?? promo.discount_value ?? 0) / 100 }}%
+                    Diskon {{ Number(promo.discountValue ?? promo.discount_value ?? 0) > 100 ? Number(promo.discountValue ?? promo.discount_value ?? 0) / 100 : Number(promo.discountValue ?? promo.discount_value ?? 0) }}%
                   </span>
                   <span v-else-if="(promo.discountType ?? promo.discount_type ?? promo.type) === 'fixed'">
                     Potongan {{ formatCurrency(promo.discountValue ?? promo.discount_value ?? 0) }}
@@ -361,6 +373,9 @@ function selectPromo(promo) {
                   </span>
                   <span v-if="Number(promo.minPurchase ?? promo.min_purchase ?? 0) > 0">
                     &bull; Min. {{ formatCurrency(promo.minPurchase ?? promo.min_purchase) }}
+                  </span>
+                  <span v-if="promo.usageLimitTotal || promo.usage_limit_total">
+                    &bull; Sisa Kuota: {{ Math.max(0, (promo.usageLimitTotal ?? promo.usage_limit_total) - (promo.usageCount ?? promo.usage_count ?? 0)) }}
                   </span>
                 </p>
               </div>

@@ -22,6 +22,7 @@ const isCashier = computed(
 const searchQuery = ref('')
 const filterStatus = ref('all') // 'all' | 'active' | 'inactive'
 const showCreateModal = ref(false)
+const selectedPromoToEdit = ref(null)
 const toastMessage = ref('')
 
 function showToast(msg) {
@@ -59,6 +60,22 @@ const filteredPromos = computed(() => {
   return list
 })
 
+function handleCreateNewPromo() {
+  selectedPromoToEdit.value = null
+  showCreateModal.value = true
+}
+
+function handleEditPromo(promo) {
+  if (isCashier.value) return
+  selectedPromoToEdit.value = promo
+  showCreateModal.value = true
+}
+
+function handleCloseModal() {
+  showCreateModal.value = false
+  selectedPromoToEdit.value = null
+}
+
 function handleToggleStatus(promo) {
   if (isCashier.value) return
   const promoId = promo.id || promo.syncId
@@ -77,13 +94,48 @@ function handleDeletePromo(promo) {
   showToast(`Promo "${promo.name}" telah dihapus.`)
 }
 
-function handlePromoCreated(newPromo) {
+function handlePromoSaved(savedPromo) {
   if (isCashier.value) return
-  showToast(`Promo "${newPromo.name}" berhasil dibuat!`)
+  const isEdit = Boolean(selectedPromoToEdit.value)
+  showToast(
+    isEdit
+      ? `Promo "${savedPromo.name}" berhasil diperbarui!`
+      : `Promo "${savedPromo.name}" berhasil dibuat!`,
+  )
   notificationStore.notifySuccessAndSync({
-    title: 'Promo Berhasil Dibuat',
-    message: `Promo "${newPromo.name}" siap digunakan.`,
+    title: isEdit ? 'Promo Berhasil Diperbarui' : 'Promo Berhasil Dibuat',
+    message: `Promo "${savedPromo.name}" siap digunakan.`,
   })
+  selectedPromoToEdit.value = null
+}
+
+function getScopeLabel(promo) {
+  if (promo.scope === 'product' || promo.scope === 'item') {
+    const count = promo.targets
+      ? promo.targets.filter(
+          (t) =>
+            (t.target_type ?? t.targetType) === 'product' ||
+            (t.target_type ?? t.targetType) === 'item',
+        ).length
+      : 0
+    return `Menu tertentu (${count} menu)`
+  }
+  if (promo.scope === 'category') {
+    return 'Kategori khusus'
+  }
+  if (promo.scope === 'customer') {
+    return 'Khusus Pelanggan'
+  }
+  return 'Semua produk'
+}
+
+function isQuotaExhausted(promo) {
+  const limit = promo.usageLimitTotal ?? promo.usage_limit_total
+  if (limit !== null && limit !== undefined && Number(limit) > 0) {
+    const count = Number(promo.usageCount ?? promo.usage_count ?? 0)
+    return count >= Number(limit)
+  }
+  return false
 }
 
 function formatValidity(promo) {
@@ -309,9 +361,17 @@ function formatValidity(promo) {
             </span>
           </div>
 
-          <BaseBadge :variant="promo.status === 'active' ? 'success' : 'neutral'">
-            {{ promo.status === 'active' ? 'Aktif' : 'Nonaktif' }}
-          </BaseBadge>
+          <div class="flex items-center gap-1.5">
+            <span
+              v-if="isQuotaExhausted(promo)"
+              class="inline-flex items-center rounded-xl bg-rose-500/15 px-2 py-0.8 text-[11px] font-bold text-rose-700 dark:bg-rose-950/40 dark:text-rose-300"
+            >
+              Kuota Habis
+            </span>
+            <BaseBadge :variant="promo.status === 'active' ? 'success' : 'neutral'">
+              {{ promo.status === 'active' ? 'Aktif' : 'Nonaktif' }}
+            </BaseBadge>
+          </div>
         </div>
 
         <!-- Middle Row: Promo Details -->
@@ -338,7 +398,18 @@ function formatValidity(promo) {
             <!-- Scope -->
             <span class="flex items-center gap-1">
               <span class="text-zinc-400">•</span>
-              {{ promo.scope === 'category' ? `Kategori khusus` : (promo.scope === 'customer' ? 'Khusus Pelanggan' : 'Semua produk') }}
+              {{ getScopeLabel(promo) }}
+            </span>
+
+            <!-- Quota Limit -->
+            <span class="flex items-center gap-1">
+              <span class="text-zinc-400">•</span>
+              <span v-if="promo.usageLimitTotal || promo.usage_limit_total">
+                Kuota: {{ promo.usageCount || promo.usage_count || 0 }} / {{ promo.usageLimitTotal || promo.usage_limit_total }}
+              </span>
+              <span v-else>
+                Kuota: Tanpa batas
+              </span>
             </span>
 
             <!-- Validity -->
@@ -356,6 +427,29 @@ function formatValidity(promo) {
           </div>
 
           <div v-if="!isCashier" class="flex items-center gap-2">
+            <!-- Edit button -->
+            <button
+              type="button"
+              data-testid="btn-edit-promo"
+              class="flex items-center gap-1 rounded-xl border border-zinc-200 px-2.5 py-1.5 text-xs font-semibold text-ink-secondary transition hover:border-primary hover:text-primary hover:bg-primary/5 dark:border-slate-700 dark:hover:bg-slate-800 cursor-pointer"
+              title="Edit Promo"
+              @click="handleEditPromo(promo)"
+            >
+              <svg
+                class="h-3.5 w-3.5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+              </svg>
+              <span>Edit</span>
+            </button>
+
             <!-- Toggle status button -->
             <button
               type="button"
@@ -424,7 +518,7 @@ function formatValidity(promo) {
           class="inline-flex h-11 w-11 items-center justify-center rounded-2xl bg-primary text-white shadow-soft transition hover:bg-primary-light active:scale-95 cursor-pointer"
           title="Buat Promo Baru"
           aria-label="Buat Promo Baru"
-          @click="showCreateModal = true"
+          @click="handleCreateNewPromo"
         >
           <svg
             class="h-5 w-5"
@@ -450,7 +544,7 @@ function formatValidity(promo) {
       class="fixed right-5 bottom-[calc(env(safe-area-inset-bottom)+6.75rem)] md:bottom-8 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-primary text-white shadow-[0_10px_25px_rgba(73,69,214,0.45)] transition hover:bg-primary-light active:scale-95 cursor-pointer"
       title="Buat Promo"
       aria-label="Buat Promo"
-      @click="showCreateModal = true"
+      @click="handleCreateNewPromo"
     >
       <svg
         class="h-6 w-6"
@@ -467,11 +561,12 @@ function formatValidity(promo) {
       <span class="sr-only">Buat Promo</span>
     </button>
 
-    <!-- Promo Create Modal -->
+    <!-- Promo Modal (Create / Edit) -->
     <PromoCreateModal
       :open="showCreateModal"
-      @close="showCreateModal = false"
-      @saved="handlePromoCreated"
+      :promo="selectedPromoToEdit"
+      @close="handleCloseModal"
+      @saved="handlePromoSaved"
     />
   </div>
 </template>

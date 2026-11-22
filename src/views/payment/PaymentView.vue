@@ -446,6 +446,10 @@ async function completePayment() {
       itemCount: transaction.itemCount ?? 0,
     }
 
+    if (cartStore.appliedPromo) {
+      promoStore.incrementPromoUsage(cartStore.appliedPromo.id || cartStore.appliedPromo.syncId)
+    }
+
     cartStore.clearCart()
     isCashModalOpen.value = false
 

@@ -55,6 +55,15 @@ export function isPromoActive(promo, now = new Date()) {
     }
   }
 
+  // 4. Usage limit check
+  const usageLimitTotal = promo.usageLimitTotal ?? promo.usage_limit_total
+  const usageCount = Number(promo.usageCount ?? promo.usage_count ?? 0)
+  if (usageLimitTotal !== null && usageLimitTotal !== undefined && Number(usageLimitTotal) > 0) {
+    if (usageCount >= Number(usageLimitTotal)) {
+      return false
+    }
+  }
+
   return true
 }
 
@@ -167,8 +176,9 @@ export function evaluatePromoDiscount(promo, cartItems = [], customer = null) {
   let discount = 0
 
   if (discountType === 'percent') {
-    // discountValue is in basis points (1000 = 10.00%, 10000 = 100%)
-    discount = Math.round((eligibleAmount * discountValue) / 10000)
+    // Support both basis points (e.g. 1000 = 10%, 10000 = 100%) and direct percentage (e.g. 10 = 10%, 100 = 100%)
+    const rate = discountValue > 100 ? discountValue / 10000 : discountValue / 100
+    discount = Math.round(eligibleAmount * rate)
     const maxDiscount = promo.maxDiscount !== undefined && promo.maxDiscount !== null
       ? Number(promo.maxDiscount)
       : (promo.max_discount !== undefined && promo.max_discount !== null ? Number(promo.max_discount) : null)
@@ -250,6 +260,13 @@ export const usePromoStore = defineStore('promo', {
         endsAt: promoData.endsAt ?? null,
         startTime: promoData.startTime ?? null,
         endTime: promoData.endTime ?? null,
+        usageLimitTotal:
+          promoData.usageLimitTotal !== undefined &&
+          promoData.usageLimitTotal !== null &&
+          promoData.usageLimitTotal !== ''
+            ? Number(promoData.usageLimitTotal)
+            : null,
+        usageCount: Number(promoData.usageCount ?? promoData.usage_count ?? 0),
         isStackable: Boolean(promoData.isStackable),
         status: promoData.status ?? 'active',
         targets: Array.isArray(promoData.targets) ? promoData.targets : [],
@@ -258,6 +275,73 @@ export const usePromoStore = defineStore('promo', {
       }
       this.upsertPromo(newPromo)
       return newPromo
+    },
+
+    updatePromo(promoId, promoData) {
+      if (isCashierRole()) {
+        throw new Error('Kasir tidak diizinkan mengubah promo.')
+      }
+      const targetId = String(promoId)
+      const index = this.promos.findIndex(
+        (p) => String(p.id) === targetId || String(p.syncId) === targetId,
+      )
+      if (index === -1) {
+        throw new Error('Promo tidak ditemukan.')
+      }
+
+      const existing = this.promos[index]
+      const updated = {
+        ...existing,
+        name: promoData.name !== undefined ? String(promoData.name).trim() : existing.name,
+        code: promoData.code !== undefined ? (promoData.code ? String(promoData.code).trim().toUpperCase() : null) : existing.code,
+        discountType: promoData.discountType ?? existing.discountType,
+        discountValue: promoData.discountValue !== undefined ? Number(promoData.discountValue) : existing.discountValue,
+        scope: promoData.scope ?? existing.scope,
+        minPurchase: promoData.minPurchase !== undefined ? Number(promoData.minPurchase) : existing.minPurchase,
+        maxDiscount:
+          promoData.maxDiscount !== undefined
+            ? (promoData.maxDiscount !== null && promoData.maxDiscount !== '' ? Number(promoData.maxDiscount) : null)
+            : existing.maxDiscount,
+        usageLimitTotal:
+          promoData.usageLimitTotal !== undefined
+            ? (promoData.usageLimitTotal !== null && promoData.usageLimitTotal !== '' ? Number(promoData.usageLimitTotal) : null)
+            : existing.usageLimitTotal,
+        weekdays: promoData.weekdays !== undefined ? promoData.weekdays : existing.weekdays,
+        startsAt: promoData.startsAt !== undefined ? promoData.startsAt : existing.startsAt,
+        endsAt: promoData.endsAt !== undefined ? promoData.endsAt : existing.endsAt,
+        startTime: promoData.startTime !== undefined ? promoData.startTime : existing.startTime,
+        endTime: promoData.endTime !== undefined ? promoData.endTime : existing.endTime,
+        isStackable: promoData.isStackable !== undefined ? Boolean(promoData.isStackable) : existing.isStackable,
+        status: promoData.status ?? existing.status,
+        targets: Array.isArray(promoData.targets) ? promoData.targets : existing.targets,
+        updatedAt: new Date().toISOString(),
+      }
+
+      this.promos[index] = updated
+
+      if (String(this.appliedPromoId) === targetId && updated.status === 'inactive') {
+        this.appliedPromoId = null
+      }
+
+      return updated
+    },
+
+    incrementPromoUsage(promoId) {
+      if (!promoId) return
+      const targetId = String(promoId)
+      const index = this.promos.findIndex(
+        (p) => String(p.id) === targetId || String(p.syncId) === targetId,
+      )
+      if (index >= 0) {
+        const promo = this.promos[index]
+        const currentCount = Number(promo.usageCount ?? promo.usage_count ?? 0)
+        this.promos[index] = {
+          ...promo,
+          usageCount: currentCount + 1,
+          usage_count: currentCount + 1,
+          updatedAt: new Date().toISOString(),
+        }
+      }
     },
 
     togglePromoStatus(promoId) {

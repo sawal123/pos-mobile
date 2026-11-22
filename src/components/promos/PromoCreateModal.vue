@@ -5,11 +5,16 @@ import PinConfirmationModal from '@/components/auth/PinConfirmationModal.vue'
 import { usePromoStore } from '@/stores/promoStore'
 import { useProductStore } from '@/stores/productStore'
 import { useCustomerStore } from '@/stores/customerStore'
+import { formatCurrency } from '@/utils/formatters'
 
 const props = defineProps({
   open: {
     type: Boolean,
     default: false,
+  },
+  promo: {
+    type: Object,
+    default: null,
   },
 })
 
@@ -19,15 +24,20 @@ const promoStore = usePromoStore()
 const productStore = useProductStore()
 const customerStore = useCustomerStore()
 
+const isEditing = computed(() => Boolean(props.promo))
+
 const name = ref('')
 const code = ref('')
 const discountType = ref('fixed') // 'fixed' | 'percent'
 const discountValue = ref('')
 const minPurchase = ref('')
 const maxDiscount = ref('')
-const scope = ref('all') // 'all' | 'category' | 'customer'
+const usageLimitTotal = ref('')
+const scope = ref('all') // 'all' | 'product' | 'category' | 'customer'
 const selectedCategory = ref('')
 const selectedCustomer = ref('')
+const selectedProductIds = ref([])
+const productSearchQuery = ref('')
 const startsAt = ref('')
 const endsAt = ref('')
 const isActive = ref(true)
@@ -42,9 +52,12 @@ function resetForm() {
   discountValue.value = ''
   minPurchase.value = ''
   maxDiscount.value = ''
+  usageLimitTotal.value = ''
   scope.value = 'all'
   selectedCategory.value = ''
   selectedCustomer.value = ''
+  selectedProductIds.value = []
+  productSearchQuery.value = ''
   startsAt.value = ''
   endsAt.value = ''
   isActive.value = true
@@ -52,17 +65,143 @@ function resetForm() {
   showPinModal.value = false
 }
 
+function populateForm() {
+  if (props.promo) {
+    name.value = props.promo.name || ''
+    code.value = props.promo.code || ''
+    discountType.value = props.promo.discountType || props.promo.discount_type || 'fixed'
+    discountValue.value = String(props.promo.discountValue ?? props.promo.discount_value ?? '')
+    minPurchase.value =
+      props.promo.minPurchase || props.promo.min_purchase
+        ? String(props.promo.minPurchase ?? props.promo.min_purchase)
+        : ''
+    maxDiscount.value =
+      props.promo.maxDiscount || props.promo.max_discount
+        ? String(props.promo.maxDiscount ?? props.promo.max_discount)
+        : ''
+
+    const limit = props.promo.usageLimitTotal ?? props.promo.usage_limit_total
+    usageLimitTotal.value = limit !== null && limit !== undefined && limit !== '' ? String(limit) : ''
+
+    const promoScope = props.promo.scope || 'all'
+    scope.value = promoScope === 'item' ? 'product' : promoScope
+
+    const targets = Array.isArray(props.promo.targets) ? props.promo.targets : []
+
+    if (scope.value === 'product') {
+      selectedProductIds.value = targets
+        .filter(
+          (t) =>
+            (t.target_type ?? t.targetType) === 'product' ||
+            (t.target_type ?? t.targetType) === 'item',
+        )
+        .map((t) =>
+          String(t.target_sync_id ?? t.targetSyncId ?? t.target_id ?? t.targetId ?? t.value ?? ''),
+        )
+        .filter(Boolean)
+    } else {
+      selectedProductIds.value = []
+    }
+
+    if (scope.value === 'category') {
+      const catTarget = targets.find((t) => (t.target_type ?? t.targetType) === 'category')
+      selectedCategory.value = catTarget
+        ? String(catTarget.target_sync_id ?? catTarget.targetSyncId ?? catTarget.value ?? catTarget.name ?? '')
+        : ''
+    } else {
+      selectedCategory.value = ''
+    }
+
+    if (scope.value === 'customer') {
+      const custTarget = targets.find((t) => (t.target_type ?? t.targetType) === 'customer')
+      selectedCustomer.value = custTarget
+        ? String(custTarget.target_sync_id ?? custTarget.targetSyncId ?? custTarget.value ?? '')
+        : ''
+    } else {
+      selectedCustomer.value = ''
+    }
+
+    startsAt.value = props.promo.startsAt
+      ? String(props.promo.startsAt).split('T')[0]
+      : props.promo.starts_at
+        ? String(props.promo.starts_at).split('T')[0]
+        : ''
+    endsAt.value = props.promo.endsAt
+      ? String(props.promo.endsAt).split('T')[0]
+      : props.promo.ends_at
+        ? String(props.promo.ends_at).split('T')[0]
+        : ''
+    isActive.value = props.promo.status === 'active'
+    productSearchQuery.value = ''
+    errorMessage.value = ''
+    showPinModal.value = false
+  } else {
+    resetForm()
+  }
+}
+
 watch(
   () => props.open,
   (isOpen) => {
     if (isOpen) {
-      resetForm()
+      populateForm()
     }
   },
+  { immediate: true },
+)
+
+watch(
+  () => props.promo,
+  () => {
+    if (props.open) {
+      populateForm()
+    }
+  },
+  { deep: true },
 )
 
 const categories = computed(() => productStore.categories || [])
 const customers = computed(() => customerStore.customers || [])
+const products = computed(() => productStore.products || [])
+
+const filteredProducts = computed(() => {
+  const query = productSearchQuery.value.trim().toLowerCase()
+  if (!query) return products.value
+  return products.value.filter((p) => {
+    const matchName = String(p.name || '').toLowerCase().includes(query)
+    const matchCat = String(p.category || '').toLowerCase().includes(query)
+    return matchName || matchCat
+  })
+})
+
+function toggleProductSelection(product) {
+  const idStr = String(product.syncId || product.id)
+  const legacyIdStr = String(product.id)
+  const index = selectedProductIds.value.findIndex(
+    (id) => String(id) === idStr || String(id) === legacyIdStr,
+  )
+  if (index > -1) {
+    selectedProductIds.value.splice(index, 1)
+  } else {
+    selectedProductIds.value.push(idStr)
+  }
+}
+
+function isProductSelected(product) {
+  const idStr = String(product.syncId || product.id)
+  const legacyIdStr = String(product.id)
+  return selectedProductIds.value.some((id) => String(id) === idStr || String(id) === legacyIdStr)
+}
+
+function selectAllFilteredProducts() {
+  const idsToAdd = filteredProducts.value.map((p) => String(p.syncId || p.id))
+  const newSet = new Set([...selectedProductIds.value, ...idsToAdd])
+  selectedProductIds.value = Array.from(newSet)
+}
+
+function clearSelectedProducts() {
+  selectedProductIds.value = []
+}
 
 function handleCodeInput(event) {
   code.value = String(event.target.value || '').toUpperCase().replace(/[^A-Z0-9_-]/g, '')
@@ -87,6 +226,16 @@ function validateAndProceed() {
     return
   }
 
+  if (usageLimitTotal.value !== '' && Number(usageLimitTotal.value) < 1) {
+    errorMessage.value = 'Batas kuota penggunaan minimal 1.'
+    return
+  }
+
+  if (scope.value === 'product' && selectedProductIds.value.length === 0) {
+    errorMessage.value = 'Pilih minimal satu menu untuk promo ini.'
+    return
+  }
+
   if (scope.value === 'category' && !selectedCategory.value) {
     errorMessage.value = 'Pilih kategori produk untuk promo ini.'
     return
@@ -104,6 +253,37 @@ function validateAndProceed() {
 function handlePinConfirmed() {
   showPinModal.value = false
 
+  let targets = []
+  if (scope.value === 'category' && selectedCategory.value) {
+    targets = [
+      {
+        target_type: 'category',
+        target_sync_id: selectedCategory.value,
+        value: selectedCategory.value,
+      },
+    ]
+  } else if (scope.value === 'customer' && selectedCustomer.value) {
+    targets = [
+      {
+        target_type: 'customer',
+        target_sync_id: selectedCustomer.value,
+        value: selectedCustomer.value,
+      },
+    ]
+  } else if (scope.value === 'product') {
+    targets = selectedProductIds.value.map((id) => {
+      const prod = products.value.find(
+        (p) => String(p.id) === String(id) || String(p.syncId) === String(id),
+      )
+      return {
+        target_type: 'product',
+        target_sync_id: String(prod?.syncId ?? prod?.id ?? id),
+        target_id: String(prod?.id ?? id),
+        name: prod?.name ?? '',
+      }
+    })
+  }
+
   const promoPayload = {
     name: name.value.trim(),
     code: code.value.trim() ? code.value.trim() : null,
@@ -112,26 +292,32 @@ function handlePinConfirmed() {
     scope: scope.value,
     minPurchase: minPurchase.value ? Number(minPurchase.value) : 0,
     maxDiscount: maxDiscount.value ? Number(maxDiscount.value) : null,
+    usageLimitTotal:
+      usageLimitTotal.value !== '' && usageLimitTotal.value !== null
+        ? Number(usageLimitTotal.value)
+        : null,
     status: isActive.value ? 'active' : 'inactive',
     startsAt: startsAt.value ? new Date(startsAt.value).toISOString() : null,
     endsAt: endsAt.value ? new Date(endsAt.value).toISOString() : null,
-    targets:
-      scope.value === 'category' && selectedCategory.value
-        ? [{ target_type: 'category', target_sync_id: selectedCategory.value, value: selectedCategory.value }]
-        : (scope.value === 'customer' && selectedCustomer.value
-            ? [{ target_type: 'customer', target_sync_id: selectedCustomer.value, value: selectedCustomer.value }]
-            : []),
+    targets,
   }
 
-  const createdPromo = promoStore.createPromo(promoPayload)
-  emit('saved', createdPromo)
+  let savedPromo
+  if (isEditing.value) {
+    const promoId = props.promo.id || props.promo.syncId
+    savedPromo = promoStore.updatePromo(promoId, promoPayload)
+  } else {
+    savedPromo = promoStore.createPromo(promoPayload)
+  }
+
+  emit('saved', savedPromo)
   emit('close')
 }
 </script>
 
 <template>
   <div>
-    <!-- Main Promo Create Modal -->
+    <!-- Main Promo Modal (Create / Edit) -->
     <div
       v-if="open"
       class="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs animate-in fade-in duration-200"
@@ -160,8 +346,12 @@ function handlePinConfirmed() {
               </svg>
             </div>
             <div>
-              <h3 class="text-base font-bold text-ink-primary">Buat Promo Baru</h3>
-              <p class="text-xs text-ink-secondary">Tambah diskon atau voucher belanja</p>
+              <h3 class="text-base font-bold text-ink-primary">
+                {{ isEditing ? 'Edit Promo' : 'Buat Promo Baru' }}
+              </h3>
+              <p class="text-xs text-ink-secondary">
+                {{ isEditing ? 'Perbarui aturan diskon atau menu berlaku' : 'Tambah diskon atau voucher belanja' }}
+              </p>
             </div>
           </div>
           <button
@@ -303,14 +493,36 @@ function handlePinConfirmed() {
             </div>
           </div>
 
+          <!-- Batas Maksimal Penggunaan Promo (Kuota) -->
+          <div>
+            <div class="flex items-center justify-between mb-1">
+              <label class="text-xs font-semibold text-ink-secondary">
+                Batas Maksimal Penggunaan (Kuota)
+              </label>
+              <span class="text-[11px] text-ink-secondary">Opsional</span>
+            </div>
+            <input
+              v-model="usageLimitTotal"
+              type="number"
+              min="1"
+              placeholder="Contoh: 50 (Kosongkan jika tanpa batas)"
+              data-testid="input-promo-usage-limit"
+              class="h-11 w-full rounded-2xl border border-zinc-200 bg-white px-3.5 text-sm text-ink-primary outline-none transition placeholder:text-zinc-400 focus:border-primary focus:ring-4 focus:ring-primary/10 dark:border-slate-700/70 dark:bg-[#121624] dark:placeholder:text-slate-500"
+            />
+            <p class="mt-1 text-[11px] text-ink-secondary">
+              Promo otomatis tidak dapat digunakan setelah mencapai batas kuota ini.
+            </p>
+          </div>
+
           <!-- Cakupan Promo -->
           <div>
             <label class="mb-1 block text-xs font-semibold text-ink-secondary">
               Berlaku Untuk
             </label>
-            <div class="grid grid-cols-3 gap-1.5">
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
               <button
                 type="button"
+                data-testid="scope-all"
                 class="h-10 rounded-2xl border text-xs font-bold transition cursor-pointer"
                 :class="[
                   scope === 'all'
@@ -323,6 +535,20 @@ function handlePinConfirmed() {
               </button>
               <button
                 type="button"
+                data-testid="scope-product"
+                class="h-10 rounded-2xl border text-xs font-bold transition cursor-pointer"
+                :class="[
+                  scope === 'product'
+                    ? 'border-primary bg-primary/10 text-primary dark:border-indigo-400 dark:bg-indigo-500/20 dark:text-indigo-300'
+                    : 'border-zinc-200 bg-surface text-ink-secondary hover:border-zinc-300 dark:border-slate-700/70 dark:bg-[#121624]',
+                ]"
+                @click="scope = 'product'"
+              >
+                Menu Tertentu
+              </button>
+              <button
+                type="button"
+                data-testid="scope-category"
                 class="h-10 rounded-2xl border text-xs font-bold transition cursor-pointer"
                 :class="[
                   scope === 'category'
@@ -335,6 +561,7 @@ function handlePinConfirmed() {
               </button>
               <button
                 type="button"
+                data-testid="scope-customer"
                 class="h-10 rounded-2xl border text-xs font-bold transition cursor-pointer"
                 :class="[
                   scope === 'customer'
@@ -345,6 +572,77 @@ function handlePinConfirmed() {
               >
                 Pelanggan
               </button>
+            </div>
+
+            <!-- Pilih Menu jika scope product -->
+            <div
+              v-if="scope === 'product'"
+              class="mt-2.5 space-y-2 rounded-2xl border border-zinc-200/90 bg-zinc-50/70 p-3 dark:border-slate-700/60 dark:bg-[#121624]"
+            >
+              <div class="flex items-center justify-between gap-2">
+                <span class="text-xs font-bold text-ink-primary">
+                  Daftar Menu ({{ selectedProductIds.length }} dipilih)
+                </span>
+                <div class="flex items-center gap-1.5 text-xs">
+                  <button
+                    type="button"
+                    class="font-semibold text-primary hover:underline dark:text-indigo-400 cursor-pointer text-[11px]"
+                    @click="selectAllFilteredProducts"
+                  >
+                    Pilih Semua
+                  </button>
+                  <span class="text-zinc-300 dark:text-slate-600">|</span>
+                  <button
+                    type="button"
+                    class="font-semibold text-rose-500 hover:underline cursor-pointer text-[11px]"
+                    @click="clearSelectedProducts"
+                  >
+                    Reset
+                  </button>
+                </div>
+              </div>
+
+              <!-- Product Search Bar -->
+              <div class="relative">
+                <input
+                  v-model="productSearchQuery"
+                  type="text"
+                  placeholder="Cari menu atau kategori..."
+                  class="h-9 w-full rounded-xl border border-zinc-200 bg-white px-3 text-xs text-ink-primary outline-none transition placeholder:text-zinc-400 focus:border-primary dark:border-slate-700/70 dark:bg-[#1B2133]"
+                />
+              </div>
+
+              <!-- Product Checklist Scrollable Container -->
+              <div class="max-h-48 overflow-y-auto space-y-1 pr-1 text-xs">
+                <div
+                  v-for="p in filteredProducts"
+                  :key="p.id"
+                  class="flex items-center justify-between rounded-xl p-2 transition cursor-pointer select-none"
+                  :class="[
+                    isProductSelected(p)
+                      ? 'bg-primary/10 border border-primary/30 dark:bg-indigo-500/15 dark:border-indigo-500/30'
+                      : 'bg-white border border-zinc-200/60 hover:bg-zinc-100 dark:bg-[#1B2133] dark:border-slate-800',
+                  ]"
+                  @click="toggleProductSelection(p)"
+                >
+                  <div class="flex items-center gap-2.5 min-w-0">
+                    <input
+                      type="checkbox"
+                      class="h-4 w-4 rounded text-primary focus:ring-primary pointer-events-none cursor-pointer"
+                      :checked="isProductSelected(p)"
+                    />
+                    <div class="min-w-0 truncate">
+                      <p class="font-semibold text-ink-primary truncate">{{ p.name }}</p>
+                      <p class="text-[10px] text-ink-secondary truncate">
+                        {{ p.category }} &bull; {{ formatCurrency(p.price) }}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                <p v-if="filteredProducts.length === 0" class="py-3 text-center text-[11px] text-ink-secondary">
+                  Tidak ada menu yang sesuai pencarian.
+                </p>
+              </div>
             </div>
 
             <!-- Pilih Kategori jika scope category -->
@@ -452,7 +750,7 @@ function handlePinConfirmed() {
     <PinConfirmationModal
       :open="showPinModal"
       title="Otorisasi PIN Kasir"
-      subtitle="Konfirmasi PIN kasir untuk membuat promo ini."
+      :subtitle="isEditing ? 'Konfirmasi PIN kasir untuk memperbarui promo ini.' : 'Konfirmasi PIN kasir untuk membuat promo ini.'"
       @close="showPinModal = false"
       @confirmed="handlePinConfirmed"
     />
