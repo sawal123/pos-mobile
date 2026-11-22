@@ -16,6 +16,7 @@ export const APP_STATE_KEYS = {
   promos: 'promos_state',
   variantGroups: 'variant_groups_state',
   paymentMethods: 'payment_methods_state',
+  ingredients: 'ingredients_state',
 }
 
 export const RESERVED_CATEGORY = 'Semua'

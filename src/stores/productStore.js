@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
+import { useIngredientStore } from '@/stores/ingredientStore'
 import {
   canManageProductCodes,
   findProductCodeConflict,
@@ -228,6 +229,9 @@ function validateProductInput(payload, categories) {
       imageData: typeof payload.imageData === 'string' ? payload.imageData : '',
       isSellable,
       isActive: payload.isActive ?? true,
+      variantGroupIds: Array.isArray(payload.variantGroupIds)
+        ? payload.variantGroupIds
+        : (Array.isArray(payload.variant_group_ids) ? payload.variant_group_ids : []),
     },
   }
 }
@@ -491,6 +495,9 @@ export const useProductStore = defineStore('product', {
       existingProduct.imageData =
         payload.imageData === undefined ? existingProduct.imageData : values.imageData
       existingProduct.isActive = values.isActive
+      if (values.variantGroupIds !== undefined) {
+        existingProduct.variantGroupIds = values.variantGroupIds
+      }
 
       // Stock is authoritative: any stock change outside Adjust Stok still
       // records a stock movement so history is never changed silently. The
@@ -712,6 +719,13 @@ export const useProductStore = defineStore('product', {
             }
           }
         }
+      }
+
+      try {
+        const ingredientStore = useIngredientStore()
+        ingredientStore.deductIngredientsForSale(items, referenceId, transactionId)
+      } catch {
+        // Fallback if ingredient store is not yet mounted
       }
     },
     createCategory(name) {

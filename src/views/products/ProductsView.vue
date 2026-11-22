@@ -5,6 +5,8 @@ import { useRouter } from 'vue-router'
 import ProductQrModal from '@/components/products/ProductQrModal.vue'
 import VariantCloudLockModal from '@/components/products/VariantCloudLockModal.vue'
 import HppCloudLockModal from '@/components/products/HppCloudLockModal.vue'
+import VariantManagerModal from '@/components/products/VariantManagerModal.vue'
+import IngredientManagerModal from '@/components/products/IngredientManagerModal.vue'
 import { useRetailProductCodes } from '@/composables/useRetailProductCodes'
 
 import AppIcon from '@/components/base/AppIcon.vue'
@@ -31,6 +33,24 @@ const { isRetail, canManageCodes } = useRetailProductCodes()
 const qrProduct = ref(null)
 const showVariantModal = ref(false)
 const showHppModal = ref(false)
+const showVariantManagerModal = ref(false)
+const showIngredientManagerModal = ref(false)
+
+function handleOpenVariants() {
+  if (hasCloudAccess.value) {
+    showVariantManagerModal.value = true
+  } else {
+    showVariantModal.value = true
+  }
+}
+
+function handleOpenHpp() {
+  if (hasCloudAccess.value) {
+    showIngredientManagerModal.value = true
+  } else {
+    showHppModal.value = true
+  }
+}
 
 function handleOpenProductQr(product) {
   if (!product) return
@@ -212,7 +232,7 @@ function resetFilters() {
               ? 'border-zinc-200/90 bg-white text-ink-primary hover:bg-zinc-50'
               : 'border-amber-200/90 bg-amber-50/70 text-amber-800 hover:bg-amber-100/70'
           "
-          @click="showVariantModal = true"
+          @click="handleOpenVariants"
         >
           <AppIcon
             :name="hasCloudAccess ? 'variants' : 'lock'"
@@ -239,7 +259,7 @@ function resetFilters() {
               ? 'border-zinc-200/90 bg-white text-ink-primary hover:bg-zinc-50'
               : 'border-amber-200/90 bg-amber-50/70 text-amber-800 hover:bg-amber-100/70'
           "
-          @click="showHppModal = true"
+          @click="handleOpenHpp"
         >
           <AppIcon
             :name="hasCloudAccess ? 'calculator' : 'lock'"
@@ -822,6 +842,14 @@ function resetFilters() {
     />
     <VariantCloudLockModal :open="showVariantModal" @close="showVariantModal = false" />
     <HppCloudLockModal :open="showHppModal" @close="showHppModal = false" />
+    <VariantManagerModal
+      :open="showVariantManagerModal"
+      @close="showVariantManagerModal = false"
+    />
+    <IngredientManagerModal
+      :open="showIngredientManagerModal"
+      @close="showIngredientManagerModal = false"
+    />
 
     <!-- Floating Action Button (FAB) -->
     <button

@@ -7,12 +7,16 @@ import ProductScannerSheet from '@/components/scanner/ProductScannerSheet.vue'
 import ProductQrModal from '@/components/products/ProductQrModal.vue'
 import VariantCloudLockModal from '@/components/products/VariantCloudLockModal.vue'
 import HppCloudLockModal from '@/components/products/HppCloudLockModal.vue'
+import VariantManagerModal from '@/components/products/VariantManagerModal.vue'
+import IngredientManagerModal from '@/components/products/IngredientManagerModal.vue'
 import { useRetailProductCodes } from '@/composables/useRetailProductCodes'
 import { generateProductCode } from '@/services/products/productCodeService'
 import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useSubscriptionStore } from '@/stores/subscriptionStore'
 import { useVariantStore } from '@/stores/variantStore'
+import { useIngredientStore } from '@/stores/ingredientStore'
 import { useUnitStore } from '@/stores/unitStore'
+import { formatCurrency } from '@/utils/formatters'
 
 import AppIcon from '@/components/base/AppIcon.vue'
 import BaseButton from '@/components/base/BaseButton.vue'
@@ -29,11 +33,14 @@ const router = useRouter()
 const cloudStore = useCloudSessionStore()
 const subscriptionStore = useSubscriptionStore()
 const variantStore = useVariantStore()
+const ingredientStore = useIngredientStore()
 const { isRetail, canManageCodes, scanContext } = useRetailProductCodes()
 const showScanner = ref(false)
 const showQr = ref(false)
 const showVariantModal = ref(false)
 const showHppModal = ref(false)
+const showVariantManagerModal = ref(false)
+const showIngredientManagerModal = ref(false)
 const savedProduct = computed(() =>
   isEditMode.value ? productStore.getProductById(route.params.id) : null,
 )
@@ -79,7 +86,96 @@ const form = reactive({
   estimatedDuration: '',
   imageData: '',
   isActive: true,
+  variantGroupIds: [],
+  recipe: [],
 })
+
+const allVariantGroups = computed(() => variantStore.activeGroups || [])
+
+function isVariantGroupSelected(group) {
+  const targetId = String(group.id || group.syncId).toLowerCase()
+  return (form.variantGroupIds || []).some(
+    (id) => String(id).toLowerCase() === targetId,
+  )
+}
+
+function toggleVariantGroup(group) {
+  const targetId = group.id || group.syncId
+  const exists = isVariantGroupSelected(group)
+  if (exists) {
+    form.variantGroupIds = form.variantGroupIds.filter(
+      (id) => String(id).toLowerCase() !== String(targetId).toLowerCase(),
+    )
+  } else {
+    if (!Array.isArray(form.variantGroupIds)) {
+      form.variantGroupIds = []
+    }
+    form.variantGroupIds.push(targetId)
+  }
+}
+
+const availableIngredients = computed(() => ingredientStore.activeIngredients || [])
+
+function addRecipeItem() {
+  const first = availableIngredients.value[0]
+  if (!Array.isArray(form.recipe)) {
+    form.recipe = []
+  }
+  form.recipe.push({
+    ingredientId: first?.id || '',
+    quantity: 1,
+    unit: first?.unit || 'gram',
+    costPerUnit: Number(first?.costPerUnit || 0),
+  })
+}
+
+function removeRecipeItem(idx) {
+  form.recipe.splice(idx, 1)
+}
+
+function onRecipeIngredientChange(item) {
+  const ing = ingredientStore.getIngredientById(item.ingredientId)
+  if (ing) {
+    item.unit = ing.unit
+    item.costPerUnit = Number(ing.costPerUnit || 0)
+  }
+}
+
+function getRecipeLineCost(item) {
+  const ing = ingredientStore.getIngredientById(item.ingredientId)
+  const cost = Number(ing?.costPerUnit ?? item.costPerUnit ?? 0)
+  const qty = Number(item.quantity ?? 0)
+  return Math.round(cost * qty)
+}
+
+const totalRecipeCost = computed(() => {
+  return (form.recipe || []).reduce((sum, item) => sum + getRecipeLineCost(item), 0)
+})
+
+function applyRecipeHpp() {
+  form.cost = totalRecipeCost.value
+  notificationStore.showNotification?.({
+    type: 'success',
+    title: 'HPP Diterapkan',
+    message: `HPP modal berhasil diset ke ${formatCurrency(form.cost)} berdasarkan resep.`,
+  })
+}
+
+function handleOpenVariants() {
+  if (hasCloudAccess.value) {
+    showVariantManagerModal.value = true
+  } else {
+    showVariantModal.value = true
+  }
+}
+
+function handleOpenHpp() {
+  if (hasCloudAccess.value) {
+    showIngredientManagerModal.value = true
+  } else {
+    showHppModal.value = true
+  }
+}
 
 const errors = ref({})
 const formError = ref('')
@@ -156,6 +252,8 @@ function resetForm() {
   form.estimatedDuration = ''
   form.imageData = ''
   form.isActive = true
+  form.variantGroupIds = []
+  form.recipe = []
   errors.value = {}
   formError.value = ''
   imageError.value = ''
@@ -193,6 +291,14 @@ function loadProduct() {
   form.estimatedDuration = product.estimatedDuration ?? ''
   form.imageData = product.imageData ?? ''
   form.isActive = product.isActive
+  form.variantGroupIds = [...(product.variantGroupIds || product.variant_group_ids || [])]
+  const loadedRecipe = ingredientStore.getRecipe(product.id)
+  form.recipe = (loadedRecipe || []).map((r) => ({
+    ingredientId: r.ingredientId,
+    quantity: r.quantity,
+    unit: r.unit,
+    costPerUnit: r.costPerUnit,
+  }))
 }
 
 function readFileAsDataUrl(file) {
@@ -314,6 +420,7 @@ async function handleSubmit() {
     estimatedDuration: form.estimatedDuration,
     imageData: form.imageData,
     isActive: form.isActive,
+    variantGroupIds: form.variantGroupIds || [],
   }
 
   const result = isEditMode.value
@@ -324,6 +431,11 @@ async function handleSubmit() {
     errors.value = result.errors ?? {}
     formError.value = result.errors?.form || (!isRetail.value && result.errors?.barcode) || ''
     return
+  }
+
+  const targetId = isEditMode.value ? route.params.id : result.product?.id
+  if (targetId && form.recipe) {
+    ingredientStore.setProductRecipe(targetId, form.recipe)
   }
 
   errors.value = {}
@@ -780,35 +892,58 @@ watch(
 
         <!-- Cloud Active State -->
         <div v-else class="space-y-3" data-testid="product-form-variants-cloud">
-          <div v-if="assignedVariantGroups.length > 0" class="flex flex-wrap gap-1.5">
-            <span
-              v-for="group in assignedVariantGroups"
-              :key="group.id || group.syncId"
-              class="inline-flex items-center gap-1.5 rounded-xl border border-indigo-200/80 bg-indigo-50/70 px-3 py-1 text-xs font-semibold text-primary"
+          <div class="flex items-center justify-between">
+            <p class="text-xs font-bold text-ink-primary">Pilih Varian untuk Menu Ini:</p>
+            <button
+              type="button"
+              data-testid="btn-manage-variants"
+              class="inline-flex items-center gap-1 text-xs font-bold text-primary hover:underline"
+              @click="showVariantManagerModal = true"
             >
               <AppIcon name="variants" class="h-3.5 w-3.5" />
-              <span>{{ group.name }} ({{ (group.options || []).length }} opsi)</span>
-            </span>
+              <span>+ Kelola Template Varian</span>
+            </button>
           </div>
 
           <div
-            class="flex items-start justify-between gap-3 rounded-2xl border border-zinc-200/80 bg-surface/70 p-3 text-xs"
+            v-if="allVariantGroups.length === 0"
+            class="rounded-2xl border border-dashed border-zinc-300 p-4 text-center dark:border-slate-700"
           >
-            <div class="flex items-start gap-2.5">
-              <AppIcon name="cloud" class="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-              <p class="leading-relaxed text-ink-secondary">
-                Penambahan &amp; pengaturan varian menu dikelola melalui
-                <strong class="font-semibold text-ink-primary">Dashboard Web Cloud</strong>, lalu
-                otomatis tersinkron ke POS Mobile.
-              </p>
-            </div>
+            <p class="text-xs text-ink-secondary">Belum ada template varian di POS.</p>
             <button
               type="button"
-              class="shrink-0 rounded-xl border border-zinc-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-primary shadow-2xs transition hover:bg-zinc-50"
-              @click="showVariantModal = true"
+              class="mt-2 text-xs font-bold text-primary hover:underline"
+              @click="showVariantManagerModal = true"
             >
-              Lihat
+              + Buat Template Varian Pertama
             </button>
+          </div>
+
+          <div v-else class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div
+              v-for="group in allVariantGroups"
+              :key="group.id || group.syncId"
+              class="flex items-center justify-between p-3 rounded-2xl border transition cursor-pointer"
+              :class="
+                isVariantGroupSelected(group)
+                  ? 'border-primary bg-primary/5 text-primary dark:bg-primary/10 dark:border-primary/50'
+                  : 'border-zinc-200/90 bg-white hover:bg-zinc-50 dark:border-slate-700 dark:bg-[#1B2133]'
+              "
+              @click="toggleVariantGroup(group)"
+            >
+              <div class="min-w-0 pr-2">
+                <p class="text-xs font-bold text-ink-primary">{{ group.name }}</p>
+                <p class="text-[10px] text-ink-secondary">
+                  {{ (group.options || []).length }} opsi • {{ group.selectionType === 'single' ? 'Pilih 1' : 'Multi' }}
+                </p>
+              </div>
+
+              <input
+                type="checkbox"
+                :checked="isVariantGroupSelected(group)"
+                class="h-4 w-4 rounded border-zinc-300 text-primary focus:ring-primary pointer-events-none"
+              />
+            </div>
           </div>
         </div>
       </section>
@@ -892,23 +1027,115 @@ watch(
 
         <!-- Cloud Active State -->
         <div v-else class="space-y-3" data-testid="product-form-hpp-cloud">
+          <div class="flex items-center justify-between">
+            <p class="text-xs font-bold text-ink-primary">Komposisi Resep Bahan Baku:</p>
+            <button
+              type="button"
+              data-testid="btn-manage-ingredients"
+              class="inline-flex items-center gap-1 text-xs font-bold text-primary hover:underline"
+              @click="showIngredientManagerModal = true"
+            >
+              <AppIcon name="package" class="h-3.5 w-3.5" />
+              <span>Kelola Stok Bahan</span>
+            </button>
+          </div>
+
+          <!-- Recipe List -->
           <div
-            class="flex items-start justify-between gap-3 rounded-2xl border border-zinc-200/80 bg-surface/70 p-3 text-xs"
+            v-if="form.recipe.length === 0"
+            class="rounded-2xl border border-dashed border-zinc-300 p-4 text-center dark:border-slate-700"
           >
-            <div class="flex items-start gap-2.5">
-              <AppIcon name="calculator" class="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-              <p class="leading-relaxed text-ink-secondary">
-                Pengaturan takaran resep bahan baku dan kalkulasi HPP otomatis dikelola melalui
-                <strong class="font-semibold text-ink-primary">Dashboard Web Cloud</strong>, lalu
-                otomatis tersinkron ke POS Mobile.
+            <p class="text-xs text-ink-secondary">Belum ada bahan baku pada resep menu ini.</p>
+            <button
+              type="button"
+              data-testid="btn-add-first-recipe-item"
+              class="mt-2 text-xs font-bold text-primary hover:underline"
+              @click="addRecipeItem"
+            >
+              + Tambah Bahan Resep Pertama
+            </button>
+          </div>
+
+          <div v-else class="space-y-2">
+            <div
+              v-for="(item, idx) in form.recipe"
+              :key="idx"
+              class="flex items-center gap-2 rounded-2xl border border-zinc-200/80 bg-surface/50 p-2.5 dark:border-slate-700 dark:bg-slate-800/40"
+            >
+              <!-- Ingredient Selector -->
+              <div class="flex-1 min-w-0">
+                <select
+                  v-model="item.ingredientId"
+                  class="h-9 w-full appearance-none rounded-xl border border-zinc-200 bg-white px-2.5 text-xs font-medium text-ink-primary outline-none focus:border-primary dark:border-slate-700 dark:bg-slate-900"
+                  @change="onRecipeIngredientChange(item)"
+                >
+                  <option disabled value="">Pilih Bahan Baku</option>
+                  <option v-for="ing in availableIngredients" :key="ing.id" :value="ing.id">
+                    {{ ing.name }} ({{ formatCurrency(ing.costPerUnit) }}/{{ ing.unit }})
+                  </option>
+                </select>
+              </div>
+
+              <!-- Quantity Input -->
+              <div class="w-24 shrink-0 flex items-center gap-1">
+                <input
+                  v-model.number="item.quantity"
+                  type="number"
+                  step="any"
+                  placeholder="Jml"
+                  class="h-9 w-full rounded-xl border border-zinc-200 bg-white px-2 text-xs text-center font-bold text-ink-primary outline-none focus:border-primary dark:border-slate-700 dark:bg-slate-900"
+                  title="Takaran / Jumlah bahan"
+                />
+                <span class="text-[11px] text-ink-secondary w-7 shrink-0">{{ item.unit || 'pcs' }}</span>
+              </div>
+
+              <!-- Line Cost -->
+              <div class="w-20 text-right shrink-0">
+                <p class="text-xs font-bold text-ink-primary">{{ formatCurrency(getRecipeLineCost(item)) }}</p>
+              </div>
+
+              <!-- Remove -->
+              <button
+                type="button"
+                class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/50"
+                title="Hapus bahan"
+                @click="removeRecipeItem(idx)"
+              >
+                <AppIcon name="trash" class="h-3.5 w-3.5" />
+              </button>
+            </div>
+
+            <button
+              type="button"
+              data-testid="btn-add-recipe-row"
+              class="text-xs font-bold text-primary hover:underline pt-1 inline-flex items-center gap-1"
+              @click="addRecipeItem"
+            >
+              <span>+ Tambah Bahan Resep</span>
+            </button>
+          </div>
+
+          <!-- Total HPP & Apply Button -->
+          <div
+            class="flex items-center justify-between rounded-2xl border border-indigo-200/80 bg-indigo-50/70 p-3.5 dark:border-indigo-500/30 dark:bg-indigo-950/35"
+          >
+            <div>
+              <p class="text-[11px] font-medium text-ink-secondary">Total HPP dari Resep:</p>
+              <p class="text-base font-black text-primary" data-testid="total-recipe-cost">
+                {{ formatCurrency(totalRecipeCost) }}
+              </p>
+              <p v-if="Number(form.price) > 0" class="text-[10px] text-ink-secondary">
+                Estimasi Margin:
+                {{ Math.max(0, Math.round(((Number(form.price) - totalRecipeCost) / Number(form.price)) * 100)) }}%
               </p>
             </div>
             <button
               type="button"
-              class="shrink-0 rounded-xl border border-zinc-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-primary shadow-2xs transition hover:bg-zinc-50"
-              @click="showHppModal = true"
+              data-testid="btn-apply-recipe-hpp"
+              class="rounded-xl bg-primary px-3 py-2 text-xs font-bold text-white shadow-xs transition hover:bg-primary-light active:scale-95"
+              @click="applyRecipeHpp"
             >
-              Lihat
+              Gunakan Sebagai HPP
             </button>
           </div>
         </div>
@@ -1111,5 +1338,13 @@ watch(
     <ProductQrModal :open="showQr && isRetail" :product="savedProduct" @close="showQr = false" />
     <VariantCloudLockModal :open="showVariantModal" @close="showVariantModal = false" />
     <HppCloudLockModal :open="showHppModal" @close="showHppModal = false" />
+    <VariantManagerModal
+      :open="showVariantManagerModal"
+      @close="showVariantManagerModal = false"
+    />
+    <IngredientManagerModal
+      :open="showIngredientManagerModal"
+      @close="showIngredientManagerModal = false"
+    />
   </div>
 </template>

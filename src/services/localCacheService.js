@@ -16,6 +16,7 @@ import { useTransactionStore } from '@/stores/transactionStore'
 import { useVariantStore } from '@/stores/variantStore'
 import { useTableStore } from '@/stores/tableStore'
 import { usePaymentMethodStore } from '@/stores/paymentMethodStore'
+import { useIngredientStore } from '@/stores/ingredientStore'
 import { getInstallMarker, getToken, saveInstallMarker } from '@/services/cloud/tokenRepository'
 import { useSyncPushStore } from '@/stores/syncPushStore'
 import { useSyncPullStore } from '@/stores/syncPullStore'
@@ -201,6 +202,10 @@ export async function clearLocalCache({
     tableStore.tables = []
     const paymentMethodStore = usePaymentMethodStore(pinia)
     paymentMethodStore.clearMethods()
+    const ingredientStore = useIngredientStore(pinia)
+    ingredientStore.ingredients = []
+    ingredientStore.recipes = {}
+    ingredientStore.movements = []
   } catch {}
 
   if (resetBusiness) {

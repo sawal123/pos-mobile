@@ -783,6 +783,12 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
     async savePrinterState(state) {
       await writeAppState(APP_STATE_KEYS.printer, state)
     },
+    async loadIngredients() {
+      return readAppState(APP_STATE_KEYS.ingredients, { ingredients: [], recipes: {}, movements: [] })
+    },
+    async saveIngredients(data) {
+      await writeAppState(APP_STATE_KEYS.ingredients, data)
+    },
     async upsertSyncQueueItem(entry) {
       const db = await ensureConnection()
 

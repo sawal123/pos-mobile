@@ -150,6 +150,12 @@ export function createMemoryAdapter() {
     async savePaymentMethods(methods) {
       state.paymentMethods = cloneValue(methods || [])
     },
+    async loadIngredients() {
+      return cloneValue(state.ingredients || { ingredients: [], recipes: {}, movements: [] })
+    },
+    async saveIngredients(data) {
+      state.ingredients = cloneValue(data || { ingredients: [], recipes: {}, movements: [] })
+    },
     async loadCashierState() {
       return cloneValue(state.cashierState)
     },
