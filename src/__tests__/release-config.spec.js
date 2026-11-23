@@ -21,7 +21,7 @@ const androidGitignore = read('../../android/.gitignore')
 const keystoreExample = read('../../android/keystore.properties.example')
 
 const RELEASE_VERSION_NAME = '0.0.2'
-const RELEASE_VERSION_CODE = 10003
+const RELEASE_VERSION_CODE = 10004
 const APPLICATION_ID = 'com.netkasir.app'
 
 // Source selection lives between the header comment and the android block.
@@ -60,7 +60,7 @@ describe('P35 Android release configuration', () => {
     expect(appBuildGradle).toContain(`versionCode ${RELEASE_VERSION_CODE}`)
 
     // The previously documented 1.0.0 release used 10000. Never downgrade it.
-    expect(RELEASE_VERSION_CODE).toBeGreaterThan(10002)
+    expect(RELEASE_VERSION_CODE).toBeGreaterThan(10003)
   })
 
   it('applicationId dan Capacitor appId tetap com.posoffline.app', () => {

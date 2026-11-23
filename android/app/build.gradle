@@ -92,8 +92,8 @@ android {
         applicationId "com.netkasir.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        // versionCode policy: monotonically increasing integer (always > 10002)
-        versionCode 10003
+        // versionCode policy: monotonically increasing integer (always > 10003)
+        versionCode 10004
         versionName "0.0.2"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
