@@ -46,6 +46,7 @@ export const useSyncRecoveryStore = defineStore('syncRecovery', () => {
     bootstrapService = null,
     orchestratorService = null,
     conflictService = null,
+    reconciliationService = null,
   } = {}) {
     if (recoveryService) {
       _recoveryService = recoveryService
@@ -56,6 +57,7 @@ export const useSyncRecoveryStore = defineStore('syncRecovery', () => {
         bootstrapService,
         orchestratorService,
         conflictService,
+        reconciliationService,
       })
     }
   }

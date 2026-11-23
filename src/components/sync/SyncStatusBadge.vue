@@ -151,7 +151,15 @@ const badgeStyles = computed(() => {
 const showPendingModal = ref(false)
 
 function handleClick() {
-  if (statusStore.pendingCount > 0 || uiStatus.value.status === SYNC_UI_PENDING) {
+  if (
+    statusStore.pendingCount > 0 ||
+    statusStore.hasInflight ||
+    statusStore.reconciliationRequired ||
+    uiStatus.value.status === SYNC_UI_PENDING ||
+    uiStatus.value.status === SYNC_UI_RECOVERY_REQUIRED ||
+    uiStatus.value.status === SYNC_UI_RECONCILIATION_REQUIRED ||
+    uiStatus.value.status === SYNC_UI_CLEANUP_FAILED
+  ) {
     showPendingModal.value = true
     return
   }

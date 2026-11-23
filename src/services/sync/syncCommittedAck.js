@@ -122,7 +122,11 @@ export async function applyCommittedAcknowledgment({ adapter, queueService, regi
   const supersededSnapshots = Array.isArray(envelope?.supersededSnapshots)
     ? envelope.supersededSnapshots
     : []
-  const queueSnapshots = Array.isArray(envelope?.queueSnapshots) ? envelope.queueSnapshots : []
+  const queueSnapshots = Array.isArray(envelope?.queueSnapshots)
+    ? envelope.queueSnapshots
+    : Array.isArray(envelope?.items)
+      ? envelope.items
+      : []
 
   // Step 1 — persist the recovered server versions first. If this cannot be
   // written durably, stop before removing anything: the envelope (requestId +

@@ -474,6 +474,7 @@ export function createSyncPushService({
   contextGuardService = null,
   capabilityVerifier = null,
   onAuthorizationRejected = null,
+  reconciliationService = null,
 } = {}) {
   const activeQueueService = queueService ?? createSyncQueueService({ adapter, scheduler })
   const activeRegistry = registry ?? createSyncIdentityRegistry({ adapter, scheduler })
@@ -863,46 +864,118 @@ export function createSyncPushService({
         }
       }
 
-      const existingEnvelope =
+      let existingEnvelope =
         adapter && typeof adapter.loadSyncPushInflight === 'function'
           ? await adapter.loadSyncPushInflight()
           : null
 
       // An envelope flagged for reconciliation must never be re-planned and
-      // must never be resent automatically: its first outcome is still unknown
-      // (the server may have committed it before the response was lost), and
-      // the backend authorizes before it dedupes, so an identical retry cannot
-      // resolve it. The envelope + every local row are preserved and surfaced
-      // as SYNC_RECONCILIATION_REQUIRED until the outcome is known (see the
-      // documented backend request-status endpoint).
-      if (existingEnvelope && existingEnvelope.reconciliationRequired === true) {
-        const remaining = await activeQueueService.countPending()
+      // must never be resent automatically without knowing if the server processed it.
+      // If a reconciliationService is available, resolve it against the backend status endpoint:
+      //  - If committed: finalize CAS removal and continue.
+      //  - If not_found: server confirmed it never received the request, so resending is safe!
+      if (
+        existingEnvelope &&
+        existingEnvelope.reconciliationRequired === true &&
+        existingEnvelope.reconciliationOutcome !== 'not_found'
+      ) {
+        if (reconciliationService && typeof reconciliationService.reconcile === 'function') {
+          const recon = await reconciliationService.reconcile({ context: options.context })
+          if (recon?.ok && recon?.code === 'SYNC_RECONCILIATION_COMMITTED') {
+            const remaining = await activeQueueService.countPending()
+            if (remaining === 0) {
+              return {
+                ok: true,
+                status: 'committed',
+                requestId: existingEnvelope.requestId,
+                duplicate: true,
+                sentQueueIds: [],
+                removedQueueIds: recon.removedQueueIds ?? [],
+                preservedQueueIds: recon.preservedQueueIds ?? [],
+                blocked: [],
+                restricted: [],
+                deferred: [],
+                warnings: [],
+                remaining: 0,
+                policy,
+                message: 'Data pengiriman sebelumnya telah berhasil diterima oleh server.',
+                error: null,
+              }
+            }
+            existingEnvelope =
+              adapter && typeof adapter.loadSyncPushInflight === 'function'
+                ? await adapter.loadSyncPushInflight()
+                : null
+          } else if (recon?.code === 'SYNC_RECONCILIATION_NOT_FOUND') {
+            // Server confirmed request was NOT committed.
+            // Safely clear reconciliationRequired and mark outcome as not_found so it can be resent!
+            existingEnvelope.reconciliationRequired = false
+            existingEnvelope.reconciliationOutcome = 'not_found'
+            if (adapter && typeof adapter.saveSyncPushInflight === 'function') {
+              try {
+                await adapter.saveSyncPushInflight(existingEnvelope)
+              } catch {
+                // best-effort
+              }
+            }
+          } else {
+            const remaining = await activeQueueService.countPending()
+            return {
+              ok: false,
+              code: recon?.code ?? 'SYNC_RECONCILIATION_REQUIRED',
+              message:
+                recon?.message ??
+                'Pengiriman sebelumnya mungkin sudah diterima server. Rekonsiliasi diperlukan sebelum mencoba lagi; data lokal tetap aman.',
+              requestId: existingEnvelope.requestId,
+              policy,
+              acceptance: existingEnvelope.acceptance ?? 'unknown',
+              reconciliationRequired: true,
+              reconciliationCode:
+                existingEnvelope.reconciliationCode ?? 'SYNC_RECONCILIATION_REQUIRED',
+              reconciliationOutcome: existingEnvelope.reconciliationOutcome ?? null,
+              sentQueueIds: [],
+              removedQueueIds: [],
+              preservedQueueIds: [],
+              blocked: [],
+              restricted: [],
+              deferred: [],
+              warnings: [],
+              remaining,
+              error: {
+                code: recon?.code ?? 'SYNC_RECONCILIATION_REQUIRED',
+                message: recon?.message ?? 'Pengiriman sebelumnya memerlukan rekonsiliasi.',
+              },
+            }
+          }
+        } else {
+          const remaining = await activeQueueService.countPending()
 
-        return {
-          ok: false,
-          code: 'SYNC_RECONCILIATION_REQUIRED',
-          message:
-            'Pengiriman sebelumnya mungkin sudah diterima server. Rekonsiliasi diperlukan sebelum mencoba lagi; data lokal tetap aman.',
-          requestId: existingEnvelope.requestId,
-          policy,
-          acceptance: existingEnvelope.acceptance ?? 'unknown',
-          reconciliationRequired: true,
-          reconciliationCode:
-            existingEnvelope.reconciliationCode ?? 'SYNC_RECONCILIATION_REQUIRED',
-          reconciliationOutcome: existingEnvelope.reconciliationOutcome ?? null,
-          sentQueueIds: [],
-          removedQueueIds: [],
-          preservedQueueIds: [],
-          blocked: [],
-          restricted: [],
-          deferred: [],
-          warnings: [],
-          remaining,
-          error: {
+          return {
+            ok: false,
             code: 'SYNC_RECONCILIATION_REQUIRED',
             message:
-              'Pengiriman sebelumnya mungkin sudah diterima server. Rekonsiliasi diperlukan sebelum mencoba lagi.',
-          },
+              'Pengiriman sebelumnya mungkin sudah diterima server. Rekonsiliasi diperlukan sebelum mencoba lagi; data lokal tetap aman.',
+            requestId: existingEnvelope.requestId,
+            policy,
+            acceptance: existingEnvelope.acceptance ?? 'unknown',
+            reconciliationRequired: true,
+            reconciliationCode:
+              existingEnvelope.reconciliationCode ?? 'SYNC_RECONCILIATION_REQUIRED',
+            reconciliationOutcome: existingEnvelope.reconciliationOutcome ?? null,
+            sentQueueIds: [],
+            removedQueueIds: [],
+            preservedQueueIds: [],
+            blocked: [],
+            restricted: [],
+            deferred: [],
+            warnings: [],
+            remaining,
+            error: {
+              code: 'SYNC_RECONCILIATION_REQUIRED',
+              message:
+                'Pengiriman sebelumnya mungkin sudah diterima server. Rekonsiliasi diperlukan sebelum mencoba lagi.',
+            },
+          }
         }
       }
 
@@ -1651,7 +1724,7 @@ export function createSyncPushService({
         changes: envelope.changes,
       }
 
-      const sentQueueIds = envelope.queueSnapshots.map((s) => s.id)
+      const sentQueueIds = (envelope.queueSnapshots ?? envelope.items ?? []).map((s) => s.id)
       const response = await transport({
         token,
         body: requestBody,

@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { createSyncPushService } from '@/services/sync/syncPushService'
 import { useCloudSessionStore } from './cloudSessionStore'
+import { useSyncReconciliationStore } from './syncReconciliationStore'
 
 export const useSyncPushStore = defineStore('syncPush', () => {
   const cloudStore = useCloudSessionStore()
@@ -20,10 +21,12 @@ export const useSyncPushStore = defineStore('syncPush', () => {
     } else if (adapter) {
       _adapter = adapter
       _scheduler = scheduler
+      const reconStore = useSyncReconciliationStore()
       _pushService = createSyncPushService({
         adapter,
         scheduler,
         cloudStore,
+        reconciliationService: reconStore.getReconciliationService(),
         capabilityVerifier: () => cloudStore.ensureVerifiedContext(),
         onAuthorizationRejected: () => cloudStore.refreshContext().catch(() => {}),
       })
@@ -42,11 +45,15 @@ export const useSyncPushStore = defineStore('syncPush', () => {
 
   async function pushNow(options = {}) {
     if (!_pushService) {
-      if (_adapter) {
+      const activeAdapter = _adapter || cloudStore?.adapter?.value || cloudStore?.adapter
+      const activeScheduler = _scheduler || cloudStore?.scheduler?.value || cloudStore?.scheduler
+      if (activeAdapter) {
+        const reconStore = useSyncReconciliationStore()
         _pushService = createSyncPushService({
-          adapter: _adapter,
-          scheduler: _scheduler,
+          adapter: activeAdapter,
+          scheduler: activeScheduler,
           cloudStore,
+          reconciliationService: reconStore.getReconciliationService(),
           capabilityVerifier: () => cloudStore.ensureVerifiedContext(),
           onAuthorizationRejected: () => cloudStore.refreshContext().catch(() => {}),
         })

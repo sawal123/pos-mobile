@@ -21,6 +21,7 @@ export function createSyncOrchestratorService({
   pushService,
   pullService,
   conflictService = null,
+  reconciliationService = null,
 } = {}) {
   let isSyncing = false
 
@@ -71,6 +72,15 @@ export function createSyncOrchestratorService({
     isSyncing = true
 
     try {
+      // ── Step 0: Auto-reconciliation check if inflight exists ───────────────
+      if (reconciliationService && typeof reconciliationService.reconcile === 'function') {
+        try {
+          await reconciliationService.reconcile({ context: options.context })
+        } catch {
+          // Non-blocking: pushNow handles detailed checks
+        }
+      }
+
       // ── Step 1: Execute Push (wrapped for unexpected exceptions) ───────────
       let pushResult
       try {
@@ -265,5 +275,6 @@ export function createSyncOrchestratorService({
     pushService,
     pullService,
     conflictService,
+    reconciliationService,
   }
 }

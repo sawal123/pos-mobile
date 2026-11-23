@@ -50,6 +50,7 @@ export function createSyncRecoveryService({
   bootstrapService = null,
   orchestratorService = null,
   conflictService = null,
+  reconciliationService = null,
 } = {}) {
   let isRecovering = false
 
@@ -309,6 +310,25 @@ export function createSyncRecoveryService({
 
       // 10. Execute target service for authorized action
       if (action === RECOVERY_ACTIONS.RETRY_INFLIGHT) {
+        if (reconciliationService && typeof reconciliationService.reconcile === 'function') {
+          try {
+            const recon = await reconciliationService.reconcile({ context })
+            if (recon?.ok && recon?.code === 'SYNC_RECONCILIATION_COMMITTED') {
+              return {
+                ok: true,
+                code: 'COMMITTED',
+                action: RECOVERY_ACTIONS.RETRY_INFLIGHT,
+                stage: 'reconcile',
+                healthBefore: freshHealth,
+                result: recon,
+                message: 'Data pengiriman sebelumnya telah berhasil diterima oleh server.',
+              }
+            }
+          } catch {
+            // non-blocking: fall through to pushNow
+          }
+        }
+
         if (!pushService || typeof pushService.pushNow !== 'function') {
           return {
             ok: false,

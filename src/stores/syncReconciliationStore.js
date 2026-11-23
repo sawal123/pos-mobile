@@ -36,6 +36,17 @@ export const useSyncReconciliationStore = defineStore('syncReconciliation', () =
     }
 
     if (!_reconciliationService) {
+      const cloudStore = useCloudSessionStore()
+      const adapter = cloudStore?.adapter?.value ?? cloudStore?.adapter ?? null
+      if (adapter) {
+        _reconciliationService = createSyncReconciliationService({
+          adapter,
+          scheduler: cloudStore?.scheduler?.value ?? cloudStore?.scheduler ?? null,
+        })
+      }
+    }
+
+    if (!_reconciliationService) {
       const notInitialized = {
         ok: false,
         code: 'SERVICE_NOT_INITIALIZED',

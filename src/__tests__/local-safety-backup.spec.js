@@ -16,6 +16,7 @@ import {
   hasRestorableData,
   peekLocalSafetyBackup,
   restoreLocalSafetyBackup,
+  preserveUnsyncedDataAfterPull,
 } from '@/services/localSafetyBackup'
 import { createMemoryAdapter } from '@/services/database/memoryAdapter'
 import { useCashStore } from '@/stores/cashStore'
@@ -143,5 +144,66 @@ describe('capture → restore round trip', () => {
     clearLocalSafetyBackup()
 
     expect(localStorage.getItem(SAFETY_BACKUP_STORAGE_KEY)).toBeNull()
+  })
+})
+
+describe('preserveUnsyncedDataAfterPull', () => {
+  it('preserves unsynced local offline transactions when cloud reload returns only server data', async () => {
+    // 1. Kasir input pesanan lokal (offline transaction)
+    const offlineTx = {
+      id: 'tx-offline-001',
+      invoiceNumber: 'INV-OFFLINE-001',
+      total: 50000,
+      createdAt: '2026-11-23T08:00:00Z',
+    }
+    const syncedTx = {
+      id: 'tx-synced-cloud-001',
+      invoiceNumber: 'INV-CLOUD-001',
+      total: 30000,
+      createdAt: '2026-11-23T07:00:00Z',
+    }
+
+    await adapter.saveTransactions([offlineTx, syncedTx])
+
+    // Capture backup before clear & reload
+    const snapshot = await captureLocalSafetyBackup({ adapter })
+    expect(snapshot.transactions).toHaveLength(2)
+
+    // 2. Clear cache runs during reload
+    await adapter.saveTransactions([])
+
+    // 3. Cloud pull only returns transactions already on cloud (offlineTx is missing because network lagged)
+    await adapter.saveTransactions([syncedTx])
+
+    // 4. preserveUnsyncedDataAfterPull runs after successful pull
+    const preserveResult = await preserveUnsyncedDataAfterPull(snapshot, { adapter, pinia })
+
+    expect(preserveResult.ok).toBe(true)
+    expect(preserveResult.preservedCount).toBe(1)
+    expect(preserveResult.preservedIds).toContain('tx-offline-001')
+
+    // Local SQLite now contains BOTH syncedTx AND preserved offlineTx!
+    const finalTransactions = await adapter.loadTransactions()
+    expect(finalTransactions).toHaveLength(2)
+    const offlineSaved = finalTransactions.find((t) => t.id === 'tx-offline-001')
+    expect(offlineSaved).toBeTruthy()
+    expect(offlineSaved.invoiceNumber).toBe('INV-OFFLINE-001')
+
+    // Sync queue has re-queued the unsynced transaction so it can sync on next attempt!
+    const queue = await adapter.listSyncQueueItems()
+    expect(queue.some((q) => q.entityId === 'tx-offline-001')).toBe(true)
+
+    // Pinia store also reflects the preserved transaction
+    const txStore = useTransactionStore(pinia)
+    expect(txStore.items.some((t) => t.id === 'tx-offline-001')).toBe(true)
+  })
+
+  it('does nothing if all transactions in snapshot are already present in cloud pull', async () => {
+    const syncedTx = { id: 'tx-cloud-1', total: 20000 }
+    await adapter.saveTransactions([syncedTx])
+    const snapshot = await captureLocalSafetyBackup({ adapter })
+
+    const preserveResult = await preserveUnsyncedDataAfterPull(snapshot, { adapter, pinia })
+    expect(preserveResult.preservedCount).toBe(0)
   })
 })

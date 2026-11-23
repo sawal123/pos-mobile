@@ -20,12 +20,14 @@ import { useSyncPullStore } from '@/stores/syncPullStore'
 import { useSyncContextGuardStore } from '@/stores/syncContextGuardStore'
 import { useSyncStatusStore } from '@/stores/syncStatusStore'
 import { useSyncProgressStore } from '@/stores/syncProgressStore'
+import { useSyncReconciliationStore } from '@/stores/syncReconciliationStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import { clearLocalCache } from '@/services/localCacheService'
 import {
   captureLocalSafetyBackup,
   clearLocalSafetyBackup,
   restoreLocalSafetyBackup,
+  preserveUnsyncedDataAfterPull,
 } from '@/services/localSafetyBackup'
 import {
   SYNC_REQUIREMENT_LABELS,
@@ -46,11 +48,13 @@ const syncPullStore = useSyncPullStore()
 const syncContextGuardStore = useSyncContextGuardStore()
 const syncStatusStore = useSyncStatusStore()
 const syncProgressStore = useSyncProgressStore()
+const syncReconciliationStore = useSyncReconciliationStore()
 const transactionStore = useTransactionStore()
 
 const isSyncing = ref(false)
 const isPulling = ref(false)
 const isClearingCache = ref(false)
+const isRecovering = ref(false)
 const syncFeedback = ref(null) // { type: 'success' | 'error', message: string }
 const autoSyncDraft = ref(syncAutoSyncStore.enabled)
 
@@ -97,7 +101,13 @@ const pendingCount = computed(() => {
  * Paket Free menyimpan data lokal saja, jadi tombolnya tidak ditampilkan.
  */
 const canPullFromCloud = computed(() => cloudStore.cloudAccess === true)
-const isAnyBusy = computed(() => isSyncing.value || isPulling.value || isClearingCache.value)
+const isAnyBusy = computed(
+  () =>
+    isSyncing.value ||
+    isPulling.value ||
+    isClearingCache.value ||
+    isRecovering.value,
+)
 
 const lastSyncFormatted = computed(() => {
   // Only a completed push/pull cycle counts as a sync. Falling back to the
@@ -448,12 +458,18 @@ async function handleClearAndPull() {
         await syncStatusStore.refresh()
 
         if (pullRes.ok) {
+          const preserved = await preserveUnsyncedDataAfterPull(backup, { adapter })
           clearLocalSafetyBackup()
           setProgress(100, 'Data Cloud berhasil dimuat ulang!')
           syncFeedback.value = {
             type: 'success',
-            message: 'Data Cloud berhasil dimuat ulang dan disimpan di SQLite.',
+            message:
+              preserved && preserved.preservedCount > 0
+                ? `Data Cloud berhasil dimuat ulang. ${preserved.preservedCount} transaksi offline yang belum terkirim ke server tetap aman tersimpan!`
+                : 'Data Cloud berhasil dimuat ulang dan disimpan di SQLite.',
           }
+          await syncPushStore.refreshPendingCount()
+          await syncStatusStore.refresh()
           return { ok: true }
         }
 
@@ -484,6 +500,66 @@ async function handleClearAndPull() {
     }
   } finally {
     isClearingCache.value = false
+  }
+}
+
+async function handleRecoverAndPush() {
+  if (isAnyBusy.value) return
+  isRecovering.value = true
+  syncFeedback.value = null
+
+  try {
+    await syncProgressStore.runWithProgress(
+      {
+        type: 'sync',
+        title: 'Memulihkan Pengiriman Tertunda',
+        description:
+          'Sedang memeriksa status pengiriman di server dan menyelesaikan transaksi...',
+      },
+      async (setProgress) => {
+        setProgress(25, 'Memeriksa status di server cloud...')
+        try {
+          const reconRes = await syncReconciliationStore.reconcile()
+          if (reconRes?.outcome === 'COMMITTED') {
+            setProgress(100, 'Transaksi berhasil diverifikasi!')
+            syncFeedback.value = {
+              type: 'success',
+              message:
+                'Pemulihan berhasil! Transaksi tertunda telah terkonfirmasi tersimpan di Cloud.',
+            }
+            await syncPushStore.refreshPendingCount()
+            await syncStatusStore.refresh()
+            return { ok: true }
+          }
+        } catch (reconErr) {
+          console.warn('Reconcile pre-check warning:', reconErr)
+        }
+
+        setProgress(60, 'Mengirimkan kembali data transaksi offline...')
+        const pushRes = await syncPushStore.pushNow()
+        await syncPushStore.refreshPendingCount()
+        await syncStatusStore.refresh()
+
+        if (pushRes?.ok) {
+          setProgress(100, 'Sinkronisasi selesai!')
+          syncFeedback.value = {
+            type: 'success',
+            message: 'Pemulihan & sinkronisasi berhasil! Semua data offline telah terkirim.',
+          }
+          return { ok: true }
+        }
+
+        syncFeedback.value = buildFailureFeedback(pushRes)
+        return pushRes
+      },
+    )
+  } catch (err) {
+    syncFeedback.value = {
+      type: 'error',
+      message: err?.message || 'Gagal melakukan pemulihan sinkronisasi.',
+    }
+  } finally {
+    isRecovering.value = false
   }
 }
 
@@ -781,6 +857,44 @@ function handleBack() {
         </div>
       </div>
 
+      <!-- In-flight / Recovery Alert Banner -->
+      <div
+        v-if="syncStatusStore.hasInflight || syncStatusStore.reconciliationRequired"
+        class="rounded-2xl border border-amber-300 bg-amber-50 p-3.5 text-xs text-amber-900 dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-200 space-y-2.5"
+        data-testid="sync-recovery-required-banner"
+      >
+        <div class="flex items-start gap-2">
+          <span class="text-base text-amber-600 dark:text-amber-400">⚠️</span>
+          <div class="space-y-0.5">
+            <p class="font-bold text-amber-900 dark:text-amber-100">
+              Sinkronisasi Membutuhkan Pemulihan
+            </p>
+            <p class="text-[11px] leading-relaxed text-amber-800 dark:text-amber-200">
+              Terdapat data transaksi yang tertunda akibat koneksi internet sempat lag atau terputus saat pengiriman. Data Anda aman tersimpan di perangkat ini. Tekan tombol Pulihkan di bawah untuk menyelesaikan pengiriman ke Cloud secara aman.
+            </p>
+          </div>
+        </div>
+        <div class="flex items-center gap-2 pt-1">
+          <BaseButton
+            size="sm"
+            variant="warning"
+            data-testid="btn-recover-sync"
+            :disabled="isAnyBusy"
+            @click="handleRecoverAndPush"
+          >
+            <span v-if="isRecovering">Memulihkan...</span>
+            <span v-else>Pulihkan &amp; Sinkronkan Sekarang</span>
+          </BaseButton>
+          <button
+            type="button"
+            class="text-[11px] font-semibold text-amber-900 underline hover:text-amber-950 dark:text-amber-200 cursor-pointer"
+            @click="showPendingDetailsModal = true"
+          >
+            Lihat Antrean
+          </button>
+        </div>
+      </div>
+
       <div class="rounded-2xl border border-zinc-200/80 bg-surface/70 p-4 space-y-2">
         <div class="flex items-center justify-between text-xs">
           <span class="text-ink-secondary">Data lokal belum terkirim:</span>
@@ -1039,6 +1153,19 @@ function handleBack() {
       @close="cancelClearAndPull"
     >
       <div class="space-y-4">
+        <div
+          v-if="pendingCount > 0 || syncStatusStore.hasInflight || syncStatusStore.reconciliationRequired"
+          class="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-200"
+          data-testid="clear-warning-pending-alert"
+        >
+          <div class="flex items-center gap-1.5 font-bold text-amber-800 dark:text-amber-300">
+            <span>⚠️</span>
+            <span>Perhatian: Ada Data/Transaksi Belum Tersinkron</span>
+          </div>
+          <p class="mt-1 leading-relaxed">
+            Terdapat {{ pendingCount }} data atau transaksi lokal yang belum terkirim ke Cloud (atau tertunda karena jaringan). Sistem proteksi kami akan mengamankan dan mempertahankan transaksi offline Anda, namun disarankan untuk menekan <strong>Sync</strong> atau <strong>Pulihkan</strong> terlebih dahulu.
+          </p>
+        </div>
         <p class="text-sm leading-relaxed text-ink-secondary">
           Data lokal di perangkat ini (<span class="font-semibold text-ink-primary"
             >produk, transaksi, pelanggan, kas, dan shift</span
@@ -1046,7 +1173,7 @@ function handleBack() {
         </p>
         <p class="text-xs leading-relaxed text-ink-secondary">
           Gunakan hanya jika Anda yakin data di Cloud sudah lengkap. Sebelum menghapus, aplikasi
-          menyimpan snapshot lokal dan akan mengembalikannya otomatis bila pengunduhan gagal.
+          menyimpan snapshot lokal dan akan mempertahankan transaksi offline yang belum terkirim.
         </p>
         <div class="flex items-center justify-end gap-2">
           <BaseButton

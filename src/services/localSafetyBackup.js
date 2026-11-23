@@ -175,6 +175,131 @@ export async function restoreLocalSafetyBackup(snapshot, { adapter = null, pinia
   return { ok: true, restored: true }
 }
 
+/**
+ * Mengamankan data transaksi lokal yang belum sempat tersinkronkan ke Cloud
+ * agar tidak terhapus saat operasi Muat Ulang Cloud berhasil.
+ *
+ * @param {object} snapshot
+ * @param {object} options
+ * @param {object} [options.adapter]
+ * @param {object|null} [options.pinia]
+ * @returns {Promise<{ok: boolean, preservedCount: number, preservedIds: string[]}>}
+ */
+export async function preserveUnsyncedDataAfterPull(snapshot, { adapter = null, pinia = null } = {}) {
+  const data = snapshot ?? memorySnapshot
+  if (!data || !adapter) return { ok: false, preservedCount: 0, preservedIds: [] }
+
+  const backupTransactions = Array.isArray(data.transactions) ? data.transactions : []
+  const backupQueue = Array.isArray(data.syncQueue) ? data.syncQueue : []
+
+  if (backupTransactions.length === 0 && backupQueue.length === 0) {
+    return { ok: true, preservedCount: 0, preservedIds: [] }
+  }
+
+  try {
+    let currentTransactions = []
+    if (typeof adapter.loadTransactions === 'function') {
+      currentTransactions = (await adapter.loadTransactions()) ?? []
+    }
+    const currentTxIds = new Set(
+      currentTransactions.map((t) => String(t.id ?? t.syncId ?? t.sync_id ?? '').toLowerCase()),
+    )
+    const currentInvoices = new Set(
+      currentTransactions.map((t) => String(t.invoiceNumber ?? t.invoice_number ?? '').toLowerCase()),
+    )
+
+    // Cari transaksi lokal dari snapshot yang belum ada di Cloud yang baru ditarik
+    const missingTransactions = backupTransactions.filter((bt) => {
+      const id = String(bt.id ?? bt.syncId ?? bt.sync_id ?? '').toLowerCase()
+      const inv = String(bt.invoiceNumber ?? bt.invoice_number ?? '').toLowerCase()
+      const matchesId = id && currentTxIds.has(id)
+      const matchesInv = inv && currentInvoices.has(inv)
+      return !matchesId && !matchesInv
+    })
+
+    if (missingTransactions.length > 0) {
+      const mergedTransactions = [...missingTransactions, ...currentTransactions]
+      if (typeof adapter.saveTransactions === 'function') {
+        await adapter.saveTransactions(mergedTransactions)
+      }
+
+      try {
+        const { useTransactionStore } = await import('@/stores/transactionStore')
+        const txStore = useTransactionStore(pinia)
+        if (txStore) {
+          txStore.$patch({ items: mergedTransactions })
+        }
+      } catch {
+        // non-blocking
+      }
+    }
+
+    // Pulihkan antrean sync untuk transaksi lokal tersebut agar tetap bisa terkirim ke Cloud
+    const missingTxIds = new Set(missingTransactions.map((t) => String(t.id).toLowerCase()))
+    const queueToRestore = backupQueue.filter((q) => {
+      const entityId = String(q.entityId ?? q.entity_id ?? '').toLowerCase()
+      return missingTxIds.has(entityId)
+    })
+
+    // Jika ada missing transaksi yang item queue-nya sudah sempat terambil ke inflight,
+    // buatkan kembali antrean sync-nya agar di-push pada sinkronisasi berikutnya
+    const foundQueueEntityIds = new Set(
+      queueToRestore.map((q) => String(q.entityId ?? q.entity_id ?? '').toLowerCase()),
+    )
+    for (const missingTx of missingTransactions) {
+      const txId = String(missingTx.id).toLowerCase()
+      if (!foundQueueEntityIds.has(txId)) {
+        queueToRestore.push({
+          id:
+            typeof crypto !== 'undefined' && crypto.randomUUID
+              ? crypto.randomUUID()
+              : `queue-preserve-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          entityType: 'sale',
+          entityId: missingTx.id,
+          operation: 'create',
+          payload: missingTx,
+          status: 'pending',
+          attemptCount: 0,
+          createdAt: missingTx.createdAt || new Date().toISOString(),
+        })
+      }
+    }
+
+    if (queueToRestore.length > 0) {
+      if (typeof adapter.upsertSyncQueueItems === 'function') {
+        await adapter.upsertSyncQueueItems(queueToRestore)
+      } else if (typeof adapter.upsertSyncQueueItem === 'function') {
+        for (const item of queueToRestore) {
+          try {
+            await adapter.upsertSyncQueueItem(item)
+          } catch {
+            // best-effort
+          }
+        }
+      } else if (
+        typeof adapter.listSyncQueueItems === 'function' &&
+        typeof adapter.replaceSyncQueueItems === 'function'
+      ) {
+        try {
+          const currentQueue = (await adapter.listSyncQueueItems()) ?? []
+          await adapter.replaceSyncQueueItems([...currentQueue, ...queueToRestore])
+        } catch {
+          // best-effort
+        }
+      }
+    }
+
+    return {
+      ok: true,
+      preservedCount: missingTransactions.length,
+      preservedIds: missingTransactions.map((t) => t.id),
+    }
+  } catch (err) {
+    console.error('Failed to preserve unsynced data after pull:', err)
+    return { ok: false, preservedCount: 0, preservedIds: [], error: err }
+  }
+}
+
 /** Buang snapshot (operasi berhasil, data Cloud sudah terpasang). */
 export function clearLocalSafetyBackup() {
   memorySnapshot = null

@@ -125,12 +125,25 @@ export function initializeSyncFoundation({ pinia, adapter, scheduler }) {
   const queueService = createSyncQueueService({ adapter, scheduler })
   const registry = createSyncIdentityRegistry({ adapter, scheduler })
   const tracker = createSyncChangeTracker({ pinia, queueService })
+  // INT-04: reconciles a retained push envelope whose server acceptance is
+  // unknown (transport loss, 403-on-retry, or a failed local cleanup) against
+  // the INT-03 request-status endpoint. Context guard is shared so a
+  // cross-tenant envelope can never be resolved.
+  const reconciliationService = createSyncReconciliationService({
+    adapter,
+    scheduler,
+    queueService,
+    registry,
+    contextGuardService,
+  })
+
   const pushService = createSyncPushService({
     adapter,
     scheduler,
     queueService,
     registry,
     contextGuardService,
+    reconciliationService,
     // INT-02: every push path funnels through the push service, so the
     // authorization re-verification lives here and covers manual push, the
     // orchestrator and auto-sync with a single implementation.
@@ -167,6 +180,7 @@ export function initializeSyncFoundation({ pinia, adapter, scheduler }) {
     pushService,
     pullService,
     conflictService,
+    reconciliationService,
   })
   const healthService = createSyncHealthService({
     adapter,
@@ -179,6 +193,7 @@ export function initializeSyncFoundation({ pinia, adapter, scheduler }) {
     bootstrapService,
     orchestratorService,
     conflictService,
+    reconciliationService,
   })
   const activityLogService = createSyncActivityLogService({
     adapter,
@@ -195,17 +210,6 @@ export function initializeSyncFoundation({ pinia, adapter, scheduler }) {
     conflictService,
     adapter,
     capabilityProvider: pinia ? () => useCloudSessionStore(pinia).pushPolicy : null,
-  })
-  // INT-04: reconciles a retained push envelope whose server acceptance is
-  // unknown (transport loss, 403-on-retry, or a failed local cleanup) against
-  // the INT-03 request-status endpoint. Context guard is shared so a
-  // cross-tenant envelope can never be resolved.
-  const reconciliationService = createSyncReconciliationService({
-    adapter,
-    scheduler,
-    queueService,
-    registry,
-    contextGuardService,
   })
 
   return {

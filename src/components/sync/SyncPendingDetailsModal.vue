@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useSyncPushStore } from '@/stores/syncPushStore'
 import { useSyncStatusStore } from '@/stores/syncStatusStore'
+import { useSyncReconciliationStore } from '@/stores/syncReconciliationStore'
 import { formatCurrency, formatDateTime } from '@/utils/formatters'
 
 const props = defineProps({
@@ -15,6 +16,7 @@ const emit = defineEmits(['update:modelValue'])
 
 const syncPushStore = useSyncPushStore()
 const syncStatusStore = useSyncStatusStore()
+const syncReconciliationStore = useSyncReconciliationStore()
 
 const items = ref([])
 const loading = ref(false)
@@ -132,6 +134,23 @@ async function handleSyncNow() {
   actionLoading.value = true
   feedbackMessage.value = null
   try {
+    if (syncStatusStore.reconciliationRequired || syncStatusStore.hasInflight) {
+      try {
+        const reconRes = await syncReconciliationStore.reconcile()
+        if (reconRes?.outcome === 'COMMITTED') {
+          feedbackMessage.value = {
+            type: 'success',
+            text: 'Pemulihan berhasil! Transaksi tertunda telah terkonfirmasi tersimpan di server Cloud.',
+          }
+          await syncStatusStore.refresh()
+          await loadPendingItems()
+          return
+        }
+      } catch (reconErr) {
+        console.warn('Reconcile pre-check warning:', reconErr)
+      }
+    }
+
     const res = await syncPushStore.pushNow()
     if (res?.ok) {
       feedbackMessage.value = {
@@ -141,9 +160,10 @@ async function handleSyncNow() {
     } else {
       feedbackMessage.value = {
         type: 'error',
-        text: res?.message || res?.error?.message || 'Sinkronisasi belum berhasil. Periksa koneksi atau error di bawah.',
+        text: res?.message || res?.error?.message || 'Sinkronisasi belum berhasil. Periksa koneksi internet Anda.',
       }
     }
+    await syncStatusStore.refresh()
     await loadPendingItems()
   } catch (err) {
     feedbackMessage.value = {
@@ -208,6 +228,24 @@ async function handleDeleteQueueItem(item) {
 
       <!-- Modal Body -->
       <div class="flex-1 overflow-y-auto p-4 space-y-3 no-scrollbar">
+        <!-- Recovery / Inflight Alert Banner -->
+        <div
+          v-if="syncStatusStore.hasInflight || syncStatusStore.reconciliationRequired"
+          class="rounded-2xl border border-amber-300 bg-amber-50/90 p-3.5 text-xs text-amber-900 shadow-2xs dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-200"
+        >
+          <div class="flex items-start gap-2">
+            <span class="text-base text-amber-600 dark:text-amber-400">⚠️</span>
+            <div class="space-y-1">
+              <p class="font-bold text-amber-900 dark:text-amber-100">
+                Data Tertunda Membutuhkan Pemulihan
+              </p>
+              <p class="text-[11px] leading-relaxed text-amber-800 dark:text-amber-200">
+                Pengiriman data sebelumnya terputus saat kasir menyimpan pesanan (koneksi ngelag/timeout). Data transaksi Anda aman di perangkat ini. Tekan tombol <strong>"Pulihkan &amp; Sinkronkan"</strong> di bawah untuk menyelesaikan pengiriman ke Cloud secara aman.
+              </p>
+            </div>
+          </div>
+        </div>
+
         <!-- Info Banner -->
         <div class="rounded-2xl border border-sky-200/70 bg-sky-50/70 p-3 text-xs text-sky-900 dark:border-sky-800/40 dark:bg-sky-950/30 dark:text-sky-200">
           <p class="font-medium">
@@ -345,7 +383,7 @@ async function handleDeleteQueueItem(item) {
         <button
           type="button"
           class="inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-bold text-white shadow-xs hover:bg-primary-hover active:scale-95 transition disabled:opacity-50 cursor-pointer"
-          :disabled="actionLoading || items.length === 0"
+          :disabled="actionLoading || (items.length === 0 && !syncStatusStore.hasInflight && !syncStatusStore.reconciliationRequired)"
           @click="handleSyncNow"
         >
           <svg
@@ -367,7 +405,7 @@ async function handleDeleteQueueItem(item) {
           >
             <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
           </svg>
-          <span>{{ actionLoading ? 'Mengirim Data...' : 'Sinkronkan Sekarang' }}</span>
+          <span>{{ actionLoading ? 'Memulihkan & Mengirim...' : (syncStatusStore.hasInflight || syncStatusStore.reconciliationRequired ? 'Pulihkan & Sinkronkan' : 'Sinkronkan Sekarang') }}</span>
         </button>
       </div>
     </div>
