@@ -261,6 +261,28 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
     ])
   }
 
+  /**
+   * Inserts multiple rows in chunks using multi-row INSERT (...), (...)
+   * This drastically reduces IPC bridge overhead on mobile devices while
+   * staying well below SQLite's variable limit (safe max ~500 params per chunk).
+   */
+  async function batchInsert(db, insertClause, colsPerRow, rows, maxChunkSize = 50) {
+    if (!rows || rows.length === 0) {
+      return
+    }
+
+    const chunkSize = Math.max(1, Math.min(maxChunkSize, Math.floor(500 / colsPerRow)))
+    const singleRowPlaceholders = `(${Array(colsPerRow).fill('?').join(', ')})`
+
+    for (let i = 0; i < rows.length; i += chunkSize) {
+      const chunk = rows.slice(i, i + chunkSize)
+      const placeholders = Array(chunk.length).fill(singleRowPlaceholders).join(', ')
+      const sql = `${insertClause} VALUES ${placeholders}`
+      const params = chunk.flat()
+      await db.run(sql, params, false)
+    }
+  }
+
   return {
     name: 'sqlite',
     async initialize() {
@@ -376,44 +398,50 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
         await db.run('DELETE FROM products', [], false)
         await db.run('DELETE FROM categories', [], false)
 
-        for (const category of categories) {
-          if (String(category) === RESERVED_CATEGORY) {
-            continue
-          }
-
-          await db.run('INSERT INTO categories (name) VALUES (?)', [category], false)
+        const validCategories = (categories || []).filter((category) => String(category) !== RESERVED_CATEGORY)
+        if (validCategories.length > 0) {
+          await batchInsert(
+            db,
+            'INSERT INTO categories (name)',
+            1,
+            validCategories.map((category) => [category]),
+            100,
+          )
         }
 
-        for (const product of products) {
-          await db.run(
+        if (products && products.length > 0) {
+          const productRows = products.map((product) => [
+            String(product.id),
+            product.name,
+            product.category,
+            product.sku ?? '',
+            Number(product.cost ?? 0),
+            Number(product.price),
+            (product.promoPrice !== null && product.promoPrice !== undefined && product.promoPrice !== '') ? Number(product.promoPrice) : null,
+            Number(product.stock),
+            product.unit ?? 'pcs',
+            Number(product.minStock ?? 0),
+            product.kind ?? 'product',
+            product.pricingUnit ?? 'pcs',
+            Number(product.minQuantity ?? 0),
+            product.estimatedDuration ?? '',
+            product.imageData ?? '',
+            product.isSellable === undefined ? 1 : (product.isSellable ? 1 : 0),
+            product.isActive ? 1 : 0,
+            Array.isArray(product.variantGroupIds)
+              ? JSON.stringify(product.variantGroupIds)
+              : (typeof product.variantGroupIds === 'string' ? product.variantGroupIds : '[]'),
+            product.barcode ?? '',
+          ])
+
+          await batchInsert(
+            db,
             `INSERT INTO products
               (id, name, category, sku, cost, price, promo_price, stock, unit, min_stock,
-               kind, pricing_unit, min_quantity, estimated_duration, image_data, is_sellable, is_active, variant_group_ids, barcode)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-              String(product.id),
-              product.name,
-              product.category,
-              product.sku ?? '',
-              Number(product.cost ?? 0),
-              Number(product.price),
-              (product.promoPrice !== null && product.promoPrice !== undefined && product.promoPrice !== '') ? Number(product.promoPrice) : null,
-              Number(product.stock),
-              product.unit ?? 'pcs',
-              Number(product.minStock ?? 0),
-              product.kind ?? 'product',
-              product.pricingUnit ?? 'pcs',
-              Number(product.minQuantity ?? 0),
-              product.estimatedDuration ?? '',
-              product.imageData ?? '',
-              product.isSellable === undefined ? 1 : (product.isSellable ? 1 : 0),
-              product.isActive ? 1 : 0,
-              Array.isArray(product.variantGroupIds)
-                ? JSON.stringify(product.variantGroupIds)
-                : (typeof product.variantGroupIds === 'string' ? product.variantGroupIds : '[]'),
-              product.barcode ?? '',
-            ],
-            false,
+               kind, pricing_unit, min_quantity, estimated_duration, image_data, is_sellable, is_active, variant_group_ids, barcode)`,
+            19,
+            productRows,
+            25,
           )
         }
 
@@ -443,11 +471,19 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
       await withTransaction(async (db) => {
         await db.run('DELETE FROM customers', [], false)
 
-        for (const customer of customers) {
-          await db.run(
-            'INSERT INTO customers (id, name, phone, email) VALUES (?, ?, ?, ?)',
-            [String(customer.id), customer.name, customer.phone, customer.email],
-            false,
+        if (customers && customers.length > 0) {
+          const customerRows = customers.map((customer) => [
+            String(customer.id),
+            customer.name,
+            customer.phone,
+            customer.email,
+          ])
+          await batchInsert(
+            db,
+            'INSERT INTO customers (id, name, phone, email)',
+            4,
+            customerRows,
+            50,
           )
         }
       })
@@ -489,37 +525,40 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
       await withTransaction(async (db) => {
         await db.run('DELETE FROM promos', [], false)
 
-        for (const promo of promos) {
-          await db.run(
+        if (promos && promos.length > 0) {
+          const promoRows = promos.map((promo) => [
+            String(promo.id ?? promo.syncId),
+            promo.name,
+            promo.code ?? null,
+            promo.discountType ?? promo.discount_type,
+            Number(promo.discountValue ?? promo.discount_value ?? 0),
+            promo.scope ?? 'all',
+            Number(promo.minPurchase ?? promo.min_purchase ?? 0),
+            promo.maxDiscount !== undefined && promo.maxDiscount !== null ? Number(promo.maxDiscount) : (promo.max_discount !== undefined && promo.max_discount !== null ? Number(promo.max_discount) : null),
+            Array.isArray(promo.weekdays) ? JSON.stringify(promo.weekdays) : (typeof promo.weekdays === 'string' ? promo.weekdays : null),
+            promo.startsAt ?? promo.starts_at ?? null,
+            promo.endsAt ?? promo.ends_at ?? null,
+            promo.startTime ?? promo.start_time ?? null,
+            promo.endTime ?? promo.end_time ?? null,
+            promo.usageLimitTotal !== undefined && promo.usageLimitTotal !== null ? Number(promo.usageLimitTotal) : (promo.usage_limit_total !== undefined && promo.usage_limit_total !== null ? Number(promo.usage_limit_total) : null),
+            promo.usageLimitPerCustomer !== undefined && promo.usageLimitPerCustomer !== null ? Number(promo.usageLimitPerCustomer) : (promo.usage_limit_per_customer !== undefined && promo.usage_limit_per_customer !== null ? Number(promo.usage_limit_per_customer) : null),
+            promo.isStackable || promo.is_stackable ? 1 : 0,
+            promo.status ?? 'active',
+            String(promo.syncId ?? promo.sync_id ?? promo.id),
+            Number(promo.syncVersion ?? promo.sync_version ?? 1),
+            Array.isArray(promo.targets) ? JSON.stringify(promo.targets) : (typeof promo.targets === 'string' ? promo.targets : '[]'),
+            promo.updatedAt ?? promo.updated_at ?? new Date().toISOString(),
+          ])
+
+          await batchInsert(
+            db,
             `INSERT INTO promos
               (id, name, code, discount_type, discount_value, scope, min_purchase, max_discount,
                weekdays, starts_at, ends_at, start_time, end_time, usage_limit_total,
-               usage_limit_per_customer, is_stackable, status, sync_id, sync_version, targets, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-              String(promo.id ?? promo.syncId),
-              promo.name,
-              promo.code ?? null,
-              promo.discountType ?? promo.discount_type,
-              Number(promo.discountValue ?? promo.discount_value ?? 0),
-              promo.scope ?? 'all',
-              Number(promo.minPurchase ?? promo.min_purchase ?? 0),
-              promo.maxDiscount !== undefined && promo.maxDiscount !== null ? Number(promo.maxDiscount) : (promo.max_discount !== undefined && promo.max_discount !== null ? Number(promo.max_discount) : null),
-              Array.isArray(promo.weekdays) ? JSON.stringify(promo.weekdays) : (typeof promo.weekdays === 'string' ? promo.weekdays : null),
-              promo.startsAt ?? promo.starts_at ?? null,
-              promo.endsAt ?? promo.ends_at ?? null,
-              promo.startTime ?? promo.start_time ?? null,
-              promo.endTime ?? promo.end_time ?? null,
-              promo.usageLimitTotal !== undefined && promo.usageLimitTotal !== null ? Number(promo.usageLimitTotal) : (promo.usage_limit_total !== undefined && promo.usage_limit_total !== null ? Number(promo.usage_limit_total) : null),
-              promo.usageLimitPerCustomer !== undefined && promo.usageLimitPerCustomer !== null ? Number(promo.usageLimitPerCustomer) : (promo.usage_limit_per_customer !== undefined && promo.usage_limit_per_customer !== null ? Number(promo.usage_limit_per_customer) : null),
-              promo.isStackable || promo.is_stackable ? 1 : 0,
-              promo.status ?? 'active',
-              String(promo.syncId ?? promo.sync_id ?? promo.id),
-              Number(promo.syncVersion ?? promo.sync_version ?? 1),
-              Array.isArray(promo.targets) ? JSON.stringify(promo.targets) : (typeof promo.targets === 'string' ? promo.targets : '[]'),
-              promo.updatedAt ?? promo.updated_at ?? new Date().toISOString(),
-            ],
-            false,
+               usage_limit_per_customer, is_stackable, status, sync_id, sync_version, targets, updated_at)`,
+            21,
+            promoRows,
+            20,
           )
         }
       })
@@ -551,27 +590,30 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
       await withTransaction(async (db) => {
         await db.run('DELETE FROM variant_groups', [], false)
 
-        for (const group of groups) {
-          await db.run(
+        if (groups && groups.length > 0) {
+          const groupRows = groups.map((group) => [
+            String(group.id ?? group.syncId),
+            String(group.syncId ?? group.sync_id ?? group.id),
+            group.name,
+            group.selectionType ?? group.selection_type ?? 'single',
+            group.isRequired !== undefined ? (group.isRequired ? 1 : 0) : (group.is_required ? 1 : 0),
+            Number(group.minSelection ?? group.min_selection ?? 1),
+            group.maxSelection !== undefined && group.maxSelection !== null ? Number(group.maxSelection) : (group.max_selection !== undefined && group.max_selection !== null ? Number(group.max_selection) : null),
+            Number(group.sortOrder ?? group.sort_order ?? 0),
+            group.status ?? 'active',
+            Number(group.syncVersion ?? group.sync_version ?? 1),
+            Array.isArray(group.options) ? JSON.stringify(group.options) : (typeof group.options === 'string' ? group.options : '[]'),
+            group.updatedAt ?? group.updated_at ?? new Date().toISOString(),
+          ])
+
+          await batchInsert(
+            db,
             `INSERT INTO variant_groups
               (id, sync_id, name, selection_type, is_required, min_selection,
-               max_selection, sort_order, status, sync_version, options, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-              String(group.id ?? group.syncId),
-              String(group.syncId ?? group.sync_id ?? group.id),
-              group.name,
-              group.selectionType ?? group.selection_type ?? 'single',
-              group.isRequired !== undefined ? (group.isRequired ? 1 : 0) : (group.is_required ? 1 : 0),
-              Number(group.minSelection ?? group.min_selection ?? 1),
-              group.maxSelection !== undefined && group.maxSelection !== null ? Number(group.maxSelection) : (group.max_selection !== undefined && group.max_selection !== null ? Number(group.max_selection) : null),
-              Number(group.sortOrder ?? group.sort_order ?? 0),
-              group.status ?? 'active',
-              Number(group.syncVersion ?? group.sync_version ?? 1),
-              Array.isArray(group.options) ? JSON.stringify(group.options) : (typeof group.options === 'string' ? group.options : '[]'),
-              group.updatedAt ?? group.updated_at ?? new Date().toISOString(),
-            ],
-            false,
+               max_selection, sort_order, status, sync_version, options, updated_at)`,
+            12,
+            groupRows,
+            25,
           )
         }
       })
@@ -605,21 +647,24 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
         try {
           await db.run('DELETE FROM dining_tables', [], false)
 
-          for (const table of tables) {
-            await db.run(
+          if (tables && tables.length > 0) {
+            const tableRows = tables.map((table) => [
+              String(table.id),
+              table.outlet_id ?? table.outletId ?? null,
+              table.name,
+              Number(table.capacity ?? 4),
+              table.status ?? 'available',
+              Number(table.sort_order ?? table.sortOrder ?? 0),
+              table.updated_at ?? table.updatedAt ?? new Date().toISOString(),
+            ])
+
+            await batchInsert(
+              db,
               `INSERT OR REPLACE INTO dining_tables
-                (id, outlet_id, name, capacity, status, sort_order, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)`,
-              [
-                String(table.id),
-                table.outlet_id ?? table.outletId ?? null,
-                table.name,
-                Number(table.capacity ?? 4),
-                table.status ?? 'available',
-                Number(table.sort_order ?? table.sortOrder ?? 0),
-                table.updated_at ?? table.updatedAt ?? new Date().toISOString(),
-              ],
-              false,
+                (id, outlet_id, name, capacity, status, sort_order, updated_at)`,
+              7,
+              tableRows,
+              50,
             )
           }
         } catch (e) {
@@ -666,25 +711,28 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
         try {
           await db.run('DELETE FROM payment_methods', [], false)
 
-          for (const method of methods) {
-            await db.run(
+          if (methods && methods.length > 0) {
+            const methodRows = methods.map((method) => [
+              String(method.id ?? method.code),
+              method.name || method.label || '',
+              String(method.code || method.id || '').toLowerCase(),
+              method.category || method.type || 'other',
+              (method.is_cash ?? method.isCash) ? 1 : 0,
+              Number(method.sort_order ?? method.sortOrder ?? 0),
+              method.description || '',
+              Array.isArray(method.enabled_outlet_ids)
+                ? JSON.stringify(method.enabled_outlet_ids)
+                : (typeof method.enabled_outlet_ids === 'string' ? method.enabled_outlet_ids : '[]'),
+              method.updated_at ?? method.updatedAt ?? new Date().toISOString(),
+            ])
+
+            await batchInsert(
+              db,
               `INSERT OR REPLACE INTO payment_methods
-                (id, name, code, category, is_cash, sort_order, description, enabled_outlet_ids, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              [
-                String(method.id ?? method.code),
-                method.name || method.label || '',
-                String(method.code || method.id || '').toLowerCase(),
-                method.category || method.type || 'other',
-                (method.is_cash ?? method.isCash) ? 1 : 0,
-                Number(method.sort_order ?? method.sortOrder ?? 0),
-                method.description || '',
-                Array.isArray(method.enabled_outlet_ids)
-                  ? JSON.stringify(method.enabled_outlet_ids)
-                  : (typeof method.enabled_outlet_ids === 'string' ? method.enabled_outlet_ids : '[]'),
-                method.updated_at ?? method.updatedAt ?? new Date().toISOString(),
-              ],
-              false,
+                (id, name, code, category, is_cash, sort_order, description, enabled_outlet_ids, updated_at)`,
+              9,
+              methodRows,
+              50,
             )
           }
         } catch (e) {
@@ -711,18 +759,22 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
       await withTransaction(async (db) => {
         await db.run('DELETE FROM expenses', [], false)
 
-        for (const expense of expenses) {
-          await db.run(
-            'INSERT INTO expenses (id, title, category, amount, note, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-            [
-              String(expense.id),
-              expense.title,
-              expense.category,
-              Number(expense.amount),
-              expense.note,
-              expense.createdAt,
-            ],
-            false,
+        if (expenses && expenses.length > 0) {
+          const expenseRows = expenses.map((expense) => [
+            String(expense.id),
+            expense.title,
+            expense.category,
+            Number(expense.amount),
+            expense.note,
+            expense.createdAt,
+          ])
+
+          await batchInsert(
+            db,
+            'INSERT INTO expenses (id, title, category, amount, note, created_at)',
+            6,
+            expenseRows,
+            50,
           )
         }
       })
@@ -739,15 +791,19 @@ export function createSQLiteAdapter({ database = DB_NAME, version = DB_VERSION }
       await withTransaction(async (db) => {
         await db.run('DELETE FROM transactions', [], false)
 
-        for (const transaction of transactions) {
-          await db.run(
-            'INSERT INTO transactions (id, payload, created_at) VALUES (?, ?, ?)',
-            [
-              String(transaction.id),
-              JSON.stringify(transaction),
-              String(transaction.createdAt ?? '') || new Date().toISOString(),
-            ],
-            false,
+        if (transactions && transactions.length > 0) {
+          const transactionRows = transactions.map((transaction) => [
+            String(transaction.id),
+            JSON.stringify(transaction),
+            String(transaction.createdAt ?? '') || new Date().toISOString(),
+          ])
+
+          await batchInsert(
+            db,
+            'INSERT INTO transactions (id, payload, created_at)',
+            3,
+            transactionRows,
+            50,
           )
         }
       })

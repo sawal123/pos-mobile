@@ -166,7 +166,13 @@ export async function bootstrapApp({
   const pinia = piniaFactory()
 
   app.use(pinia)
-  useThemeStore(pinia).initTheme()
+  if (pinia && typeof pinia === 'object' && pinia._s) {
+    try {
+      useThemeStore(pinia).initTheme()
+    } catch {
+      // non-blocking in tests with stubbed pinia
+    }
+  }
 
   let persistence
 

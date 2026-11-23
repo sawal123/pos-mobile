@@ -65,19 +65,27 @@ const { fakeDb, nativeState } = vi.hoisted(() => {
           outlet: values[5], mode: values[6],
         }
       } else if (normalized.startsWith('INSERT INTO categories')) {
-        state.categories.push({ name: values[0] })
+        for (const name of values) state.categories.push({ name })
       } else if (normalized.startsWith('INSERT INTO products')) {
         const columns = /INSERT INTO products\s*\(([^)]+)\)/i.exec(normalized)[1].split(',').map((column) => column.trim())
-        state.products.push(Object.fromEntries(columns.map((column, index) => [column, values[index]])))
+        for (let i = 0; i < values.length; i += columns.length) {
+          state.products.push(Object.fromEntries(columns.map((column, index) => [column, values[i + index]])))
+        }
       } else if (normalized.startsWith('INSERT INTO customers')) {
-        state.customers.push({ id: values[0], name: values[1], phone: values[2], email: values[3] })
+        for (let i = 0; i < values.length; i += 4) {
+          state.customers.push({ id: values[i], name: values[i + 1], phone: values[i + 2], email: values[i + 3] })
+        }
       } else if (normalized.startsWith('INSERT INTO expenses')) {
-        state.expenses.push({
-          id: values[0], title: values[1], category: values[2], amount: values[3],
-          note: values[4], created_at: values[5],
-        })
+        for (let i = 0; i < values.length; i += 6) {
+          state.expenses.push({
+            id: values[i], title: values[i + 1], category: values[i + 2], amount: values[i + 3],
+            note: values[i + 4], created_at: values[i + 5],
+          })
+        }
       } else if (normalized.startsWith('INSERT INTO transactions')) {
-        state.transactions.push({ id: values[0], payload: values[1], created_at: values[2] })
+        for (let i = 0; i < values.length; i += 3) {
+          state.transactions.push({ id: values[i], payload: values[i + 1], created_at: values[i + 2] })
+        }
       } else if (normalized.startsWith('INSERT OR REPLACE INTO app_meta')) {
         state.meta.set(values[0], values[1])
       } else if (normalized.startsWith('INSERT OR REPLACE INTO app_state')) {

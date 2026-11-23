@@ -42,6 +42,7 @@ vi.mock('@/services/localSafetyBackup', () => ({
   captureLocalSafetyBackup: (...args) => captureBackupMock(...args),
   restoreLocalSafetyBackup: (...args) => restoreBackupMock(...args),
   clearLocalSafetyBackup: (...args) => clearBackupMock(...args),
+  preserveUnsyncedDataAfterPull: vi.fn().mockResolvedValue({ ok: true, preservedCount: 0, preservedIds: [] }),
 }))
 
 enableAutoUnmount(afterEach)

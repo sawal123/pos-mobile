@@ -74,7 +74,13 @@ const { fakeDb, nativeState } = vi.hoisted(() => {
     else if (normalized.startsWith('DELETE FROM customers')) state.customers = []
     else if (normalized.startsWith('DELETE FROM expenses')) state.expenses = []
     else if (normalized.startsWith('DELETE FROM transactions')) state.transactions = []
-    else if (normalized.startsWith('DELETE FROM sync_queue')) state.syncQueue = []
+    else if (normalized.startsWith('DELETE FROM sync_queue')) {
+      if (normalized.includes("WHERE entity_type = 'business'")) {
+        state.syncQueue = state.syncQueue.filter((item) => item.entity_type !== 'business')
+      } else {
+        state.syncQueue = []
+      }
+    }
     else if (normalized.startsWith('INSERT INTO business')) {
       state.business = {
         name: values[1], type: values[2], owner: values[3], phone: values[4],
@@ -83,13 +89,8 @@ const { fakeDb, nativeState } = vi.hoisted(() => {
     } else if (normalized.startsWith('INSERT INTO categories')) {
       state.categories.push({ name: values[0] })
     } else if (normalized.startsWith('INSERT INTO products')) {
-      state.products.push({
-        id: values[0], name: values[1], category: values[2], sku: values[3],
-        cost: values[4], price: values[5], stock: values[6], unit: values[7],
-        min_stock: values[8], kind: values[9], pricing_unit: values[10],
-        min_quantity: values[11], estimated_duration: values[12],
-        image_data: values[13], is_active: values[14],
-      })
+      const columns = /INSERT INTO products\s*\(([^)]+)\)/i.exec(normalized)[1].split(',').map((column) => column.trim())
+      state.products.push(Object.fromEntries(columns.map((column, index) => [column, values[index]])))
     } else if (normalized.startsWith('INSERT INTO transactions')) {
       state.transactions.push({ id: values[0], payload: values[1], created_at: values[2] })
     } else if (normalized.startsWith('INSERT INTO customers')) {

@@ -2932,6 +2932,10 @@ export function createSyncPullService({
       }
     }
 
+    if (typeof options.onProgress === 'function') {
+      options.onProgress(95, 'Data berhasil disimpan ke perangkat...')
+    }
+
     // ── 12. Execute planned identity registry operations ───────────────────────
     if (typeof options.onProgress === 'function') {
       options.onProgress(96, 'Menyelesaikan sinkronisasi data...')

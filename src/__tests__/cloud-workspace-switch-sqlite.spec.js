@@ -77,9 +77,11 @@ const { fakeDb, nativeState } = vi.hoisted(() => {
           outlet: values[5], mode: values[6],
         }
       } else if (normalized.startsWith('INSERT INTO categories')) {
-        state.categories.push({ name: values[0] })
+        for (const name of values) state.categories.push({ name })
       } else if (normalized.startsWith('INSERT INTO products')) {
-        state.products.push({ id: values[0], name: values[1], category: values[2], is_active: values[14] })
+        for (let i = 0; i < values.length; i += 19) {
+          state.products.push({ id: values[i], name: values[i + 1], category: values[i + 2], is_active: values[i + 16] })
+        }
       } else if (normalized.startsWith('INSERT INTO sync_queue')) {
         state.syncQueue.push({
           id: values[0], entity_type: values[1], entity_id: values[2], operation: values[3],
