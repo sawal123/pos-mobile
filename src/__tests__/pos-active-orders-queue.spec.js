@@ -174,4 +174,100 @@ describe('UX Antrean Pesanan Berjalan (Kombinasi 1 & 2)', () => {
     expect(router.currentRoute.value.path).toBe('/transactions/trx-proses-3')
     expect(router.currentRoute.value.query.edit).toBe('items')
   })
+
+  it('ActiveOrdersSheet: klik Bayar langsung memunculkan modal metode pembayaran', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const router = createTestRouter()
+    await router.push('/pos')
+
+    const trxStore = useTransactionStore()
+    trxStore.addTransaction({
+      id: 'trx-unpaid-1',
+      invoiceNumber: 'INV-ANTREAN-01',
+      customer: 'Doni',
+      items: [{ id: 10, name: 'Kopi Susu', price: 15000, qty: 2 }],
+      total: 30000,
+      orderStatus: 'Proses',
+      paymentStatus: 'unpaid',
+      createdAt: new Date().toISOString(),
+    })
+
+    const wrapper = mount(ActiveOrdersSheet, {
+      props: { open: true },
+      global: { plugins: [pinia, router] },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    const payBtn = wrapper.find('[data-testid="btn-sheet-pay-order"]')
+    expect(payBtn.exists()).toBe(true)
+    expect(payBtn.text()).toContain('Bayar')
+
+    // Klik tombol Bayar
+    await payBtn.trigger('click')
+    await flushPromises()
+
+    // Modal metode pembayaran harus langsung muncul
+    const modal = document.querySelector('[data-testid="antrian-payment-modal"]')
+    expect(modal).not.toBeNull()
+    expect(modal.textContent).toContain('Metode Pembayaran')
+    expect(modal.textContent).toContain('INV-ANTREAN-01')
+    expect(modal.textContent).toContain('Doni')
+    expect(modal.textContent).toContain('30.000')
+
+    wrapper.unmount()
+  })
+
+  it('ActiveOrdersSheet: pelunasan via modal berhasil mengubah status transaksi menjadi paid', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const router = createTestRouter()
+    await router.push('/pos')
+
+    const trxStore = useTransactionStore()
+    trxStore.addTransaction({
+      id: 'trx-unpaid-2',
+      invoiceNumber: 'INV-ANTREAN-02',
+      customer: 'Maya',
+      items: [{ id: 11, name: 'Roti Bakar', price: 20000, qty: 1 }],
+      total: 20000,
+      orderStatus: 'Proses',
+      paymentStatus: 'unpaid',
+      createdAt: new Date().toISOString(),
+    })
+
+    const wrapper = mount(ActiveOrdersSheet, {
+      props: { open: true },
+      global: { plugins: [pinia, router] },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    // Klik tombol Bayar
+    await wrapper.find('[data-testid="btn-sheet-pay-order"]').trigger('click')
+    await flushPromises()
+
+    // Pilih QRIS
+    const qrisBtn = document.querySelector('[data-testid="btn-select-payment-qris"]')
+    expect(qrisBtn).not.toBeNull()
+    qrisBtn.click()
+    await flushPromises()
+
+    // Klik Bayar Sekarang
+    const confirmBtn = document.querySelector('[data-testid="btn-confirm-antrian-payment"]')
+    expect(confirmBtn).not.toBeNull()
+    confirmBtn.click()
+    await flushPromises()
+
+    const updated = trxStore.items.find((item) => item.id === 'trx-unpaid-2')
+    expect(updated.paymentStatus).toBe('paid')
+    expect(updated.paymentMethod).toBe('qris')
+
+    // Modal tertutup setelah pembayaran
+    const modalAfter = document.querySelector('[data-testid="antrian-payment-modal"]')
+    expect(modalAfter).toBeNull()
+
+    wrapper.unmount()
+  })
 })

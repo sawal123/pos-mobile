@@ -126,7 +126,7 @@ describe('P1 POS flow', () => {
       },
     })
 
-    const checkoutButton = getButtonByText(wrapper, 'Kunci Pesanan')
+    const checkoutButton = getButtonByText(wrapper, 'Bayar')
 
     expect(checkoutButton).toBeTruthy()
     expect(checkoutButton.attributes('disabled')).toBeDefined()
@@ -153,7 +153,7 @@ describe('P1 POS flow', () => {
       },
     })
 
-    const checkoutButton = getButtonByText(wrapper, 'Kunci Pesanan')
+    const checkoutButton = getButtonByText(wrapper, 'Bayar')
 
     expect(checkoutButton.attributes('disabled')).toBeUndefined()
 

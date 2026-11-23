@@ -3,8 +3,11 @@ import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import BaseButton from '@/components/base/BaseButton.vue'
+import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSheet from '@/components/base/BaseSheet.vue'
 import { useBusinessStore } from '@/stores/businessStore'
+import { useCashStore } from '@/stores/cashStore'
+import { usePaymentMethodStore } from '@/stores/paymentMethodStore'
 import { useSyncPushStore } from '@/stores/syncPushStore'
 import { useTransactionStore } from '@/stores/transactionStore'
 import { formatCurrency, formatDateTime } from '@/utils/formatters'
@@ -22,8 +25,118 @@ const router = useRouter()
 const transactionStore = useTransactionStore()
 const businessStore = useBusinessStore()
 const syncPushStore = useSyncPushStore()
+const cashStore = useCashStore()
+const paymentMethodStore = usePaymentMethodStore()
 
 const feedbackMsg = ref('')
+
+// Payment Modal State
+const showPaymentModal = ref(false)
+const selectedOrderForPayment = ref(null)
+const selectedPaymentMethod = ref('cash')
+const cashReceived = ref('')
+const paymentError = ref('')
+const isSubmittingPayment = ref(false)
+
+const availablePaymentMethods = computed(() => {
+  const list = paymentMethodStore.activeMethods
+  if (list && list.length > 0) {
+    return list.map((m) => ({
+      id: m.code || m.id,
+      label: m.name || m.label || m.code,
+      isCash: Boolean(m.is_cash ?? m.isCash),
+    }))
+  }
+  return [
+    { id: 'cash', label: 'Tunai', isCash: true },
+    { id: 'qris', label: 'QRIS', isCash: false },
+    { id: 'transfer', label: 'Transfer', isCash: false },
+    { id: 'card', label: 'Kartu', isCash: false },
+  ]
+})
+
+const isCashSelected = computed(() => {
+  return paymentMethodStore.isCashMethod(selectedPaymentMethod.value)
+})
+
+const calculatedChange = computed(() => {
+  if (!isCashSelected.value || !selectedOrderForPayment.value) return 0
+  const rec = Number(cashReceived.value) || 0
+  const tot = Number(selectedOrderForPayment.value.total) || 0
+  return Math.max(0, rec - tot)
+})
+
+const quickCashAmounts = computed(() => {
+  const tot = Number(selectedOrderForPayment.value?.total) || 0
+  const suggestions = [20000, 50000, 100000, 200000, 500000].filter((amt) => amt > tot)
+  return suggestions.slice(0, 2)
+})
+
+function openPaymentModal(order) {
+  selectedOrderForPayment.value = order
+  selectedPaymentMethod.value = 'cash'
+  cashReceived.value = String(order.total ?? '')
+  paymentError.value = ''
+  showPaymentModal.value = true
+}
+
+function closePaymentModal() {
+  showPaymentModal.value = false
+  selectedOrderForPayment.value = null
+  paymentError.value = ''
+}
+
+function setCashAmount(val) {
+  cashReceived.value = String(val)
+}
+
+async function confirmPayment() {
+  if (!selectedOrderForPayment.value || isSubmittingPayment.value) return
+  paymentError.value = ''
+
+  const order = selectedOrderForPayment.value
+  const total = Number(order.total) || 0
+  const isCash = isCashSelected.value
+  const rec = isCash ? Number(cashReceived.value) : 0
+
+  if (isCash && (Number.isNaN(rec) || rec < total)) {
+    paymentError.value = 'Nominal uang diterima kurang dari total tagihan.'
+    return
+  }
+
+  isSubmittingPayment.value = true
+  try {
+    const change = isCash ? Math.max(0, rec - total) : 0
+    const result = transactionStore.settleTransactionPayment({
+      transactionId: order.id,
+      paymentMethod: selectedPaymentMethod.value,
+      cashReceived: isCash ? rec : null,
+      changeAmount: isCash ? change : null,
+      cashStore,
+    })
+
+    if (result.success) {
+      showPaymentModal.value = false
+      selectedOrderForPayment.value = null
+      feedbackMsg.value = `✓ Pembayaran pesanan ${order.invoiceNumber || ''} berhasil!`
+      setTimeout(() => {
+        feedbackMsg.value = ''
+      }, 3000)
+
+      if (businessStore.isCloudMode) {
+        try {
+          await syncPushStore.pushIfOnline?.()
+        } catch {
+          // Safe fallback
+        }
+      }
+    } else {
+      paymentError.value = result.error || 'Pelunasan gagal disimpan.'
+    }
+  } finally {
+    isSubmittingPayment.value = false
+  }
+}
 
 function isSameDay(date1, date2) {
   const d1 = new Date(date1)
@@ -93,8 +206,7 @@ function printReceipt(order) {
 }
 
 function settlePayment(order) {
-  emit('close')
-  router.push(`/transactions/${order.id}`)
+  openPaymentModal(order)
 }
 
 function addToOrder(order) {
@@ -281,8 +393,9 @@ function viewAllTransactions() {
               <button
                 v-if="order.paymentStatus === 'unpaid' || order.status === 'unpaid'"
                 type="button"
+                data-testid="btn-sheet-pay-order"
                 class="inline-flex h-8 items-center gap-1 rounded-xl bg-amber-500 px-2.5 text-xs font-bold text-white shadow-2xs transition hover:bg-amber-600 active:scale-95 cursor-pointer"
-                @click="settlePayment(order)"
+                @click="openPaymentModal(order)"
               >
                 <span>Bayar</span>
               </button>
@@ -316,4 +429,141 @@ function viewAllTransactions() {
       </div>
     </div>
   </BaseSheet>
+
+  <!-- Modal Metode Pembayaran (Antrean) -->
+  <Teleport to="body">
+    <div
+      v-if="showPaymentModal && selectedOrderForPayment"
+      class="fixed inset-0 z-[70] flex items-end justify-center bg-black/60 p-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] backdrop-blur-xs sm:items-center"
+      data-testid="antrian-payment-modal"
+    >
+      <div class="max-h-[90vh] w-full max-w-sm flex flex-col overflow-hidden rounded-3xl bg-white shadow-2xl dark:bg-slate-900 border border-zinc-200/80 dark:border-slate-800">
+        <!-- Header -->
+        <div class="flex items-center justify-between border-b border-zinc-100 p-4 dark:border-slate-800">
+          <div>
+            <h3 class="text-base font-bold text-ink-primary dark:text-white">Metode Pembayaran</h3>
+            <p class="font-mono text-xs text-ink-secondary">
+              {{ selectedOrderForPayment.invoiceNumber || '-' }}
+              <span v-if="selectedOrderForPayment.customer"> • {{ selectedOrderForPayment.customer }}</span>
+              <span v-if="selectedOrderForPayment.tableNumber || selectedOrderForPayment.table_number">
+                • Meja {{ selectedOrderForPayment.tableNumber || selectedOrderForPayment.table_number }}
+              </span>
+            </p>
+          </div>
+          <button
+            type="button"
+            class="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-slate-800 cursor-pointer"
+            @click="closePaymentModal"
+          >
+            ✕
+          </button>
+        </div>
+
+        <!-- Body -->
+        <div class="flex-1 overflow-y-auto p-4 space-y-4">
+          <!-- Total Tagihan -->
+          <div class="rounded-2xl bg-primary/5 p-3.5 border border-primary/15 dark:bg-primary/10 dark:border-primary/20">
+            <p class="text-xs font-medium text-ink-secondary">Total Tagihan:</p>
+            <p class="text-2xl font-black text-primary dark:text-indigo-400 font-mono">
+              {{ formatCurrency(selectedOrderForPayment.total) }}
+            </p>
+          </div>
+
+          <!-- Pilihan Metode Pembayaran -->
+          <div class="space-y-2">
+            <label class="text-xs font-bold uppercase tracking-wider text-ink-secondary">Pilih Metode</label>
+            <div class="grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <button
+                v-for="m in availablePaymentMethods"
+                :key="m.id"
+                type="button"
+                class="rounded-xl border p-2.5 text-center text-xs font-bold transition cursor-pointer"
+                :class="
+                  selectedPaymentMethod === m.id
+                    ? 'border-primary bg-primary/10 text-primary dark:border-indigo-500 dark:bg-indigo-500/20 dark:text-indigo-300'
+                    : 'border-zinc-200 text-zinc-600 hover:bg-zinc-50 dark:border-slate-700 dark:text-slate-300'
+                "
+                :data-testid="`btn-select-payment-${m.id}`"
+                @click="selectedPaymentMethod = m.id"
+              >
+                {{ m.label }}
+              </button>
+            </div>
+          </div>
+
+          <!-- Uang Diterima & Kembalian jika Tunai -->
+          <div
+            v-if="isCashSelected"
+            class="space-y-2.5 rounded-2xl bg-zinc-50 p-3 border border-zinc-100 dark:bg-slate-800/50 dark:border-slate-700"
+          >
+            <BaseInput
+              v-model="cashReceived"
+              label="Uang Diterima"
+              type="number"
+              placeholder="Nominal uang tunai"
+              data-testid="input-cash-received"
+            />
+
+            <!-- Tombol Cepat Nominal -->
+            <div class="grid grid-cols-3 gap-1.5">
+              <button
+                type="button"
+                class="rounded-xl border border-zinc-200/90 bg-white py-1.5 text-xs font-bold text-zinc-700 shadow-2xs transition hover:bg-zinc-50 active:scale-95 cursor-pointer dark:border-slate-700 dark:bg-slate-800 dark:text-zinc-200"
+                @click="setCashAmount(selectedOrderForPayment.total)"
+              >
+                Uang Pas
+              </button>
+              <button
+                v-for="amt in quickCashAmounts"
+                :key="amt"
+                type="button"
+                class="rounded-xl border border-zinc-200/90 bg-white py-1.5 text-xs font-bold text-zinc-700 shadow-2xs transition hover:bg-zinc-50 active:scale-95 cursor-pointer dark:border-slate-700 dark:bg-slate-800 dark:text-zinc-200"
+                @click="setCashAmount(amt)"
+              >
+                {{ formatCurrency(amt) }}
+              </button>
+            </div>
+
+            <!-- Kembalian -->
+            <div class="flex items-center justify-between border-t border-zinc-200/80 pt-2 text-xs dark:border-slate-700">
+              <span class="text-ink-secondary font-medium">Kembalian:</span>
+              <span
+                class="font-bold font-mono text-sm"
+                :class="calculatedChange < 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'"
+              >
+                {{ formatCurrency(calculatedChange) }}
+              </span>
+            </div>
+          </div>
+
+          <p v-if="paymentError" class="text-xs font-semibold text-rose-500" data-testid="payment-error-msg">
+            {{ paymentError }}
+          </p>
+        </div>
+
+        <!-- Footer -->
+        <div class="flex items-center gap-2.5 border-t border-zinc-100 p-4 bg-zinc-50/50 dark:border-slate-800 dark:bg-slate-900/50">
+          <BaseButton
+            variant="secondary"
+            size="md"
+            class="flex-1 rounded-2xl h-11 text-xs font-semibold cursor-pointer"
+            @click="closePaymentModal"
+          >
+            Batal
+          </BaseButton>
+          <BaseButton
+            variant="primary"
+            size="md"
+            class="flex-1 rounded-2xl h-11 text-xs sm:text-sm font-bold shadow-md shadow-primary/25 cursor-pointer"
+            data-testid="btn-confirm-antrian-payment"
+            :disabled="isSubmittingPayment"
+            @click="confirmPayment"
+          >
+            <span v-if="isSubmittingPayment">Memproses...</span>
+            <span v-else>Bayar Sekarang</span>
+          </BaseButton>
+        </div>
+      </div>
+    </div>
+  </Teleport>
 </template>
