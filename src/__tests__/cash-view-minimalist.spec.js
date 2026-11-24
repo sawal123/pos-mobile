@@ -1,11 +1,13 @@
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { createAppRouter } from '@/router'
+import { createSyncChangeTracker } from '@/services/sync/syncTracker'
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCashierStore } from '@/stores/cashierStore'
 import { useCashStore } from '@/stores/cashStore'
+import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { formatCurrency } from '@/utils/formatters'
 import CashView from '@/views/cash/CashView.vue'
 
@@ -16,6 +18,7 @@ function setupContext() {
   const businessStore = useBusinessStore()
   const cashierStore = useCashierStore()
   const cashStore = useCashStore()
+  const cloudStore = useCloudSessionStore()
 
   businessStore.setBusiness({
     name: 'Kopi Nusantara',
@@ -27,7 +30,7 @@ function setupContext() {
   })
   cashierStore.setPinConfigured(true)
 
-  return { pinia, router, businessStore, cashierStore, cashStore }
+  return { pinia, router, businessStore, cashierStore, cashStore, cloudStore }
 }
 
 describe('CashView Minimalist UI', () => {
@@ -136,5 +139,87 @@ describe('CashView Minimalist UI', () => {
 
     expect(wrapper.text()).toContain('Listrik & Air')
     expect(wrapper.text()).not.toContain('Setoran Tambahan')
+  })
+
+  it('menyembunyikan tombol entry kas dan menampilkan banner kunci ketika role kasir login', async () => {
+    const { pinia, router, cloudStore } = setupContext()
+    cloudStore.role = 'cashier'
+
+    await router.push('/cash')
+    await flushPromises()
+
+    const wrapper = mount(CashView, {
+      global: { plugins: [pinia, router] },
+    })
+
+    // Tombol Masuk / Keluar tidak ada
+    expect(wrapper.find('[data-testid="cash-in-action-btn"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="cash-out-action-btn"]').exists()).toBe(false)
+
+    // FAB tombol catat kas tidak ada
+    expect(wrapper.find('[data-testid="cash-open-modal"]').exists()).toBe(false)
+
+    // Banner kunci tampil
+    const lockedBanner = wrapper.find('[data-testid="cashier-entry-locked-banner"]')
+    expect(lockedBanner.exists()).toBe(true)
+    expect(lockedBanner.text()).toContain('Peran Kasir hanya dapat melihat ringkasan kas')
+  })
+
+  it('mencegah role kasir membuka modal atau mencatat kas manual', async () => {
+    const { pinia, router, cashStore, cloudStore } = setupContext()
+    cloudStore.role = 'cashier'
+
+    await router.push('/cash')
+    await flushPromises()
+
+    const wrapper = mount(CashView, {
+      global: { plugins: [pinia, router] },
+    })
+
+    // Panggil openRecordModal langsung dari vm
+    wrapper.vm.openRecordModal('in')
+    expect(wrapper.vm.showRecordSheet).toBe(false)
+
+    // Panggil handleManualCash langsung dari vm
+    wrapper.vm.cashForm = { type: 'in', amount: '50000', category: 'Modal', note: '' }
+    wrapper.vm.handleManualCash()
+    expect(wrapper.vm.cashError).toContain('Peran Kasir tidak diizinkan')
+    expect(cashStore.entries.length).toBe(0)
+  })
+
+  it('tidak mengantrekan entry kas manual ke sync outbox saat role kasir', async () => {
+    const { pinia, businessStore, cashStore, cloudStore } = setupContext()
+    businessStore.mode = 'cloud'
+    cloudStore.role = 'cashier'
+
+    const enqueued = []
+    const queueService = {
+      enqueueUpsert: vi.fn(async (type, id, payload) => {
+        enqueued.push({ type, id, payload })
+      }),
+      enqueueDelete: vi.fn(async () => {}),
+    }
+
+    createSyncChangeTracker({
+      pinia,
+      queueService,
+      stores: { businessStore, cashStore, cloudSessionStore: cloudStore },
+    })
+
+    // Catat kas manual / opening balance tanpa transactionId
+    cashStore.recordOpeningBalance(150000, 'shift-1')
+    expect(enqueued.length).toBe(0)
+
+    // Catat kas pembayaran penjualan (dengan transactionId)
+    cashStore.recordSalePayment({
+      id: 'tx-123',
+      total: 50000,
+      paymentMethod: 'cash',
+      invoiceNumber: 'INV-001',
+      createdAt: new Date().toISOString(),
+    })
+    expect(enqueued.length).toBe(1)
+    expect(enqueued[0].type).toBe('cash_entry')
+    expect(enqueued[0].payload.transactionId).toBe('tx-123')
   })
 })

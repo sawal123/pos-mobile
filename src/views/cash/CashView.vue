@@ -6,13 +6,19 @@ import BaseInput from '@/components/base/BaseInput.vue'
 import BaseSheet from '@/components/base/BaseSheet.vue'
 import { isNativePrinterPlatform, openCashDrawer } from '@/services/printer/bluetoothPrinterService'
 import { useCashStore } from '@/stores/cashStore'
+import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useNotificationStore } from '@/stores/notificationStore'
 import { usePrinterStore } from '@/stores/printerStore'
 import { formatCurrency, formatDateTime } from '@/utils/formatters'
 
 const cashStore = useCashStore()
+const cloudStore = useCloudSessionStore()
 const notificationStore = useNotificationStore()
 const printerStore = usePrinterStore()
+
+const isCashier = computed(
+  () => cloudStore.role === 'cashier' || cloudStore.isCashierContext === true,
+)
 
 const isNative = computed(() => isNativePrinterPlatform())
 const isOpeningDrawer = ref(false)
@@ -72,6 +78,13 @@ function setCashType(type) {
 }
 
 function openRecordModal(type = 'in') {
+  if (isCashier.value) {
+    notificationStore.notifyError({
+      title: 'Akses Dibatasi',
+      message: 'Peran Kasir tidak memiliki akses mencatat kas masuk atau kas keluar manual.',
+    })
+    return
+  }
   setCashType(type)
   cashForm.value.amount = ''
   cashForm.value.note = ''
@@ -86,6 +99,10 @@ function selectQuickAmount(val) {
 }
 
 function handleManualCash() {
+  if (isCashier.value) {
+    cashError.value = 'Peran Kasir tidak diizinkan mencatat kas manual.'
+    return
+  }
   cashError.value = ''
   feedbackMessage.value = ''
 
@@ -198,9 +215,10 @@ const filteredEntries = computed(() => {
       </div>
 
       <!-- Quick Action Buttons -->
-      <div class="grid grid-cols-2 gap-2.5 pt-1">
+      <div v-if="!isCashier" class="grid grid-cols-2 gap-2.5 pt-1">
         <button
           type="button"
+          data-testid="cash-in-action-btn"
           class="flex items-center justify-center gap-1.5 rounded-2xl bg-emerald-600 px-4 py-2.5 text-xs font-semibold text-white shadow-soft hover:bg-emerald-700 active:scale-[0.98] transition whitespace-nowrap cursor-pointer"
           @click="openRecordModal('in')"
         >
@@ -212,6 +230,7 @@ const filteredEntries = computed(() => {
 
         <button
           type="button"
+          data-testid="cash-out-action-btn"
           class="flex items-center justify-center gap-1.5 rounded-2xl bg-rose-600 px-4 py-2.5 text-xs font-semibold text-white shadow-soft hover:bg-rose-700 active:scale-[0.98] transition whitespace-nowrap cursor-pointer"
           @click="openRecordModal('out')"
         >
@@ -220,6 +239,20 @@ const filteredEntries = computed(() => {
           </svg>
           <span>Keluar<span class="sr-only"> Kas Keluar</span></span>
         </button>
+      </div>
+
+      <!-- Cashier Locked Entry Notice -->
+      <div
+        v-else
+        data-testid="cashier-entry-locked-banner"
+        class="rounded-2xl border border-amber-200/80 bg-amber-50/80 p-3 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200 flex items-center gap-2.5"
+      >
+        <svg class="h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
+        </svg>
+        <span class="font-medium">
+          Peran Kasir hanya dapat melihat ringkasan kas &amp; membuka laci. Entry kas masuk/keluar manual dibatasi untuk Owner/Supervisor.
+        </span>
       </div>
 
       <!-- Quick Buka Laci Kasir Button on Android Native -->
@@ -468,6 +501,7 @@ const filteredEntries = computed(() => {
 
     <!-- Floating Action Button (FAB) -->
     <button
+      v-if="!isCashier"
       type="button"
       data-testid="cash-open-modal"
       class="fixed right-5 bottom-[calc(env(safe-area-inset-bottom)+6.75rem)] md:bottom-8 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-primary text-white shadow-[0_10px_25px_rgba(73,69,214,0.45)] transition hover:bg-primary-light active:scale-95 cursor-pointer"

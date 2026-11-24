@@ -1,5 +1,6 @@
 import { useBusinessStore } from '@/stores/businessStore'
 import { useCashStore } from '@/stores/cashStore'
+import { useCloudSessionStore } from '@/stores/cloudSessionStore'
 import { useCustomerStore } from '@/stores/customerStore'
 import { useExpenseStore } from '@/stores/expenseStore'
 import { useProductStore } from '@/stores/productStore'
@@ -41,6 +42,7 @@ export function createSyncChangeTracker({ pinia, queueService, stores = {} }) {
   const transactionStore = stores.transactionStore ?? useTransactionStore(pinia)
   const shiftStore = stores.shiftStore ?? useShiftStore(pinia)
   const promoStore = stores.promoStore ?? usePromoStore(pinia)
+  const cloudSessionStore = stores.cloudSessionStore ?? (pinia ? useCloudSessionStore(pinia) : null)
 
   const stopHandlers = []
 
@@ -326,6 +328,14 @@ export function createSyncChangeTracker({ pinia, queueService, stores = {} }) {
   track(cashStore, 'recordEntry', ({ after }) => {
     after((result) => {
       if (!result?.success || result?.duplicated || !result?.entry?.id) {
+        return
+      }
+
+      // Guard: Cashier role is not permitted to sync manual cash entries (backend 403 SYNC_OPERATION_NOT_ALLOWED).
+      // Only cash entries linked to a sale transaction (transactionId present) may be synced to cloud for cashier.
+      const isCashier =
+        cloudSessionStore?.role === 'cashier' || cloudSessionStore?.isCashierContext === true
+      if (isCashier && !result.entry.transactionId) {
         return
       }
 

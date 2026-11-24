@@ -71,6 +71,24 @@ export const useNotificationStore = defineStore('notification', () => {
     }
   }
 
+  function notifyError({ title = 'Terjadi Kesalahan', message = '', duration = 2500 } = {}) {
+    showNotification({
+      type: 'error',
+      title,
+      message,
+      duration,
+    })
+  }
+
+  function notifySuccess({ title = 'Berhasil', message = '', duration = 1800 } = {}) {
+    showNotification({
+      type: 'success',
+      title,
+      message,
+      duration,
+    })
+  }
+
   return {
     isOpen,
     type,
@@ -78,6 +96,8 @@ export const useNotificationStore = defineStore('notification', () => {
     message,
     showNotification,
     notifySuccessAndSync,
+    notifyError,
+    notifySuccess,
     close,
   }
 })
