@@ -134,6 +134,14 @@ async function handleSyncNow() {
   actionLoading.value = true
   feedbackMessage.value = null
   try {
+    try {
+      if (typeof syncConflictStore.autoResolveAll === 'function') {
+        await syncConflictStore.autoResolveAll()
+      }
+    } catch {
+      // Non-blocking fallback
+    }
+
     if (syncStatusStore.reconciliationRequired || syncStatusStore.hasInflight) {
       try {
         const reconRes = await syncReconciliationStore.reconcile()

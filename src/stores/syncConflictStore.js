@@ -100,5 +100,31 @@ export const useSyncConflictStore = defineStore('syncConflict', {
         this.loading = false
       }
     },
+
+    async autoResolveAll() {
+      if (!this._conflictService) {
+        if (this._adapter) {
+          this._conflictService = createSyncConflictService({ adapter: this._adapter })
+        } else {
+          return { ok: false, code: 'SERVICE_NOT_INITIALIZED', message: 'Conflict service not initialized' }
+        }
+      }
+
+      this.loading = true
+      this.lastError = null
+
+      try {
+        const res = typeof this._conflictService.autoResolveOpenConflicts === 'function'
+          ? await this._conflictService.autoResolveOpenConflicts()
+          : { resolved: 0 }
+        await this.loadConflicts()
+        return { ok: true, resolved: res.resolved }
+      } catch (err) {
+        this.lastError = err?.message || 'Failed to auto-resolve conflicts'
+        return { ok: false, code: 'AUTO_RESOLVE_ERROR', message: this.lastError }
+      } finally {
+        this.loading = false
+      }
+    },
   },
 })

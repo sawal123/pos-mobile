@@ -122,10 +122,13 @@ export function createSyncOrchestratorService({
         }
       }
 
-      // ── Step 3: Check Open Conflicts ─────────────────────────────────────
+      // ── Step 3: Check & Auto-Resolve Open Conflicts ────────────────────────
       if (conflictService && typeof conflictService.countOpenConflicts === 'function') {
         let openConflictCount = 0
         try {
+          if (typeof conflictService.autoResolveOpenConflicts === 'function') {
+            await conflictService.autoResolveOpenConflicts()
+          }
           openConflictCount = await conflictService.countOpenConflicts()
         } catch (err) {
           return {

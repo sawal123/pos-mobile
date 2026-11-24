@@ -1839,5 +1839,62 @@ describe('P15: Group useServer Resolution for Same Queue ID', () => {
     expect(pushRes.code).toBe('SYNC_CONFLICT_PENDING')
     expect(mockTransport).not.toHaveBeenCalled()
   })
+
+  it('P15: autoResolveOpenConflicts resolves sales conflicts via keepLocal and master conflicts via useServer', async () => {
+    const adapter = createMemoryAdapter()
+    const queueService = createSyncQueueService({ adapter })
+    const registry = createSyncIdentityRegistry({ adapter })
+    const conflictService = createSyncConflictService({ adapter, queueService, registry })
+
+    const qTrx = await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.TRANSACTION, 'sale-auto-1', {
+      id: 'sale-auto-1',
+      total: 50000,
+    })
+    const qProd = await queueService.enqueueUpsert(SYNC_ENTITY_TYPES.PRODUCT, 'prod-auto-1', {
+      id: 'prod-auto-1',
+      name: 'Kopi Susu',
+    })
+
+    const conflicts = [
+      {
+        id: 'conf-auto-sales',
+        requestId: 'req-auto-1',
+        queueId: qTrx.entry.id,
+        serverEntity: 'sales',
+        syncId: 'sync-sale-1',
+        serverSyncVersion: 5,
+        queueSnapshot: qTrx.entry,
+        status: 'open',
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'conf-auto-product',
+        requestId: 'req-auto-1',
+        queueId: qProd.entry.id,
+        serverEntity: 'products',
+        syncId: 'sync-prod-1',
+        serverSyncVersion: 3,
+        queueSnapshot: qProd.entry,
+        status: 'open',
+        createdAt: new Date().toISOString(),
+      },
+    ]
+
+    await adapter.saveSyncConflicts({ version: 1, conflicts })
+    expect(await conflictService.countOpenConflicts()).toBe(2)
+
+    const autoRes = await conflictService.autoResolveOpenConflicts()
+    expect(autoRes.resolved).toBe(2)
+    expect(await conflictService.countOpenConflicts()).toBe(0)
+
+    const saved = await adapter.loadSyncConflicts()
+    const resolvedSales = saved.conflicts.find((c) => c.id === 'conf-auto-sales')
+    const resolvedProd = saved.conflicts.find((c) => c.id === 'conf-auto-product')
+
+    expect(resolvedSales.status).toBe('resolved')
+    expect(resolvedSales.resolution).toBe('keep_local')
+    expect(resolvedProd.status).toBe('resolved')
+    expect(resolvedProd.resolution).toBe('use_server')
+  })
 })
 

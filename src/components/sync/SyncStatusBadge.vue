@@ -155,6 +155,7 @@ function handleClick() {
     statusStore.pendingCount > 0 ||
     statusStore.hasInflight ||
     statusStore.reconciliationRequired ||
+    uiStatus.value.status === SYNC_UI_CONFLICT ||
     uiStatus.value.status === SYNC_UI_PENDING ||
     uiStatus.value.status === SYNC_UI_RECOVERY_REQUIRED ||
     uiStatus.value.status === SYNC_UI_RECONCILIATION_REQUIRED ||
@@ -186,6 +187,21 @@ watch(
   ],
   () => {
     void statusStore.refresh()
+  },
+)
+
+// Auto-resolve any open conflicts in background so cashier is never blocked or confused by conflict badge
+watch(
+  () => statusStore.openConflictCount,
+  async (count) => {
+    if (count > 0 && typeof syncConflictStore.autoResolveAll === 'function') {
+      try {
+        await syncConflictStore.autoResolveAll()
+        await statusStore.refresh()
+      } catch {
+        // Safe fallback
+      }
+    }
   },
 )
 </script>

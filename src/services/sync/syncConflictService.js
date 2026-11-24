@@ -196,12 +196,54 @@ export function createSyncConflictService({
     }
   }
 
+  /**
+   * Auto Resolution:
+   * Resolves all open conflicts automatically without requiring manual cashier intervention:
+   * - Sales & sale items: keepLocal (preserves cashier sales and advances base version).
+   * - Master entities (products, categories, etc.): useServer (adopts cloud master data).
+   *
+   * @returns {Promise<{ resolved: number, results: Array<{ id: string, resolution: string, ok: boolean }> }>}
+   */
+  async function autoResolveOpenConflicts() {
+    const open = await listOpenConflicts()
+    if (open.length === 0) {
+      return { resolved: 0, results: [] }
+    }
+
+    const results = []
+    for (const conflict of open) {
+      const isSale =
+        conflict.serverEntity === 'sales' ||
+        conflict.serverEntity === 'sale_items' ||
+        conflict.entityType === 'transaction' ||
+        conflict.entityType === 'sale'
+
+      try {
+        if (isSale) {
+          const res = await keepLocal(conflict.id)
+          results.push({ id: conflict.id, resolution: 'keep_local', ok: Boolean(res?.ok) })
+        } else {
+          const res = await useServer(conflict.id)
+          results.push({ id: conflict.id, resolution: 'use_server', ok: Boolean(res?.ok) })
+        }
+      } catch (err) {
+        results.push({ id: conflict.id, resolution: 'error', ok: false, error: err })
+      }
+    }
+
+    return {
+      resolved: results.filter((r) => r.ok).length,
+      results,
+    }
+  }
+
   return {
     listConflicts,
     listOpenConflicts,
     countOpenConflicts,
     useServer,
     keepLocal,
+    autoResolveOpenConflicts,
     queueService: activeQueueService,
     registry: activeRegistry,
   }
