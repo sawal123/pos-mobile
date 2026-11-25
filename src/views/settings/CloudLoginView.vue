@@ -3790,6 +3790,12 @@ onMounted(async () => {
         @close="showDisconnectConfirm = false"
       >
         <div class="space-y-4" data-testid="cloud-disconnect-modal">
+          <div
+            v-if="syncPushStore.pendingCount > 0"
+            class="rounded-2xl border border-rose-300 bg-rose-50 p-3 text-xs text-rose-800 dark:border-rose-800 dark:bg-rose-950/60 dark:text-rose-200"
+          >
+            ⚠️ <strong>Perhatian:</strong> Masih ada <strong>{{ syncPushStore.pendingCount }} data transaksi offline</strong> yang belum tersinkron ke Cloud. Memutuskan akun sekarang akan <strong>menghapus</strong> transaksi lokal tersebut dari perangkat.
+          </div>
           <p class="text-sm text-ink-secondary">
             Apakah Anda yakin ingin memutuskan akun Cloud? Sesi Cloud akan diputuskan dan seluruh
             data cache lokal (menu produk, transaksi, riwayat kas, dan shift) akan dibersihkan agar

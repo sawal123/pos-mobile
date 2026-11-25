@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 import BaseButton from '@/components/base/BaseButton.vue'
 import { formatCurrency, formatDateTime } from '@/utils/formatters'
@@ -15,7 +15,54 @@ const props = defineProps({
   },
 })
 
-defineEmits(['new-transaction', 'complete-ready', 'view-receipt', 'view-transactions'])
+const emit = defineEmits(['new-transaction', 'complete-ready', 'view-receipt', 'view-transactions'])
+
+const pendingAction = ref(null)
+
+watch(
+  () => props.open,
+  (isOpen) => {
+    if (!isOpen) {
+      pendingAction.value = null
+    }
+  },
+)
+
+function handleCompleteReady() {
+  if (pendingAction.value === 'ready') return
+  pendingAction.value = 'ready'
+  emit('complete-ready')
+  setTimeout(() => {
+    pendingAction.value = null
+  }, 500)
+}
+
+function handleNewTransaction() {
+  if (pendingAction.value === 'process') return
+  pendingAction.value = 'process'
+  emit('new-transaction')
+  setTimeout(() => {
+    pendingAction.value = null
+  }, 500)
+}
+
+function handleViewReceipt() {
+  if (pendingAction.value === 'receipt') return
+  pendingAction.value = 'receipt'
+  emit('view-receipt')
+  setTimeout(() => {
+    pendingAction.value = null
+  }, 500)
+}
+
+function handleViewTransactions() {
+  if (pendingAction.value === 'transactions') return
+  pendingAction.value = 'transactions'
+  emit('view-transactions')
+  setTimeout(() => {
+    pendingAction.value = null
+  }, 500)
+}
 
 const METHOD_LABELS = {
   cash: 'Cash',
@@ -113,41 +160,53 @@ const happenedAt = computed(() => props.summary?.paidAt || props.summary?.create
         <button
           type="button"
           data-testid="success-complete-ready"
-          class="flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-bold text-white shadow-2xs transition hover:bg-emerald-700 active:scale-98 cursor-pointer"
-          @click="$emit('complete-ready')"
+          :disabled="pendingAction === 'ready'"
+          class="flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-600 px-4 py-3 text-sm font-bold text-white shadow-2xs transition hover:bg-emerald-700 active:scale-98 cursor-pointer disabled:opacity-75"
+          @click="handleCompleteReady"
         >
-          <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <svg v-if="pendingAction === 'ready'" class="h-4 w-4 shrink-0 animate-spin text-white" viewBox="0 0 24 24" fill="none">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" />
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+          </svg>
+          <svg v-else class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="20 6 9 17 4 12" />
           </svg>
-          <span>Selesai & Tandai Siap</span>
+          <span>{{ pendingAction === 'ready' ? 'Menandai Siap...' : 'Selesai & Tandai Siap' }}</span>
         </button>
 
         <!-- Pilihan Selesai (Pesanan Masih Diproses di Bar/Dapur) -->
         <button
           type="button"
           data-testid="success-new-transaction"
-          class="flex w-full items-center justify-center gap-2 rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm font-bold text-ink-primary shadow-2xs transition hover:bg-zinc-50 active:scale-98 cursor-pointer dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-          @click="$emit('new-transaction')"
+          :disabled="pendingAction === 'process'"
+          class="flex w-full items-center justify-center gap-2 rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm font-bold text-ink-primary shadow-2xs transition hover:bg-zinc-50 active:scale-98 cursor-pointer dark:border-slate-700 dark:bg-slate-800 dark:text-white disabled:opacity-75"
+          @click="handleNewTransaction"
         >
-          <svg class="h-4 w-4 text-amber-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg v-if="pendingAction === 'process'" class="h-4 w-4 shrink-0 animate-spin text-amber-500" viewBox="0 0 24 24" fill="none">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" />
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+          </svg>
+          <svg v-else class="h-4 w-4 text-amber-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="10" />
             <polyline points="12 6 12 12 16 14" />
           </svg>
-          <span>Selesai (Pesanan Diproses)</span>
+          <span>{{ pendingAction === 'process' ? 'Menyimpan...' : 'Selesai (Pesanan Diproses)' }}</span>
         </button>
 
         <div class="grid grid-cols-2 gap-2 pt-0.5">
           <BaseButton
             variant="secondary"
+            :loading="pendingAction === 'receipt'"
             data-testid="success-view-receipt"
-            @click="$emit('view-receipt')"
+            @click="handleViewReceipt"
           >
             <span class="sr-only">Lihat </span>Struk
           </BaseButton>
           <BaseButton
             variant="secondary"
+            :loading="pendingAction === 'transactions'"
             data-testid="success-view-transactions"
-            @click="$emit('view-transactions')"
+            @click="handleViewTransactions"
           >
             <span>Antrean Pesanan</span>
           </BaseButton>

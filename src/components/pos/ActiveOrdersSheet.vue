@@ -283,7 +283,7 @@ function viewAllTransactions() {
                 </span>
               </div>
               <p class="truncate text-xs font-medium text-ink-secondary mt-0.5">
-                {{ order.customer || 'Walk-in Customer' }}
+                {{ order.customer || order.customerName || order.customer_name || order.customerSnapshot?.name || 'Walk-in Customer' }}
                 <span v-if="order.tableNumber || order.table_number" class="ml-1 font-bold text-amber-700 dark:text-amber-400">
                   • Meja {{ order.tableNumber || order.table_number }}
                 </span>

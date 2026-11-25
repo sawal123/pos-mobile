@@ -178,7 +178,12 @@ export const useTransactionStore = defineStore('transaction', {
       const cashReceived = isUnpaidMethod ? 0 : (payload.cashReceived ?? null)
       const changeAmount = isUnpaidMethod ? 0 : (payload.changeAmount ?? null)
 
-      const customer = payload.customer ?? 'Walk-in Customer'
+      const customer =
+        (typeof payload.customer === 'string' && payload.customer.trim()) ||
+        (typeof payload.customerName === 'string' && payload.customerName.trim()) ||
+        (typeof payload.customer_name === 'string' && payload.customer_name.trim()) ||
+        (payload.customerSnapshot && typeof payload.customerSnapshot.name === 'string' && payload.customerSnapshot.name.trim()) ||
+        'Walk-in Customer'
       const customerId = payload.customerId ?? null
       let customerSnapshot = normalizeCustomerSnapshot(payload.customerSnapshot)
       if (!customerSnapshot && customer && customer !== 'Walk-in Customer' && !customerId) {

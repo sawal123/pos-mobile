@@ -20,8 +20,8 @@ const appBuildGradle = read('../../android/app/build.gradle')
 const androidGitignore = read('../../android/.gitignore')
 const keystoreExample = read('../../android/keystore.properties.example')
 
-const RELEASE_VERSION_NAME = '0.0.2'
-const RELEASE_VERSION_CODE = 10004
+const RELEASE_VERSION_NAME = '0.0.4'
+const RELEASE_VERSION_CODE = 10006
 const APPLICATION_ID = 'com.netkasir.app'
 
 // Source selection lives between the header comment and the android block.

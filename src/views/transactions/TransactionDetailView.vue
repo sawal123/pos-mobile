@@ -65,6 +65,21 @@ const transaction = computed(() =>
 
 const laundryStatuses = ['Masuk', 'Diproses', 'Siap Diambil', 'Selesai']
 
+const displayCustomerName = computed(() => {
+  if (!transaction.value) return 'Walk-in Customer'
+  const t = transaction.value
+  return (
+    t.customer ||
+    t.customerName ||
+    t.customer_name ||
+    t.guestName ||
+    t.guest_name ||
+    t.customerSnapshot?.name ||
+    t.customer_snapshot?.name ||
+    'Walk-in Customer'
+  )
+})
+
 const displayInvoiceNumber = computed(() => {
   if (!transaction.value) return ''
   return transaction.value.invoiceNumber || transaction.value.orderNumber || transaction.value.id
@@ -143,7 +158,15 @@ const paymentBadge = computed(() => {
   return { label: transaction.value?.paymentStatus || transaction.value?.status || 'Lunas', variant: 'success' }
 })
 
+const optimisticOrderStatus = ref(null)
+const isUpdatingStatus = ref(null)
+
 const orderBadge = computed(() => {
+  if (optimisticOrderStatus.value) {
+    if (optimisticOrderStatus.value === 'Batal') return { label: 'Batal', variant: 'danger' }
+    if (optimisticOrderStatus.value === 'Siap') return { label: 'Siap', variant: 'success' }
+    return { label: 'Proses', variant: 'info' }
+  }
   const os = transaction.value?.orderStatus ?? transaction.value?.order_status
   if (!os) {
     if (transaction.value?.status === 'completed') {
@@ -168,6 +191,7 @@ const orderBadge = computed(() => {
 })
 
 const currentOrderStatus = computed(() => {
+  if (optimisticOrderStatus.value) return optimisticOrderStatus.value
   const os = transaction.value?.orderStatus
   if (os === 'Batal' || os === 'cancelled') return 'Batal'
   if (os === 'Siap' || os === 'ready' || os === 'Selesai' || os === 'completed') return 'Siap'
@@ -431,8 +455,26 @@ onMounted(() => {
 
 function handleUpdateOrderStatus(status) {
   if (!transaction.value) return
-  transactionStore.updateOrderStatus(transaction.value.id, status)
-  void syncPushStore.pushIfOnline()
+  if (isUpdatingStatus.value === status) return
+
+  // Eager / optimistic update immediately on touch
+  optimisticOrderStatus.value = status
+  isUpdatingStatus.value = status
+
+  try {
+    transactionStore.updateOrderStatus(transaction.value.id, status)
+    showToast(`✓ Status pesanan diubah ke ${status}`)
+    setTimeout(() => {
+      void syncPushStore.pushIfOnline?.()
+    }, 50)
+  } catch (err) {
+    console.error('Failed to update order status:', err)
+  } finally {
+    setTimeout(() => {
+      isUpdatingStatus.value = null
+      optimisticOrderStatus.value = null
+    }, 300)
+  }
 }
 
 function openSettlement() {
@@ -585,7 +627,7 @@ async function copyInvoiceNumber() {
 
             <!-- Customer Name -->
             <h2 class="mt-1.5 text-xl font-bold text-ink-primary truncate">
-              {{ transaction.customer || 'Walk-in Customer' }}
+              {{ displayCustomerName }}
             </h2>
 
             <!-- Timestamp & ID reference -->
@@ -821,20 +863,24 @@ async function copyInvoiceNumber() {
               :key="status"
               size="sm"
               :variant="currentOrderStatus === status ? 'primary' : 'secondary'"
-              class="w-full text-xs inline-flex items-center justify-center gap-1.5"
+              :loading="isUpdatingStatus === status"
+              :disabled="isUpdatingStatus !== null && isUpdatingStatus !== status"
+              class="w-full text-xs inline-flex items-center justify-center gap-1.5 active:scale-95 transition cursor-pointer"
               @click="handleUpdateOrderStatus(status)"
             >
-              <svg v-if="status === 'Proses'" class="h-3.5 w-3.5 shrink-0 text-amber-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="10" />
-                <polyline points="12 6 12 12 16 14" />
-              </svg>
-              <svg v-else-if="status === 'Siap'" class="h-3.5 w-3.5 shrink-0 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                <polyline points="20 6 9 17 4 12" />
-              </svg>
-              <svg v-else-if="status === 'Batal'" class="h-3.5 w-3.5 shrink-0 text-rose-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="10" />
-                <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
-              </svg>
+              <template v-if="isUpdatingStatus !== status">
+                <svg v-if="status === 'Proses'" class="h-3.5 w-3.5 shrink-0 text-amber-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10" />
+                  <polyline points="12 6 12 12 16 14" />
+                </svg>
+                <svg v-else-if="status === 'Siap'" class="h-3.5 w-3.5 shrink-0 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+                <svg v-else-if="status === 'Batal'" class="h-3.5 w-3.5 shrink-0 text-rose-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+                </svg>
+              </template>
               <span>{{ status }}</span>
             </BaseButton>
           </div>

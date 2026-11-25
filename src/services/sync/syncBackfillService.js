@@ -23,7 +23,9 @@ export async function backfillUnsyncedTransactions({ pinia, queueService, adapte
 
   // Only backfill if the device is connected to Cloud or in cloud mode
   const isCloud =
-    businessStore.mode === 'cloud' || (cloudStore.isLinked && cloudStore.hasCloudAccess)
+    businessStore.mode === 'cloud' ||
+    (cloudStore.isLinked && cloudStore.hasCloudAccess) ||
+    cloudStore.cloudAccess === true
   if (!isCloud) {
     return 0
   }
@@ -39,6 +41,15 @@ export async function backfillUnsyncedTransactions({ pinia, queueService, adapte
     }
   } catch {
     serverVersions = {}
+  }
+
+  let identityMap = {}
+  try {
+    if (adapter && typeof adapter.loadSyncIdentityMap === 'function') {
+      identityMap = (await adapter.loadSyncIdentityMap()) || {}
+    }
+  } catch {
+    identityMap = {}
   }
 
   let existingQueue = []
@@ -58,8 +69,29 @@ export async function backfillUnsyncedTransactions({ pinia, queueService, adapte
       .map((item) => String(item.entityId)),
   )
 
+  let allItems = Array.isArray(transactionStore.items) && transactionStore.items.length > 0
+    ? [...transactionStore.items]
+    : []
+
+  if (adapter && typeof adapter.loadTransactions === 'function') {
+    try {
+      const dbItems = await adapter.loadTransactions()
+      if (Array.isArray(dbItems) && dbItems.length > 0) {
+        const seen = new Set(allItems.map((t) => String(t.id)))
+        for (const dbItem of dbItems) {
+          if (dbItem?.id && !seen.has(String(dbItem.id))) {
+            allItems.push(dbItem)
+            seen.add(String(dbItem.id))
+          }
+        }
+      }
+    } catch {
+      // non-blocking fallback
+    }
+  }
+
   let count = 0
-  for (const trx of transactionStore.items) {
+  for (const trx of allItems) {
     if (!trx?.id) continue
     const idStr = String(trx.id)
     // Skip static sample mockup data if any
@@ -68,6 +100,14 @@ export async function backfillUnsyncedTransactions({ pinia, queueService, adapte
     // Remote synced sales must never be backfilled into outbox
     if (trx.synced === true || trx.isSynced === true) continue
     if (serverVersions[`sales:${idStr.toLowerCase()}`] || serverVersions[`sales:${idStr}`]) continue
+
+    const mappedSyncId = identityMap[`transaction:${idStr}`] || identityMap[`sale:${idStr}`]
+    if (mappedSyncId) {
+      const lowerMapped = String(mappedSyncId).toLowerCase()
+      if (serverVersions[`sales:${lowerMapped}`] || serverVersions[`sales:${mappedSyncId}`]) {
+        continue
+      }
+    }
 
     if (!queuedTrxIds.has(idStr)) {
       try {

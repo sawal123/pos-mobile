@@ -92,9 +92,9 @@ android {
         applicationId "com.netkasir.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        // versionCode policy: monotonically increasing integer (always > 10004)
-        versionCode 10005
-        versionName "0.0.3"
+        // versionCode policy: monotonically increasing integer (always > 10005)
+        versionCode 10006
+        versionName "0.0.4"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

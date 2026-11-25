@@ -250,6 +250,46 @@ export const useSyncPushStore = defineStore('syncPush', () => {
     return { ok: false }
   }
 
+  async function requeueOfflineTransactions() {
+    let queueService = _pushService?.queueService
+    let adapter = _adapter || cloudStore?.adapter?.value || cloudStore?.adapter
+    if (!adapter) {
+      try {
+        const { resolvePersistenceAdapter } = await import('@/services/database')
+        adapter = await resolvePersistenceAdapter()
+      } catch {
+        // non-blocking
+      }
+    }
+    if (!queueService && adapter) {
+      try {
+        const { createSyncQueueService } = await import('@/services/sync/syncQueueService')
+        queueService = createSyncQueueService({ adapter, scheduler: _scheduler })
+      } catch {
+        // non-blocking
+      }
+    }
+    if (!queueService) {
+      return { ok: false, count: 0, message: 'Layanan antrean sinkronisasi tidak tersedia.' }
+    }
+
+    try {
+      const { backfillUnsyncedTransactions } = await import('@/services/sync/syncBackfillService')
+      const count = await backfillUnsyncedTransactions({
+        queueService,
+        adapter,
+      })
+
+      await refreshPendingCount()
+      const { useSyncStatusStore } = await import('@/stores/syncStatusStore')
+      await useSyncStatusStore().refresh()
+
+      return { ok: true, count }
+    } catch (err) {
+      return { ok: false, count: 0, message: err?.message || String(err) }
+    }
+  }
+
   return {
     loading,
     pendingCount,
@@ -261,6 +301,7 @@ export const useSyncPushStore = defineStore('syncPush', () => {
     pushIfOnline,
     listPendingItems,
     removePendingItem,
+    requeueOfflineTransactions,
     getPushService: () => _pushService,
   }
 })

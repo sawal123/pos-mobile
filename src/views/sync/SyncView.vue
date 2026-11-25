@@ -55,6 +55,7 @@ const isSyncing = ref(false)
 const isPulling = ref(false)
 const isClearingCache = ref(false)
 const isRecovering = ref(false)
+const isRequeueing = ref(false)
 const syncFeedback = ref(null) // { type: 'success' | 'error', message: string }
 const autoSyncDraft = ref(syncAutoSyncStore.enabled)
 
@@ -106,7 +107,8 @@ const isAnyBusy = computed(
     isSyncing.value ||
     isPulling.value ||
     isClearingCache.value ||
-    isRecovering.value,
+    isRecovering.value ||
+    isRequeueing.value,
 )
 
 const lastSyncFormatted = computed(() => {
@@ -536,7 +538,7 @@ async function handleRecoverAndPush() {
         }
 
         setProgress(60, 'Mengirimkan kembali data transaksi offline...')
-        const pushRes = await syncPushStore.pushNow()
+        const pushRes = await syncPushStore.pushNow({ force: true, forceReplan: true })
         await syncPushStore.refreshPendingCount()
         await syncStatusStore.refresh()
 
@@ -560,6 +562,43 @@ async function handleRecoverAndPush() {
     }
   } finally {
     isRecovering.value = false
+  }
+}
+
+async function handleRequeueTransactions() {
+  if (isAnyBusy.value) return
+  isRequeueing.value = true
+  syncFeedback.value = null
+
+  try {
+    const res = await syncPushStore.requeueOfflineTransactions()
+    if (res && res.ok) {
+      if (res.count > 0) {
+        syncFeedback.value = {
+          type: 'success',
+          message: `Berhasil menemukan dan memasukkan ${res.count} transaksi offline ke antrean! Silakan tekan tombol Sync untuk mengirim ke Cloud.`,
+        }
+      } else {
+        syncFeedback.value = {
+          type: 'info',
+          message: 'Semua transaksi offline sudah ada di antrean atau sudah tersinkronkan ke Cloud.',
+        }
+      }
+    } else {
+      syncFeedback.value = {
+        type: 'error',
+        message: res?.message || 'Gagal memeriksa transaksi offline.',
+      }
+    }
+    await syncPushStore.refreshPendingCount()
+    await syncStatusStore.refresh()
+  } catch (err) {
+    syncFeedback.value = {
+      type: 'error',
+      message: err?.message || 'Terjadi kesalahan saat memeriksa transaksi offline.',
+    }
+  } finally {
+    isRequeueing.value = false
   }
 }
 
@@ -998,6 +1037,25 @@ function handleBack() {
             <span v-else class="flex items-center justify-center gap-2">
               <AppIcon name="download" class="h-4 w-4" />
               <span>Tarik</span>
+            </span>
+          </BaseButton>
+
+          <BaseButton
+            variant="outline"
+            block
+            data-testid="btn-requeue-offline"
+            :disabled="isAnyBusy"
+            @click="handleRequeueTransactions"
+          >
+            <span v-if="isRequeueing" class="flex items-center justify-center gap-2">
+              <span
+                class="h-4 w-4 rounded-full border-2 border-primary/30 border-t-primary animate-spin"
+              />
+              <span>Memeriksa transaksi offline...</span>
+            </span>
+            <span v-else class="flex items-center justify-center gap-2">
+              <AppIcon name="refresh" class="h-4 w-4" />
+              <span>Masukkan Ulang Transaksi Offline ke Antrean</span>
             </span>
           </BaseButton>
 

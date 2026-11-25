@@ -124,6 +124,41 @@ describe('Direct Sync and Offline Sync Prompt Flow', () => {
       expect(enqueued).toHaveLength(1)
       expect(enqueued[0].entityId).toBe('09A2C9A9-FE19-4264-98E7-03668669D92E')
     })
+
+    it('re-enqueues offline transactions from adapter and skips serverVersions', async () => {
+      const enqueued = []
+      const mockQueueService = {
+        listPending: vi.fn().mockResolvedValue([]),
+        enqueueUpsert: vi.fn().mockImplementation((entityType, entityId, payload) => {
+          enqueued.push({ entityType, entityId, payload })
+          return Promise.resolve()
+        }),
+      }
+
+      const mockAdapter = {
+        loadSyncServerVersions: vi.fn().mockResolvedValue({
+          'sales:synced-uuid-1': { syncVersion: 1 },
+        }),
+        loadSyncIdentityMap: vi.fn().mockResolvedValue({}),
+        loadTransactions: vi.fn().mockResolvedValue([
+          { id: 'synced-uuid-1', total: 50000 },
+          { id: 'offline-uuid-2', total: 75000 },
+        ]),
+      }
+
+      transactionStore.items = []
+      businessStore.mode = 'cloud'
+
+      const count = await backfillUnsyncedTransactions({
+        pinia,
+        queueService: mockQueueService,
+        adapter: mockAdapter,
+      })
+
+      expect(count).toBe(1)
+      expect(enqueued).toHaveLength(1)
+      expect(enqueued[0].entityId).toBe('offline-uuid-2')
+    })
   })
 
   describe('OfflineSyncPromptModal', () => {

@@ -993,53 +993,60 @@ export function createSyncPushService({
       let useExistingEnvelope = Boolean(existingEnvelope)
 
       if (existingEnvelope && existingEnvelope.rejectionCode) {
-        const remainingForFingerprint = await activeQueueService.countPending()
-        const pendingForFingerprint = await activeQueueService.listPending({
-          limit: Math.max(remainingForFingerprint, 1),
-        })
-        const currentFingerprint = buildPushConditionFingerprint({
-          policy,
-          pendingItems: pendingForFingerprint,
-        })
-
-        // Compare against the conditions the envelope was *planned* under (the
-        // fingerprint captured when it was built), not merely the conditions at
-        // rejection time. A role/capability change (for example member ->
-        // cashier) or an outbox change since the build means a fresh plan would
-        // differ, so re-planning is safe and a rejected envelope can never wedge
-        // the app. Only a byte-identical re-plan is short-circuited.
-        const plannedFingerprint =
-          existingEnvelope.conditionFingerprint ?? existingEnvelope.rejectionFingerprint ?? null
-
-        if (plannedFingerprint !== null && currentFingerprint === plannedFingerprint) {
-          const remaining = await activeQueueService.countPending()
-          return {
-            ok: false,
-            code: 'SYNC_ENVELOPE_REJECTED_PENDING_CONTEXT_CHANGE',
-            message:
-              'Pengiriman sebelumnya ditolak server. Menunggu perubahan peran/izin atau data lokal sebelum mencoba lagi.',
+        if (options.force === true || options.forceReplan === true) {
+          if (adapter && typeof adapter.clearSyncPushInflight === 'function') {
+            await adapter.clearSyncPushInflight()
+          }
+          useExistingEnvelope = false
+        } else {
+          const remainingForFingerprint = await activeQueueService.countPending()
+          const pendingForFingerprint = await activeQueueService.listPending({
+            limit: Math.max(remainingForFingerprint, 1),
+          })
+          const currentFingerprint = buildPushConditionFingerprint({
             policy,
-            rejectionCode: existingEnvelope.rejectionCode,
-            remaining,
-            sentQueueIds: [],
-            removedQueueIds: [],
-            preservedQueueIds: [],
-            blocked: [],
-            restricted: [],
-            deferred: [],
-            warnings: [],
-            error: {
+            pendingItems: pendingForFingerprint,
+          })
+
+          // Compare against the conditions the envelope was *planned* under (the
+          // fingerprint captured when it was built), not merely the conditions at
+          // rejection time. A role/capability change (for example member ->
+          // cashier) or an outbox change since the build means a fresh plan would
+          // differ, so re-planning is safe and a rejected envelope can never wedge
+          // the app. Only a byte-identical re-plan is short-circuited.
+          const plannedFingerprint =
+            existingEnvelope.conditionFingerprint ?? existingEnvelope.rejectionFingerprint ?? null
+
+          if (plannedFingerprint !== null && currentFingerprint === plannedFingerprint) {
+            const remaining = await activeQueueService.countPending()
+            return {
+              ok: false,
               code: 'SYNC_ENVELOPE_REJECTED_PENDING_CONTEXT_CHANGE',
               message:
-                'Pengiriman sebelumnya ditolak server. Menunggu perubahan peran/izin atau data lokal.',
-            },
+                'Pengiriman sebelumnya ditolak server. Menunggu perubahan peran/izin atau data lokal sebelum mencoba lagi.',
+              policy,
+              rejectionCode: existingEnvelope.rejectionCode,
+              remaining,
+              sentQueueIds: [],
+              removedQueueIds: [],
+              preservedQueueIds: [],
+              blocked: [],
+              restricted: [],
+              deferred: [],
+              warnings: [],
+              error: {
+                code: 'SYNC_ENVELOPE_REJECTED_PENDING_CONTEXT_CHANGE',
+                message:
+                  'Pengiriman sebelumnya ditolak server. Menunggu perubahan peran/izin atau data lokal.',
+              },
+            }
           }
-        }
 
-        if (adapter && typeof adapter.clearSyncPushInflight === 'function') {
-          await adapter.clearSyncPushInflight()
+          if (adapter && typeof adapter.clearSyncPushInflight === 'function') {
+            await adapter.clearSyncPushInflight()
+          }
+          useExistingEnvelope = false
         }
-        useExistingEnvelope = false
       }
 
       if (useExistingEnvelope) {

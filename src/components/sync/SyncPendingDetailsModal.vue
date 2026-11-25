@@ -159,7 +159,7 @@ async function handleSyncNow() {
       }
     }
 
-    const res = await syncPushStore.pushNow()
+    const res = await syncPushStore.pushNow({ force: true, forceReplan: true })
     if (res?.ok) {
       feedbackMessage.value = {
         type: 'success',
@@ -192,6 +192,41 @@ async function handleDeleteQueueItem(item) {
     await loadPendingItems()
   } catch (err) {
     window.alert('Gagal menghapus antrean: ' + (err?.message || err))
+  }
+}
+
+async function handleRequeueInModal() {
+  actionLoading.value = true
+  feedbackMessage.value = null
+  try {
+    const res = await syncPushStore.requeueOfflineTransactions()
+    if (res?.ok) {
+      if (res.count > 0) {
+        feedbackMessage.value = {
+          type: 'success',
+          text: `Berhasil menambahkan ${res.count} transaksi offline ke antrean!`,
+        }
+      } else {
+        feedbackMessage.value = {
+          type: 'info',
+          text: 'Tidak ditemukan transaksi offline baru yang perlu dimasukkan ke antrean.',
+        }
+      }
+    } else {
+      feedbackMessage.value = {
+        type: 'error',
+        text: res?.message || 'Gagal memeriksa transaksi offline.',
+      }
+    }
+    await loadPendingItems()
+    await syncStatusStore.refresh()
+  } catch (err) {
+    feedbackMessage.value = {
+      type: 'error',
+      text: err instanceof Error ? err.message : String(err),
+    }
+  } finally {
+    actionLoading.value = false
   }
 }
 </script>
@@ -268,7 +303,9 @@ async function handleDeleteQueueItem(item) {
           :class="
             feedbackMessage.type === 'success'
               ? 'bg-emerald-50 text-emerald-800 border border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-300'
-              : 'bg-rose-50 text-rose-800 border border-rose-200 dark:bg-rose-950/50 dark:text-rose-300'
+              : feedbackMessage.type === 'info'
+                ? 'bg-sky-50 text-sky-800 border border-sky-200 dark:bg-sky-950/50 dark:text-sky-300'
+                : 'bg-rose-50 text-rose-800 border border-rose-200 dark:bg-rose-950/50 dark:text-rose-300'
           "
         >
           {{ feedbackMessage.text }}
@@ -283,17 +320,31 @@ async function handleDeleteQueueItem(item) {
         <!-- Empty State -->
         <div
           v-else-if="items.length === 0"
-          class="rounded-3xl border border-dashed border-zinc-200 p-8 text-center dark:border-slate-800"
+          class="rounded-3xl border border-dashed border-zinc-200 p-8 text-center dark:border-slate-800 space-y-3"
         >
           <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-300">
             <svg class="h-6 w-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
             </svg>
           </div>
-          <p class="mt-3 text-sm font-bold text-ink-primary dark:text-white">Semua Data Sudah Tersinkronkan</p>
-          <p class="mt-1 text-xs text-ink-secondary dark:text-zinc-400">
-            Tidak ada transaksi atau perubahan data lokal yang tertahan di antrean.
-          </p>
+          <div>
+            <p class="text-sm font-bold text-ink-primary dark:text-white">Semua Data Sudah Tersinkronkan</p>
+            <p class="mt-1 text-xs text-ink-secondary dark:text-zinc-400">
+              Tidak ada transaksi atau perubahan data lokal yang tertahan di antrean.
+            </p>
+          </div>
+          <button
+            type="button"
+            class="inline-flex items-center gap-1.5 rounded-xl border border-sky-300 bg-sky-50 px-3.5 py-2 text-xs font-bold text-sky-700 shadow-2xs hover:bg-sky-100 active:scale-95 transition cursor-pointer dark:border-sky-800 dark:bg-sky-950/60 dark:text-sky-300"
+            data-testid="btn-requeue-modal-empty"
+            :disabled="actionLoading"
+            @click="handleRequeueInModal"
+          >
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
+            </svg>
+            <span>Masukkan Ulang Transaksi Offline ke Antrean</span>
+          </button>
         </div>
 
         <!-- Pending Items List -->
@@ -380,13 +431,25 @@ async function handleDeleteQueueItem(item) {
 
       <!-- Modal Footer -->
       <div class="flex items-center justify-between gap-3 border-t border-zinc-100 p-4 dark:border-slate-800/80">
-        <button
-          type="button"
-          class="rounded-xl border border-zinc-200 bg-white px-4 py-2 text-xs font-semibold text-ink-primary hover:bg-zinc-50 active:scale-95 transition cursor-pointer dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-          @click="closeModal"
-        >
-          Tutup
-        </button>
+        <div class="flex items-center gap-2">
+          <button
+            type="button"
+            class="rounded-xl border border-zinc-200 bg-white px-4 py-2 text-xs font-semibold text-ink-primary hover:bg-zinc-50 active:scale-95 transition cursor-pointer dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+            @click="closeModal"
+          >
+            Tutup
+          </button>
+          <button
+            v-if="items.length > 0"
+            type="button"
+            class="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-700 hover:bg-sky-100 active:scale-95 transition cursor-pointer dark:border-sky-800 dark:bg-sky-950/50 dark:text-sky-300"
+            data-testid="btn-requeue-modal-footer"
+            :disabled="actionLoading"
+            @click="handleRequeueInModal"
+          >
+            Cek Transaksi Lain
+          </button>
+        </div>
 
         <button
           type="button"

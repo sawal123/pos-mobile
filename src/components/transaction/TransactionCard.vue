@@ -141,6 +141,20 @@ function statusLabel(status) {
 const txDate = computed(() => {
   return props.transaction.createdAt || props.transaction.created_at || props.transaction.date || props.transaction.timestamp
 })
+
+const displayCustomerName = computed(() => {
+  const t = props.transaction
+  return (
+    t.customer ||
+    t.customerName ||
+    t.customer_name ||
+    t.guestName ||
+    t.guest_name ||
+    t.customerSnapshot?.name ||
+    t.customer_snapshot?.name ||
+    'Walk-in Customer'
+  )
+})
 </script>
 
 <template>
@@ -176,7 +190,7 @@ const txDate = computed(() => {
     <!-- Middle: Customer & Items Preview -->
     <div>
       <h3 class="text-base font-semibold text-ink-primary truncate">
-        {{ transaction.customer || transaction.customer_name || 'Walk-in Customer' }}
+        {{ displayCustomerName }}
       </h3>
 
       <p v-if="itemsPreview" class="mt-0.5 text-xs text-ink-secondary truncate">

@@ -2355,7 +2355,12 @@ export function createSyncPullService({
         }
 
         // If no sale_items exist in snapshot, we fallback gracefully below instead of failing closed
-        let customerName = 'Walk-in Customer'
+        let customerName =
+          (customer_snapshot && typeof customer_snapshot === 'object' && customer_snapshot.name) ||
+          (typeof data.customer_name === 'string' && data.customer_name.trim()) ||
+          (typeof data.customer === 'string' && data.customer.trim()) ||
+          (existingTrx?.customer && existingTrx.customer !== 'Walk-in Customer' ? existingTrx.customer : null) ||
+          'Walk-in Customer'
         let resolvedCustomerId = null
         let customerSnapshot = null
 
@@ -2477,14 +2482,14 @@ export function createSyncPullService({
         // The customer snapshot is likewise authoritative history: the live
         // master record keeps its own name while the receipt keeps the name
         // at sale time.
-        const remoteCustomerSnapshot = customer_snapshot && typeof customer_snapshot === 'object'
+        const remoteCustomerSnapshot = (customer_snapshot && typeof customer_snapshot === 'object' && customer_snapshot.name)
           ? {
               id: resolvedCustomerId ?? customer_snapshot.id ?? null,
               name: typeof customer_snapshot.name === 'string' ? customer_snapshot.name : '',
               phone: customer_snapshot.phone != null ? `${customer_snapshot.phone}` : '',
               email: customer_snapshot.email != null ? `${customer_snapshot.email}` : '',
             }
-          : customerSnapshot
+          : (customerSnapshot || (existingTrx?.customerSnapshot ? existingTrx.customerSnapshot : null))
         const remoteBusinessSnapshot = business_snapshot && typeof business_snapshot === 'object'
           ? {
               name: typeof business_snapshot.name === 'string' ? business_snapshot.name : '',
@@ -2504,7 +2509,9 @@ export function createSyncPullService({
           existingTrx.createdAt = sold_at
           existingTrx.items = mappedItems
           existingTrx.itemCount = itemCount
-          existingTrx.customer = customerName
+          existingTrx.customer = (customerName && customerName !== 'Walk-in Customer')
+            ? customerName
+            : (existingTrx.customer || 'Walk-in Customer')
           existingTrx.customerId = resolvedCustomerId
           existingTrx.customerSnapshot = remoteCustomerSnapshot
           existingTrx.businessSnapshot = remoteBusinessSnapshot

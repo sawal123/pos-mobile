@@ -411,7 +411,7 @@ async function completePayment() {
           outlet: businessStore.outlet,
           phone: businessStore.phone,
         },
-        customer: selectedCustomer.value?.name ?? (cartStore.customerName || 'Walk-in Customer'),
+        customer: selectedCustomer.value?.name ?? (cartStore.customerName || (cartStore.customerPhone ? cartStore.customerPhone : 'Walk-in Customer')),
         customerId: selectedCustomer.value?.id ?? null,
         customerSnapshot: selectedCustomer.value
           ? {
@@ -420,8 +420,8 @@ async function completePayment() {
               phone: selectedCustomer.value.phone || '',
               email: selectedCustomer.value.email || '',
             }
-          : (cartStore.customerName
-              ? { id: null, name: cartStore.customerName, phone: '', email: '' }
+          : (cartStore.customerName || cartStore.customerPhone
+              ? { id: null, name: cartStore.customerName || cartStore.customerPhone, phone: cartStore.customerPhone || '', email: '' }
               : null),
         paymentMethod: selectedMethod.value,
         paymentStatus: isUnpaid ? 'unpaid' : 'paid',
@@ -500,7 +500,9 @@ function handleCompleteReady() {
       const isCloudMode =
         businessStore.mode === 'cloud' || (cloudStore.isLinked && cloudStore.hasCloudAccess)
       if (isCloudMode) {
-        syncPushStore.pushIfOnline?.()
+        setTimeout(() => {
+          void syncPushStore.pushIfOnline?.()
+        }, 50)
       }
     }
   } catch (err) {

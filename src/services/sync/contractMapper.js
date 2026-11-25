@@ -830,17 +830,19 @@ export async function mapOutboxEntries(
       }
 
       const customerSnapshot = payload.customerSnapshot
-      if (customerSnapshot && typeof customerSnapshot === 'object') {
+      const customerName = payload.customer && payload.customer !== 'Walk-in Customer' ? payload.customer : null
+      if ((customerSnapshot && typeof customerSnapshot === 'object') || customerName) {
         const normalizedSnapshot = {
-          id: customerSyncId ?? customerSnapshot.id ?? null,
+          id: customerSyncId ?? customerSnapshot?.id ?? null,
         }
-        if (isNonEmptyString(customerSnapshot.name)) {
-          normalizedSnapshot.name = customerSnapshot.name.trim()
+        const snapName = customerSnapshot?.name?.trim() || customerName
+        if (isNonEmptyString(snapName)) {
+          normalizedSnapshot.name = snapName
         }
-        if (customerSnapshot.phone !== undefined && customerSnapshot.phone !== null) {
+        if (customerSnapshot?.phone !== undefined && customerSnapshot?.phone !== null) {
           normalizedSnapshot.phone = `${customerSnapshot.phone}`
         }
-        if (customerSnapshot.email !== undefined && customerSnapshot.email !== null) {
+        if (customerSnapshot?.email !== undefined && customerSnapshot?.email !== null) {
           normalizedSnapshot.email = `${customerSnapshot.email}`
         }
         saleChange.customer_snapshot = normalizedSnapshot
